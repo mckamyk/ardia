@@ -647,6 +647,10 @@ AC_ENGINE_CALL(ac_autofill_remove) {
 
 AC_ENGINE_CALL(ac_autofill_card_number) {
   AC_AUTOFILL_CALL();
+  if (!ardia::ReauthAvailable()) {
+    return call.TakeReply().Error(
+        "OS authentication is unavailable on this platform");
+  }
   ardia::Load(
       call,
       base::BindOnce(

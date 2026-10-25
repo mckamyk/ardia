@@ -7,6 +7,8 @@ import { useBrowser } from "../../../../browser/src/store/browser";
 import { REFUSED_PAGE_THEME } from "./RefusedPage";
 import { RefusedPage } from "./RefusedPage";
 import { createFrame, moveFrame, noteFrameSize, parkFrame, takeFrame } from "./framePool";
+import { ardiaHost } from "../../host";
+import { HostWebView } from "./HostWebView";
 
 let nextBrowserId = 1;
 
@@ -24,7 +26,7 @@ const isBlank = (url: string) => !url || url === "about:blank";
 
 type Page = { url: string; key: number };
 
-export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(props, ref) {
+const DemoWebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(props, ref) {
   const latest = useRef(props);
   latest.current = props;
   const [page, setPage] = useState<Page | null>(null);
@@ -167,3 +169,5 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
     </View>
   );
 });
+
+export const WebView = ardiaHost ? HostWebView : DemoWebView;

@@ -1,7 +1,9 @@
 import type { AppEvent, CommandEvent, ConfirmOptions, InlineWrite, PromptOptions, SystemInfo, WindowEvent } from "@ardia-real/shell";
 import { unstable_batchedUpdates } from "react-dom";
-import { emitNativeEvent, provideNativeModule } from "./expo-modules-core";
+import { emitNativeEvent, provideNativeModule, provideNativeModuleProvider } from "./expo-modules-core";
 import { NATIVE_CHANGE } from "./react-native";
+import { ardiaHost, hostModuleMethod, reportHostError } from "../host";
+import { createHostDocuments } from "../hostDocuments";
 
 export * from "@ardia-real/shell";
 export { Symbol } from "./web/Symbol";
@@ -39,23 +41,25 @@ provideNativeModule("ArdiaApp", { launchEnvironment: () => null, systemInfo: () 
 provideNativeModule("ArdiaCalendar", { authorizationStatus: () => "notDetermined" });
 
 const documents = new Map<string, string>();
-export const readDocument = (name: string) => documents.get(name) ?? null;
-export const writeDocument = (name: string, contents: string) => void documents.set(name, contents);
+const hostDocuments = ardiaHost ? createHostDocuments(ardiaHost) : undefined;
+export const readDocument = (name: string) => hostDocuments ? hostDocuments.read(name) : documents.get(name) ?? null;
+export const writeDocument = (name: string, contents: string) => hostDocuments ? void hostDocuments.write(name, contents).catch(reportHostError) : void documents.set(name, contents);
 export const fetchBangList = (_etag: string | null): Promise<{ status: number; etag: string | null; contentType: string | null; body: string | null; bytes: number }> | null => null;
-export const saveDocument = async (name: string, contents: string) => void documents.set(name, contents);
-export const removeDocument = (name: string) => void documents.delete(name);
+export const saveDocument = async (name: string, contents: string) => hostDocuments ? hostDocuments.write(name, contents) : void documents.set(name, contents);
+export const removeDocument = (name: string) => hostDocuments ? void hostDocuments.remove(name).catch(reportHostError) : void documents.delete(name);
 
 export function copyText(text: string) {
+  if (ardiaHost) return void hostModuleMethod("ArdiaShell", "copyText")(text).catch(reportHostError);
   void navigator.clipboard?.writeText(text).catch(() => {});
 }
 
-export const confirm = async (options: ConfirmOptions) => ({
+export const confirm = async (options: ConfirmOptions): Promise<{ confirmed: boolean; suppressed: boolean }> => ardiaHost ? hostModuleMethod("ArdiaShell", "confirm")(options) as Promise<{ confirmed: boolean; suppressed: boolean }> : ({
   confirmed: window.confirm([options.title, options.message].filter(Boolean).join("\n\n")),
   suppressed: false,
 });
 
 export const prompt = async (options: PromptOptions) =>
-  window.prompt(options.message ? `${options.title}\n\n${options.message}` : options.title, options.value ?? "");
+  ardiaHost ? hostModuleMethod("ArdiaShell", "prompt")(options) as Promise<string | null> : window.prompt(options.message ? `${options.title}\n\n${options.message}` : options.title, options.value ?? "");
 
 const darkQuery = typeof window === "undefined" ? null : window.matchMedia("(prefers-color-scheme: dark)");
 export const isDarkAppearance = async () => !!darkQuery?.matches;
@@ -67,10 +71,19 @@ export const setAppearance = async (mode: "auto" | "light" | "dark") => {
 };
 darkQuery?.addEventListener("change", (e) => appearance === "auto" && emitAppEvent({ type: "appearance", dark: e.matches }));
 
-export const windowIds = async () => [] as string[];
-export const windowFrame = async (_id: string): Promise<[number, number, number, number] | null> => null;
-export const systemInfo = () => SYSTEM_INFO;
-export const launchEnvironment = (_name: string) => null;
+export const windowIds = async () => ardiaHost ? hostModuleMethod("ArdiaShell", "windowIds")() as Promise<string[]> : [] as string[];
+export const windowFrame = async (id: string): Promise<[number, number, number, number] | null> => ardiaHost ? hostModuleMethod("ArdiaShell", "windowFrame")(id) as Promise<[number, number, number, number] | null> : null;
+export const systemInfo = (): SystemInfo => ardiaHost ? (ardiaHost.bootstrap.nativeModules?.ArdiaApp?.systemInfo as SystemInfo | undefined) ?? { ...SYSTEM_INFO, appVersion: "linux-dev", appBuild: "host", bundleId: "dev.ardia.linux", osVersion: "Linux", osBuild: "Linux", arch: "unknown", model: "Linux" } : SYSTEM_INFO;
+export const launchEnvironment = (name: string) => ardiaHost?.bootstrap.environment?.[name] ?? null;
+
+const claimHostFocus = async (generation: number, tag: number) => {
+  const node = tag as unknown;
+  if (node instanceof HTMLElement) node.focus();
+  else await hostModuleMethod("ArdiaShell", "claimFocus")(generation, tag);
+};
+const hostShellLocals: Record<string, unknown> = { readDocument, writeDocument, saveDocument, removeDocument, claimFocus: claimHostFocus };
+const hostAppLocals: Record<string, unknown> = { systemInfo, launchEnvironment, killSwitchEnvironment: launchEnvironment };
+provideNativeModuleProvider((module, method) => ardiaHost ? (module === "ArdiaShell" ? hostShellLocals[method] : module === "ArdiaApp" ? hostAppLocals[method] : undefined) : undefined);
 
 const valueSetter = typeof window === "undefined" ? undefined : Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
 
