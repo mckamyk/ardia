@@ -5,7 +5,14 @@
 set -euo pipefail
 source "$(dirname "$0")/step-guard.sh" "$@"
 source "$(dirname "$0")/env.sh"
-rm -rf "$CB/series-base"
+case "$(uname -s):$AC_TARGET_OS" in
+  Darwin:mac | Linux:linux) ;;
+  *) echo "01-sync.sh: run on the target operating system ($AC_TARGET_OS)" >&2; exit 64 ;;
+esac
+if [[ -e "$CB/chromium_git/chromium/src/out" ]]; then
+  echo "01-sync.sh: an output tree already exists; use incremental patch/build steps" >&2
+  exit 64
+fi
 mkdir -p "$CB/chromium_git/chromium"
 cd "$CB/chromium_git/chromium"
 cat > .gclient <<GCLIENT
@@ -13,7 +20,8 @@ solutions = [{'managed': False, 'name': 'src',
   'url': 'https://chromium.googlesource.com/chromium/src.git@refs/tags/$CHROMIUM_VERSION',
   'custom_vars': {'checkout_pgo_profiles': True, 'source_tarball': False, 'siso_version': 'latest'},
   'custom_deps': {}, 'deps_file': 'DEPS', 'safesync_url': ''}]
-target_os = ['mac']
+target_os = ['$AC_TARGET_OS']
+target_cpu = ['$AC_TARGET_CPU']
 GCLIENT
 if [ -d src/.git ]; then
   lowprio_net timeout 3600 git -C src fetch --depth=1 --no-tags origin "refs/tags/$CHROMIUM_VERSION:refs/tags/$CHROMIUM_VERSION"
