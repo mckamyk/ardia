@@ -121,3 +121,18 @@ For the architecture and the test tooling, read `docs/agent-brief.md`.
 `apps/browser` is the React Native macOS app. The native Expo modules are in `packages/{ardiacore,shell,shaders,import,sync}`; `engine/chromium` is our Chrome-services code (the `ac_*` C calls) and `engine/ardiacore` ArdiaCore's window and tab layer,
 and `packages/core` holds the omnibox logic and its tests. `apps/site` is ardia.dev and
 `apps/videos` holds the Remotion videos. The license is Apache-2.0.
+
+
+## Linux Port & Long-Lived Fork (`mckamyk/ardia`)
+This repository is a long-lived fork of `mantrakp04/ardia` targeting **Linux (Arch Linux / Omarchy / Hyprland / Wayland)** by pairing:
+1. **`apps/demo` (`react-native-web` + WebGL shaders + inline SVG icons)** as the cross-platform UI bundle for `apps/browser/src` (replacing `react-native-macos` and Metal `MTKView`s).
+2. **`engine/chromium/src/chrome/browser/ardia/` (`ac_engine.h` C ABI)** compiled against **[`imputnet/helium-linux`](https://github.com/imputnet/helium-linux)** (replacing `imputnet/helium-macos`).
+3. **A thin Linux Aura / `views::View` window host (`engine/ardiacore-linux/`)** replacing the macOS `remote_cocoa` / `AppKit` Objective-C++ layer (`engine/ardiacore/`).
+
+Read **`docs/linux-port.md`** before making any Linux or build-pipeline changes.
+
+### Fork Hygiene Rules (Keeping Upstream Merges Zero-Conflict)
+- **Never rewrite upstream files in `apps/browser/src/` or `packages/*/ios/`** when a shim in `apps/demo/src/shims/` or a separate Linux file can do the job. Upstream commits to `apps/browser/src` and `apps/demo` several times a day; keeping those paths untouched lets `git rebase upstream/main` succeed automatically.
+- **Keep Linux engine host files in their own directory (`engine/ardiacore-linux/`)** and gate OS-specific sources in `engine/chromium/src/chrome/browser/ardia/BUILD.gn` with `if (is_mac)` / `if (is_linux)` instead of deleting macOS `.mm` files.
+- **Respect upstream's no-comments rule inside upstream-shared source files** so upstream linters/checks pass without noise; put architectural documentation in `docs/linux-port.md`.
+- **Use `scripts/linux/check-upstream.sh` and `scripts/linux/sync-upstream.sh`** on the Linux build server to detect upstream changes and classify whether an upstream update only needs a fast UI rebuild (`pnpm --filter @ardia/demo build`, ~10 seconds) or an incremental/full Chromium engine rebuild (`engine/` or `CHROMIUM_VERSION` changed).
