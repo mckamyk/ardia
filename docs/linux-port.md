@@ -87,3 +87,21 @@ That gives `@barre_of_lube` a **3-minute Linux CI job on `ubuntu-latest`** that 
    ```bash
    ./scripts/linux/sync-upstream.sh
    ```
+
+---
+
+## 6. Build Acceleration with `sccache` (Local VM + Upstream CI Jobs)
+
+To keep both local Linux engine builds (e.g. 16–18 vCPUs / 44–48 GB RAM on i9-10900KF) and upstream CI engine/app jobs fast:
+
+1. **Local & Dedicated Engine Builder (`sccache` + optional R2/S3 backend)**:
+   - Install `sccache` (`sudo pacman -S sccache`) and set:
+     ```bash
+     export SCCACHE_DIR="$HOME/.cache/sccache"
+     export SCCACHE_CACHE_SIZE="50G"
+     ```
+   - Or back it with Cloudflare R2 / S3 (`SCCACHE_BUCKET`, `SCCACHE_ENDPOINT`, `SCCACHE_REGION=auto`) so any Linux build runner or VM shares the same precompiled Chromium `.o` cache.
+   - Pass `cc_wrapper="sccache"` in `args.gn` (`engine/patches/build/gn_defines.sh` when `command -v sccache` is present), plus `use_thin_lto=false` and `concurrent_links=1` on dev/porting builds to avoid linker RAM spikes.
+2. **Upstream GitHub Actions CI (`.github/workflows/build.yml`)**:
+   - **Per-commit `app-linux-x64` job (`ubuntu-latest`, ~3 min)**: Uses `actions/cache@v6` on `apps/browser/build-ardiacore/prebuilt-linux-x86_64` with `packages/ardiacore/scripts/fetch-engine.sh --arch linux-x86_64 --nearest`, builds `apps/demo` (`pnpm --filter @ardia/demo build`), and packages the Linux release tarball without compiling Chromium on GitHub's runners.
+   - **Engine release workflow (if building `engine/` in CI or self-hosted runner)**: Wire `mozilla-actions/sccache-action@v0.0.9` (with `SCCACHE_GHA_ENABLED=true` or R2 bucket credentials) so incremental or clean engine rebuilds hit cached object files across runs.
