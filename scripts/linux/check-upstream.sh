@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# usage: scripts/linux/check-upstream.sh [--json]
 set -euo pipefail
+
+usage="usage: scripts/linux/check-upstream.sh [--json]"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  echo "$usage"
+  exit 0
+fi
 
 UPSTREAM_URL="https://github.com/mantrakp04/ardia.git"
 UPSTREAM_REMOTE="upstream"
@@ -13,12 +18,14 @@ git fetch --quiet "$UPSTREAM_REMOTE" main
 
 LOCAL_BASE="$(git merge-base HEAD "$UPSTREAM_REMOTE/main")"
 UPSTREAM_HEAD="$(git rev-parse "$UPSTREAM_REMOTE/main")"
+ENGINE_TREE="$(git rev-parse HEAD:engine)"
+ENGINE_SHORT="${ENGINE_TREE:0:12}"
 
 if [ "$LOCAL_BASE" = "$UPSTREAM_HEAD" ]; then
   if [ "${1:-}" = "--json" ]; then
-    printf '{"up_to_date":true,"commits_behind":0,"rebuild_level":"NONE"}\n'
+    printf '{"up_to_date":true,"commits_behind":0,"rebuild_level":"NONE","engine_tree":"%s"}\n' "$ENGINE_SHORT"
   else
-    echo "Up to date with mantrakp04/ardia@main ($UPSTREAM_HEAD)."
+    echo "Up to date with mantrakp04/ardia@main ($UPSTREAM_HEAD, engine tree $ENGINE_SHORT)."
   fi
   exit 0
 fi
@@ -39,10 +46,11 @@ if echo "$CHANGED_FILES" | grep -qE '^engine/chromium/src/chrome/browser/ardia/(
 fi
 
 if [ "${1:-}" = "--json" ]; then
-  printf '{"up_to_date":false,"commits_behind":%d,"rebuild_level":"%s","abi_or_gn_changed":%s,"upstream_head":"%s"}\n' \
-    "$COMMITS_BEHIND" "$REBUILD_LEVEL" "$ABI_CHANGED" "$UPSTREAM_HEAD"
+  printf '{"up_to_date":false,"commits_behind":%d,"rebuild_level":"%s","abi_or_gn_changed":%s,"upstream_head":"%s","engine_tree":"%s"}\n' \
+    "$COMMITS_BEHIND" "$REBUILD_LEVEL" "$ABI_CHANGED" "$UPSTREAM_HEAD" "$ENGINE_SHORT"
 else
   echo "Upstream mantrakp04/ardia is ahead by $COMMITS_BEHIND commit(s) ($LOCAL_BASE -> $UPSTREAM_HEAD)"
+  echo "Current engine tree SHA:   $ENGINE_SHORT"
   echo "Recommended rebuild level: $REBUILD_LEVEL"
   echo "ABI or BUILD.gn touched:   $ABI_CHANGED"
   echo ""
