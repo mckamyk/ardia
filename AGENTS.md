@@ -127,16 +127,13 @@ and `packages/core` holds the omnibox logic and its tests. `apps/site` is ardia.
 `apps/videos` holds the Remotion videos. The license is Apache-2.0.
 
 
-## Linux Port & Long-Lived Fork (`mckamyk/ardia`)
-This repository is a long-lived fork of `mantrakp04/ardia` targeting **Linux (Arch Linux / Omarchy / Hyprland / Wayland)** by pairing:
-1. **`apps/demo` (`react-native-web` + WebGL shaders + inline SVG icons)** as the cross-platform UI bundle for `apps/browser/src` (replacing `react-native-macos` and Metal `MTKView`s).
-2. **`engine/chromium/src/chrome/browser/ardia/` (`ac_engine.h` C ABI)** compiled against **[`imputnet/helium-linux`](https://github.com/imputnet/helium-linux)** (replacing `imputnet/helium-macos`).
-3. **A thin Linux Aura / `views::View` window host (`engine/ardiacore-linux/`)** replacing the macOS `remote_cocoa` / `AppKit` Objective-C++ layer (`engine/ardiacore/`).
+## Linux Port & Upstream PR Target (`Closes #1`)
+The upstream owner (`@barre_of_lube` / `mantrakp04`) requested a working Linux build with CI wired up so it can be merged upstream into `mantrakp04/ardia` (`Closes #1`). Read **`docs/linux-port.md`** before touching any Linux, build, or CI files.
 
-Read **`docs/linux-port.md`** before making any Linux or build-pipeline changes.
-
-### Fork Hygiene Rules (Keeping Upstream Merges Zero-Conflict)
-- **Never rewrite upstream files in `apps/browser/src/` or `packages/*/ios/`** when a shim in `apps/demo/src/shims/` or a separate Linux file can do the job. Upstream commits to `apps/browser/src` and `apps/demo` several times a day; keeping those paths untouched lets `git rebase upstream/main` succeed automatically.
-- **Keep Linux engine host files in their own directory (`engine/ardiacore-linux/`)** and gate OS-specific sources in `engine/chromium/src/chrome/browser/ardia/BUILD.gn` with `if (is_mac)` / `if (is_linux)` instead of deleting macOS `.mm` files.
-- **Respect upstream's no-comments rule inside upstream-shared source files** so upstream linters/checks pass without noise; put architectural documentation in `docs/linux-port.md`.
-- **Use `scripts/linux/check-upstream.sh` and `scripts/linux/sync-upstream.sh`** on the Linux build server to detect upstream changes and classify whether an upstream update only needs a fast UI rebuild (`pnpm --filter @ardia/demo build`, ~10 seconds) or an incremental/full Chromium engine rebuild (`engine/` or `CHROMIUM_VERSION` changed).
+### Upstream Merge Rules (Strict)
+- **Zero comments in code, scripts, or configs.** Upstream enforces a strict no-comments rule (`CONTRIBUTING.md` & `AGENTS.md`): never write `//`, `/* */`, `#`, or `<!-- -->` comments in any source file, shell script, GN file, or GitHub Actions YAML. Only shebangs, license headers, compiler/linter directives (`@ts-expect-error`, `#pragma`), and a script's `--help` header string are allowed. Put all explanations in `docs/linux-port.md` and commit messages.
+- **Keep macOS 100% untouched.** Gate Linux additions behind `is_linux` in GN (`engine/chromium/src/chrome/browser/ardia/BUILD.gn`), keep the Linux Aura host in `engine/ardiacore-linux/` (or `#if BUILDFLAG(IS_LINUX)` beside `.mm` files), and keep `apps/demo` working for `ardia.dev` while activating the live engine bridge when `window.__ardiaHost` is present.
+- **Match upstream's Prebuilt Engine CI model (`packages/ardiacore/scripts/fetch-engine.sh` & `.github/workflows/build.yml`).** Upstream CI never compiles the 5-hour Chromium tree inside GitHub Actions. Instead:
+  1. Your local Linux build server compiles the Linux Chromium + `helium-linux` engine (`libardiacore.so` / `chrome`) keyed by `git rev-parse HEAD:engine` (12-char tree SHA).
+  2. `packages/ardiacore/scripts/fetch-engine.sh --arch linux-x86_64 --nearest` downloads and caches `ArdiaCore-<short-tree-sha>-linux-x64.tar.xz` in GitHub Actions (`ubuntu-latest`), and builds the Linux app + `apps/demo` UI bundle in ~3 minutes.
+- **Every upstream PR must link an issue (`Closes #1`)** and have the CLA signed on the PR thread.

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# usage: scripts/linux/sync-upstream.sh [--push]
 set -euo pipefail
+
+usage="usage: scripts/linux/sync-upstream.sh [--push]"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  echo "$usage"
+  exit 0
+fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 cd "$ROOT"
@@ -15,7 +20,6 @@ else
   git rebase upstream/main
 fi
 
-echo "Installing workspace dependencies and verifying react-native-web + WebGL UI..."
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm --filter @ardia/demo build
