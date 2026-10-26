@@ -443,7 +443,7 @@ test("viewport observation tracks transforms, scroll, visual zoom, overlays, and
   let blocked = false;
   let disconnected = false;
   const element = { isConnected: true, parentElement: null, getBoundingClientRect: () => rect, contains: () => false };
-  const document = Object.assign(documentEvents, { hidden: false, elementFromPoint: () => blocked ? {} : element });
+  const document = Object.assign(documentEvents, { hidden: false, querySelectorAll: () => [], elementFromPoint: () => blocked ? {} : element });
   globalThis.window = Object.assign(windowEvents, { innerWidth: 1280, innerHeight: 800, visualViewport });
   globalThis.document = document;
   globalThis.getComputedStyle = () => ({ display: "block", visibility: "visible", opacity: "1" });
