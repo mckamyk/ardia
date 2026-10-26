@@ -34,6 +34,8 @@ ardiaHost?.onEvent((module, event, payload) => {
   if (module !== "ArdiaShell" || event !== "shell") return;
   const envelope = payload as { name: string; data: WindowCloseRequest };
   if (envelope?.name === "shell.closeRequested") void acceptCloseRequest(envelope.data).catch(reportHostError);
+  if (envelope?.name === "shell.closeCancelled" && envelope.data?.windowId === ardiaHost?.bootstrap.windowId)
+    closeBarrier.cancelled(envelope.data);
 });
 export const closeWindow = async (id: string): Promise<void> => {
   const request = await hostModuleMethod("ArdiaShell", "requestWindowClose")(id) as WindowCloseRequest;

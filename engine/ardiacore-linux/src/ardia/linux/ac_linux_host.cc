@@ -14,6 +14,9 @@
 
 #include "ardia/linux/ac_linux_policy.h"
 #include "ardia/linux/ac_linux_contract.h"
+#include "ardia/linux/ac_linux_close.h"
+#include "ardia/linux/ac_linux_close_hooks.h"
+#include "ardia/linux/ac_linux_document_service.h"
 #include "ardia/linux/ac_linux_launch_config.h"
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/ac_linux_session.h"
@@ -23,6 +26,7 @@
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
@@ -44,7 +48,10 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/threading/sequence_bound.h"
 #include "base/time/time.h"
+#include "base/uuid.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "chrome/browser/ardia/public/ac_engine.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -126,6 +133,7 @@
 #include "ui/views/view_targeter.h"
 #include "ui/views/view_targeter_delegate.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_observer.h"
 #include "ui/wm/core/window_modality_controller.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -221,13 +229,6 @@ struct RequestedWindow {
   base::WeakPtr<BrowserWindowInterface> browser;
 };
 std::map<int, RequestedWindow>& RequestedWindows();
-
-void CloseNativeWindow(BrowserWindowInterface* browser) {
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce([](base::WeakPtr<BrowserWindowInterface> target) {
-        if (target) target->GetWindow()->Close();
-      }, browser->GetWeakPtr()));
-}
 
 void FocusNativeWindow(BrowserWindowInterface* browser) {
   const auto* command = base::CommandLine::ForCurrentProcess();
@@ -396,7 +397,7 @@ base::DictValue ReadDocuments(const base::FilePath& directory) {
   size_t bytes = 0;
   for (auto file = files.Next(); !file.empty(); file = files.Next()) {
     const std::string name = file.BaseName().value();
-    if (name == kSessionName) continue;
+    if (name == kSessionName || LinuxDocuments::Reserved(name)) continue;
     auto contents = ReadDocument(directory, name);
     if (contents && documents.size() < 128 &&
         bytes + contents->size() <= kDocumentLimit) {
@@ -413,6 +414,70 @@ scoped_refptr<base::SequencedTaskRunner> FileRunner() {
           {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
            base::TaskShutdownBehavior::BLOCK_SHUTDOWN}));
   return *runner;
+}
+
+LinuxDocumentRead ReadCanonicalDocument(const base::FilePath& directory,
+                                        std::string_view name) {
+  LinuxDocumentRead result;
+  if (!LinuxDocuments::Reserved(name) || !PrepareDocuments(directory)) {
+    result.state = LinuxDocumentRead::State::kError;
+    return result;
+  }
+  const auto path = directory.AppendASCII(name);
+  if (base::IsLink(path)) {
+    result.state = LinuxDocumentRead::State::kError;
+    return result;
+  }
+  base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_READ);
+  if (!file.IsValid()) {
+    result.state = file.error_details() == base::File::FILE_ERROR_NOT_FOUND
+                       ? LinuxDocumentRead::State::kMissing
+                       : LinuxDocumentRead::State::kError;
+    return result;
+  }
+  const auto contents = ReadDocument(directory, std::string(name));
+  if (!contents) {
+    result.state = LinuxDocumentRead::State::kError;
+    return result;
+  }
+  result.state = LinuxDocumentRead::State::kFound;
+  auto value = base::JSONReader::Read(*contents, base::JSON_PARSE_RFC, 48);
+  if (value && value->is_dict()) result.value = std::move(value->GetDict());
+  else result.value.Set("format", "invalid");
+  return result;
+}
+
+struct DocumentAuthority {
+  explicit DocumentAuthority(base::FilePath directory)
+      : scope(base::Uuid::GenerateRandomV4().AsLowercaseString()),
+        service(FileRunner(), scope,
+                base::Uuid::GenerateRandomV4().AsLowercaseString(),
+                LinuxDocuments::Read([directory](std::string_view name) {
+                  return ReadCanonicalDocument(directory, name);
+                }),
+                LinuxDocuments::Write([directory](const base::DictValue& value) {
+                  const auto json = base::WriteJsonWithOptions(
+                      value, base::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION, 48);
+                  return json && WriteDocument(directory, kLinuxLiveEnvelope, json);
+                })) {}
+  const std::string scope;
+  base::SequenceBound<LinuxDocumentService> service;
+};
+
+std::shared_ptr<DocumentAuthority> DocumentsFor(Profile* profile) {
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  if (!profile || !profile->IsRegularProfile() || profile->GetPath().empty())
+    return {};
+  static base::NoDestructor<
+      std::map<base::FilePath, std::weak_ptr<DocumentAuthority>>> authorities;
+  const auto directory = DocumentDirectory(profile);
+  auto& slot = (*authorities)[directory];
+  auto authority = slot.lock();
+  if (!authority) {
+    authority = std::make_shared<DocumentAuthority>(directory);
+    slot = authority;
+  }
+  return authority;
 }
 
 std::string AssetPath(const GURL& url) {
@@ -555,6 +620,7 @@ class WindowKeyboardHandler : public ui::EventHandler {
 
 class ShellHostView : public views::View,
                       public views::ViewObserver,
+                      public views::WidgetObserver,
                       public aura::WindowObserver,
                       public TabStripModelObserver {
  public:
@@ -585,6 +651,11 @@ class ShellHostView : public views::View,
   content::WebContents* shell() const { return shell_->GetWebContents(); }
   Profile* profile() const { return browser_ ? browser_->GetProfile() : nullptr; }
   bool Trusted(content::WebUI* ui) const;
+  bool DeferChromeClose(const base::UnguessableToken& token, LinuxCloseStage stage,
+                         base::OnceCallback<void(bool)> continuation);
+  void ChromeCloseCancelled(const base::UnguessableToken& token);
+  void DocumentCall(std::string verb, base::DictValue request,
+                    base::OnceCallback<void(LinuxDocumentResult)> done);
   base::DictValue Bootstrap() const;
   base::DictValue Strip() const;
   base::DictValue Transaction(std::optional<int> command, bool advance);
@@ -613,6 +684,7 @@ class ShellHostView : public views::View,
     return true;
   }
   void RetireRenderer() {
+    if (!RetireDocuments()) return;
     ++renderer_generation_;
     renderer_document_ = content::WeakDocumentPtr();
     std::vector<int> temporary;
@@ -708,9 +780,44 @@ class ShellHostView : public views::View,
   void OnKeyEvent(ui::KeyEvent* event) override;
   bool OwnsKeyboardEvent(const ui::KeyEvent& event) const;
   void OnWindowDestroying(aura::Window* window) override;
-  void ArmUtilityClose();
+  void ArmWindowClose();
+  void CloseNativeWindow(LinuxClose::Identity identity);
+  bool ReadyForChromeClose(const LinuxClose::Identity& identity) const;
+  LinuxCloseAdmission AdmitChromeTeardown(LinuxClose::Identity identity,
+                                          base::UnguessableToken token, LinuxCloseStage stage);
+  void ReplyChromeClose(LinuxCloseStage stage, LinuxClose::Identity identity,
+                        base::UnguessableToken token,
+                        base::OnceCallback<void(bool)> continuation, bool ready);
+  void FinishChromePreparations(bool ready);
+  void CancelDocumentSeal(LinuxClose::Identity identity, bool chrome_aborted);
   void RequestUtilityClose();
-  void CloseUtilityAfterSave();
+  base::DictValue RequestWindowClose();
+  bool RetireDocuments();
+  struct StorageIntent {
+    std::string name;
+    base::DictValue operation;
+    size_t bytes;
+    size_t pending = 0;
+    uint64_t failure = 0;
+  };
+  struct StorageTicket {
+    std::shared_ptr<StorageIntent> intent;
+    uint64_t sequence;
+  };
+  std::optional<StorageTicket> BeginStorageIntent(std::string name,
+                                                 base::DictValue operation);
+  void CompleteStorageIntent(const StorageTicket& ticket, bool durable,
+                             bool failed);
+  bool TrackStorageWrite(std::string name, base::DictValue operation,
+                        base::OnceCallback<void(bool, base::Value)>& done);
+  LinuxDocumentClient DocumentClient() const;
+  bool EnsureDocumentClient();
+  void CancelWindowClose(LinuxClose::Identity identity,
+                         base::OnceCallback<void(bool, base::Value)> done);
+  void AcknowledgeWindowClose(const base::DictValue& request,
+                              base::OnceCallback<void(bool, base::Value)> done);
+  void OnWidgetClosing(views::Widget* widget) override;
+  void OnWidgetDestroying(views::Widget* widget) override;
   void LayoutOverlay();
   void ReattachViewports();
   void OnViewBoundsChanged(views::View*) override { LayoutOverlay(); }
@@ -724,6 +831,37 @@ class ShellHostView : public views::View,
   raw_ptr<HostMessageHandler> handler_ = nullptr;
   uint64_t renderer_generation_ = 0;
   content::WeakDocumentPtr renderer_document_;
+  std::shared_ptr<DocumentAuthority> documents_;
+  const std::string document_window_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
+  LinuxDocumentClient document_client_;
+  uint64_t document_client_generation_ = 0;
+  uint64_t document_subscription_ = 0;
+  bool document_watched_ = false;
+  bool document_used_ = false;
+  size_t storage_pending_ = 0;
+  std::set<std::string> storage_failures_;
+  std::vector<std::shared_ptr<StorageIntent>> storage_intents_;
+  size_t storage_bytes_ = 0;
+  size_t storage_pending_bytes_ = 0;
+  uint64_t storage_sequence_ = 0;
+  LinuxClose close_;
+  std::optional<base::UnguessableToken> chrome_close_token_;
+  LinuxDocumentClient close_client_;
+  base::WeakPtr<BrowserWindowInterface> close_browser_;
+  base::WeakPtr<views::Widget> close_widget_;
+  std::string close_window_;
+  bool close_cancel_running_ = false;
+  std::vector<std::pair<LinuxCloseStage, base::OnceCallback<void(bool)>>> close_preparations_;
+  std::vector<base::OnceCallback<void(bool, base::Value)>> close_cancellations_;
+  struct PendingDocumentWatch {
+    uint64_t generation;
+    uint64_t subscription;
+    base::DictValue request;
+    base::OnceCallback<void(LinuxDocumentResult)> done;
+  };
+  std::vector<PendingDocumentWatch> pending_document_watches_;
+  std::optional<std::pair<std::string, std::string>> close_error_;
+  std::vector<base::OnceCallback<void(bool, base::Value)>> close_replies_;
   raw_ptr<views::FocusManager> focus_manager_ = nullptr;
   std::unique_ptr<WindowKeyboardHandler> input_handler_;
   std::map<ui::Accelerator, base::DictValue> shortcuts_;
@@ -741,6 +879,7 @@ class ShellHostView : public views::View,
   std::map<int, std::unique_ptr<TabBinding>> bindings_;
   bool app_operation_ = false;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
+  base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
   base::ScopedObservation<aura::Window, aura::WindowObserver> input_observation_{this};
   base::WeakPtrFactory<ShellHostView> weak_factory_{this};
 };
@@ -769,6 +908,10 @@ class HostMessageHandler : public content::WebUIMessageHandler,
     if (!IsJavascriptAllowed() || !host_ || !host_->OwnsHandler(this, generation_) || !host_->Trusted(web_ui())) return;
     CallJavascriptFunction("__ardiaEvent", base::Value(module),
                            base::Value(event), payload);
+  }
+  bool Authorized() {
+    return host_ && host_->OwnsHandler(this, generation_) &&
+           host_->Trusted(web_ui()) && IsJavascriptAllowed();
   }
 
  private:
@@ -867,6 +1010,10 @@ class HostMessageHandler : public content::WebUIMessageHandler,
         return Reply(id, false, base::Value(base::DictValue().Set("code", "ERR_ENGINE").Set("message", "Only the default regular profile is supported")));
       }
       const base::Value* value = args.Find("args");
+      if (name.starts_with("documents.") && args.size() != 3)
+        return Fail(id, "ERR_DOCUMENT_REQUEST", "Invalid document transport request");
+      if (name.starts_with("documents.") && (!value || !value->is_string()))
+        return Fail(id, "ERR_DOCUMENT_REQUEST", "Document arguments require JSON text");
       if (!value || (!value->is_none() && !value->is_string())) {
         return Reply(id, false, base::Value("Engine arguments must be JSON text or null"));
       }
@@ -875,12 +1022,23 @@ class HostMessageHandler : public content::WebUIMessageHandler,
           json.size() > kDocumentLimit || json.find('\0') != std::string::npos) {
         return Reply(id, false, base::Value("Invalid or oversized engine request"));
       }
-      auto parsed = base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+      auto parsed = name.starts_with("documents.")
+          ? base::JSONReader::Read(json, base::JSON_PARSE_RFC, 48)
+          : base::JSONReader::Read(json, base::JSON_PARSE_RFC);
       if (!parsed || !parsed->is_dict() || parsed->GetDict().contains("profile") ||
           parsed->GetDict().contains("offTheRecord") || parsed->GetDict().contains("incognito")) {
         return Fail(id, "ERR_ENGINE", "Engine arguments require a regular-profile JSON object");
       }
       const auto& input = parsed->GetDict();
+      if (name.starts_with("documents.")) {
+        return host_->DocumentCall(name.substr(10), input.Clone(),
+            base::BindOnce([](base::WeakPtr<HostMessageHandler> handler,
+                              std::string id, LinuxDocumentResult result) {
+              if (!handler) return;
+              if (!result.ok()) return handler->Fail(id, result.code, result.message);
+              handler->Resolve(id, base::Value(std::move(result.value)));
+            }, weak_factory_.GetWeakPtr(), id));
+      }
       if (const auto* engine = input.FindString("engine"); engine && *engine != "chromium") {
         return Fail(id, "ERR_UNKNOWN_CALL", "This page engine is unavailable on Linux");
       }
@@ -1030,6 +1188,7 @@ ShellHostView::ShellHostView(BrowserWindowInterface* browser, BrowserView* paren
 
 ShellHostView::~ShellHostView() {
   weak_factory_.InvalidateWeakPtrs();
+  RetireDocuments();
   UnregisterAccelerators();
   Hosts().erase(id_);
   bindings_.clear();
@@ -1038,6 +1197,9 @@ ShellHostView::~ShellHostView() {
 }
 
 void ShellHostView::Initialize() {
+  documents_ = DocumentsFor(profile());
+  close_observation_.Observe(GetWidget());
+  ArmWindowClose();
   focus_manager_ = GetFocusManager();
   aura::Window* input_window = GetWidget()->GetNativeWindow()->GetRootWindow();
   input_observation_.Observe(input_window);
@@ -1045,7 +1207,6 @@ void ShellHostView::Initialize() {
       base::BindRepeating(&ShellHostView::OnKeyEvent, GetWeakPtr()));
   input_window->AddPreTargetHandler(input_handler_.get(), ui::EventTarget::Priority::kSystem);
   if (is_utility()) {
-    ArmUtilityClose();
     browser_view_->SetPreferredSize(kind_ == "settings" ? gfx::Size(720, 480)
                                                        : gfx::Size(640, 600));
     GetWidget()->OnSizeConstraintsChanged();
@@ -1066,6 +1227,7 @@ void ShellHostView::DetachViewports() {
 }
 
 void ShellHostView::DetachBrowser() {
+  if (!RetireDocuments()) return;
   weak_factory_.InvalidateWeakPtrs();
   UnregisterAccelerators();
   TabStripModelObserver::StopObservingAll(this);
@@ -1189,38 +1351,570 @@ bool ShellHostView::CanHandleAccelerators() const {
   return browser_ && (is_utility() || handler_);
 }
 
-void ShellHostView::ArmUtilityClose() {
+LinuxDocumentClient ShellHostView::DocumentClient() const {
+  return document_client_;
+}
+
+bool ShellHostView::EnsureDocumentClient() {
+  if (!documents_ || !handler_ || !handler_->Authorized() ||
+      !profile() || !profile()->IsRegularProfile()) return false;
+  if (document_client_.id.empty()) {
+    document_client_ = {documents_->scope + ":" + document_window_ + ":" +
+                            base::NumberToString(renderer_generation_),
+                        documents_->scope, true, true};
+    document_client_generation_ = renderer_generation_;
+  }
+  return document_client_generation_ == renderer_generation_ &&
+         document_client_.scope == documents_->scope;
+}
+
+bool ShellHostView::RetireDocuments() {
+  const auto weak = GetWeakPtr();
+  const auto authority = documents_;
+  const auto client = DocumentClient();
+  const auto close_generation = close_.identity().close;
+  const bool closing = close_.phase() != LinuxClose::Phase::kIdle;
+  const bool coordinated = chrome_close_token_.has_value() || close_.HandedOff();
+  std::vector<base::OnceCallback<void(bool, base::Value)>> retired_cancellations;
+  ++document_subscription_;
+  document_watched_ = false;
+  document_client_ = {};
+  document_client_generation_ = 0;
+  if (authority && !client.id.empty()) {
+    if (closing && !coordinated) {
+      authority->service.AsyncCall(&LinuxDocumentService::CancelSeal)
+          .WithArgs(client, close_generation)
+          .Then(base::BindOnce([](LinuxDocumentResult) {}));
+    }
+    authority->service.AsyncCall(&LinuxDocumentService::Retire).WithArgs(client);
+  }
+  document_used_ = false;
+  if (coordinated) {
+    FinishChromePreparations(false);
+    if (chrome_close_token_ && !close_.Irreversible()) {
+      CancelLinuxCloseAttempt(browser_, *chrome_close_token_);
+      if (!weak) return false;
+    }
+  } else {
+    close_.Retire();
+    close_client_ = {};
+    close_browser_.reset();
+    close_widget_.reset();
+    close_window_.clear();
+    close_error_.reset();
+    close_cancel_running_ = false;
+    retired_cancellations = std::move(close_cancellations_);
+  }
+  auto watches = std::move(pending_document_watches_);
+
+  auto replies = std::move(close_replies_);
+  for (auto& reply : replies)
+    std::move(reply).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_WINDOW_CLOSE_STALE").Set("message", "Renderer retired")));
+  for (auto& watch : watches)
+    std::move(watch.done).Run({"ERR_DOCUMENT_AUTH", "Renderer retired", {}});
+  for (auto& done : retired_cancellations)
+    std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_WINDOW_CLOSE_STALE").Set("message", "Renderer retired")));
+  return !!weak;
+}
+
+void ShellHostView::DocumentCall(
+    std::string verb, base::DictValue request,
+    base::OnceCallback<void(LinuxDocumentResult)> done) {
+  if (!EnsureDocumentClient())
+    return std::move(done).Run({"ERR_DOCUMENT_AUTH", "Document access denied", {}});
+  if (verb != "watch" && verb != "commit" && verb != "flush" && verb != "unwatch")
+    return std::move(done).Run({"ERR_UNKNOWN_CALL", "Unknown document operation", {}});
+  const auto* document = request.FindString("document");
+  if ((verb == "watch" || verb == "unwatch") &&
+      (request.size() != 1 || !document || *document != kLinuxLiveDocument))
+    return std::move(done).Run({"ERR_DOCUMENT_REQUEST", "Invalid document subscription", {}});
+  if (verb == "watch" || verb == "unwatch") {
+    if (document_subscription_ == UINT64_MAX)
+      return std::move(done).Run({"ERR_DOCUMENT_LIMIT", "Document subscription exhausted", {}});
+    ++document_subscription_;
+    document_watched_ = false;
+    auto superseded = std::move(pending_document_watches_);
+    for (auto& watch : superseded)
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(std::move(watch.done),
+              LinuxDocumentResult{"ERR_DOCUMENT_SUBSCRIPTION", "Document subscription replaced", {}}));
+  }
+  if (verb == "watch" && chrome_close_token_ &&
+      close_.identity().renderer != base::NumberToString(renderer_generation_)) {
+    if (pending_document_watches_.size() >= 64)
+      return std::move(done).Run({"ERR_DOCUMENT_LIMIT", "Too many pending subscriptions", {}});
+    pending_document_watches_.push_back({renderer_generation_, document_subscription_,
+                                         std::move(request), std::move(done)});
+    return;
+  }
+  if ((close_.BlocksWrites() || (chrome_close_token_ &&
+       close_.identity().renderer != base::NumberToString(renderer_generation_))) && (verb == "commit" || verb == "watch"))
+    return std::move(done).Run({"ERR_DOCUMENT_CLOSING", "Window is closing", {}});
+  if (verb == "watch" || verb == "unwatch") {
+    document_watched_ = verb == "watch";
+    if (document_watched_) document_used_ = true;
+  }
+  const auto client = DocumentClient();
+  const auto ui = base::SingleThreadTaskRunner::GetCurrentDefault();
+  auto changed = [ui, weak = GetWeakPtr(), client,
+                  generation = renderer_generation_, subscription = document_subscription_]
+                 (base::DictValue payload) {
+    ui->PostTask(FROM_HERE, base::BindOnce(
+        [](base::WeakPtr<ShellHostView> host, LinuxDocumentClient client,
+           uint64_t generation, uint64_t subscription, base::DictValue payload) {
+          if (!host || !host->handler_ || !host->documents_ ||
+              !host->profile() || !host->profile()->IsRegularProfile() ||
+              host->renderer_generation_ != generation ||
+              host->document_subscription_ != subscription ||
+              !host->document_watched_ || host->documents_->scope != client.scope) return;
+          host->Event("ArdiaDocuments", "documents", base::Value(base::DictValue()
+              .Set("name", "documents.changed").Set("data", std::move(payload))));
+        }, weak, client, generation, subscription, std::move(payload)));
+  };
+  std::optional<StorageTicket> ticket;
+  if (verb == "commit") {
+    auto operation = request.Clone();
+    operation.Remove("requestId");
+    operation.Remove("observedRevision");
+    operation.Set("authority", documents_->scope);
+    ticket = BeginStorageIntent(kLinuxLiveEnvelope, std::move(operation));
+    if (!ticket)
+      return std::move(done).Run({"ERR_DOCUMENT_LIMIT", "Window storage ledger is full", {}});
+  }
+  documents_->service.AsyncCall(&LinuxDocumentService::DispatchTracked)
+      .WithArgs(std::move(verb), client, std::move(request),
+                LinuxDocuments::Changed(std::move(changed)))
+      .Then(base::BindOnce(
+          [](base::WeakPtr<ShellHostView> host, std::optional<StorageTicket> ticket,
+             base::OnceCallback<void(LinuxDocumentResult)> done,
+             LinuxDocumentDispatchResult dispatched) {
+            if (host && ticket)
+              host->CompleteStorageIntent(*ticket,
+                  dispatched.durability == LinuxDocumentDurability::kCommitted,
+                  dispatched.durability == LinuxDocumentDurability::kFailed);
+            std::move(done).Run(std::move(dispatched.result));
+          }, GetWeakPtr(), std::move(ticket), std::move(done)));
+}
+
+std::optional<ShellHostView::StorageTicket> ShellHostView::BeginStorageIntent(
+    std::string name, base::DictValue operation) {
+  if (storage_pending_ >= 128 || storage_sequence_ == UINT64_MAX) return std::nullopt;
+  std::shared_ptr<StorageIntent> intent;
+  for (const auto& item : storage_intents_) {
+    if (item->name == name && item->operation == operation) { intent = item; break; }
+  }
+  if (!intent) {
+    auto encoded = base::WriteJsonWithOptions(
+        operation, base::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION, 128);
+    if (!encoded || encoded->size() > 2 * kLinuxLiveMaxBytes + 1024 ||
+        storage_intents_.size() >= 128 ||
+        storage_bytes_ > 4 * kLinuxLiveMaxBytes - encoded->size() ||
+        storage_pending_bytes_ > 4 * kLinuxLiveMaxBytes - encoded->size()) return std::nullopt;
+    intent = std::make_shared<StorageIntent>(StorageIntent{
+        std::move(name), std::move(operation), encoded->size()});
+    storage_bytes_ += intent->bytes;
+    storage_intents_.push_back(intent);
+  }
+  if (storage_pending_bytes_ > 4 * kLinuxLiveMaxBytes - intent->bytes) return std::nullopt;
+  ++intent->pending;
+  storage_pending_bytes_ += intent->bytes;
+  ++storage_pending_;
+  return StorageTicket{std::move(intent), ++storage_sequence_};
+}
+
+void ShellHostView::CompleteStorageIntent(const StorageTicket& ticket,
+                                         bool durable, bool failed) {
+  const auto& intent = ticket.intent;
+  --storage_pending_;
+  storage_pending_bytes_ -= intent->bytes;
+  --intent->pending;
+  if (failed) intent->failure = std::max(intent->failure, ticket.sequence);
+  else if (durable && intent->failure <= ticket.sequence) intent->failure = 0;
+  if (!intent->pending && !intent->failure) {
+    storage_bytes_ -= intent->bytes;
+    std::erase(storage_intents_, intent);
+  }
+  if (std::ranges::any_of(storage_intents_, [&intent](const auto& item) {
+        return item->name == intent->name && item->failure;
+      })) storage_failures_.insert(intent->name);
+  else storage_failures_.erase(intent->name);
+}
+
+bool ShellHostView::TrackStorageWrite(
+    std::string name, base::DictValue operation,
+    base::OnceCallback<void(bool, base::Value)>& done) {
+  auto ticket = BeginStorageIntent(std::move(name), std::move(operation));
+  if (!ticket) return false;
+  done = base::BindOnce(
+      [](base::WeakPtr<ShellHostView> host, StorageTicket ticket,
+         base::OnceCallback<void(bool, base::Value)> done,
+         bool ok, base::Value value) {
+        if (host) host->CompleteStorageIntent(ticket, ok, !ok);
+        std::move(done).Run(ok, std::move(value));
+      }, GetWeakPtr(), std::move(*ticket), std::move(done));
+  return true;
+}
+
+void ShellHostView::CloseNativeWindow(LinuxClose::Identity identity) {
+  if (!browser_) return;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+          [](base::WeakPtr<ShellHostView> host,
+             base::WeakPtr<BrowserWindowInterface> browser, std::string window,
+             LinuxClose::Identity identity) {
+            if (!host || !browser || host->browser_ != browser.get() ||
+                host->window_id_ != window ||
+                host->chrome_close_token_ ||
+                !CurrentLinuxCloseToken(browser.get()).is_empty() ||
+                host->close_.phase() != LinuxClose::Phase::kSealed ||
+                !host->close_.Matches(identity, host->renderer_generation_) ||
+                !host->ReadyForChromeClose(identity) ||
+                !host->close_.CanClose() || host->storage_pending_ ||
+                !host->storage_failures_.empty() || !host->handler_ ||
+                !host->handler_->Authorized() || !host->profile() ||
+                !host->profile()->IsRegularProfile() || !host->GetWidget() ||
+                host->GetWidget()->IsClosed()) return;
+            const auto token = base::UnguessableToken::Create();
+            if (!BindLinuxCloseAttempt(browser.get(), token)) {
+              host->CancelWindowClose(identity, base::BindOnce([](bool, base::Value) {}));
+              return;
+            }
+            host->chrome_close_token_ = token;
+            if (!host->close_.HandOff(identity, host->renderer_generation_)) {
+              host->CancelWindowClose(identity, base::BindOnce([](bool, base::Value) {}));
+              return;
+            }
+            browser->GetWindow()->Close();
+          }, GetWeakPtr(), browser_->GetWeakPtr(), window_id_, std::move(identity)));
+}
+
+void ShellHostView::ArmWindowClose() {
   if (!browser_ || !browser_view_ || !GetWidget() || GetWidget()->IsClosed()) return;
   GetWidget()->MakeCloseSynchronous(base::BindOnce(
       [](base::WeakPtr<ShellHostView> host, base::WeakPtr<views::Widget> widget,
-         views::Widget::ClosedReason) {
+         views::Widget::ClosedReason reason) {
         if (!host || !widget || widget->IsClosed()) return;
-        host->ArmUtilityClose();
-        host->RequestUtilityClose();
+        host->ArmWindowClose();
+        if (!host->ReadyForChromeClose(host->close_.identity())) {
+          host->RequestWindowClose();
+          return;
+        }
+        widget->MakeCloseSynchronous({});
+        widget->CloseWithReason(reason);
+        if (host && widget && !widget->IsClosed()) host->ArmWindowClose();
       }, GetWeakPtr(), GetWidget()->GetWeakPtr()));
 }
 
-void ShellHostView::RequestUtilityClose() {
-  if (!browser_ || !browser_view_ || !GetWidget() || GetWidget()->IsClosed()) return;
-  utility_close_pending_ = true;
-  if (!utility_ready_ || !handler_) return;
-  Event("ArdiaShell", "onCommand", base::Value(base::DictValue()
-      .Set("command", "closeTab").Set("arg", base::Value()).Set("windowId", window_id_)));
+base::DictValue ShellHostView::RequestWindowClose() {
+  if (!browser_ || !browser_view_ || !handler_ || !handler_->Authorized() || !GetWidget() ||
+      GetWidget()->IsClosed() || !EnsureDocumentClient()) return {};
+  if (close_.phase() != LinuxClose::Phase::kIdle &&
+      close_.phase() != LinuxClose::Phase::kCancelled &&
+      close_.identity().renderer != base::NumberToString(renderer_generation_)) return {};
+  const bool fresh = close_.phase() == LinuxClose::Phase::kIdle ||
+                     close_.phase() == LinuxClose::Phase::kCancelled;
+  const auto identity = close_.Request(renderer_generation_);
+  if (!identity) return {};
+  base::DictValue request;
+  request.Set("windowId", window_id_);
+  request.Set("rendererGeneration", identity->renderer);
+  request.Set("closeGeneration", identity->close);
+  if (fresh) {
+    close_client_ = DocumentClient();
+    close_browser_ = browser_->GetWeakPtr();
+    close_widget_ = GetWidget()->GetWeakPtr();
+    close_window_ = window_id_;
+    close_error_.reset();
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce(
+            [](base::WeakPtr<ShellHostView> host, LinuxClose::Identity identity) {
+              if (!host || !host->close_.Matches(identity, host->renderer_generation_)) return;
+              host->CancelWindowClose(identity, base::BindOnce([](bool, base::Value) {}));
+            }, GetWeakPtr(), *identity), base::Seconds(30));
+  }
+  if (close_.phase() == LinuxClose::Phase::kRequested)
+    Event("ArdiaShell", "shell", base::Value(base::DictValue()
+        .Set("name", "shell.closeRequested").Set("data", request.Clone())));
+  return request;
 }
 
-void ShellHostView::CloseUtilityAfterSave() {
-  if (!browser_ || !browser_view_ || !GetWidget() || GetWidget()->IsClosed()) return;
+void ShellHostView::RequestUtilityClose() {
+  utility_close_pending_ = true;
+  if (!utility_ready_) return;
+  RequestWindowClose();
+}
+
+bool ShellHostView::ReadyForChromeClose(const LinuxClose::Identity& identity) const {
+  const auto* widget = GetWidget();
+  if (!close_browser_ || !close_widget_ || close_browser_.get() != browser_ ||
+      close_widget_.get() != widget || !browser_view_ || close_window_ != window_id_ ||
+      !documents_ || close_client_.id.empty() || !close_client_.privileged ||
+      !close_client_.regular || close_client_.scope != documents_->scope ||
+      !close_.IsCurrent(identity) || !close_.CanClose() ||
+      storage_pending_ || !storage_failures_.empty()) return false;
+  if (close_.Irreversible()) return chrome_close_token_.has_value();
+  return close_.Matches(identity, renderer_generation_) &&
+         close_client_.id == document_client_.id && handler_ &&
+         handler_->Authorized() && profile() && profile()->IsRegularProfile() &&
+         !widget->IsClosed();
+}
+
+LinuxCloseAdmission ShellHostView::AdmitChromeTeardown(
+    LinuxClose::Identity identity, base::UnguessableToken token, LinuxCloseStage stage) {
+  if (!chrome_close_token_ || *chrome_close_token_ != token ||
+      close_.Irreversible() || !ReadyForChromeClose(identity))
+    return LinuxCloseAdmission::kRejected;
+  return CommitLinuxCloseTeardown(browser_, token, stage, base::BindOnce(
+      [](base::WeakPtr<ShellHostView> host,
+         base::WeakPtr<BrowserWindowInterface> browser,
+         LinuxClose::Identity identity, base::UnguessableToken token) {
+        if (!host || !browser || host->browser_ != browser.get() ||
+            !host->chrome_close_token_ || *host->chrome_close_token_ != token ||
+            host->close_.Irreversible() ||
+            !host->close_.Matches(identity, host->renderer_generation_) ||
+            !host->ReadyForChromeClose(identity)) return false;
+        return host->close_.BeginTeardown(identity, host->renderer_generation_);
+      }, GetWeakPtr(), close_browser_, std::move(identity), token));
+}
+
+void ShellHostView::ReplyChromeClose(
+    LinuxCloseStage stage, LinuxClose::Identity identity,
+    base::UnguessableToken token, base::OnceCallback<void(bool)> continuation,
+    bool ready) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
-          [](base::WeakPtr<ShellHostView> host, base::WeakPtr<views::Widget> widget) {
-            if (!host || !widget || widget->IsClosed() ||
-                !host->browser_ || !host->browser_view_) return;
+          [](base::WeakPtr<ShellHostView> host, LinuxCloseStage stage,
+             LinuxClose::Identity identity, base::UnguessableToken token,
+             base::OnceCallback<void(bool)> continuation, bool ready) {
+            bool proceed = ready && host && host->chrome_close_token_ &&
+                           *host->chrome_close_token_ == token &&
+                           host->ReadyForChromeClose(identity);
+            if (proceed && stage != LinuxCloseStage::kPrepare && !host->close_.Irreversible()) {
+              const auto admission = host->AdmitChromeTeardown(identity, token, stage);
+              if (admission == LinuxCloseAdmission::kRetryPreflight)
+                return std::move(continuation).Run(true);
+              proceed = admission == LinuxCloseAdmission::kCommitted && host &&
+                        host->close_.Irreversible() && host->ReadyForChromeClose(identity);
+            }
+            if (proceed && stage == LinuxCloseStage::kDestroy)
+              proceed = host->close_.Destroy(identity);
+            std::move(continuation).Run(proceed);
+          }, GetWeakPtr(), stage, std::move(identity), token,
+          std::move(continuation), ready));
+}
+
+void ShellHostView::FinishChromePreparations(bool ready) {
+  auto pending = std::move(close_preparations_);
+  const auto identity = close_.identity();
+  const auto token = chrome_close_token_.value_or(base::UnguessableToken());
+  for (auto& [stage, continuation] : pending)
+    ReplyChromeClose(stage, identity, token, std::move(continuation), ready);
+}
+
+bool ShellHostView::DeferChromeClose(
+    const base::UnguessableToken& supplied, LinuxCloseStage stage,
+    base::OnceCallback<void(bool)> continuation) {
+  const auto weak = GetWeakPtr();
+  if (!chrome_close_token_ && supplied.is_empty()) {
+    const auto request = RequestWindowClose();
+    if (!weak) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(std::move(continuation), false));
+      return true;
+    }
+    if (!request.empty()) {
+      const auto token = base::UnguessableToken::Create();
+      if (BindLinuxCloseAttempt(browser_, token)) chrome_close_token_ = token;
+      else CancelWindowClose(close_.identity(), base::BindOnce([](bool, base::Value) {}));
+    }
+  }
+  if (!chrome_close_token_ || (!supplied.is_empty() && *chrome_close_token_ != supplied) ||
+      (!close_.Matches(close_.identity(), renderer_generation_) && !close_.Irreversible()) ||
+      close_.phase() == LinuxClose::Phase::kCancelling ||
+      close_.phase() == LinuxClose::Phase::kCancelled) {
+    ReplyChromeClose(stage, close_.identity(), supplied, std::move(continuation), false);
+    return true;
+  }
+  const auto identity = close_.identity();
+  if (ReadyForChromeClose(identity)) {
+    const auto token = *chrome_close_token_;
+    if (stage != LinuxCloseStage::kPrepare && !close_.Irreversible()) {
+      const auto admission = AdmitChromeTeardown(identity, token, stage);
+      if (admission != LinuxCloseAdmission::kCommitted) {
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(std::move(continuation),
+                admission == LinuxCloseAdmission::kRetryPreflight));
+        return true;
+      }
+      if (!weak || !weak->close_.Irreversible() || !weak->ReadyForChromeClose(identity)) {
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(std::move(continuation), false));
+        return true;
+      }
+    }
+    const bool accepted = stage != LinuxCloseStage::kDestroy || weak->close_.Destroy(identity);
+    if (!accepted)
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(std::move(continuation), false));
+    return !accepted;
+  }
+  if (close_preparations_.size() >= 64 || close_.HandedOff() || close_error_) {
+    ReplyChromeClose(stage, identity, *chrome_close_token_, std::move(continuation), false);
+    return true;
+  }
+  close_preparations_.emplace_back(stage, std::move(continuation));
+  return true;
+}
+
+void ShellHostView::ChromeCloseCancelled(const base::UnguessableToken& token) {
+  if (!chrome_close_token_ || *chrome_close_token_ != token || close_.Irreversible()) return;
+  FinishChromePreparations(false);
+  CancelDocumentSeal(close_.identity(), true);
+}
+
+void ShellHostView::CancelWindowClose(
+    LinuxClose::Identity identity,
+    base::OnceCallback<void(bool, base::Value)> done) {
+  if (!documents_ || !close_.Matches(identity, renderer_generation_))
+    return std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_WINDOW_CLOSE_STALE").Set("message", "Close request is not current")));
+  if (close_.phase() == LinuxClose::Phase::kCancelled)
+    return std::move(done).Run(true, base::Value());
+  if (close_cancellations_.size() >= 64)
+    return std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_WINDOW_CLOSE_LIMIT").Set("message", "Too many close cancellations")));
+  if (close_.Irreversible() || (!chrome_close_token_ &&
+      (close_.HandedOff() || (browser_ && !CurrentLinuxCloseToken(browser_).is_empty()))))
+    return std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_WINDOW_CLOSE_IN_PROGRESS").Set("message", "Chromium teardown is in progress")));
+  close_cancellations_.push_back(std::move(done));
+  if (chrome_close_token_) {
+    const auto weak = GetWeakPtr();
+    if (!CancelLinuxCloseAttempt(browser_, *chrome_close_token_) && weak) {
+      auto rejected = std::move(close_cancellations_.back());
+      close_cancellations_.pop_back();
+      std::move(rejected).Run(false, base::Value(base::DictValue()
+          .Set("code", "ERR_WINDOW_CLOSE_IN_PROGRESS").Set("message", "Chromium cancellation is not confirmed")));
+    }
+    return;
+  }
+  CancelDocumentSeal(identity, false);
+}
+
+void ShellHostView::CancelDocumentSeal(LinuxClose::Identity identity, bool chrome_aborted) {
+  if (close_cancel_running_ || !documents_ || !close_.BeginCancel(identity, chrome_aborted)) return;
+  close_cancel_running_ = true;
+  documents_->service.AsyncCall(&LinuxDocumentService::CancelSeal)
+      .WithArgs(close_client_, identity.close)
+      .Then(base::BindOnce(
+          [](base::WeakPtr<ShellHostView> host, LinuxClose::Identity identity,
+             LinuxDocumentResult result) {
+            if (!host || !host->close_.IsCurrent(identity)) return;
+            host->close_cancel_running_ = false;
+            auto cancellations = std::move(host->close_cancellations_);
+            if (!result.ok()) {
+              for (auto& done : cancellations)
+                std::move(done).Run(false, base::Value(base::DictValue()
+                    .Set("code", result.code).Set("message", result.message)));
+              return;
+            }
+            if (!host->close_.Cancelled(identity)) return;
+            host->chrome_close_token_.reset();
+            host->close_client_ = {};
+            host->close_browser_.reset();
+            host->close_widget_.reset();
+            host->close_window_.clear();
+            auto replies = std::move(host->close_replies_);
+            auto watches = std::move(host->pending_document_watches_);
             host->utility_close_pending_ = false;
-            widget->MakeCloseSynchronous({});
-            host->browser_->GetWindow()->Close();
-            if (host && widget && !widget->IsClosed() &&
-                host->browser_ && host->browser_view_) host->ArmUtilityClose();
-          }, GetWeakPtr(), GetWidget()->GetWeakPtr()));
+            const auto weak = host;
+            host->Event("ArdiaShell", "shell", base::Value(base::DictValue()
+                .Set("name", "shell.closeCancelled").Set("data", base::DictValue()
+                    .Set("windowId", host->window_id_)
+                    .Set("rendererGeneration", identity.renderer)
+                    .Set("closeGeneration", identity.close))));
+            for (auto& watch : watches) {
+              if (!weak || watch.generation != weak->renderer_generation_)
+                std::move(watch.done).Run({"ERR_DOCUMENT_AUTH", "Renderer changed", {}});
+              else if (watch.subscription != weak->document_subscription_)
+                std::move(watch.done).Run({"ERR_DOCUMENT_SUBSCRIPTION", "Document subscription replaced", {}});
+              else
+                weak->DocumentCall("watch", std::move(watch.request), std::move(watch.done));
+            }
+            for (auto& reply : replies)
+              std::move(reply).Run(false, base::Value(base::DictValue()
+                  .Set("code", "ERR_WINDOW_CLOSE_CANCELLED").Set("message", "Window close cancelled")));
+            for (auto& done : cancellations) std::move(done).Run(true, base::Value());
+          }, GetWeakPtr(), identity));
+}
+
+void ShellHostView::AcknowledgeWindowClose(
+    const base::DictValue& request,
+    base::OnceCallback<void(bool, base::Value)> done) {
+  const LinuxClose::Identity identity{String(request, "rendererGeneration"),
+                                      String(request, "closeGeneration")};
+  const auto watermark = request.FindInt("watermark");
+  const auto phase = close_.phase();
+  if (!handler_ || !handler_->Authorized() ||
+      request.size() != 4 || String(request, "windowId") != window_id_ ||
+      !watermark || !documents_ ||
+      !close_.BeginSeal(identity, renderer_generation_, *watermark))
+    return std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_WINDOW_CLOSE_STALE").Set("message", "Invalid close acknowledgment")));
+  if (close_error_)
+    return std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", close_error_->first).Set("message", close_error_->second)));
+  if (close_replies_.size() >= 64)
+    return std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_WINDOW_CLOSE_LIMIT").Set("message", "Too many close acknowledgments")));
+  close_replies_.push_back(std::move(done));
+  if (phase == LinuxClose::Phase::kSealing || close_.CanClose()) return;
+  documents_->service.AsyncCall(&LinuxDocumentService::Seal)
+      .WithArgs(DocumentClient(), identity.close, *watermark, document_used_)
+      .Then(base::BindOnce(
+          [](base::WeakPtr<ShellHostView> host, LinuxClose::Identity identity,
+             LinuxDocumentResult result) {
+            if (!host || !host->close_.Matches(identity, host->renderer_generation_) ||
+                host->close_.phase() != LinuxClose::Phase::kSealing) return;
+            if (!result.ok()) {
+              host->close_error_ = {result.code, result.message};
+              host->FinishChromePreparations(false);
+              auto replies = std::move(host->close_replies_);
+              for (auto& reply : replies)
+                std::move(reply).Run(false, base::Value(base::DictValue()
+                    .Set("code", result.code).Set("message", result.message)));
+              return;
+            }
+            if (host->storage_pending_ || !host->storage_failures_.empty()) {
+              host->close_error_ = {"ERR_DOCUMENT_STORAGE", "Window storage has unresolved writes"};
+              host->FinishChromePreparations(false);
+              auto replies = std::move(host->close_replies_);
+              for (auto& reply : replies)
+                std::move(reply).Run(false, base::Value(base::DictValue()
+                    .Set("code", "ERR_DOCUMENT_STORAGE")
+                    .Set("message", "Window storage has unresolved writes")));
+              return;
+            }
+            if (!host->browser_ || !host->browser_view_ || !host->GetWidget() ||
+                host->GetWidget()->IsClosed() || !host->handler_ || !host->handler_->Authorized() ||
+                !host->profile() || !host->profile()->IsRegularProfile()) return;
+            if (!host->close_.Sealed(identity, host->renderer_generation_)) return;
+            host->FinishChromePreparations(true);
+            if (!host->chrome_close_token_) host->CloseNativeWindow(identity);
+          }, GetWeakPtr(), identity));
+}
+
+void ShellHostView::OnWidgetClosing(views::Widget*) {
+  auto replies = std::move(close_replies_);
+  const bool sealed = close_.CanClose();
+  for (auto& reply : replies)
+    std::move(reply).Run(sealed, base::Value());
+}
+
+void ShellHostView::OnWidgetDestroying(views::Widget*) {
+  close_observation_.Reset();
 }
 
 bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
@@ -1903,6 +2597,47 @@ void ShellHostView::Invoke(
     base::OnceCallback<void(bool, base::Value)> done) {
   if (!browser_) return std::move(done).Run(false, base::Value("The native browser window has closed"));
   const base::ListValue& values = Arguments(args);
+  if (method == "ArdiaShell.windowIdentity") {
+    const auto* supplied = args.Find("args");
+    if (args.size() != 1 || !supplied || !supplied->is_list() || !values.empty() ||
+        !handler_ || !handler_->Authorized() || !renderer_generation_ ||
+        !profile() || !profile()->IsRegularProfile())
+      return std::move(done).Run(false, base::Value(base::DictValue()
+          .Set("code", "ERR_WINDOW_IDENTITY").Set("message", "Committed window identity unavailable")));
+    return std::move(done).Run(true, base::Value(base::DictValue()
+        .Set("windowId", window_id_)
+        .Set("rendererGeneration", base::NumberToString(renderer_generation_))));
+  }
+  if (method == "ArdiaShell.requestWindowClose") {
+    if (values.size() != 1 || !values[0].is_string())
+      return std::move(done).Run(false, base::Value("Window identity required"));
+    for (const auto& [id, target] : Hosts()) {
+      if (target->window_id() != values[0].GetString() || target->profile() != profile()) continue;
+      auto request = target->RequestWindowClose();
+      if (request.empty()) return std::move(done).Run(false, base::Value(base::DictValue()
+          .Set("code", "ERR_WINDOW_CLOSE_UNAVAILABLE").Set("message", "Target renderer unavailable")));
+      return std::move(done).Run(true, base::Value(std::move(request)));
+    }
+    return std::move(done).Run(false, base::Value("No such native window"));
+  }
+  if (method == "ArdiaShell.acknowledgeWindowClose" || method == "ArdiaShell.rejectWindowClose") {
+    if (values.size() != 1 || !values[0].is_dict())
+      return std::move(done).Run(false, base::Value("Close identity required"));
+    const auto& request = values[0].GetDict();
+    if (method == "ArdiaShell.acknowledgeWindowClose")
+      return AcknowledgeWindowClose(request, std::move(done));
+    if (request.size() != 3 || String(request, "windowId") != window_id_)
+      return std::move(done).Run(false, base::Value("Invalid close rejection"));
+    return CancelWindowClose({String(request, "rendererGeneration"),
+                               String(request, "closeGeneration")}, std::move(done));
+  }
+  if ((close_.BlocksWrites() || (chrome_close_token_ &&
+       close_.identity().renderer != base::NumberToString(renderer_generation_))) &&
+      (method == "session.write" || method == "ArdiaShell.writeDocument" ||
+       method == "ArdiaShell.saveDocument" || method == "ArdiaShell.removeDocument")) {
+    return std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_DOCUMENT_CLOSING").Set("message", "Window is closing")));
+  }
   if (method == "ArdiaShell.restoreShortcutFocus") {
     if (switcher_source_ && browser_->GetTabStripModel()->GetActiveWebContents() == switcher_source_.get()) {
       switcher_source_->Focus();
@@ -2045,6 +2780,10 @@ void ShellHostView::Invoke(
     }
     const base::FilePath profile_path = profile()->GetPath();
     const std::string source_window = window_id_;
+    if (!TrackStorageWrite(kSessionName, base::DictValue()
+            .Set("base", base->Clone()).Set("session", local->Clone()), done))
+      return std::move(done).Run(false, base::Value(base::DictValue()
+          .Set("code", "ERR_DOCUMENT_LIMIT").Set("message", "Window storage ledger is full")));
     FileRunner()->PostTaskAndReplyWithResult(
         FROM_HERE, base::BindOnce(&MergeAndWriteSession,
                                   DocumentDirectory(profile()),
@@ -2079,7 +2818,8 @@ void ShellHostView::Invoke(
   }
   if (method == "ArdiaShell.readDocument") {
     const std::string name = ArgumentString(values, 0);
-    if (!linux_policy::ValidDocumentName(name) || name == kSessionName) {
+    if (!linux_policy::ValidDocumentName(name) || name == kSessionName ||
+        LinuxDocuments::Reserved(name)) {
       return std::move(done).Run(false, base::Value("Invalid or reserved document name"));
     }
     FileRunner()->PostTaskAndReplyWithResult(
@@ -2094,7 +2834,8 @@ void ShellHostView::Invoke(
   if (method == "ArdiaShell.writeDocument" || method == "ArdiaShell.saveDocument" ||
       method == "ArdiaShell.removeDocument") {
     const std::string name = ArgumentString(values, 0);
-    if (!linux_policy::ValidDocumentName(name) || name == kSessionName) {
+    if (!linux_policy::ValidDocumentName(name) || name == kSessionName ||
+        LinuxDocuments::Reserved(name)) {
       return std::move(done).Run(false, base::Value("Invalid or reserved document name"));
     }
     std::optional<std::string> contents;
@@ -2103,7 +2844,16 @@ void ShellHostView::Invoke(
         return std::move(done).Run(false, base::Value("Document text is required"));
       }
       contents = values[1].GetString();
+      if (contents->size() > kDocumentLimit)
+        return std::move(done).Run(false, base::Value(base::DictValue()
+            .Set("code", "ERR_DOCUMENT_LIMIT").Set("message", "Document storage limit exceeded")));
     }
+    base::DictValue operation;
+    operation.Set("kind", contents ? "write" : "remove");
+    if (contents) operation.Set("contents", *contents);
+    if (!TrackStorageWrite(name, std::move(operation), done))
+      return std::move(done).Run(false, base::Value(base::DictValue()
+          .Set("code", "ERR_DOCUMENT_LIMIT").Set("message", "Window storage ledger is full")));
     FileRunner()->PostTaskAndReplyWithResult(
         FROM_HERE, base::BindOnce(&WriteDocument, DocumentDirectory(profile()), name, std::move(contents)),
         base::BindOnce(
@@ -2215,11 +2965,10 @@ void ShellHostView::Invoke(
       }
     } else if (method == "ArdiaShell.focusWindow") {
       FocusNativeWindow(target->browser());
-    } else if (target->is_utility()) {
-      if (target == this) target->CloseUtilityAfterSave();
-      else target->RequestUtilityClose();
     } else {
-      CloseNativeWindow(target->browser());
+      auto request = target->RequestWindowClose();
+      if (request.empty()) return std::move(done).Run(false, base::Value("Target renderer unavailable"));
+      return std::move(done).Run(true, base::Value(std::move(request)));
     }
     return std::move(done).Run(true, base::Value());
   }
@@ -2616,6 +3365,20 @@ void StartLinuxHost() {
   g_ardia_keeps_window_without_tabs = [](const BrowserWindowInterface* browser) {
     return browser && Hosts().contains(browser->GetSessionID().id());
   };
+  g_ardia_linux_close_hooks = {
+      [](BrowserWindowInterface* browser, const base::UnguessableToken& token,
+         LinuxCloseStage stage, base::OnceCallback<void(bool)> continuation) {
+        if (!browser) return false;
+        const auto found = Hosts().find(browser->GetSessionID().id());
+        if (found == Hosts().end() || found->second->browser() != browser) return false;
+        return found->second->DeferChromeClose(token, stage, std::move(continuation));
+      },
+      [](BrowserWindowInterface* browser, const base::UnguessableToken& token) {
+        if (!browser) return;
+        const auto found = Hosts().find(browser->GetSessionID().id());
+        if (found != Hosts().end() && found->second->browser() == browser)
+          found->second->ChromeCloseCancelled(token);
+      }};
   ac_engine_set_event_sink(EngineEvent, nullptr);
   static base::NoDestructor<HostRegistry> registry;
   registry->Start();

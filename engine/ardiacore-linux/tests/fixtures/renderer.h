@@ -117,6 +117,7 @@ struct ShellHostView {
   int detached = 0;
   int closed = 0;
   content::WebContents* shell() const { return const_cast<content::WebContents*>(&contents_); }
+  bool RetireDocuments() { return true; }
   void DetachViewports() { ++detached; }
   ShellHostView* GetWeakPtr() { return this; }
   bool DisposeTemporary(TabBinding* binding) { binding->live = false; ++closed; return true; }

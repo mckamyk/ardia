@@ -55,6 +55,7 @@ chromium chromium-password-generation-local.patch
 chromium chromium-window-docked-devtools.patch
 chromium chromium-window-hosted.patch
 chromium chromium-window-hosted-mac.patch mac
+chromium chromium-linux-document-close.patch linux
 chromium chromium-extension-installed-bubble.patch
 chromium chromium-pip-overlay-window.patch
 chromium chromium-tab-sharing-capturer.patch
