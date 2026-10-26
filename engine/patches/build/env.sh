@@ -15,6 +15,9 @@ export HELIUM_LINUX_DIR="$CB/helium-linux"
 _ac_target_config=$(python3 "$(dirname "${BASH_SOURCE[0]:-$0}")/target_config.py" --shell) || return $?
 eval "$_ac_target_config"
 unset _ac_target_config
+if [[ "$AC_TARGET_OS" == linux ]]; then
+  export CHROMIUM_SRC="${CHROMIUM_SRC:-$CB/chromium_git/chromium/src}"
+fi
 if [[ "$AC_TARGET_OS" == mac && "$AC_TARGET_CPU" == arm64 ]]; then
   export AC_SERIES_BASE="${AC_SERIES_BASE:-$CB/series-base}"
 else

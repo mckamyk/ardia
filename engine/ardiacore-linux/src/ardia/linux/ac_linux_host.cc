@@ -84,6 +84,8 @@
 #include "ui/base/accelerators/accelerator_manager.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect_conversions.h"
@@ -256,7 +258,7 @@ scoped_refptr<base::SequencedTaskRunner> FileRunner() {
 }
 
 std::string AssetPath(const GURL& url) {
-  const std::string path = url.path();
+  const std::string path(url.path());
   return path == "/" || path.empty() ? "index.html" : path.substr(1);
 }
 
@@ -364,8 +366,10 @@ class TabBinding : public content::WebContentsObserver {
 
 class ShellHostView : public views::View,
                       public views::ViewObserver,
-                      public TabStripModelObserver,
-                      public ui::AcceleratorTarget {
+                      public TabStripModelObserver {
+ public:
+  METADATA_HEADER(ShellHostView, views::View)
+
  public:
   ShellHostView(BrowserWindowInterface* browser, BrowserView* parent, bool startup);
   ~ShellHostView() override;
@@ -427,9 +431,11 @@ class ShellHostView : public views::View,
   std::map<int, std::unique_ptr<TabBinding>> bindings_;
   bool app_operation_ = false;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
-  base::ScopedObservation<TabStripModel, TabStripModelObserver> tab_observation_{this};
   base::WeakPtrFactory<ShellHostView> weak_factory_{this};
 };
+
+BEGIN_METADATA(ShellHostView)
+END_METADATA
 
 ShellHostView* HostFor(content::WebContents* contents) {
   for (const auto& [id, host] : Hosts()) {
@@ -605,7 +611,7 @@ ShellHostView::ShellHostView(BrowserWindowInterface* browser, BrowserView* paren
   Hosts()[id_] = this;
   shell_ = AddChildView(std::make_unique<views::WebView>(browser->GetProfile()));
   view_observation_.Observe(parent);
-  tab_observation_.Observe(browser->GetTabStripModel());
+  browser->GetTabStripModel()->AddObserver(this);
 }
 
 ShellHostView::~ShellHostView() {
@@ -613,7 +619,7 @@ ShellHostView::~ShellHostView() {
   UnregisterAccelerators();
   Hosts().erase(id_);
   bindings_.clear();
-  tab_observation_.Reset();
+  TabStripModelObserver::StopObservingAll(this);
   view_observation_.Reset();
 }
 
@@ -644,7 +650,7 @@ void ShellHostView::DetachViewports() {
 void ShellHostView::DetachBrowser() {
   weak_factory_.InvalidateWeakPtrs();
   UnregisterAccelerators();
-  tab_observation_.Reset();
+  TabStripModelObserver::StopObservingAll(this);
   view_observation_.Reset();
   bindings_.clear();
   browser_ = nullptr;

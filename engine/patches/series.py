@@ -231,10 +231,29 @@ def cmd_files(args):
 
 
 def cmd_apply(args):
-    for step in read_series():
-        if args.phase and phase_of(step) != args.phase:
-            continue
-        if step.kind != "layer" and is_applied(step, SRC):
+    steps = [s for s in read_series() if not args.phase or phase_of(s) == args.phase]
+    final_applied = set()
+    if TARGET_OS == "linux" and os.path.isfile(os.path.join(BASE, '.ardia-series-target')):
+        with tempfile.TemporaryDirectory(prefix="ac-linux-applied-") as scratch:
+            errors = materialize(steps, scratch)
+            if errors:
+                sys.exit("\n".join(errors))
+            for step in steps:
+                if step.kind != "chromium":
+                    continue
+                text = pathlib.Path(step.patch).read_text(encoding="utf-8", errors="surrogateescape")
+                if re.search(r"^(?:\+\+\+ /dev/null(?:\s|$)|(?:rename|copy) (?:from|to) )", text, re.M):
+                    continue
+                paths = step.paths()
+                if paths and all(
+                    os.path.isfile(os.path.join(scratch, path)) and
+                    os.path.isfile(os.path.join(SRC, path)) and
+                    filecmp.cmp(os.path.join(scratch, path), os.path.join(SRC, path), shallow=False)
+                    for path, is_dir in paths if not is_dir
+                ):
+                    final_applied.add(step.name)
+    for step in steps:
+        if step.kind != "layer" and (step.name in final_applied or is_applied(step, SRC)):
             print(f"already applied {step.name}")
             continue
         error = apply_step(step, SRC, strict=False)
@@ -398,7 +417,7 @@ def main():
         command_parser.add_argument("--platform", choices=("mac", "linux"))
         command_parser.add_argument("--cpu", choices=("arm64", "x64"))
     args = parser.parse_args()
-    global BASE, TARGET_OS, TARGET_CPU
+    global BASE, TARGET_OS, TARGET_CPU, SRC
     try:
         target = configuration(args.platform, args.cpu)
     except ValueError as error:
@@ -407,12 +426,14 @@ def main():
     TARGET_CPU = target['AC_TARGET_CPU']
     os.environ.update(target)
     cb = os.environ.get("AC_CHROMIUM_BUILD", os.path.expanduser("~/chromium-build"))
+    if TARGET_OS == "linux" and "CHROMIUM_SRC" not in os.environ:
+        SRC = os.path.join(cb, "chromium_git/chromium/src")
     base_name = "series-base" if (TARGET_OS, target['AC_TARGET_CPU']) == ("mac", "arm64") else f"series-base-{TARGET_OS}-{target['AC_TARGET_CPU']}"
     BASE = os.environ.get("AC_SERIES_BASE", os.path.join(cb, base_name))
     if args.command in ("check", "capture-base", "materialize"):
         refuse_live_base_for_scratch_tree()
     guard_writes(args)
-    if args.command in ("check", "capture-base", "materialize"):
+    if args.command in ("check", "capture-base", "materialize") or (args.command == "apply" and TARGET_OS == "linux"):
         marker = pathlib.Path(BASE, '.ardia-series-target')
         if marker.exists():
             try:
