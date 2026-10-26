@@ -25,6 +25,8 @@ export function fitFor(layer: SymbolLayer, weight: SymbolWeight): LayerFit {
 
 const round = (n: number) => Math.round(n * 1000) / 1000;
 const precise = (n: number) => Number(n.toPrecision(5));
+const XML_ENTITIES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" };
+const attribute = (value: string) => value.replace(/[&<>"']/g, (character) => XML_ENTITIES[character]!);
 
 function layerTransform(layer: SymbolLayer, fit: LayerFit, pointSize: number, width: number, height: number, nudge: readonly [number, number]) {
   const [scale, aspect, fitDx, fitDy, , rotate, flip] = fit;
@@ -47,7 +49,9 @@ export function symbolMarkup(
   layers: readonly SymbolLayer[],
   options: { pointSize: number; weight: SymbolWeight; width: number; height: number; color: string; id: string; nudge?: readonly [number, number] },
 ): string {
-  const { pointSize, weight, width, height, color, id, nudge = [0, 0] } = options;
+  const { pointSize, weight, width, height, nudge = [0, 0] } = options;
+  const color = attribute(options.color);
+  const id = options.id.replace(/[^a-zA-Z0-9_-]/g, "_") || "symbol";
   let content = "";
   let defs = "";
   layers.forEach((layer, index) => {

@@ -32,7 +32,7 @@ export function setTrafficLightsCenter(_windowId: string, next: [number, number]
   return Promise.resolve();
 }
 
-function TrafficLight({ name, theme }: { name: Light; theme: keyof typeof ART }) {
+export function TrafficLight({ name, theme }: { name: Light; theme: keyof typeof ART }) {
   const { interior, rim } = ART[theme][name];
   const id = `ardia-light-${theme}-${name}`;
   const r = DIAMETER / 2;
@@ -55,11 +55,15 @@ function TrafficLight({ name, theme }: { name: Light; theme: keyof typeof ART })
   );
 }
 
-export function TrafficLights() {
-  const at = useSyncExternalStore(
+export function useTrafficLightsCenter() {
+  return useSyncExternalStore(
     (watch) => (watchers.add(watch), () => void watchers.delete(watch)),
     () => center,
   );
+}
+
+export function TrafficLights() {
+  const at = useTrafficLightsCenter();
   const theme = useBrowser((s) => (s.ui.appDark ? "dark" : "light"));
   if (!at) return null;
   return (
