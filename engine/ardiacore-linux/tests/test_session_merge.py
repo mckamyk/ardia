@@ -419,7 +419,9 @@ std::vector<std::string> order;
 struct ShellHostView {
   Profile* value;
   std::vector<base::Value> events;
+  std::string identifier = "peer";
   Profile* profile() { return value; }
+  const std::string& window_id() const { return identifier; }
   void Event(std::string_view module, std::string_view event, base::Value payload) {
     assert(module == "ArdiaHost" && event == "session");
     order.push_back("event");
@@ -468,7 +470,7 @@ auto& Hosts() { return hosts; }
   auto deliver =
 ''' + callback + r''';
   bool replied = false;
-  deliver("/Profile", "closed-source-window",
+  deliver("/Profile", "closed-source-window", theme.GetDict().Clone(),
           base::OnceCallback<void(bool, base::Value)>([&](bool ok, base::Value value) {
             assert(ok && value.GetDict() == expected.GetDict());
             replied = true;
@@ -485,14 +487,26 @@ auto& Hosts() { return hosts; }
   orphaned.ok = true;
   orphaned.previous = original.GetDict().Clone();
   orphaned.session = expected.GetDict().Clone();
-  deliver("/Profile", "destroyed-source",
+  deliver("/Profile", "destroyed-source", expected.GetDict().Clone(),
           base::OnceCallback<void(bool, base::Value)>([](bool, base::Value) {}), std::move(orphaned));
   assert(order == std::vector<std::string>({"event"}));
   assert(peer.events.size() == 2);
   order.clear();
-  deliver("/Profile", "closed-source-window",
+  deliver("/Profile", "closed-source-window", theme.GetDict().Clone(),
           base::OnceCallback<void(bool, base::Value)>([](bool ok, base::Value) { assert(ok); order.push_back("reply"); }), std::move(final));
   assert(order == std::vector<std::string>({"reply"}) && peer.events.size() == 2);
+  ShellHostView source{&regular, {}, "writer"};
+  hosts[5] = &source;
+  SessionWriteResult changed;
+  changed.ok = true;
+  changed.previous = original.GetDict().Clone();
+  changed.session = expected.GetDict().Clone();
+  deliver("/Profile", "writer", nav.GetDict().Clone(),
+          base::OnceCallback<void(bool, base::Value)>([](bool ok, base::Value) { assert(ok); }), std::move(changed));
+  assert(source.events.size() == 1 && peer.events.size() == 3);
+  assert(source.events.back().GetDict().Find("base")->GetDict() == nav.GetDict());
+  assert(peer.events.back().GetDict().Find("base")->GetDict() == original.GetDict());
+  assert(source.events.back().GetDict().Find("session")->GetDict() == expected.GetDict());
 }
 '''
         with tempfile.TemporaryDirectory(prefix='ardia-session-worker-') as scratch:

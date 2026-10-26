@@ -88,11 +88,13 @@
 #include "ui/aura/window.h"
 #include "ui/aura/window_targeter.h"
 #include "ui/compositor/layer.h"
+#include "ui/aura/window_observer.h"
 #include "ui/base/base_window.h"
 #include "ui/base/accelerators/accelerator.h"
-#include "ui/base/accelerators/accelerator_manager.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
+#include "ui/base/ime/input_method.h"
+#include "ui/base/ime/text_input_client.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/page_transition_types.h"
@@ -101,7 +103,9 @@
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/events/event_constants.h"
+#include "ui/events/event_handler.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/events/keycodes/keyboard_code_conversion.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/controls/native/native_view_host.h"
@@ -111,6 +115,7 @@
 #include "ui/views/view_targeter.h"
 #include "ui/views/view_targeter_delegate.h"
 #include "ui/views/widget/widget.h"
+#include "ui/wm/core/window_modality_controller.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -485,8 +490,19 @@ class TabBinding : public content::WebContentsObserver {
   std::string key_;
 };
 
+class WindowKeyboardHandler : public ui::EventHandler {
+ public:
+  explicit WindowKeyboardHandler(base::RepeatingCallback<void(ui::KeyEvent*)> handle)
+      : handle_(std::move(handle)) {}
+  void OnKeyEvent(ui::KeyEvent* event) override { handle_.Run(event); }
+
+ private:
+  base::RepeatingCallback<void(ui::KeyEvent*)> handle_;
+};
+
 class ShellHostView : public views::View,
                       public views::ViewObserver,
+                      public aura::WindowObserver,
                       public TabStripModelObserver {
  public:
   METADATA_HEADER(ShellHostView, views::View)
@@ -524,6 +540,12 @@ class ShellHostView : public views::View,
     if (handler_ == handler) {
       handler_ = nullptr;
       utility_ready_ = false;
+      switcher_capture_ = false;
+      switcher_source_.reset();
+      if (focus_manager_ && shortcut_recording_) {
+        focus_manager_->set_shortcut_handling_suspended(false);
+        shortcut_recording_ = false;
+      }
     }
   }
   void Event(std::string_view module, std::string_view event,
@@ -549,6 +571,10 @@ class ShellHostView : public views::View,
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
   bool CanHandleAccelerators() const override;
   void UnregisterAccelerators();
+  void FocusShell();
+  void OnKeyEvent(ui::KeyEvent* event) override;
+  bool OwnsKeyboardEvent(const ui::KeyEvent& event) const;
+  void OnWindowDestroying(aura::Window* window) override;
   void ArmUtilityClose();
   void RequestUtilityClose();
   void CloseUtilityAfterSave();
@@ -564,6 +590,11 @@ class ShellHostView : public views::View,
   raw_ptr<views::WebView> shell_ = nullptr;
   raw_ptr<HostMessageHandler> handler_ = nullptr;
   raw_ptr<views::FocusManager> focus_manager_ = nullptr;
+  std::unique_ptr<WindowKeyboardHandler> input_handler_;
+  std::map<ui::Accelerator, base::DictValue> shortcuts_;
+  bool shortcut_recording_ = false;
+  bool switcher_capture_ = false;
+  base::WeakPtr<content::WebContents> switcher_source_;
   int id_;
   bool startup_;
   std::string window_id_;
@@ -575,6 +606,7 @@ class ShellHostView : public views::View,
   std::map<int, std::unique_ptr<TabBinding>> bindings_;
   bool app_operation_ = false;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
+  base::ScopedObservation<aura::Window, aura::WindowObserver> input_observation_{this};
   base::WeakPtrFactory<ShellHostView> weak_factory_{this};
 };
 
@@ -769,17 +801,11 @@ ShellHostView::~ShellHostView() {
 
 void ShellHostView::Initialize() {
   focus_manager_ = GetFocusManager();
-  if (focus_manager_) {
-    for (auto key : {ui::VKEY_T, ui::VKEY_L, ui::VKEY_W, ui::VKEY_R,
-                     ui::VKEY_OEM_COMMA}) {
-      focus_manager_->RegisterAccelerator(
-          ui::Accelerator(key, ui::EF_CONTROL_DOWN),
-          ui::AcceleratorManager::kHighPriority, this);
-    }
-    focus_manager_->RegisterAccelerator(
-        ui::Accelerator(ui::VKEY_T, ui::EF_CONTROL_DOWN | ui::EF_SHIFT_DOWN),
-        ui::AcceleratorManager::kHighPriority, this);
-  }
+  aura::Window* input_window = GetWidget()->GetNativeWindow()->GetRootWindow();
+  input_observation_.Observe(input_window);
+  input_handler_ = std::make_unique<WindowKeyboardHandler>(
+      base::BindRepeating(&ShellHostView::OnKeyEvent, GetWeakPtr()));
+  input_window->AddPreTargetHandler(input_handler_.get(), ui::EventTarget::Priority::kSystem);
   if (is_utility()) {
     ArmUtilityClose();
     browser_view_->SetPreferredSize(kind_ == "settings" ? gfx::Size(720, 480)
@@ -861,8 +887,62 @@ void ShellHostView::OnViewIsDeleting(views::View*) {
 }
 
 void ShellHostView::UnregisterAccelerators() {
-  if (focus_manager_) focus_manager_->UnregisterAccelerators(this);
+  if (input_observation_.IsObserving()) {
+    input_observation_.GetSource()->RemovePreTargetHandler(input_handler_.get());
+    input_observation_.Reset();
+  }
+  input_handler_.reset();
+  if (focus_manager_) {
+    if (shortcut_recording_) focus_manager_->set_shortcut_handling_suspended(false);
+  }
+  shortcut_recording_ = false;
+  shortcuts_.clear();
   focus_manager_ = nullptr;
+}
+
+void ShellHostView::FocusShell() {
+  shell_->RequestFocus();
+  if (shell()) shell()->Focus();
+}
+
+void ShellHostView::OnWindowDestroying(aura::Window*) {
+  UnregisterAccelerators();
+}
+
+bool ShellHostView::OwnsKeyboardEvent(const ui::KeyEvent& event) const {
+  const views::Widget* widget = GetWidget();
+  if (!widget) return false;
+  for (auto* target = static_cast<aura::Window*>(event.target()); target; target = target->parent()) {
+    if (const auto* owner = views::Widget::GetWidgetForNativeView(target)) {
+      if (owner != widget) return false;
+      break;
+    }
+  }
+  if (wm::GetModalTransient(widget->GetNativeWindow())) return false;
+  for (const auto& [id, tab] : bindings_) {
+    if (tab->viewport() && tab->viewport()->GetVisible() && tab->contents() &&
+        wm::GetModalTransient(tab->contents()->GetNativeView())) return false;
+  }
+  return true;
+}
+
+void ShellHostView::OnKeyEvent(ui::KeyEvent* event) {
+  if (!CanHandleAccelerators() || !OwnsKeyboardEvent(*event) || !focus_manager_ || shortcut_recording_ ||
+      focus_manager_->shortcut_handling_suspended() ||
+      event->type() != ui::EventType::kKeyPressed) return;
+  const ui::KeyboardCode physical = ui::DomCodeToUsLayoutKeyboardCode(event->code());
+  const ui::Accelerator accelerator(physical == ui::VKEY_UNKNOWN ? event->key_code() : physical,
+                                    event->flags());
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch("ardia-keyboard-diagnostics") &&
+      (event->IsControlDown() || shortcuts_.contains(accelerator))) {
+    LOG(INFO) << "Ardia key window=" << window_id_
+              << " key=" << event->key_code() << " code=" << static_cast<int>(event->code())
+              << " flags=" << event->flags()
+              << " view=" << static_cast<bool>(focus_manager_->GetFocusedView())
+              << " shell_view=" << shell_->HasFocus()
+              << " binding=" << shortcuts_.contains(accelerator);
+  }
+  if (AcceleratorPressed(accelerator)) event->StopPropagation();
 }
 
 bool ShellHostView::CanHandleAccelerators() const {
@@ -904,26 +984,52 @@ void ShellHostView::CloseUtilityAfterSave() {
 }
 
 bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
-  if (is_utility()) {
-    if (accelerator.key_code() == ui::VKEY_W) {
-      RequestUtilityClose();
+  const auto found = shortcuts_.find(accelerator);
+  if (found == shortcuts_.end()) return false;
+  const base::DictValue& binding = found->second;
+  const std::string command = String(binding, "command");
+  if (switcher_capture_) {
+    std::string key;
+    if (accelerator.key_code() == ui::VKEY_ESCAPE) key = "escape";
+    if (accelerator.key_code() == ui::VKEY_RIGHT) key = "next";
+    if (accelerator.key_code() == ui::VKEY_LEFT) key = "previous";
+    if (!key.empty()) {
+      Event("ArdiaShell", "onAppEvent", base::Value(base::DictValue()
+          .Set("type", "switcherKey").Set("key", key)));
       return true;
     }
-    if (accelerator.key_code() != ui::VKEY_OEM_COMMA) return true;
+    if (command != "tabSwitcher") return true;
   }
-  std::string command;
-  switch (accelerator.key_code()) {
-    case ui::VKEY_T:
-      command = accelerator.IsShiftDown() ? "reopenClosedTab" : "newTab";
-      break;
-    case ui::VKEY_L: command = "focusCommandBar"; break;
-    case ui::VKEY_W: command = "closeTab"; break;
-    case ui::VKEY_R: command = "reload"; break;
-    case ui::VKEY_OEM_COMMA: command = "openSettings"; break;
-    default: return false;
+  if (binding.FindBool("suppressed").value_or(false)) return true;
+  if (command == "tabSwitcher" && !switcher_capture_) {
+    switcher_source_.reset();
+    for (const auto& [id, tab] : bindings_) {
+      if (tab->viewport() && tab->viewport()->HasFocus() && tab->contents()) {
+        switcher_source_ = tab->contents()->GetWeakPtr();
+        break;
+      }
+    }
   }
+  if (binding.FindBool("notInText").value_or(false)) {
+    ui::InputMethod* input = GetWidget()->GetInputMethod();
+    ui::TextInputClient* client = input ? input->GetTextInputClient() : nullptr;
+    if (client && client->GetTextInputType() != ui::TEXT_INPUT_TYPE_NONE) return false;
+  }
+  if (is_utility() && command == "closeTab") {
+    RequestUtilityClose();
+    return true;
+  }
+  if (command == "focusCommandBar" || command == "newTab" ||
+      command == "newTabInGroup" || command == "findInPage" ||
+      command == "findAndReplace" || command == "searchTabs" ||
+      command == "tabSwitcher" || command == "openProfileMenu" ||
+      command == "closeTab") {
+    FocusShell();
+  }
+  const base::Value* arg = binding.Find("arg");
   Event("ArdiaShell", "onCommand", base::Value(base::DictValue()
-      .Set("command", command).Set("arg", base::Value()).Set("windowId", window_id_)));
+      .Set("command", command).Set("arg", arg ? arg->Clone() : base::Value())
+      .Set("shortcutModifiers", accelerator.modifiers()).Set("windowId", window_id_)));
   return true;
 }
 
@@ -1231,6 +1337,7 @@ void ShellHostView::TabCommand(
   } else if (command == "stopLoading") {
     contents->Stop();
   } else if (command == "focus") {
+    if (binding->viewport()) binding->viewport()->RequestFocus();
     contents->Focus();
   } else if (command == "setMuted") {
     if (values.empty() || !values[0].is_bool()) {
@@ -1426,13 +1533,61 @@ void ShellHostView::Invoke(
     base::OnceCallback<void(bool, base::Value)> done) {
   if (!browser_) return std::move(done).Run(false, base::Value("The native browser window has closed"));
   const base::ListValue& values = Arguments(args);
+  if (method == "ArdiaShell.restoreShortcutFocus") {
+    if (switcher_source_ && browser_->GetTabStripModel()->GetActiveWebContents() == switcher_source_.get()) {
+      switcher_source_->Focus();
+    }
+    switcher_source_.reset();
+    return std::move(done).Run(true, base::Value());
+  }
+  if (method == "ArdiaShell.setKeyboardShortcuts") {
+    if (!focus_manager_ || values.empty() || !values[0].is_list() ||
+        values[0].GetList().size() > 256) {
+      return std::move(done).Run(false, base::Value("Invalid keyboard shortcut table"));
+    }
+    std::map<ui::Accelerator, base::DictValue> shortcuts;
+    constexpr int modifiers = ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN |
+                              ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN;
+    for (const auto& value : values[0].GetList()) {
+      if (!value.is_dict()) return std::move(done).Run(false, base::Value("Invalid keyboard shortcut"));
+      const auto& binding = value.GetDict();
+      const int key = binding.FindInt("keyCode").value_or(0);
+      const int flags = binding.FindInt("modifiers").value_or(-1);
+      const std::string command = String(binding, "command");
+      if (key < 1 || key > 255 || flags < 0 || (flags & ~modifiers) ||
+          command.empty() || command.size() > 64) {
+        return std::move(done).Run(false, base::Value("Invalid keyboard shortcut"));
+      }
+      shortcuts.emplace(ui::Accelerator(static_cast<ui::KeyboardCode>(key), flags), binding.Clone());
+    }
+    shortcuts_ = std::move(shortcuts);
+    return std::move(done).Run(true, base::Value());
+  }
+  if (method == "ArdiaShell.setShortcutRecording" || method == "ArdiaShell.setSwitcherCapture") {
+    if (!focus_manager_ || values.empty() || !values[0].is_bool()) {
+      return std::move(done).Run(false, base::Value("A keyboard capture flag is required"));
+    }
+    if (method == "ArdiaShell.setShortcutRecording") {
+      shortcut_recording_ = values[0].GetBool();
+      focus_manager_->set_shortcut_handling_suspended(shortcut_recording_);
+    } else {
+      switcher_capture_ = values[0].GetBool();
+      if (!switcher_capture_) {
+        if (switcher_source_ && browser_->GetTabStripModel()->GetActiveWebContents() == switcher_source_.get()) {
+          switcher_source_->Focus();
+        }
+        switcher_source_.reset();
+      }
+    }
+    return std::move(done).Run(true, base::Value());
+  }
   if (method == "tab.create") return CreateTab(args, std::move(done));
   if (method == "tab.command") return TabCommand(args, std::move(done));
   if (method == "tab.viewport") return SetViewport(args, std::move(done));
   if (method == "tab.close") {
     TabBinding* binding = BindingForKey(String(args, "key"));
     if (!binding || !binding->contents()) {
-      return std::move(done).Run(false, base::Value("No such claimed live tab"));
+      return std::move(done).Run(true, base::Value());
     }
     base::DictValue close = base::DictValue()
         .Set("id", TabId(binding->contents())).Set("command", "close");
@@ -1472,6 +1627,7 @@ void ShellHostView::Invoke(
                                   base->Clone(), local->Clone()),
         base::BindOnce(
             [](base::FilePath profile_path, std::string source_window,
+               base::DictValue source_session,
                base::OnceCallback<void(bool, base::Value)> done,
                SessionWriteResult result) {
               if (!result.ok) {
@@ -1487,10 +1643,14 @@ void ShellHostView::Invoke(
                 Profile* profile = host->profile();
                 if (profile && !profile->IsOffTheRecord() &&
                     profile->GetPath() == profile_path) {
-                  host->Event("ArdiaHost", "session", base::Value(event.Clone()));
+                  base::DictValue update = event.Clone();
+                  if (host->window_id() == source_window) {
+                    update.Set("base", source_session.Clone());
+                  }
+                  host->Event("ArdiaHost", "session", base::Value(std::move(update)));
                 }
               }
-            }, profile_path, source_window, std::move(done)));
+            }, profile_path, source_window, local->Clone(), std::move(done)));
     return;
   }
   if (method == "ArdiaShell.readDocument") {
@@ -1659,8 +1819,17 @@ void ShellHostView::Invoke(
                      !DefaultProfileId(String(*options, "profile"))))) {
       return std::move(done).Run(false, base::Value("Only regular default-profile windows are supported"));
     }
+    std::optional<gfx::Rect> bounds;
+    const base::ListValue* frame = options ? options->FindList("frame") : nullptr;
+    if (!utility && frame && frame->size() == 4 &&
+        std::ranges::all_of(*frame, [](const base::Value& value) { return value.is_int(); }) &&
+        (*frame)[2].GetInt() > 0 && (*frame)[3].GetInt() > 0) {
+      bounds = gfx::Rect((*frame)[0].GetInt(), (*frame)[1].GetInt(),
+                         (*frame)[2].GetInt(), (*frame)[3].GetInt());
+    }
     for (const auto& [native_id, host] : Hosts()) {
       if (host->window_id() != id) continue;
+      if (bounds) host->browser()->GetWindow()->SetBounds(*bounds);
       if (utility_navigation && host->is_utility()) host->NavigateUtility(utility_navigation->Clone());
       if (utility) FocusNativeWindow(host->browser());
       return std::move(done).Run(true, base::Value());
@@ -1671,19 +1840,8 @@ void ShellHostView::Invoke(
       if (utility) FocusNativeWindow(request.browser.get());
       return std::move(done).Run(true, base::Value());
     }
-    if (!utility && !is_utility() && window_id_ == "main") {
-      window_id_ = id;
-      if (options && options->FindList("frame") && options->FindList("frame")->size() == 4) {
-        const auto& frame = *options->FindList("frame");
-        if (std::ranges::all_of(frame, [](const base::Value& value) { return value.is_int(); }) &&
-            frame[2].GetInt() > 0 && frame[3].GetInt() > 0) {
-          browser_->GetWindow()->SetBounds(gfx::Rect(frame[0].GetInt(), frame[1].GetInt(),
-                                                    frame[2].GetInt(), frame[3].GetInt()));
-        }
-      }
-      return std::move(done).Run(true, base::Value());
-    }
     BrowserWindowCreateParams params(profile(), true);
+    if (bounds) params.initial_bounds = *bounds;
     if (utility) {
       params.type = BrowserWindowInterface::TYPE_APP;
       params.app_name = kind == "settings" ? "ArdiaSettings" : "ArdiaImport";

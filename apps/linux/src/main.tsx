@@ -16,7 +16,7 @@ import { startHostData } from "./hostData";
 import { startHostTabLifecycle } from "./hostTabLifecycle";
 import { setHostOverlayCheck } from "./hostViewport";
 import { MenuHost } from "./menus";
-import "./shims/web/motion/shortcuts";
+import { startLinuxShortcuts } from "./shortcutsRuntime";
 import { TrafficLights } from "./TrafficLights";
 import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setSessionFlush } from "./session";
 import { startUtility } from "./utility";
@@ -31,6 +31,7 @@ async function start() {
   const saved = ardiaHost.bootstrap.session ?? await invokeHost<HydrateData | null>("session.read", {});
   setStoreBatching(unstable_batchedUpdates);
   useBrowser.getState().hydrate(initialLinuxSession(ardiaHost, saved));
+  await startLinuxShortcuts(ardiaHost);
   if (utility) {
     const persistence = startHostPersistence(ardiaHost, useBrowser, saved ?? {}, createUtilitySessionSnapshot(useBrowser.getState(), saved ?? {}));
     setSessionFlush(persistence.flush);
@@ -50,6 +51,7 @@ async function start() {
     });
     const persistence = startHostPersistence(ardiaHost, useBrowser, saved ?? {});
     setSessionFlush(persistence.flush);
+    await persistence.flush();
     startTabPages();
     startNativeSync();
   }
