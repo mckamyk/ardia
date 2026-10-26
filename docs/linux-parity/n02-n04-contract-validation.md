@@ -49,3 +49,26 @@ The coordinator should add `src/hostContract.test.mjs` to the UI-owned `test:hos
 No matching Chromium 156 source build/binary is available in this environment. The full modified `ac_linux_host.cc` has not been compiled, linked or executed against 156. No older 155 executable was used as evidence.
 
 Independent review and a matching native build must still exercise current history/bookmarks/download settings/extensions/auto-PiP service calls, unknown/private-profile rejection, ordinary-page bridge isolation, fresh/restored production startup, live event/profile/window filtering, create/remount/adopt/reclaim, unauthorized transfer/takeover, late completion, renderer replacement and temporary extension surface disposal. Native permissions/media integration remains unavailable; generic JSON does not pretend those services exist. Physical focus, keyboard, cross-window transfer and compositor behavior remain desktop acceptance work.
+
+## Independent review correction
+
+The review of `c0610dc7` requested one P1 and four P2 corrections. All were reproduced before source changes. The failing logs are `/tmp/ardia-bridge-replacement-before.log`, `/tmp/ardia-bridge-renderer-before.log`, `/tmp/ardia-bridge-extension-before.log` and `/tmp/ardia-bridge-launch-before.log`.
+
+Native handler registration now acquires a renderer generation once. Replacement retires predecessor claims before publishing the new handler, and request, reply, event and binding authorization check the current native generation. Late destruction of the predecessor cannot retire the replacement. Retirement detaches old viewports, closes temporary native contents through the normal native close path and retains ordinary logical tabs. Extracted native methods exercise both replacement/destruction orders and current-generation authorization.
+
+`HostTab` now serializes creation, commands and release for each stable key. It publishes a replacement owner after successful native creation; a failed replacement retains its predecessor. Disposal waits behind pending replacement work, so failure releases the original claim and success cannot release the new one. Pending viewports/presentations wait for replacement decisions. Six real `HostTab` tests use a native-policy transport to cover failure, disposal, retry, concurrent replacement, pending commands and late success. Callback exceptions cannot undo an already accepted native claim.
+
+`extensions.configure` validates and flattens the supported Swift options (`pinned`, `fileAccess`, `incognito`, `siteAccess`) before native dispatch. Unknown options, wrong types, unknown site-access values and empty option objects reject before mutation. The regression fixture captures JSON from the real shared wrapper and production Linux Expo adapter, reconstructs it as native values, and compiles/runs the actual Linux transform together with the existing `ac_extensions_configure` backend. The fixture verifies the requested changes reach that backend, rather than treating its prior success response as evidence of mutation.
+
+Launch claims consume one native decision, including an empty claim. Nonempty claims require a matching native key, URL, profile and existing tab offer. Adoption reuses the exact owned contents and never calls general tab creation. There is currently no native early-launch offer producer on Linux; arbitrary nonempty launch claims therefore fail closed. Fixtures exercise repeat, mismatch, empty, absent/stale offers and the actual native offered-tab adoption method.
+
+Correction verification, from repository root:
+
+- `node --experimental-strip-types --test apps/linux/src/hostTabReplacement.test.mjs apps/linux/src/hostContract.test.mjs engine/ardiacore-linux/tests/bootstrap.test.mjs` — 20 passed.
+- `npm exec --yes --package=pnpm@11.1.3 -- pnpm --filter @ardia/linux test:host` — 76 passed.
+- `python3 -m unittest discover -s engine/ardiacore-linux/tests -v` — 29 passed.
+- `npm exec --yes --package=pnpm@11.1.3 -- pnpm --filter @ardia/linux typecheck` — passed.
+- `npm exec --yes --package=pnpm@11.1.3 -- pnpm --filter @ardia/linux build` — passed, 1161 modules.
+- `git diff --check` — passed.
+
+The parent integrator must include `src/hostTabReplacement.test.mjs` alongside the contract test in its default host-test script. Package/Vite files were not changed in this correction. F04 documents and close-barrier integration are deliberately outside this commit. Matching Chromium 156 compilation/runtime, real temporary-page teardown and compositor/renderer replacement acceptance remain unverified; these extracted fixtures do not establish those results.
