@@ -28,6 +28,18 @@
 #endif
 
 namespace base {
+class OnceClosure {
+ public:
+  OnceClosure() = default;
+  template <typename F> OnceClosure(F fn) : fn_(std::move(fn)) {}
+  bool is_null() const { return !fn_; }
+  explicit operator bool() const { return static_cast<bool>(fn_); }
+  void Run() { auto fn = std::move(fn_); if (fn) fn(); }
+  void Reset() { fn_ = nullptr; }
+ private:
+  std::function<void()> fn_;
+};
+
 template <typename T> class WeakPtr {
  public:
   WeakPtr() = default;
@@ -65,9 +77,26 @@ template <typename F, typename... Bound> auto BindRepeating(F fn, Bound... bound
     return fn(bound..., std::forward<decltype(args)>(args)...);
   };
 }
-template <typename C> auto BindOnce(void (C::*fn)(), WeakPtr<C> weak) {
-  return [fn, weak]() { if (weak) (weak.get()->*fn)(); };
+template <typename C, typename... Args, typename... Bound>
+auto BindOnce(void (C::*fn)(Args...), WeakPtr<C> weak, Bound... bound) {
+  return [fn, weak, bound...]() mutable { if (weak) (weak.get()->*fn)(std::move(bound)...); };
 }
+template <typename F, typename... Bound> auto BindOnce(F fn, Bound... bound) {
+  return [fn, bound...]() mutable { return fn(std::move(bound)...); };
+}
+class SequencedTaskRunner {
+ public:
+  static SequencedTaskRunner* GetCurrentDefault() { static SequencedTaskRunner runner; return &runner; }
+  void PostTask(int, OnceClosure task) { tasks.push_back(std::move(task)); }
+  void Drain() {
+    while (!tasks.empty()) {
+      auto pending = std::move(tasks);
+      tasks.clear();
+      for (auto& task : pending) std::move(task).Run();
+    }
+  }
+  std::vector<OnceClosure> tasks;
+};
 class DictValue;
 class Value {
  public:

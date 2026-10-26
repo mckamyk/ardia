@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "ardia/linux/ac_linux_devtools_authority.h"
 #include "ardia/linux/ac_linux_find.h"
 #include "base/functional/bind.h"
 #include "base/metrics/user_metrics.h"
@@ -252,33 +253,46 @@ std::optional<base::DictValue> LinuxPageCommands::DevTools(
   if (!DevToolsWindow::AllowDevToolsFor(service_profile_, contents)) {
     return Error("ERR_PAGE_POLICY", "DevTools is disabled for this page");
   }
-  if (!allow_native_ui_ || !devtools_presentation_) {
+  if (!allow_native_ui_ || !devtools_presentation_ ||
+      !HasLinuxDevToolsDispatcher()) {
     return Error("ERR_PAGE_UNAVAILABLE",
                  "DevTools presentation is unavailable");
   }
-  auto* tools = DevToolsWindow::GetInstanceForInspectedWebContents(contents);
-  if (action == "toggle" && tools && tools->IsDocked()) {
-    auto* frontend = tools->GetDevToolsWebContents().get();
-    if (!frontend)
-      return Error("ERR_PAGE_UNAVAILABLE", "DevTools frontend is unavailable");
-    frontend->DispatchBeforeUnload(false);
-    return std::nullopt;
+  auto* existing = DevToolsWindow::GetInstanceForInspectedWebContents(contents);
+  if (action == "toggle" && existing && existing->IsDocked() &&
+      !existing->GetDevToolsWebContents()) {
+    return Error("ERR_PAGE_UNAVAILABLE", "DevTools frontend is unavailable");
   }
-  const auto toggle = action == "inspect" ? DevToolsToggleAction::Inspect()
-                      : action == "console"
-                          ? DevToolsToggleAction::ShowConsolePanel()
-                          : DevToolsToggleAction::Show();
   auto weak = weak_factory_.GetWeakPtr();
-  DevToolsWindow::OpenDevToolsWindow(
-      contents, toggle, DevToolsOpenedByAction::kMainMenuOrMainShortcut);
-  if (!weak || !weak->IsCurrent())
+  auto lease = std::make_shared<LinuxDevToolsLease>(
+      contents, base::BindRepeating(
+                    [](base::WeakPtr<LinuxPageCommands> commands) {
+                      return commands && commands->IsCurrent();
+                    },
+                    weak));
+  auto previous = std::exchange(devtools_lease_, lease);
+  const auto native_action = action == "inspect" ? LinuxDevToolsAction::kInspect
+                             : action == "console"
+                                 ? LinuxDevToolsAction::kConsole
+                             : action == "toggle" ? LinuxDevToolsAction::kToggle
+                                                  : LinuxDevToolsAction::kShow;
+  const bool dispatched = DispatchLinuxDevTools(
+      contents, native_action, lease,
+      base::BindOnce(&LinuxPageCommands::RefreshDevTools, weak));
+  if (!weak || !lease->IsCurrent()) {
+    lease->Revoke();
+    if (previous)
+      previous->Revoke();
     return Error("ERR_PAGE_STALE_TARGET",
                  "Page claim changed during DevTools dispatch");
-  tools = DevToolsWindow::GetInstanceForInspectedWebContents(contents);
-  if (!tools)
+  }
+  if (!dispatched) {
+    weak->devtools_lease_ = std::move(previous);
+    lease->Revoke();
     return Error("ERR_PAGE_DISPATCH", "DevTools dispatch was refused");
-  tools->SetLoadCompletedCallback(base::BindOnce(
-      &LinuxPageCommands::RefreshDevTools, weak_factory_.GetWeakPtr()));
+  }
+  if (previous)
+    previous->Revoke();
   return std::nullopt;
 }
 
@@ -298,6 +312,9 @@ void LinuxPageCommands::Reset() {
   contents_.reset();
   service_profile_ = nullptr;
   Observe(nullptr);
+  auto lease = std::move(devtools_lease_);
+  if (lease)
+    lease->Revoke();
 }
 
 void LinuxPageCommands::WebContentsDestroyed() {

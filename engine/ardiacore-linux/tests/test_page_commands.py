@@ -10,14 +10,33 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'src'
 FIXTURE = ROOT / 'tests/fixtures/page_commands.h'
-PRODUCTION = [SOURCE / 'ardia/linux/ac_linux_page_commands.cc', SOURCE / 'ardia/linux/ac_linux_find.cc']
+PRODUCTION = [SOURCE / 'ardia/linux/ac_linux_page_commands.cc', SOURCE / 'ardia/linux/ac_linux_find.cc', SOURCE / 'ardia/linux/ac_linux_devtools_authority.cc']
 MAIN = r'''
 #include "ardia/linux/ac_linux_page_commands.h"
 #include "ardia/linux/ac_linux_find.h"
+#include "ardia/linux/ac_linux_devtools_authority.h"
 
 using ardiacore::LinuxPageCommands;
 using base::ListValue;
 using find_in_page::SelectionAction;
+
+bool FixtureDevToolsDispatch(content::WebContents* contents, ardiacore::LinuxDevToolsAction action,
+    std::shared_ptr<ardiacore::LinuxDevToolsLease> lease, base::OnceClosure ready) {
+  if (!lease->Matches(contents)) return false;
+  auto* tools = DevToolsWindow::GetInstanceForInspectedWebContents(contents);
+  if (action == ardiacore::LinuxDevToolsAction::kToggle && tools && tools->IsDocked()) {
+    tools->frontend.DispatchBeforeUnload(false);
+    return true;
+  }
+  auto toggle = action == ardiacore::LinuxDevToolsAction::kInspect ? DevToolsToggleAction::Inspect()
+      : action == ardiacore::LinuxDevToolsAction::kConsole ? DevToolsToggleAction::ShowConsolePanel()
+      : DevToolsToggleAction::Show();
+  DevToolsWindow::OpenDevToolsWindow(contents, toggle, DevToolsOpenedByAction::kMainMenuOrMainShortcut);
+  tools = DevToolsWindow::GetInstanceForInspectedWebContents(contents);
+  if (!tools) return false;
+  tools->SetLoadCompletedCallback([ready = std::move(ready)]() mutable { std::move(ready).Run(); });
+  return true;
+}
 
 struct Fixture {
   Profile profile;
@@ -29,6 +48,7 @@ struct Fixture {
   int presented = 0;
   std::unique_ptr<LinuxPageCommands> commands;
   Fixture(bool ui = true, bool presentation = true) {
+    ardiacore::InstallLinuxDevToolsDispatcher(FixtureDevToolsDispatch);
     LinuxPageCommands::Presentation present;
     if (presentation) present = [this] { presented++; };
     commands = std::make_unique<LinuxPageCommands>(
@@ -336,7 +356,7 @@ class PageCommandTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         cls.root = pathlib.Path(cls.temp.name)
         headers = set()
-        for source in PRODUCTION + list((SOURCE / 'ardia/linux').glob('ac_linux_*commands.h')) + [SOURCE / 'ardia/linux/ac_linux_find.h']:
+        for source in PRODUCTION + list((SOURCE / 'ardia/linux').glob('ac_linux_*commands.h')) + [SOURCE / 'ardia/linux/ac_linux_find.h', SOURCE / 'ardia/linux/ac_linux_devtools_authority.h']:
             headers.update(re.findall(r'^#include "([^"]+)"', source.read_text(), re.M))
         for header in headers:
             if header.startswith('ardia/linux/'):

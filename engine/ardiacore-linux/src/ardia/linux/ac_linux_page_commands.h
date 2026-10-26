@@ -17,6 +17,7 @@ class Profile;
 namespace ardiacore {
 
 class LinuxFind;
+class LinuxDevToolsLease;
 
 class LinuxPageCommands : public content::WebContentsObserver {
  public:
@@ -53,6 +54,7 @@ class LinuxPageCommands : public content::WebContentsObserver {
   bool allow_native_ui_;
   Presentation devtools_presentation_;
   std::unique_ptr<LinuxFind> find_;
+  std::shared_ptr<LinuxDevToolsLease> devtools_lease_;
   base::WeakPtrFactory<LinuxPageCommands> weak_factory_{this};
 };
 
