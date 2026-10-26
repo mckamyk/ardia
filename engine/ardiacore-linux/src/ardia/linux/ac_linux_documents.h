@@ -55,6 +55,17 @@ class LinuxDocuments {
   static bool Reserved(std::string_view name);
 
  private:
+  friend class LinuxDocumentService;
+  struct CommitPreparation {
+    LinuxDocumentResult result;
+    base::DictValue next = {};
+    bool admitted = false;
+    bool duplicate = false;
+    bool superseded = false;
+  };
+  LinuxDocumentResult CommitAccess(const LinuxDocumentClient& client) const;
+  CommitPreparation PrepareCommit(const LinuxDocumentClient& client,
+                                   const base::DictValue& request) const;
   LinuxDocumentResult Load();
   LinuxDocumentResult ReadCurrent();
   bool Authorized(const LinuxDocumentClient& client) const;
