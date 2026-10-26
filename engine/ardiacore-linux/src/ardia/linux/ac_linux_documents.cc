@@ -48,9 +48,11 @@ LinuxDocumentResult LinuxDocuments::Load() {
     next.Set("epoch", epoch_);
     auto generations = next.FindDict("generations")->Clone();
     for (const auto& [id, owner] : *next.FindDict("owners"))
-      generations.Set(id, base::Value(LinuxDocumentInteger(generations, id, 0) + 1));
+      if (!AdvanceLinuxLiveGeneration(generations, id))
+        return Error("ERR_DOCUMENT_LIMIT", "Document generation exhausted");
     next.Set("generations", std::move(generations));
     next.Set("owners", base::DictValue());
+    if (!ValidLinuxLiveEnvelope(next)) return Error("ERR_DOCUMENT_DATA", "Invalid document recovery");
     if (!write_(next)) return Error("ERR_DOCUMENT_STORAGE", "Cannot recover document authority");
     envelope_ = std::move(next);
     loaded_ = true;
@@ -74,7 +76,7 @@ LinuxDocumentResult LinuxDocuments::Load() {
   envelope.Set("generations", base::DictValue());
   envelope.Set("owners", base::DictValue());
   envelope.Set("clients", base::DictValue());
-  if (!Fits(envelope) || !write_(envelope))
+  if (!ValidLinuxLiveEnvelope(envelope) || !Fits(envelope) || !write_(envelope))
     return Error("ERR_DOCUMENT_STORAGE", "Cannot initialize canonical document");
   envelope_ = std::move(envelope);
   loaded_ = true;
@@ -122,6 +124,7 @@ LinuxDocumentResult LinuxDocuments::Commit(const LinuxDocumentClient& client,
                                            const base::DictValue& request) {
   if (!Authorized(client) || !watchers_.contains(client.id))
     return Error("ERR_DOCUMENT_AUTH", "Document subscription required");
+  if (generation_exhausted_) return Error("ERR_DOCUMENT_LIMIT", "Document generation exhausted");
   if (seals_.contains(client.id)) return Error("ERR_DOCUMENT_CLOSING", "Document client is sealed for close");
   auto current = ReadCurrent();
   if (!current.ok()) return current;
@@ -134,17 +137,17 @@ LinuxDocumentResult LinuxDocuments::Commit(const LinuxDocumentClient& client,
       !epoch || !request_id || !operations || !operations->is_list() ||
       operations->GetList().size() == 0 ||
       operations->GetList().size() > kLinuxLiveMaxOperations ||
-      observed < 0 || !Fits(request))
+      observed < 0 || !Fits(request) || !ValidLinuxLiveOperations(operations->GetList()))
     return Error("ERR_DOCUMENT_REQUEST", "Invalid document commit");
   if (*epoch != *envelope_.FindString("epoch"))
     return Error("ERR_DOCUMENT_EPOCH", "Document authority requires reconnect");
   const auto* clients = envelope_.FindDict("clients");
   const auto* receipt = clients->FindDict(client.id);
   const int accepted = receipt ? LinuxDocumentInteger(*receipt, "sequence", 0) : 0;
-  if (accepted >= 2147483000) return Error("ERR_DOCUMENT_LIMIT", "Document request sequence exhausted");
   const std::string expected_id = client.id + ":" + std::to_string(accepted + 1);
   bool duplicate = receipt && receipt->FindString("requestId") &&
                    *receipt->FindString("requestId") == *request_id;
+  if (!duplicate && accepted >= 2147483000) return Error("ERR_DOCUMENT_LIMIT", "Document request sequence exhausted");
   if (duplicate && *receipt->Find("operations") != *operations)
     return Error("ERR_DOCUMENT_REQUEST", "Request identity was reused");
   if (!duplicate && *request_id != expected_id)
@@ -157,11 +160,12 @@ LinuxDocumentResult LinuxDocuments::Commit(const LinuxDocumentClient& client,
     for (const auto& [id, owner] : *next.FindDict("owners")) {
       const auto retired = retired_generations_.find(std::string(id));
       const int generation = LinuxDocumentInteger(generations, id, 0);
-      if (watchers_.contains(owner.GetString()) &&
+      if (watchers_.contains(owner.GetString()) && !retired_clients_.contains(owner.GetString()) &&
           (retired == retired_generations_.end() || retired->second <= generation)) continue;
       owners.Remove(id);
-      generations.Set(id, base::Value(std::max(generation + 1,
-          retired == retired_generations_.end() ? 0 : retired->second)));
+      if (!AdvanceLinuxLiveGeneration(generations, id,
+          retired == retired_generations_.end() ? 0 : retired->second))
+        return Error("ERR_DOCUMENT_LIMIT", "Document generation exhausted");
     }
     next.Set("owners", std::move(owners));
     next.Set("generations", std::move(generations));
@@ -169,10 +173,12 @@ LinuxDocumentResult LinuxDocuments::Commit(const LinuxDocumentClient& client,
       return Error("ERR_DOCUMENT_LIMIT", "Document revision exhausted");
     auto outcome = ApplyLinuxLiveOperations(next, operations->GetList(), client.id, observed);
     superseded = outcome == "superseded";
+    if (outcome == "limit") return Error("ERR_DOCUMENT_LIMIT", "Document generation exhausted");
     if (outcome == "invalid") return Error("ERR_DOCUMENT_REQUEST", "Invalid document operations");
-    if (outcome == "conflict") {
+    if (outcome == "conflict" || outcome == "notOwner") {
       base::DictValue value;
       value.Set("status", "conflict");
+      if (outcome == "notOwner" && operations->GetList().size() == 1) value.Set("reason", "notOwner");
       value.Set("requestId", *request_id);
       value.Set("snapshot", Snapshot(client.id));
       return {{}, {}, std::move(value)};
@@ -187,9 +193,11 @@ LinuxDocumentResult LinuxDocuments::Commit(const LinuxDocumentClient& client,
     next_clients.Set(client.id, std::move(receipt_value));
     next.Set("clients", std::move(next_clients));
     next.Set("revision", base::Value(LinuxDocumentInteger(envelope_, "revision") + 1));
+    if (!ValidLinuxLiveEnvelope(next)) return Error("ERR_DOCUMENT_REQUEST", "Invalid document operations");
     if (!Fits(next)) return Error("ERR_DOCUMENT_LIMIT", "Document storage limit reached");
     if (!write_(next)) return Error("ERR_DOCUMENT_STORAGE", "Cannot persist document commit");
     envelope_ = std::move(next);
+    retired_clients_.clear();
   }
   base::DictValue value;
   value.Set("status", "committed");
@@ -231,6 +239,8 @@ void LinuxDocuments::Unwatch(const LinuxDocumentClient& client) {
   if (!Authorized(client)) return;
   watchers_.erase(client.id);
   if (!loaded_) return;
+  retired_clients_.insert(client.id);
+  if (!ReadCurrent().ok()) return;
   auto next = envelope_.Clone();
   auto owners = next.FindDict("owners")->Clone();
   auto generations = next.FindDict("generations")->Clone();
@@ -238,12 +248,14 @@ void LinuxDocuments::Unwatch(const LinuxDocumentClient& client) {
     if (owner.GetString() != client.id) continue;
     owners.Remove(id);
     auto& retired = retired_generations_[std::string(id)];
-    retired = std::max(retired, LinuxDocumentInteger(generations, id, 0)) + 1;
-    generations.Set(id, base::Value(retired));
+    const int previous = std::max(retired, LinuxDocumentInteger(generations, id, 0));
+    if (previous >= kLinuxLiveMaxGeneration) { generation_exhausted_ = true; return; }
+    retired = previous + 1;
+    if (!AdvanceLinuxLiveGeneration(generations, id, retired)) { generation_exhausted_ = true; return; }
   }
   next.Set("owners", std::move(owners));
   next.Set("generations", std::move(generations));
-  if (write_(next)) envelope_ = std::move(next);
+  if (ValidLinuxLiveEnvelope(next) && Fits(next) && write_(next)) { envelope_ = std::move(next); retired_clients_.erase(client.id); }
 }
 
 LinuxDocumentResult LinuxDocuments::Seal(const LinuxDocumentClient& client,
