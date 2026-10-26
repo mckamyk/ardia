@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { useBrowser } from "../../browser/src/store/browser.ts";
+import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { createSessionWriter, initialHostSession, snapshotHostSession, startHostPersistence } from "./hostSession.ts";
 import { cloneSessionValue, mergeSession } from "./hostSessionMerge.ts";
 import { sessionStatePatch } from "./hostSessionState.ts";

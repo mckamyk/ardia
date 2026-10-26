@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import type { MenuItem } from "@ardia-real/shell";
-import { useBrowser } from "../../browser/src/store/browser";
+import { useBrowser } from "../../browser/src/state/browser/store";
 import { Symbol } from "./shims/web/Symbol";
 
 type OpenMenu = { items: MenuItem[]; x: number; y: number; resolve: (id: string | null) => void };

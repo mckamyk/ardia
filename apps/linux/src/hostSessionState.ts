@@ -1,4 +1,4 @@
-import type { BrowserState, HydrateData } from "../../browser/src/store/browser";
+import type { BrowserState, HydrateData } from "../../browser/src/state/browser/store";
 import { cloneSessionValue, sessionItemIdentity, shareSessionValue } from "./hostSessionMerge.ts";
 
 const tables = ["profiles", "windows", "tabs", "groups", "splits", "parkedPins", "pinChoices", "pinSync"] as const;

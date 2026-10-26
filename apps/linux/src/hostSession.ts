@@ -1,11 +1,11 @@
-import type { BrowserState, HydrateData } from "../../browser/src/store/browser";
-import type { BrowserWindow, Tab } from "../../browser/src/store/types";
+import type { BrowserState, HydrateData } from "../../browser/src/state/browser/store";
+import type { BrowserWindow, Tab } from "../../browser/src/state/browser/types";
 import type { ArdiaHost } from "./host";
 import { reportHostError } from "./host.ts";
 import { canonicalSessionValue, cloneSessionValue, equalSessionValue, mergeSession } from "./hostSessionMerge.ts";
 import { sessionStatePatch } from "./hostSessionState.ts";
-import { parkWindowPins } from "../../browser/src/store/parkedPins";
-import { inPinnedContainer, newId, snapshotTab } from "../../browser/src/store/model";
+import { parkWindowPins } from "../../browser/src/state/pins/parkedPins";
+import { inPinnedContainer, newId, snapshotTab } from "../../browser/src/state/browser/model";
 
 function withoutRestoredWindows(saved: HydrateData, now: number): HydrateData {
   const source = { tabs: saved.tabs ?? {}, groups: saved.groups ?? {}, splits: saved.splits ?? {}, history: {} };
