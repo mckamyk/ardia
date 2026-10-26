@@ -120,14 +120,19 @@ LinuxDocumentResult LinuxDocuments::Watch(const LinuxDocumentClient& client,
   return result;
 }
 
-LinuxDocumentResult LinuxDocuments::Commit(const LinuxDocumentClient& client,
-                                           const base::DictValue& request) {
+LinuxDocumentResult LinuxDocuments::CommitAccess(
+    const LinuxDocumentClient& client) const {
   if (!Authorized(client) || !watchers_.contains(client.id))
     return Error("ERR_DOCUMENT_AUTH", "Document subscription required");
   if (generation_exhausted_) return Error("ERR_DOCUMENT_LIMIT", "Document generation exhausted");
   if (seals_.contains(client.id)) return Error("ERR_DOCUMENT_CLOSING", "Document client is sealed for close");
-  auto current = ReadCurrent();
-  if (!current.ok()) return current;
+  return {};
+}
+
+LinuxDocuments::CommitPreparation LinuxDocuments::PrepareCommit(
+    const LinuxDocumentClient& client, const base::DictValue& request) const {
+  auto access = CommitAccess(client);
+  if (!access.ok()) return {std::move(access)};
   const auto* document = request.FindString("document");
   const auto* epoch = request.FindString("epoch");
   const auto* request_id = request.FindString("requestId");
@@ -138,20 +143,20 @@ LinuxDocumentResult LinuxDocuments::Commit(const LinuxDocumentClient& client,
       operations->GetList().size() == 0 ||
       operations->GetList().size() > kLinuxLiveMaxOperations ||
       observed < 0 || !Fits(request) || !ValidLinuxLiveOperations(operations->GetList()))
-    return Error("ERR_DOCUMENT_REQUEST", "Invalid document commit");
+    return {Error("ERR_DOCUMENT_REQUEST", "Invalid document commit")};
   if (*epoch != *envelope_.FindString("epoch"))
-    return Error("ERR_DOCUMENT_EPOCH", "Document authority requires reconnect");
+    return {Error("ERR_DOCUMENT_EPOCH", "Document authority requires reconnect")};
   const auto* clients = envelope_.FindDict("clients");
   const auto* receipt = clients->FindDict(client.id);
   const int accepted = receipt ? LinuxDocumentInteger(*receipt, "sequence", 0) : 0;
   const std::string expected_id = client.id + ":" + std::to_string(accepted + 1);
   bool duplicate = receipt && receipt->FindString("requestId") &&
                    *receipt->FindString("requestId") == *request_id;
-  if (!duplicate && accepted >= 2147483000) return Error("ERR_DOCUMENT_LIMIT", "Document request sequence exhausted");
+  if (!duplicate && accepted >= 2147483000) return {Error("ERR_DOCUMENT_LIMIT", "Document request sequence exhausted")};
   if (duplicate && *receipt->Find("operations") != *operations)
-    return Error("ERR_DOCUMENT_REQUEST", "Request identity was reused");
+    return {Error("ERR_DOCUMENT_REQUEST", "Request identity was reused")};
   if (!duplicate && *request_id != expected_id)
-    return Error("ERR_DOCUMENT_REQUEST", "Request sequence is not current");
+    return {Error("ERR_DOCUMENT_REQUEST", "Request sequence is not current")};
   base::DictValue next = envelope_.Clone();
   bool superseded = false;
   if (!duplicate) {
@@ -165,23 +170,23 @@ LinuxDocumentResult LinuxDocuments::Commit(const LinuxDocumentClient& client,
       owners.Remove(id);
       if (!AdvanceLinuxLiveGeneration(generations, id,
           retired == retired_generations_.end() ? 0 : retired->second))
-        return Error("ERR_DOCUMENT_LIMIT", "Document generation exhausted");
+        return {Error("ERR_DOCUMENT_LIMIT", "Document generation exhausted")};
     }
     next.Set("owners", std::move(owners));
     next.Set("generations", std::move(generations));
     if (LinuxDocumentInteger(envelope_, "revision") == std::numeric_limits<int>::max())
-      return Error("ERR_DOCUMENT_LIMIT", "Document revision exhausted");
+      return {Error("ERR_DOCUMENT_LIMIT", "Document revision exhausted")};
     auto outcome = ApplyLinuxLiveOperations(next, operations->GetList(), client.id, observed);
     superseded = outcome == "superseded";
-    if (outcome == "limit") return Error("ERR_DOCUMENT_LIMIT", "Document generation exhausted");
-    if (outcome == "invalid") return Error("ERR_DOCUMENT_REQUEST", "Invalid document operations");
+    if (outcome == "limit") return {Error("ERR_DOCUMENT_LIMIT", "Document generation exhausted")};
+    if (outcome == "invalid") return {Error("ERR_DOCUMENT_REQUEST", "Invalid document operations")};
     if (outcome == "conflict" || outcome == "notOwner") {
       base::DictValue value;
       value.Set("status", "conflict");
       if (outcome == "notOwner" && operations->GetList().size() == 1) value.Set("reason", "notOwner");
       value.Set("requestId", *request_id);
       value.Set("snapshot", Snapshot(client.id));
-      return {{}, {}, std::move(value)};
+      return {LinuxDocumentResult{{}, {}, std::move(value)}};
     }
     base::DictValue receipt_value;
     receipt_value.Set("sequence", base::Value(accepted + 1));
@@ -189,22 +194,36 @@ LinuxDocumentResult LinuxDocuments::Commit(const LinuxDocumentClient& client,
     receipt_value.Set("operations", operations->Clone());
     auto next_clients = clients->Clone();
     if (!receipt && next_clients.size() >= 256)
-      return Error("ERR_DOCUMENT_LIMIT", "Document client history is full");
+      return {Error("ERR_DOCUMENT_LIMIT", "Document client history is full")};
     next_clients.Set(client.id, std::move(receipt_value));
     next.Set("clients", std::move(next_clients));
     next.Set("revision", base::Value(LinuxDocumentInteger(envelope_, "revision") + 1));
-    if (!ValidLinuxLiveEnvelope(next)) return Error("ERR_DOCUMENT_REQUEST", "Invalid document operations");
-    if (!Fits(next)) return Error("ERR_DOCUMENT_LIMIT", "Document storage limit reached");
-    if (!write_(next)) return Error("ERR_DOCUMENT_STORAGE", "Cannot persist document commit");
-    envelope_ = std::move(next);
+    if (!ValidLinuxLiveEnvelope(next)) return {Error("ERR_DOCUMENT_REQUEST", "Invalid document operations")};
+    if (!Fits(next)) return {Error("ERR_DOCUMENT_LIMIT", "Document storage limit reached")};
+  }
+  return {{}, std::move(next), true, duplicate, superseded};
+}
+
+LinuxDocumentResult LinuxDocuments::Commit(const LinuxDocumentClient& client,
+                                           const base::DictValue& request) {
+  auto access = CommitAccess(client);
+  if (!access.ok()) return access;
+  auto current = ReadCurrent();
+  if (!current.ok()) return current;
+  auto prepared = PrepareCommit(client, request);
+  if (!prepared.admitted) return std::move(prepared.result);
+  if (!prepared.duplicate) {
+    if (!write_(prepared.next)) return Error("ERR_DOCUMENT_STORAGE", "Cannot persist document commit");
+    envelope_ = std::move(prepared.next);
     retired_clients_.clear();
   }
+  const auto* request_id = request.FindString("requestId");
   base::DictValue value;
   value.Set("status", "committed");
-  value.Set("superseded", base::Value(superseded));
+  value.Set("superseded", base::Value(prepared.superseded));
   value.Set("requestId", *request_id);
   value.Set("snapshot", Snapshot(client.id));
-  if (!duplicate) {
+  if (!prepared.duplicate) {
     for (const auto& [id, changed] : watchers_) {
       base::DictValue event;
       event.Set("snapshot", Snapshot(id));

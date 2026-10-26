@@ -20,6 +20,13 @@ const synchronousMethods: Record<string, Record<string, unknown>> = {
 
 export function resolveHostModule(host: ArdiaHost, name: string, method: string): unknown {
   if (name === "ArdiaApp" && method === "launchConfig") return () => hostLaunchConfig(host);
+  if (name === "ArdiaDocuments" && method === "call") {
+    return (verb: string, profile: string, args: string) => {
+      if (!["watch", "commit", "flush", "unwatch"].includes(verb)) return Promise.reject(Object.assign(new Error("Unknown document operation"), { code: "ERR_UNKNOWN_CALL" }));
+      if (typeof args !== "string") return Promise.reject(Object.assign(new Error("Document arguments require JSON text"), { code: "ERR_DOCUMENT_REQUEST" }));
+      return callHost(`documents.${verb}`, profile, args, host);
+    };
+  }
   if (method === "call" && /^Ardia[A-Z]/.test(name)) {
     const domain = name.slice(5, 6).toLowerCase() + name.slice(6);
     return (verb: string, profile: string, args: string) => callHost(`${domain}.${verb}`, profile, args, host);

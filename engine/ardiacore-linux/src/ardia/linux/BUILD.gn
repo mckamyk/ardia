@@ -12,9 +12,25 @@ action("bootstrap") {
   ]
 }
 
+source_set("close_hooks") {
+  sources = [
+    "ac_linux_close_hooks.cc",
+    "ac_linux_close_hooks.h",
+  ]
+  deps = [ "//base" ]
+}
+
 source_set("linux") {
   sources = [
+    "ac_linux_close.h",
     "ac_linux_contract.h",
+    "ac_linux_document_reducer.cc",
+    "ac_linux_document_reducer.h",
+    "ac_linux_document_schema.cc",
+    "ac_linux_document_service.cc",
+    "ac_linux_document_service.h",
+    "ac_linux_documents.cc",
+    "ac_linux_documents.h",
     "ac_linux_host.cc",
     "ac_linux_host.h",
     "ac_linux_policy.h",
@@ -24,6 +40,7 @@ source_set("linux") {
   sources += get_target_outputs(":bootstrap")
   deps = [
     ":bootstrap",
+    ":close_hooks",
     "//ardia/core:launch_switches",
     "//base",
     "//chrome/browser",

@@ -161,7 +161,7 @@ test("close barrier shares repeated close, awaits final persistence and retries 
     async reject() { steps.push("reject"); },
     resume() { steps.push("resume"); },
   });
-  const request = { windowId: "browser", rendererGeneration: "renderer", closeGeneration: "1" };
+  const request = { windowId: "browser", rendererGeneration: "9007199254740993", closeGeneration: "1" };
   const first = close(request);
   assert.equal(close(request), first);
   await turn();
@@ -214,7 +214,7 @@ test("close cancellation failure keeps producers quiesced; another close token s
   assert.equal(native.payload.calendar.showPreview, false);
   let resumed = false;
   const close = createWindowCloseBarrier({ quiesce() {}, async drain() { throw new Error("write failed"); }, async acknowledge() {}, async reject() { throw new Error("cancellation not established"); }, resume() { resumed = true; } });
-  await assert.rejects(close({ windowId: "w", rendererGeneration: "r", closeGeneration: "g" }), /cancellation not established/);
+  await assert.rejects(close({ windowId: "w", rendererGeneration: "1", closeGeneration: "1" }), /cancellation not established/);
   assert.equal(resumed, false);
 });
 
