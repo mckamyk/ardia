@@ -32,7 +32,7 @@ template<class T> struct WeakPtr {
   T* operator->() const { assert(!life.expired()); return value; }
 };
 }
-enum class TabRemovedReason { kDeleted };
+enum class TabRemovedReason { kDeleted, kInsertedIntoOtherTabStrip };
 namespace TabCloseTypes { constexpr int CLOSE_USER_GESTURE = 1; constexpr int CLOSE_CREATE_HISTORICAL_TAB = 2; }
 struct State {
   bool live = true;
@@ -59,14 +59,23 @@ struct Model {
     std::weak_ptr<State> pending = tabs[index]->state;
     delayed.push_back([pending] { const auto state = pending.lock(); if (state && state->live) ++state->late_callbacks; });
   }
-  std::unique_ptr<Contents> DetachWebContentsAtForInsertion(int index, TabRemovedReason reason) {
-    assert(reason == TabRemovedReason::kDeleted);
+  std::unique_ptr<Contents> Remove(int index, TabRemovedReason reason) {
     ++detachments;
     auto owned = std::move(tabs[index]);
     tabs.erase(tabs.begin() + index);
     auto hook = std::move(during_detach);
     if (hook) hook();
+    if (reason == TabRemovedReason::kDeleted) owned.reset();
     return owned;
+  }
+  std::unique_ptr<Contents> DetachWebContentsAtForInsertion(int index, TabRemovedReason reason) {
+    auto owned = Remove(index, reason);
+    assert(owned);
+    return owned;
+  }
+  void DetachAndDeleteWebContentsAt(int index) {
+    auto owned = Remove(index, TabRemovedReason::kDeleted);
+    assert(!owned);
   }
 };
 struct Browser { Model model; Model* GetTabStripModel() { return &model; } };
@@ -154,14 +163,14 @@ void OwnerDestruction(bool destroy_browser, bool destroy_at_queue) {
   auto hook = [&] {
     host.reset();
     if (destroy_browser) browser.reset();
-    assert(state->live);
+    assert(state->live != destroy_at_queue);
   };
   if (destroy_at_queue) host->during_queue = hook;
   else browser->model.during_detach = hook;
   assert(host->DisposeTemporary(target));
   assert(!state->live);
   assert(!host);
-  assert(state->observed_destructions == 0);
+  assert(state->observed_destructions == (destroy_at_queue ? 1 : 0));
 }
 int main() {
   CanceledAndDeferredClose();
