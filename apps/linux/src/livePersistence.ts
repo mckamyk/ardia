@@ -13,6 +13,7 @@ export function createLivePersistence(): LivePersistenceBinding {
     start: client.start,
     changed: client.changed,
     newFolderId: () => `lf-${crypto.randomUUID()}`,
+    completionFence: client.completionFence,
     beginRefresh: client.beginRefresh,
   };
 }

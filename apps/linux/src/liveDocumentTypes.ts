@@ -21,7 +21,7 @@ export type DocumentOperation = FieldOperation
   | { type: "claim"; id: string; incarnation: string }
   | { type: "refresh"; id: string; incarnation: string; generation: number; owner: string; operations: DocumentOperation[]; orders?: Partial<Record<"items" | "hidden" | "completed", string[]>> };
 export type DocumentCommit = { document: "live.json"; epoch: string; requestId: string; observedRevision: number; operations: DocumentOperation[] };
-export type DocumentReply = { status: "committed" | "conflict"; snapshot: DocumentSnapshot; requestId: string };
+export type DocumentReply = { status: "committed" | "conflict"; reason?: "notOwner"; superseded?: boolean; snapshot: DocumentSnapshot; requestId: string };
 export type DocumentChange = { snapshot: DocumentSnapshot; clientId: string; requestId: string };
 export const documentError = (code: string, message: string) => Object.assign(new Error(message), { code });
 export const equalDocumentValue = (a: unknown, b: unknown): boolean => {

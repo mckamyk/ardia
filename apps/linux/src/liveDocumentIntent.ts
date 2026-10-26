@@ -68,11 +68,13 @@ export function captureLiveIntent(before: LiveProjection, after: LiveProjection,
     }
   }
 
-  if (intent?.kind === "refresh") {
-    const fence = intent.fence as { generation: number; owner: string } | undefined;
+  if (intent?.kind === "refresh" || intent?.kind === "completion") {
+    const fence = intent.fence as { generation: number; owner: string; incarnation?: string } | undefined;
     if (!fence) throw documentError("ERR_DOCUMENT_FENCE", "Refresh requires an active native owner");
     const orders = Object.fromEntries((["items", "hidden", "completed"] as const).map((key) => [key, list(record(after[key])[intent.folderId]).map((entry) => key === "completed" ? entry.item.id : entry.id)]));
-    return [{ type: "refresh", id: intent.folderId, incarnation: incarnation(intent.folderId), ...fence, operations, orders }];
+    const origin = fence.incarnation ?? incarnation(intent.folderId);
+    const scoped = operations.map((operation) => "incarnation" in operation ? { ...operation, incarnation: origin } : operation);
+    return [{ type: "refresh", id: intent.folderId, incarnation: origin, generation: fence.generation, owner: fence.owner, operations: scoped, ...(intent.kind === "refresh" ? { orders } : {}) }];
   }
   return operations;
 }
@@ -88,7 +90,7 @@ export function projectLiveIntent(payload: LiveProjection, operations: DocumentO
       }
       continue;
     }
-    if (op.type === "create") { (result.folders ??= {})[op.id] = op.value; (result.folderOrder ??= []).push(op.id); }
+    if (op.type === "create") { (result.folders ??= {})[op.id] = op.value; if (!(result.folderOrder ??= []).includes(op.id)) result.folderOrder.push(op.id); }
     if (op.type === "delete") {
       for (const key of ["folders", "items", "hidden", "completed", "known", "unread", "expandedStacks"]) delete (result[key] ?? {})[op.id];
       result.folderOrder = list(result.folderOrder).filter((id) => id !== op.id);

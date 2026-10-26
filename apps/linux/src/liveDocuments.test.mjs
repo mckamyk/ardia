@@ -250,7 +250,7 @@ test("lost reply plus absent source event survives a new authority epoch without
   assert.equal(a.client.state().dirty, false);
   assert.equal(native.payload.calendar.showPreview, false);
   assert.equal(native.payload.calendar.showTimeToNext, false);
-  assert.deepEqual(native.commits.map((request) => request.requestId), ["a:1", "a:1", "a:2"]);
+  assert.deepEqual(native.commits.map((request) => request.requestId), ["a:1", "a:2"]);
 });
 
 test("an older commit reply cannot overwrite a later peer canonical event", async () => {
@@ -278,4 +278,159 @@ test("destroying the source subscription does not cancel accepted persistence or
   await a.client.flush();
   assert.equal(native.payload.calendar.showPreview, false);
   assert.equal(b.state().calendar.showPreview, false);
+});
+
+for (const changedEpoch of [false, true]) test(`authenticated resnapshot removes accepted create before projection and preserves later intent, changed epoch ${changedEpoch}`, async () => {
+  const native = authority(), a = bind(native.connect("a"));
+  await a.client.reconnect();
+  native.muted = true; native.lose = true;
+  a.edit({ folders: { f: { id: "f" } }, folderOrder: ["f"] });
+  await assert.rejects(a.client.flush(), /Lost reply/);
+  assert.equal(a.client.state().dirty, true);
+  if (changedEpoch) native.epoch = "replacement";
+  await a.client.reconnect();
+  assert.equal(a.client.state().dirty, false);
+  assert.deepEqual(a.state().folderOrder, ["f"]);
+  a.edit({ calendar: { ...a.state().calendar, showPreview: false } });
+  await a.client.flush();
+  assert.deepEqual(a.state().folderOrder, ["f"]);
+  assert.equal(native.commits.at(-1).requestId, "a:2");
+});
+
+for (const corrupt of [
+  (snapshot) => ({ ...snapshot, clientId: "forged" }),
+  (snapshot) => ({ ...snapshot, scope: "forged" }),
+  (snapshot) => ({ ...snapshot, watermark: 2 }),
+  (snapshot) => ({ ...snapshot, watermark: -1 }),
+  (snapshot) => ({ ...snapshot, watermark: 0.5 }),
+]) test("unauthenticated or impossible resnapshot never drops pending create", async () => {
+  const native = authority(), host = native.connect("a"), a = bind(host);
+  await a.client.reconnect();
+  native.muted = true; native.lose = true;
+  a.edit({ folders: { f: { id: "f" } }, folderOrder: ["f"] });
+  await assert.rejects(a.client.flush());
+  const call = host.call;
+  host.call = async (...args) => JSON.stringify(corrupt(JSON.parse(await call(...args))));
+  await assert.rejects(a.client.reconnect());
+  assert.equal(a.client.state().dirty, true);
+  host.call = call;
+  await a.client.reconnect();
+  assert.equal(a.client.state().dirty, false);
+  assert.deepEqual(a.state().folderOrder, ["f"]);
+});
+
+function refusingOwner(changeReply = (reply) => reply) {
+  let payload = { ...initial(), folders: { f: { id: "f" } }, folderOrder: ["f"] }, watermark = 0, revision = 0;
+  const requests = [];
+  const snapshot = () => ({ document: "live.json", clientId: "b", scope: "scope", epoch: "epoch", revision, watermark, payload, incarnations: { f: "folder:f" }, generations: { f: 2 } });
+  const host = {
+    bootstrap: { profileId: "default" }, onEvent() { return () => {}; },
+    async call(name, profile, json) {
+      const request = JSON.parse(json);
+      if (name === "documents.watch" || name === "documents.flush") return JSON.stringify(snapshot());
+      requests.push(request);
+      if (request.operations[0].type === "claim") return JSON.stringify(changeReply({ status: "conflict", reason: "notOwner", requestId: request.requestId, snapshot: snapshot() }));
+      assert.equal(request.requestId, `b:${watermark + 1}`);
+      payload = projectLiveIntent(payload, request.operations); watermark++; revision++;
+      return JSON.stringify({ status: "committed", requestId: request.requestId, snapshot: snapshot() });
+    },
+  };
+  return { host, requests, snapshot };
+}
+
+test("definitive owner refusal retires one producer without consuming sequence or blocking user edits and close", async () => {
+  const native = refusingOwner(), a = bind(native.host);
+  await a.client.reconnect();
+  const started = deferred(), gate = deferred(), call = native.host.call;
+  native.host.call = async (name, profile, json) => {
+    if (name === "documents.commit" && JSON.parse(json).operations[0].type === "claim") { started.resolve(); await gate.promise; }
+    return call(name, profile, json);
+  };
+  const claim = a.client.beginRefresh("f");
+  await started.promise;
+  a.edit({ calendar: { ...a.state().calendar, showPreview: false } });
+  gate.resolve();
+  assert.equal(await claim, null);
+  a.client.quiesce("close");
+  assert.equal(await a.client.flush(), 1);
+  assert.equal(a.client.state().dirty, false);
+  assert.equal(native.requests.filter((request) => request.operations[0].type === "claim").length, 1);
+  assert.deepEqual(native.requests.map((request) => request.requestId), ["b:1", "b:1"]);
+  assert.equal(native.snapshot().payload.calendar.showPreview, false);
+});
+
+for (const changeReply of [
+  (reply) => ({ ...reply, reason: "unknown" }),
+  (reply) => ({ ...reply, requestId: "b:0" }),
+  (reply) => ({ ...reply, snapshot: { ...reply.snapshot, clientId: "forged" } }),
+  (reply) => ({ ...reply, snapshot: { ...reply.snapshot, epoch: "stale" } }),
+  (reply) => ({ ...reply, snapshot: { ...reply.snapshot, watermark: 1 } }),
+]) test("unproven ownership refusal retains producer and following user intent", async () => {
+  const native = refusingOwner(changeReply), a = bind(native.host);
+  await a.client.reconnect();
+  await assert.rejects(a.client.beginRefresh("f"));
+  a.edit({ calendar: { ...a.state().calendar, showPreview: false } });
+  await assert.rejects(a.client.flush());
+  assert.equal(a.client.state().dirty, true);
+  assert.equal(native.requests.some((request) => request.operations[0].type === "field"), false);
+});
+
+test("a lost accepted claim reply retries its accepted identity and preserves following user sequence", async () => {
+  const native = refusingOwner();
+  const call = native.host.call;
+  let lose = true, accepted = false;
+  native.host.call = async (name, profile, json) => {
+    const request = JSON.parse(json);
+    if (name === "documents.commit" && request.operations[0].type === "claim") {
+      native.requests.push(request);
+      accepted = true;
+      if (lose) { lose = false; throw new Error("Lost accepted claim reply"); }
+      return JSON.stringify({ status: "committed", requestId: request.requestId, snapshot: { ...native.snapshot(), watermark: 1 } });
+    }
+    if (accepted && name === "documents.commit") {
+      assert.equal(request.requestId, "b:2");
+      native.requests.push(request);
+      return JSON.stringify({ status: "committed", requestId: request.requestId, snapshot: { ...native.snapshot(), watermark: 2, payload: projectLiveIntent(native.snapshot().payload, request.operations) } });
+    }
+    return call(name, profile, json);
+  };
+  const a = bind(native.host);
+  await a.client.reconnect();
+  await assert.rejects(a.client.beginRefresh("f"), /Lost accepted claim/);
+  a.edit({ calendar: { ...a.state().calendar, showPreview: false } });
+  await a.client.flush();
+  assert.deepEqual(native.requests.map((request) => request.requestId), ["b:1", "b:1", "b:2"]);
+  assert.equal(a.client.state().dirty, false);
+});
+
+test("storage failure never becomes skipped ownership and retry preserves later Calendar intent", async () => {
+  const native = refusingOwner(), call = native.host.call;
+  const attempts = [];
+  let fail = true;
+  native.host.call = async (name, profile, json) => {
+    if (name === "documents.commit") {
+      const request = JSON.parse(json); attempts.push(request.requestId);
+      if (fail) throw Object.assign(new Error("Storage unavailable"), { code: "ERR_DOCUMENT_STORAGE" });
+    }
+    return call(name, profile, json);
+  };
+  const a = bind(native.host); await a.client.reconnect();
+  await assert.rejects(a.client.beginRefresh("f"), { code: "ERR_DOCUMENT_STORAGE" });
+  assert.equal(a.client.state().dirty, true);
+  a.edit({ calendar: { ...a.state().calendar, showPreview: false } });
+  await assert.rejects(a.client.flush(), { code: "ERR_DOCUMENT_STORAGE" });
+  fail = false; await a.client.flush();
+  assert.equal(a.client.state().dirty, false);
+  assert.equal(native.snapshot().payload.calendar.showPreview, false);
+  assert.ok(attempts.every((id) => id === "b:1"));
+});
+
+test("ownership refusal older than the observed operation base cannot retire the producer", async () => {
+  const native = refusingOwner(); let listener;
+  native.host.onEvent = (callback) => { listener = callback; return () => {}; };
+  const a = bind(native.host); await a.client.reconnect();
+  listener("ArdiaDocuments", "documents", { name: "documents.changed", data: { clientId: "peer", requestId: "peer:1", snapshot: { ...native.snapshot(), revision: 5 } } });
+  await assert.rejects(a.client.beginRefresh("f"), { code: "ERR_BAD_REPLY" });
+  assert.equal(a.client.state().dirty, true);
+  assert.equal(native.requests[0].observedRevision, 5);
 });
