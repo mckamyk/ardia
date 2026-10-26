@@ -1,8 +1,8 @@
 # Linux parity repair plans
 
-These six draft planning PRs hand off36 issues:27 original gaps,3 desktop investigations and6 new upstream integration regressions. [#10 coordination](https://github.com/mckamyk/ardia/issues/10) is the live coordination tracker. Plans describe work and acceptance; they do not implement repairs or close issues.
+These six draft planning PRs hand off 36 issues: 27 original gaps, 3 desktop investigations and 6 new upstream integration regressions. [#10 coordination](https://github.com/mckamyk/ardia/issues/10) is the live coordination tracker. Plans describe work and acceptance; they do not implement repairs or close issues.
 
-The Linux branch was rebased onto main `a2ca6bdf8f69ef1b5818525ca79e9d85de2fc962` and published at `6907d6831980c3b6d686ccba0d3abdb8be2d5ebe`. The 311 incoming commits reorganize shared UI/state/platform layers, native domain calls/events, stable tab identity, configuration and Chromium 156. All 30 original findings remain applicable on current-source review. Issue links pin evidence to this rebased source, replacing obsolete pre-rebase paths.
+The Linux branch was rebased onto main `a2ca6bdf8f69ef1b5818525ca79e9d85de2fc962` and published at `b70711df2af16cee08146b78f7d3405c57d6d1de`. The 311 incoming commits reorganize shared UI/state/platform layers, native domain calls/events, stable tab identity, configuration and Chromium 156. All 30 original findings remain applicable on current-source review. Issue links pin evidence to this rebased source, replacing obsolete pre-rebase paths.
 
 ## Validation status
 
@@ -14,9 +14,11 @@ The Linux branch was rebased onto main `a2ca6bdf8f69ef1b5818525ca79e9d85de2fc962
 | Linux host tests | Three test files cannot load removed paths; N01 |
 | Native host fixtures |11 passed |
 | Native bootstrap |7 passed |
-| Linux platform tooling |14 passed;1 stale hardcoded 155 expectation fails; N05 |
+| Linux platform tooling |16 passed;1 stale hardcoded 155 expectation fails; N05 |
 | Matching Chromium 156 engine/package | Not built or qualified; N05 |
 | Shared browser and demo relative to new main | No application-source changes |
+
+The final review found duplicated shared/platform branding hunks. Linux now includes a correction that leaves those changes only in each selected platform patch. Both affected Mac/Linux branding sequences pass focused zero-fuzz regression fixtures, including Safari-dialog and Linux-only flag coverage. This does not establish full Chromium 156 materialization or a native build.
 
 The Linux/shared Helium pins now match 0.20.1 at `f29a25968e483f8bb85e47829ccd487bbe229199`; Helium Linux 0.20.1.1 is pinned at `473c0f72d7db2e8492f0fa975b8544bc719bb027`. This is source alignment, not native build evidence. Historical Chromium 155 native probes do not validate the rebased tree.
 
@@ -112,11 +114,11 @@ flowchart LR
 | F26 | P2 | persists | 1 | [#36 F26](https://github.com/mckamyk/ardia/issues/36) — Unsupported platform choices are exposed as normal settings |
 | F27 | P2 | persists | 5 | [#37 F27](https://github.com/mckamyk/ardia/issues/37) — App-level help/onboarding and developer services are not started |
 | N01 | P1 | new | 1 | [#38 N01](https://github.com/mckamyk/ardia/issues/38) — Migrate Linux imports, Vite adapters and type contracts after the upstream layer move |
-| N02 | P1 | persists | 1 | [#39 N02](https://github.com/mckamyk/ardia/issues/39) — Rebased shared UI cannot use the Linux legacy native call and event ABI |
-| N03 | P1 | persists | 1 | [#40 N03](https://github.com/mckamyk/ardia/issues/40) — Rebased tabId contract diverges from Linux random native binding keys |
-| N04 | P1 | persists | 1 | [#41 N04](https://github.com/mckamyk/ardia/issues/41) — Synchronous launchConfig contract has no Linux provider and can break startup |
+| N02 | P1 | new | 1 | [#39 N02](https://github.com/mckamyk/ardia/issues/39) — Rebased shared UI cannot use the Linux legacy native call and event ABI |
+| N03 | P1 | new | 1 | [#40 N03](https://github.com/mckamyk/ardia/issues/40) — Rebased tabId contract diverges from Linux random native binding keys |
+| N04 | P1 | new | 1 | [#41 N04](https://github.com/mckamyk/ardia/issues/41) — Synchronous launchConfig contract has no Linux provider and can break startup |
 | N05 | P1 | new | 1 | [#42 N05](https://github.com/mckamyk/ardia/issues/42) — Provide Linux launch switches and qualify the Chromium 156 native build and package |
-| N06 | P2 | new_confirmed_source_probe | 1 | [#43 N06](https://github.com/mckamyk/ardia/issues/43) — Linux shortcut hints and conflict resolution diverge from the actual native shortcut catalog |
+| N06 | P2 | new | 1 | [#43 N06](https://github.com/mckamyk/ardia/issues/43) — Linux shortcut hints and conflict resolution diverge from the actual native shortcut catalog |
 | R01 | Risk | risk | 6 | [#44 R01](https://github.com/mckamyk/ardia/issues/44) — Clicking native split pane B may leave Ardia commands targeting pane A |
 | R02 | Risk | risk | 6 | [#45 R02](https://github.com/mckamyk/ardia/issues/45) — Cross-window dragging has coordinate and per-renderer state risks |
 | R03 | Risk | risk | 6 | [#46 R03](https://github.com/mckamyk/ardia/issues/46) — Window focus/frame/fullscreen bookkeeping lacks native notifications |
