@@ -25,12 +25,12 @@ A user with “Warn before closing a window with multiple tabs” enabled can cl
 
 Header non-utility close still forwards directly to native closure without closeRequest. Shared guard moved to state/windows and now finishes via closeWindowAnimated, but Linux emits no closeRequest. Only utility close interception exists.
 
-- [apps/linux/src/TrafficLights.tsx:21](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/TrafficLights.tsx#L21)
-- [apps/linux/src/utilityClose.ts:6](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/utilityClose.ts#L6)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1894](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1894)
-- [apps/browser/src/state/windows/windowClose.ts:13](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/windows/windowClose.ts#L13)
-- [apps/browser/src/state/windows/windowClose.ts:31](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/windows/windowClose.ts#L31)
-- [apps/browser/src/state/settings/settings.ts:114](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/settings/settings.ts#L114)
+- [apps/linux/src/TrafficLights.tsx:21](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/TrafficLights.tsx#L21)
+- [apps/linux/src/utilityClose.ts:6](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/utilityClose.ts#L6)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1894](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1894)
+- [apps/browser/src/state/windows/windowClose.ts:13](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/windows/windowClose.ts#L13)
+- [apps/browser/src/state/windows/windowClose.ts:31](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/windows/windowClose.ts#L31)
+- [apps/browser/src/state/settings/settings.ts:114](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/settings/settings.ts#L114)
 
 ### Implementation slices
 
@@ -66,9 +66,9 @@ Ctrl+N and other new-window flows may leave the new window inactive while keyboa
 
 Shared window creation now uses a WindowPort but still passes focus/behind. Linux openWindow still never reads focus; utilities focus and regular windows always ShowInactive. The port extraction provides an integration seam, not a Linux activation fix.
 
-- [apps/browser/src/state/windows/windowSync.ts:60](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/windows/windowSync.ts#L60)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1945](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1945)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2016](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2016)
+- [apps/browser/src/state/windows/windowSync.ts:60](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/windows/windowSync.ts#L60)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1945](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1945)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2016](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2016)
 
 ### Implementation slices
 
@@ -102,10 +102,10 @@ Reload, close and address commands could act on the previously selected pane aft
 
 Shared onPageFocus now calls activateFocusedPane(tabId); Linux still emits no pageFocus/focus event. Real native WebContents input does not necessarily bubble to outer shell touch handlers. TabPane retains onTouchStart activation, so source inspection alone cannot determine physical split behavior.
 
-- [apps/browser/src/components/window/TabWebView.tsx:221](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/window/TabWebView.tsx#L221)
-- [apps/browser/src/components/window/TabPane.tsx:99](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/window/TabPane.tsx#L99)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:464](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L464)
-- [apps/linux/src/shims/web/HostWebView.tsx:16](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/web/HostWebView.tsx#L16)
+- [apps/browser/src/components/window/TabWebView.tsx:221](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/window/TabWebView.tsx#L221)
+- [apps/browser/src/components/window/TabPane.tsx:99](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/window/TabPane.tsx#L99)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:464](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L464)
+- [apps/linux/src/shims/web/HostWebView.tsx:16](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/web/HostWebView.tsx#L16)
 
 ### Implementation slices
 
@@ -138,11 +138,11 @@ A tab dragged outside its window could miss its target, create a wrongly positio
 
 Window-drop helper moved to state/drag and still computes bottom-up screen y while Linux returns gfx top-down bounds. Drag state/resolvers remain module-local across separate renderers. Native previews remain unavailable; upstream now calls preview helpers unconditionally.
 
-- [apps/browser/src/state/drag/windowDrop.ts:7](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/drag/windowDrop.ts#L7)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1915](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1915)
-- [apps/browser/src/state/drag/tabDrag.ts:142](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/drag/tabDrag.ts#L142)
-- [apps/linux/src/hostModules.ts:6](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/hostModules.ts#L6)
-- [packages/shell/src/windows.ts:38](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/shell/src/windows.ts#L38)
+- [apps/browser/src/state/drag/windowDrop.ts:7](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/drag/windowDrop.ts#L7)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1915](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1915)
+- [apps/browser/src/state/drag/tabDrag.ts:142](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/drag/tabDrag.ts#L142)
+- [apps/linux/src/hostModules.ts:6](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/hostModules.ts#L6)
+- [packages/shell/src/windows.ts:38](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/shell/src/windows.ts#L38)
 
 ### Implementation slices
 
@@ -176,11 +176,11 @@ The shared focused-window state and saved frame may stay stale after compositor 
 
 Native window bookkeeping moved behind WindowPort onEvent; it still needs focus/frame/fullScreen notifications. Linux still emits none and its bounds observer only relayouts the overlay. Restoring old bounds is not evidence of recording user changes.
 
-- [apps/browser/src/state/windows/windowSync.ts:34](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/windows/windowSync.ts#L34)
-- [apps/browser/src/state/windows/windowSync.ts:38](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/windows/windowSync.ts#L38)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:642](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L642)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1894](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1894)
-- [apps/linux/src/hostSession.ts:87](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/hostSession.ts#L87)
+- [apps/browser/src/state/windows/windowSync.ts:34](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/windows/windowSync.ts#L34)
+- [apps/browser/src/state/windows/windowSync.ts:38](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/windows/windowSync.ts#L38)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:642](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L642)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1894](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1894)
+- [apps/linux/src/hostSession.ts:87](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/hostSession.ts#L87)
 
 ### Implementation slices
 
