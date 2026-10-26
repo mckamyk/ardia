@@ -20,6 +20,8 @@ The Chromium pin is now `156.0.8078.47`, shared Helium is `0.20.1` at `f29a25968
 
 Eleven native host fixture tests and seven bootstrap tests still pass. Linux UI migration, the current native domain and identity contracts, a Linux launch-switch implementation, Chromium 156 patch/GN verification, and a matching native build remain prerequisites for runnable feature acceptance. Do not use the older executable as evidence for this tree or introduce old native API aliases in the shared browser to mask the mismatch. Keep integration changes in Linux-owned adapters and helpers, and retain the shared browser and demo from main.
 
+The final rebase review also found duplicate Helium flag-header hunks in the shared and platform branding patches. Those hunks now remain only in the selected Mac or Linux patch, preserving the Mac Safari-dialog change and Linux-only middle-click paste flags. Focused tests reproduced failures for both selected sequences before correction and apply the actual selected patch sections with zero fuzz afterward. They cover the affected branding hunks, not a full Chromium 156 series materialization or native build.
+
 ## Current implementation
 
 - The build tools select `AC_TARGET_OS=mac|linux` and `AC_TARGET_CPU=arm64|x64`. Linux builds `chrome` in `Release_GN_linux_<cpu>`; the existing Mac framework output is unchanged.
