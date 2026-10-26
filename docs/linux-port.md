@@ -12,6 +12,14 @@ Keep macOS behavior and its CI intact. Linux additions belong behind `is_linux` 
 
 Source, scripts and configs must contain no comments except shebangs, license headers, compiler/linter directives and a script's printed `--help` header. Put explanations here or in commit messages. Existing checks, including `pnpm typecheck`, `pnpm test` and platform-appropriate patch-series checks, remain upstream merge requirements; the verification guidance below does not establish that they have passed for a particular revision.
 
+## Upstream rebase validation on 2026-10-26
+
+The Linux changes were rebased onto `a2ca6bdf8f69ef1b5818525ca79e9d85de2fc962` (`Release 0.2.41`), incorporating 311 commits since the previous common base. The incoming tree moves the browser into `state/`, `platform/` and feature components, replaces the old native service bridge with per-domain calls and events, changes page identity to stable application tab IDs, and requires a synchronous launch configuration. Linux adapters have not yet been migrated to those contracts. The Linux UI build, typecheck and part of the host test suite currently fail; the earlier successful verification below applies to the previous source revision and packaged Chromium 155 executable, not this rebased tree.
+
+The Chromium pin is now `156.0.8078.47`, shared Helium is `0.20.1` at `f29a25968e483f8bb85e47829ccd487bbe229199`, and the compatible Helium Linux `0.20.1.1` pin is `473c0f72d7db2e8492f0fa975b8544bc719bb027`. Its upstream submodule points to the same shared Helium commit. The Linux pin was corrected after the rebase exposed the incompatible older Linux submodule pin. This establishes matching source pins, not a compiled or qualified Linux Chromium 156 package.
+
+Eleven native host fixture tests and seven bootstrap tests still pass. Linux UI migration, the current native domain and identity contracts, a Linux launch-switch implementation, Chromium 156 patch/GN verification, and a matching native build remain prerequisites for runnable feature acceptance. Do not use the older executable as evidence for this tree or introduce old native API aliases in the shared browser to mask the mismatch. Keep integration changes in Linux-owned adapters and helpers, and retain the shared browser and demo from main.
+
 ## Current implementation
 
 - The build tools select `AC_TARGET_OS=mac|linux` and `AC_TARGET_CPU=arm64|x64`. Linux builds `chrome` in `Release_GN_linux_<cpu>`; the existing Mac framework output is unchanged.
