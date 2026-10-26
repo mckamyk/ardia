@@ -1,0 +1,33 @@
+import { shortcutSources as sharedSources, staticShortcutSources as sharedStaticSources } from "../../browser/src/state/commands/commandCatalog";
+import { parseShortcut, storedShortcut, type ShortcutSource } from "../../browser/src/state/commands/shortcuts";
+
+export * from "../../browser/src/state/commands/commandCatalog";
+
+const linuxKeys: Record<string, readonly string[]> = {
+  focusCommandBar: ["⌘L", "F6", "⌥D"],
+  reload: ["⌘R", "F5"],
+  forceReload: ["⇧⌘R", "⇧F5"],
+  devTools: ["⇧⌘I", "⌥⌘I"],
+  emailPageLocation: [],
+  jumpToSelection: [],
+  downloads: ["⌘J", "⌥⌘L"],
+  javaScriptConsole: ["⇧⌘J", "⌥⌘J"],
+  zoomIn: ["⌘=", "⇧⌘="],
+  back: ["⌘[", "⌥←"],
+  forward: ["⌘]", "⌥→"],
+  nextTab: ["⇧⌘]", "⌥⌘→", "⌘⇟", "⌥⌘↓"],
+  previousTab: ["⇧⌘[", "⌥⌘←", "⌘⇞", "⌥⌘↑"],
+  "tabSwitcher:forward": ["⌘⇥"],
+  "tabSwitcher:backward": ["⇧⌘⇥"],
+};
+const shiftedKeys: Record<string, string> = { "+": "=", "{": "[", "}": "]" };
+const adapt = (sources: ShortcutSource[]): ShortcutSource[] => sources.filter((source) => !source.id.startsWith("std:")).map((source) => ({
+  ...source,
+  keys: (linuxKeys[source.id]?.map(parseShortcut) ?? source.keys).map((shortcut) => {
+    const key = shiftedKeys[shortcut.key];
+    return key ? storedShortcut([key, ...shortcut.modifiers, "shift"]) : shortcut;
+  }),
+}));
+
+export const staticShortcutSources = () => adapt(sharedStaticSources());
+export const shortcutSources = (profiles: readonly string[], overriddenIds: readonly string[]) => adapt(sharedSources(profiles, overriddenIds));
