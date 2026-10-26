@@ -45,6 +45,23 @@ Linux disables speculative New Tab prewarming before rendering the browser UI. T
 
 Headless native verification confirmed that a blank New Tab became the active native tab before this change. With prewarming disabled, sidebar clicks, repeated sidebar clicks, the top-strip button and Ctrl+T retained search-field focus and accepted typing across a 700 ms delay without creating a hidden native tab. Enter created and navigated a real page, and switching back to an existing native page worked. The headless backend did not reproduce active desktop focus clearing itself, so focus retention in an active Wayland window still needs a desktop check. Evidence is under `/tmp/ardia-new-tab-focus`, including `baseline.log` and `native/verification.json`.
 
+## Automatic Picture in Picture
+
+Linux forwards the Tabs setting to Chromium and enables its browser-initiated automatic PiP feature before feature initialization. The native host begins with automatic entry blocked until the shell supplies the setting. Explicit site blocks remain effective; the global setting disables automatic entry even for sites with an allow override.
+
+The shared native-tab transport reports logical page presentation separately from viewport geometry. A batch applies every tab's presentation before notifying Chromium, with returning pages processed before departing pages. Split-pane focus changes, menu coverage and viewport clipping do not count as leaving a page. Release cancels an attempt without treating a remount or transfer as a departure. The host records actual automatic requests at Chromium dispatch, retains cancellation across a hidden remount and clears it on a document change, a new departure or the cancelled window's closure. A late automatic window is closed only if its source and PiP generation still match the cancelled request; subsequent manual PiP remains available.
+
+Chromium retains responsibility for audio focus, playback, recent audibility, URL safety, site permissions and the single PiP owner. Returning to the source or disabling the setting closes automatic PiP without pausing. Dismissal consumes the departure; another visit and departure is required to open it again. Native PiP state is reported to the shell so its lifecycle rules can retain the playing tab.
+
+The browser-initiated video path requires a primary-main-frame player and Chromium's eligible secure or file URL. This change does not add arbitrary iframe-video support, manual PiP controls or Linux window-occlusion handling. macOS behavior and the plain web demo remain unchanged.
+
+Verification on 2026-10-26 used a production x64 executable with the existing PGO, ThinLTO, CFI and sandbox configuration, isolated profiles and the headless Ozone backend. Real video playback covered enabled departure, return without pause, dismissal and rearming, disabled entry, enabling while hidden, viewport coverage, rapid switching, paused media and split-pane focus. Delayed site handlers covered release followed by a hidden remount, return before entry, disabling before entry and manual PiP after the cancelled window closed. Native entry and exit events reached the shell. Evidence and the private build provenance are in `/home/mac/ardia-linux-build/logs/auto-pip`; Chromium source, object and executable outputs used by other tasks were not overwritten.
+
+Linux and demo UI builds and all nine workspace typechecks passed. The available browser suite passed 782 tests with one existing skip; core passed 81, host transport 41, native Linux fixtures nine, bootstrap seven, engine fixtures five and patch tooling 15. Both PiP math programs passed. The full workspace command stops at the import package because Swift is unavailable on this Linux builder. Native window placement, compositor behavior and video-call service integration still need desktop checks.
+
+The packaged test build is `/home/mac/ardia-linux-build/artifacts/ardia-linux-x64-auto-pip-20261026.tar.xz` (142,976,736 bytes; SHA-256 `4e901d6ee5c9432721eaf742005bf7510947598f296ec1d3ea556d7ebc39f6d9`). Its extracted executable matches the verified build. `/home/mac/ardia-linux-build/artifacts/auto-pip/ardia/bin/ardia` launched with its bundled UI and no development override, and passed the playback checks again. All test instances were closed. The installed browser was not replaced.
+
+
 ## Architecture and boundaries
 
 `ChromeBrowserMainParts::PostBrowserStart()` starts `ardia::StartLinuxHost()`. The Linux host serves the bundled UI at `chrome://ardia/`. Assets are loaded from `ardia-ui` beside the Chromium executable, or an explicit `--ardia-ui-dir` for development.
