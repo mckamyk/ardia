@@ -384,7 +384,7 @@
    DCHECK(is_docked_);
    life_stage_ = kClosing;
    main_web_contents_->DispatchBeforeUnload(false /* auto_cancel */);
-@@ -1775,6 +1959,12 @@
+@@ -1775,6 +1959,16 @@
  }
 
  void DevToolsWindow::SetIsDocked(bool dock_requested) {
@@ -394,10 +394,34 @@
 +    BindLinuxDevToolsLease(nullptr, false);
 +  if (life_stage_ == kLoadCompleted && !linux_devtools_state_.IsCurrent()) return;
 +#endif
++#if BUILDFLAG(IS_LINUX)
++  auto linux_weak = weak_factory_.GetWeakPtr();
++  auto linux_ticket = linux_devtools_state_.Capture();
++#endif
    if (life_stage_ == kClosing) {
      return;
    }
-@@ -2052,6 +2242,9 @@
+@@ -1820,6 +2014,9 @@
+     std::unique_ptr<WebContents> web_contents =
+         tab_strip_model->DetachWebContentsAtForInsertion(
+             tab_strip_model->GetIndexOfWebContents(main_web_contents_));
++#if BUILDFLAG(IS_LINUX)
++  if (!linux_weak) return;
++#endif
+     owned_main_web_contents_ =
+         std::make_unique<OwnedMainWebContents>(std::move(web_contents));
+   } else if (!dock_requested && was_docked) {
+@@ -1827,6 +2024,9 @@
+   }
+ #endif
+
++#if BUILDFLAG(IS_LINUX)
++  if (!linux_weak || !linux_weak->linux_devtools_state_.IsCurrent(linux_ticket)) return;
++#endif
+   Show(DevToolsToggleAction::Show());
+ }
+
+@@ -2052,6 +2252,9 @@
  }
 
  void DevToolsWindow::CreateDevToolsBrowser() {
@@ -407,7 +431,7 @@
    PrefService* prefs = profile_->GetPrefs();
    bool resetPrefs = false;
    if (!prefs->GetDict(prefs::kAppWindowPlacement).Find(kDevToolsApp)) {
-@@ -2134,7 +2327,21 @@
+@@ -2134,7 +2337,21 @@
  }
 
  void DevToolsWindow::LoadCompleted() {

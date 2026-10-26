@@ -72,8 +72,6 @@ bool LinuxDevToolsState::OwnsFrontend(uint64_t epoch) const {
 bool LinuxDevToolsState::BeginClose() {
   if (!owns_frontend_ && !IsCurrent())
     Begin(nullptr, false);
-  if (!managed_)
-    return true;
   if (close_) {
     retry_ = Capture();
     return false;
@@ -88,7 +86,7 @@ LinuxDevToolsCloseDecision LinuxDevToolsState::FinishClose(bool proceed) {
   auto closing = std::exchange(close_, std::nullopt);
   auto retry = std::exchange(retry_, std::nullopt);
   if (IsCurrent(*closing))
-    return {true, proceed, std::nullopt};
+    return {managed_, proceed, std::nullopt};
   return {true, false, retry && IsCurrent(*retry) ? retry : std::nullopt};
 }
 

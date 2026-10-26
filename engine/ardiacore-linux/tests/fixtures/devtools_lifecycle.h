@@ -124,7 +124,7 @@ class DevToolsWindow {
   void MaybeShowSharedProcessInfobar() {}
   void RemoveSharingInfoBar() {}
   void UpdateBrowserToolbar() { if (on_toolbar) on_toolbar(); }
-  void UpdateBrowserWindow() {}
+  void UpdateBrowserWindow();
   void DoAction(const DevToolsToggleAction&) { actions++; }
   void CreateDevToolsBrowser() { browser_ = &undocked_browser_; }
   ardiacore::LinuxDevToolsState linux_devtools_state_;

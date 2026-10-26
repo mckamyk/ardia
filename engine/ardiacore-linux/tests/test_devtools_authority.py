@@ -462,6 +462,50 @@ int main(int argc, char** argv) {
       assert(proceed && window->bindings_->detached == 1);
       assert(!window->linux_devtools_state_.IsCurrent(ticket));
     }
+  } else if (mode == "chrome-pending-ardia-show" || mode == "chrome-pending-ardia-close") {
+    Fixture f;
+    DevToolsWindow::OpenDevToolsWindow(&f.b, DevToolsToggleAction::Show(), DevToolsOpenedByAction::kUnknown);
+    f.Load(); f.Drain();
+    auto* window = f.tools();
+    window->CloseWindow();
+    f.Open();
+    assert(window->life_stage_ == DevToolsWindow::kLoadCompleted);
+    if (mode == "chrome-pending-ardia-close") f.Open("toggle");
+    bool proceed = true;
+    window->BeforeUnloadFired(window->main_web_contents_, true, &proceed);
+    assert(!proceed && window->bindings_->detached == 0);
+    f.Drain();
+    if (mode == "chrome-pending-ardia-close") {
+      assert(window->main_web_contents_->beforeunloads == 2);
+      window->BeforeUnloadFired(window->main_web_contents_, true, &proceed);
+      assert(proceed && window->bindings_->detached == 1);
+    }
+  } else if (mode == "dock-update-destroy" || mode == "dock-update-takeover") {
+    Fixture f;
+    DevToolsWindow::OpenDevToolsWindow(&f.b, DevToolsToggleAction::Show(), DevToolsOpenedByAction::kUnknown);
+    f.Load(); f.Drain(); f.Open("console"); f.Reset();
+    auto* window = f.tools();
+    const auto original = window->linux_devtools_state_.Capture();
+    auto shows = f.browser.window.shows;
+    bool updated = false;
+    DevtoolsUIController::on_update = [&] {
+      if (updated) return;
+      updated = true;
+      if (mode == "dock-update-destroy") DevToolsWindow::instances.clear();
+      else {
+        f.current = true; f.commands = f.Make();
+        window->BindLinuxDevToolsLease(std::make_shared<ardiacore::LinuxDevToolsLease>(
+            &f.b, [&] { return f.current; }), false);
+      }
+    };
+    window->SetIsDocked(false);
+    assert(updated);
+    if (mode == "dock-update-destroy") assert(!f.tools());
+    else {
+      assert(f.browser.window.shows == shows);
+      assert(!window->linux_devtools_state_.IsCurrent(original));
+    }
+    f.Drain();
   } else assert(false);
 }
 '''
@@ -573,6 +617,8 @@ class BrowserWindowInterface {''')
             path.write_text('#include "native_common.h"\n')
         declarations = (ROOT / 'tests/fixtures/devtools_lifecycle.h').read_text()
         bodies = '\n'.join('inline ' + method(cls.patched, signature) for signature in METHODS)
+        views = (cls.root / 'chrome/browser/devtools/devtools_window_views.cc').read_text()
+        bodies += '\ninline ' + method(views, 'void DevToolsWindow::UpdateBrowserWindow()')
         (cls.root / 'native_devtools.h').write_text(declarations + '\n' + bodies + '\n')
         (cls.root / 'chrome/browser/devtools/devtools_window.h').write_text('#include "native_common.h"\n#include "native_devtools.h"\n')
         (cls.root / 'main.cc').write_text(MAIN)
@@ -594,6 +640,10 @@ class BrowserWindowInterface {''')
     def test_preexisting_frontend_accepts_fresh_close_after_reset(self): self.run_case('preexisting-close-reset')
     def test_preexisting_frontend_accepts_fresh_docking_without_old_posted_activation(self): self.run_case('preexisting-dock-reset')
     def test_preexisting_frontend_rejects_old_close_then_retries_fresh_close(self): self.run_case('preexisting-close-pending-reset')
+    def test_unmanaged_pending_close_cannot_complete_after_ardia_takeover(self): self.run_case('chrome-pending-ardia-show')
+    def test_unmanaged_pending_close_preserves_new_ardia_close_retry(self): self.run_case('chrome-pending-ardia-close')
+    def test_actual_docking_update_can_destroy_frontend(self): self.run_case('dock-update-destroy')
+    def test_actual_docking_update_cannot_continue_after_owner_takeover(self): self.run_case('dock-update-takeover')
     def test_undocked_quarantine_reveal_and_no_automatic_close(self): self.run_case('undocked')
     def test_old_close_cannot_cancel_or_destroy_new_close_and_veto_preserves_edits(self): self.run_case('close-overlap')
     def test_native_update_reentrancy_revokes_remaining_show_and_focus(self): self.run_case('reentrant')
