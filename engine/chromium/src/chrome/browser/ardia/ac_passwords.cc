@@ -223,6 +223,9 @@ void Reauthenticate(Session session,
                     int prompt,
                     base::TimeDelta validity,
                     Authenticated then) {
+  if (!ReauthAvailable()) {
+    return reply.Error("OS authentication is unavailable on this platform");
+  }
   Profile* profile = session.profile();
   Reauth(profile, device_reauth::DeviceAuthSource::kPasswordManager,
          l10n_util::GetStringUTF16(prompt), validity,

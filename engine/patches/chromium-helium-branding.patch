@@ -339,28 +339,6 @@ icons already replaced from ardia_resources.txt); it covers what those can't rea
    map.AddWebUIConfig(std::make_unique<ProfileCustomizationUIConfig>());
    map.AddWebUIConfig(std::make_unique<ProfilePickerUIConfig>());
    map.AddWebUIConfig(std::make_unique<SigninErrorUIConfig>());
---- a/chrome/browser/ui/webui/settings/brave_full_disk_access_confirm_dialog_delegate_mac.mm
-+++ b/chrome/browser/ui/webui/settings/brave_full_disk_access_confirm_dialog_delegate_mac.mm
-@@ -39,7 +39,7 @@
- }
- 
- std::u16string FullDiskAccessConfirmDialogDelegate::GetLinkText() const {
--  return l10n_util::GetStringUTF16(IDS_IMPORT_FULL_DISK_ACCESS_DIALOG_LINK);
-+  return std::u16string();
- }
- 
- std::u16string FullDiskAccessConfirmDialogDelegate::GetAcceptButtonTitle() {
-@@ -55,9 +55,4 @@
- }
- 
- void FullDiskAccessConfirmDialogDelegate::OnLinkClicked(
--    WindowOpenDisposition disposition) {
--  const int target_index = browser_->GetTabStripModel()->active_index() + 1;
--  // Add import help tab right after current settings tab.
--  chrome::AddTabAt(browser_, GURL("https://github.com/imputnet/helium-macos/wiki/Import-data-from-Safari"), target_index,
--                   true /* foreground */);
--}
-+    WindowOpenDisposition disposition) {}
 --- a/chrome/chrome_paks.gni
 +++ b/chrome/chrome_paks.gni
 @@ -147,7 +147,6 @@ template("chrome_extra_paks") {
