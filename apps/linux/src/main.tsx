@@ -6,6 +6,7 @@ import { emitCommand, menuShown } from "@ardia/shell";
 import { WindowRoot } from "../../browser/src/App";
 import { startNativeSync } from "../../browser/src/lib/native";
 import { startTabPages } from "../../browser/src/lib/tabPages";
+import { setNewTabPrewarm } from "../../browser/src/lib/preload";
 import { setStoreBatching, useBrowser, type HydrateData } from "../../browser/src/store/browser";
 import { usePages } from "../../browser/src/components/layout/pageState";
 import { adoptParkedPins } from "../../browser/src/store/parkedPins";
@@ -24,6 +25,7 @@ Object.assign(globalThis, { ardiaLinux: { store: useBrowser, emitCommand } });
 
 async function start() {
   if (!ardiaHost) throw new Error("The Linux desktop UI requires an Ardia native host");
+  setNewTabPrewarm(false);
   const { windowId, profileId } = ardiaHost.bootstrap;
   const utility = isLinuxUtility(windowId);
   const saved = ardiaHost.bootstrap.session ?? await invokeHost<HydrateData | null>("session.read", {});

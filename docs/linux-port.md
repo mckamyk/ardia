@@ -41,6 +41,10 @@ Settings opens through the header button or Ctrl+comma, including when a native 
 
 Some native host methods remain explicitly unavailable, including tab-strip grouping, capture commands, native confirm/prompt panels and profile-data deletion. These calls reject with an unsupported error. A successful web build does not mean every existing Mac feature has a Linux implementation.
 
+Linux disables speculative New Tab prewarming before rendering the browser UI. The shared prewarmer mounts an invisible blank native tab after 120 ms, and native tab-strip synchronization activates it. Chromium can clear the centered search field's focus during that activation in an active desktop window. Linux now creates the native page when the user submits a destination; this gives up speculative tab startup savings. macOS and the website demo retain their existing prewarming behavior.
+
+Headless native verification confirmed that a blank New Tab became the active native tab before this change. With prewarming disabled, sidebar clicks, repeated sidebar clicks, the top-strip button and Ctrl+T retained search-field focus and accepted typing across a 700 ms delay without creating a hidden native tab. Enter created and navigated a real page, and switching back to an existing native page worked. The headless backend did not reproduce active desktop focus clearing itself, so focus retention in an active Wayland window still needs a desktop check. Evidence is under `/tmp/ardia-new-tab-focus`, including `baseline.log` and `native/verification.json`.
+
 ## Architecture and boundaries
 
 `ChromeBrowserMainParts::PostBrowserStart()` starts `ardia::StartLinuxHost()`. The Linux host serves the bundled UI at `chrome://ardia/`. Assets are loaded from `ardia-ui` beside the Chromium executable, or an explicit `--ardia-ui-dir` for development.
