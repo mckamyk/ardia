@@ -1,13 +1,13 @@
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
-import { webShellConfig } from "../demo/vite.shared";
+import { webShellConfig } from "./vite.shared";
 
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const replacements = new Map([
   [here("../browser/src/components/settings/windows.ts"), here("./src/settingsWindows.ts")],
   [here("../browser/src/components/ProfileIndicator.tsx"), here("./src/ProfileIndicator.tsx")],
   [here("../browser/src/components/sidebar/AddressBar.tsx"), here("./src/SidebarAddressBar.tsx")],
-  [here("../demo/src/shims/web/menus.tsx"), here("./src/menus.tsx")],
+  [here("../browser/src/components/sidebar/TileFace.tsx"), here("./src/TileFace.tsx")],
 ]);
 const adapters = new Set(replacements.values());
 

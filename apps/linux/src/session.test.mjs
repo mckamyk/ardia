@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createUtilitySessionSnapshot, initialLinuxSession } from "./session.ts";
-import { startHostPersistence } from "../../demo/src/hostSession.ts";
+import { startHostPersistence } from "./hostSession.ts";
 import { useBrowser } from "../../browser/src/store/browser.ts";
-import { mergeSession } from "../../demo/src/hostSessionMerge.ts";
+import { mergeSession } from "./hostSessionMerge.ts";
 
 const host = (windowId = "main") => ({ bootstrap: { windowId, profileId: "default", startup: false } });
 
@@ -252,7 +252,7 @@ test("utility close waits for every save acknowledgement and deduplicates repeat
 
 test("failed utility saves leave the window open and retrying close saves again", async () => {
   const { createUtilityWindowCloser } = await import("./utilityClose.ts");
-  const { createSessionWriter } = await import("../../demo/src/hostSession.ts");
+  const { createSessionWriter } = await import("./hostSession.ts");
   const closed = [];
   let calls = 0;
   const writer = createSessionWriter({
@@ -328,7 +328,7 @@ test("matching canonical state supersedes a settled save failure before retrying
 
 test("canonical satisfaction cannot bypass an in-flight save rejection", async () => {
   const { createUtilityWindowCloser } = await import("./utilityClose.ts");
-  const { createSessionWriter } = await import("../../demo/src/hostSession.ts");
+  const { createSessionWriter } = await import("./hostSession.ts");
   const saved = { settings: { showFullUrl: true } };
   const closed = [];
   let rejectSave;
@@ -358,7 +358,7 @@ test("canonical satisfaction cannot bypass an in-flight save rejection", async (
 
 test("a matching older canonical event cannot discard newer unsaved edits after failure", async () => {
   const { createUtilityWindowCloser } = await import("./utilityClose.ts");
-  const { createSessionWriter } = await import("../../demo/src/hostSession.ts");
+  const { createSessionWriter } = await import("./hostSession.ts");
   const saved = { settings: { showFullUrl: true } };
   const newer = { settings: { showFullUrl: true, sidebarWidth: 360 } };
   const writes = [];

@@ -33,7 +33,7 @@ def engine_identity(env, pins):
 def classify(paths, old_env, new_env, old_pins, new_pins):
     full = engine_identity(old_env, old_pins) != engine_identity(new_env, new_pins)
     engine = any(path.startswith(('engine/chromium/', 'engine/ardiacore-linux/', 'engine/patches/', 'scripts/linux/')) for path in paths)
-    ui = any(path.startswith(('apps/browser/src/', 'apps/demo/', 'packages/')) and '/ios/' not in path for path in paths)
+    ui = any(path.startswith(('apps/browser/src/', 'apps/linux/', 'packages/')) and '/ios/' not in path for path in paths)
     ui = ui or any(path in ('package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'turbo.json') or path.startswith('patches/') for path in paths)
     return 'ENGINE_FULL' if full else 'ENGINE_INCREMENTAL' if engine else 'UI_ONLY' if ui else 'NONE'
 
