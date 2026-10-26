@@ -1,5 +1,6 @@
 #include "ardia/linux/ac_linux_document_reducer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 #include <string_view>
@@ -177,6 +178,133 @@ std::optional<base::DictValue> NormalizeLinuxLive(const base::DictValue& payload
   return result;
 }
 
+namespace {
+
+bool Identifier(const base::DictValue& op, std::string_view key, size_t limit = 160) {
+  auto* value = op.FindString(key);
+  return value && !value->empty() && value->size() <= limit;
+}
+
+bool NullableString(const base::Value* value) {
+  return value && (value->is_none() || (value->is_string() && value->GetString().size() <= 1024));
+}
+
+bool Entry(const base::Value& value, bool completed, const std::string& key) {
+  if (value.is_none()) return true;
+  const base::Value* item = &value;
+  if (completed) {
+    if (!value.is_dict() || !Shape(value.GetDict(), "|item|state|at|")) return false;
+    auto* state = value.GetDict().FindString("state");
+    auto* at = value.GetDict().Find("at");
+    if (!state || (*state != "closed" && *state != "merged" && *state != "reviewed") ||
+        !at || (!at->is_int() && !at->is_double())) return false;
+    item = value.GetDict().Find("item");
+  }
+  return item && Item(*item) && *item->GetDict().FindString("id") == key;
+}
+
+bool FieldValue(const std::string& target, const std::string& field,
+                const std::string& id, const base::Value& value) {
+  if (target == "folder") {
+    if (field == "name") return value.is_string();
+    if (field == "icon" || field == "after") return NullableString(&value);
+    if (field == "sources") return Strings(value);
+    return std::set<std::string>{"collapsed", "groupStacks", "showCompleted", "filters.authored", "filters.reviewRequests"}.contains(field) && value.is_bool();
+  }
+  if (target == "calendar") {
+    if (field == "alertLead") return value.is_string();
+    if (field == "alertCondition") return value.is_string() && (value.GetString() == "always" || value.GetString() == "activeOnly");
+    return std::set<std::string>{"showPreview", "showTimeToNext", "prompted"}.contains(field) && value.is_bool();
+  }
+  if (target == "config") return std::set<std::string>{"githubClientId", "bitbucketUser", "confluenceSite", "confluenceEmail", "googleClientId"}.contains(field) && value.is_string();
+  if (field != "value" || id.empty()) return false;
+  if (target == "expandedStack") return value.is_none() || value.is_bool();
+  if (target != "account" && target != "meetingGroup") return false;
+  if (value.is_none()) return true;
+  base::DictValue payload;
+  base::DictValue entries;
+  entries.Set(id, value.Clone());
+  payload.Set(target == "account" ? "accounts" : "meetingGroups", std::move(entries));
+  return NormalizeLinuxLive(payload).has_value();
+}
+
+bool Operation(const base::DictValue& op, bool nested) {
+  const auto* type = op.FindString("type");
+  if (!type) return false;
+  const auto* target = op.FindString("target");
+  if (*type == "create") {
+    if (nested || op.size() != 4 || !Shape(op, "|type|id|incarnation|value|") ||
+        !Identifier(op, "id", 128) || !Identifier(op, "incarnation") || !op.FindDict("value")) return false;
+    auto folder = op.FindDict("value")->Clone();
+    return Folder(folder, *op.FindString("id"));
+  }
+  if (*type == "delete" || *type == "claim") return !nested && op.size() == 3 && Shape(op, "|type|id|incarnation|") && Identifier(op, "id", 128) && Identifier(op, "incarnation");
+  if (*type == "refresh") {
+    if (nested || (op.size() != 6 && op.size() != 7) || !Shape(op, "|type|id|incarnation|generation|owner|operations|orders|") ||
+        !Identifier(op, "id", 128) || !Identifier(op, "incarnation") || !Identifier(op, "owner", 128) ||
+        LinuxDocumentInteger(op, "generation") < 0 || LinuxDocumentInteger(op, "generation") > kLinuxLiveMaxGeneration) return false;
+    const auto* operations = op.Find("operations");
+    if (!operations || !operations->is_list() || operations->GetList().size() > 2048) return false;
+    for (const auto& child : operations->GetList()) {
+      if (!child.is_dict() || !Operation(child.GetDict(), true) ||
+          !child.GetDict().FindString("id") || *child.GetDict().FindString("id") != *op.FindString("id") ||
+          !child.GetDict().FindString("incarnation") || *child.GetDict().FindString("incarnation") != *op.FindString("incarnation")) return false;
+    }
+    if (const auto* orders = op.Find("orders")) {
+      if (!orders->is_dict() || !Shape(orders->GetDict(), "|items|hidden|completed|")) return false;
+      for (const auto& [key, ids] : orders->GetDict()) if (!Strings(ids)) return false;
+    }
+    return true;
+  }
+  if (*type == "field") {
+    const auto* field = op.FindString("field");
+    const auto* value = op.Find("value");
+    const auto* expected = op.Find("expected");
+    if (nested || !target || !field || !value || !expected || !Shape(op, "|type|target|id|incarnation|field|expected|value|")) return false;
+    const auto* id = op.FindString("id");
+    if (*target == "folder") {
+      if (op.size() != 7 || !Identifier(op, "id", 128) || !Identifier(op, "incarnation")) return false;
+    } else if (*target == "calendar" || *target == "config") {
+      if (op.size() != 5) return false;
+    } else if (op.size() != 6 || !Identifier(op, "id", 128)) return false;
+    return FieldValue(*target, *field, id ? *id : "", *value) &&
+           (expected->is_none() || FieldValue(*target, *field, id ? *id : "", *expected));
+  }
+  if (*type == "member") {
+    const auto* present = op.Find("present");
+    if (!target || !Identifier(op, "member", 1024) || !present || !present->is_bool() || !Shape(op, "|type|target|id|incarnation|member|present|")) return false;
+    if (*target == "known" || *target == "unread") return op.size() == 6 && Identifier(op, "id", 128) && Identifier(op, "incarnation");
+    return !nested && op.size() == 4 && (*target == "hiddenCalendarIds" || *target == "dismissedAlerts");
+  }
+  if (*type == "entry") {
+    const auto* value = op.Find("value");
+    const auto* expected = op.Find("expected");
+    return op.size() == 7 && Shape(op, "|type|target|id|incarnation|key|expected|value|") &&
+      target && (*target == "items" || *target == "hidden" || *target == "completed") &&
+      Identifier(op, "id", 128) && Identifier(op, "incarnation") && Identifier(op, "key", 1024) && value && expected &&
+      Entry(*value, *target == "completed", *op.FindString("key")) && Entry(*expected, *target == "completed", *op.FindString("key"));
+  }
+  return !nested && *type == "place" && op.size() == 5 && Shape(op, "|type|id|incarnation|after|expected|") && Identifier(op, "id", 128) && Identifier(op, "incarnation") && NullableString(op.Find("after")) && NullableString(op.Find("expected"));
+}
+
+}
+
+bool ValidLinuxLiveOperations(const base::ListValue& operations) {
+  if (operations.size() > 2048) return false;
+  size_t nodes = 0;
+  if (!JsonSafe(base::Value(operations.Clone()), 0, nodes)) return false;
+  for (const auto& operation : operations)
+    if (!operation.is_dict() || !Operation(operation.GetDict(), false)) return false;
+  return true;
+}
+
+bool AdvanceLinuxLiveGeneration(base::DictValue& generations, std::string_view id, int floor) {
+  const int current = LinuxDocumentInteger(generations, id, 0);
+  if (current < 0 || current >= kLinuxLiveMaxGeneration || floor < 0 || floor > kLinuxLiveMaxGeneration) return false;
+  generations.Set(id, base::Value(std::max(current + 1, floor)));
+  return true;
+}
+
 bool ValidLinuxLiveEnvelope(const base::DictValue& envelope) {
   if (LinuxDocumentInteger(envelope, "format") != 1 ||
       LinuxDocumentInteger(envelope, "revision") < 0 || !envelope.FindString("epoch") ||
@@ -198,11 +326,13 @@ bool ValidLinuxLiveEnvelope(const base::DictValue& envelope) {
     if (!folders->contains(id) || !owner.is_string() || owner.GetString().empty()) return false;
   if (envelope.FindDict("clients")->size() > 256) return false;
   for (const auto& [id, receipt] : *envelope.FindDict("clients")) {
-    if (!receipt.is_dict() || receipt.GetDict().size() != 3 ||
+    if (id.empty() || id.size() > 128 || !receipt.is_dict() || receipt.GetDict().size() != 3 ||
         LinuxDocumentInteger(receipt.GetDict(), "sequence") < 1 ||
         LinuxDocumentInteger(receipt.GetDict(), "sequence") > 2147483000 ||
         !receipt.GetDict().FindString("requestId") ||
-        !receipt.GetDict().Find("operations") || !receipt.GetDict().Find("operations")->is_list()) return false;
+        *receipt.GetDict().FindString("requestId") != std::string(id) + ":" + std::to_string(LinuxDocumentInteger(receipt.GetDict(), "sequence")) ||
+        !receipt.GetDict().Find("operations") || !receipt.GetDict().Find("operations")->is_list() ||
+        !ValidLinuxLiveOperations(receipt.GetDict().Find("operations")->GetList())) return false;
   }
   size_t nodes = 0;
   return JsonSafe(base::Value(envelope.Clone()), 0, nodes);

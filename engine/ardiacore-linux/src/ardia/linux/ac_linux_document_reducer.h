@@ -8,6 +8,9 @@
 
 namespace ardia {
 
+inline constexpr int kLinuxLiveMaxGeneration = 2147483000;
+bool AdvanceLinuxLiveGeneration(base::DictValue& generations, std::string_view id, int floor = 0);
+bool ValidLinuxLiveOperations(const base::ListValue& operations);
 std::optional<base::DictValue> NormalizeLinuxLive(const base::DictValue& payload);
 std::string ApplyLinuxLiveOperations(base::DictValue& envelope,
                                     const base::ListValue& operations,

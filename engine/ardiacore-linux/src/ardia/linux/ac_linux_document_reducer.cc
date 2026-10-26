@@ -32,10 +32,11 @@ bool Existing(const base::DictValue& envelope, const base::DictValue& op) {
          *envelope.FindDict("incarnations")->FindString(*id) == *incarnation;
 }
 
-void Advance(base::DictValue& envelope, const std::string& id) {
+bool Advance(base::DictValue& envelope, const std::string& id) {
   auto generations = envelope.FindDict("generations")->Clone();
-  generations.Set(id, base::Value(LinuxDocumentInteger(generations, id, 0) + 1));
+  if (!AdvanceLinuxLiveGeneration(generations, id)) return false;
   envelope.Set("generations", std::move(generations));
+  return true;
 }
 
 std::string EntryId(const base::Value& entry, bool completed) {
@@ -83,11 +84,11 @@ std::string ApplyOne(base::DictValue& envelope, const base::DictValue& op,
     if (*type == "claim") {
       if (op.size() != 3) return "invalid";
       const auto* owner = envelope.FindDict("owners")->FindString(*id);
-      if (owner && *owner != client) return "conflict";
+      if (owner && *owner != client) return "notOwner";
       auto owners = envelope.FindDict("owners")->Clone();
       owners.Set(*id, client);
       envelope.Set("owners", std::move(owners));
-      Advance(envelope, *id);
+      if (!Advance(envelope, *id)) return "limit";
       return {};
     }
     const auto* owner = envelope.FindDict("owners")->FindString(*id);
@@ -243,8 +244,8 @@ std::string ApplyOne(base::DictValue& envelope, const base::DictValue& op,
   auto normalized = NormalizeLinuxLive(payload);
   if (!normalized) return "invalid";
   envelope.Set("payload", std::move(*normalized));
-  if (folder_change) Advance(envelope, *id);
-  if (global_change) for (const auto& [folder, record] : *envelope.FindDict("payload")->FindDict("folders")) Advance(envelope, std::string(folder));
+  if (folder_change && !Advance(envelope, *id)) return "limit";
+  if (global_change) for (const auto& [folder, record] : *envelope.FindDict("payload")->FindDict("folders")) if (!Advance(envelope, std::string(folder))) return "limit";
   return {};
 }
 
@@ -254,6 +255,7 @@ std::string ApplyLinuxLiveOperations(base::DictValue& envelope,
                                     const base::ListValue& operations,
                                     const std::string& client,
                                     int observed_revision) {
+  if (!ValidLinuxLiveOperations(operations)) return "invalid";
   if (observed_revision > LinuxDocumentInteger(envelope, "revision")) return "invalid";
   bool superseded = false;
   for (const auto& op : operations) {

@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -64,8 +65,10 @@ class LinuxDocuments {
   Write write_;
   base::DictValue envelope_;
   bool loaded_ = false;
+  bool generation_exhausted_ = false;
   std::map<std::string, Changed> watchers_;
   std::map<std::string, int> retired_generations_;
+  std::set<std::string> retired_clients_;
   std::map<std::string, std::pair<std::string, int>> seals_;
 };
 
