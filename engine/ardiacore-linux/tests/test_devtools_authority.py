@@ -431,6 +431,37 @@ int main(int argc, char** argv) {
     window->BeforeUnloadFired(window->main_web_contents_, false, &proceed);
     assert(!proceed && f.b.delegate.cancellations == 1 && !f.tools());
     f.Drain();
+  } else if (mode == "preexisting-close-reset" || mode == "preexisting-dock-reset" || mode == "preexisting-close-pending-reset") {
+    Fixture f;
+    DevToolsWindow::OpenDevToolsWindow(&f.b, DevToolsToggleAction::Show(), DevToolsOpenedByAction::kUnknown);
+    f.Load(); f.Drain();
+    f.Open("console");
+    auto* window = f.tools();
+    const auto ticket = window->linux_devtools_state_.Capture();
+    if (mode == "preexisting-close-pending-reset") f.Open("toggle");
+    f.Reset();
+    assert(!window->linux_devtools_state_.OwnsFrontend(ticket.epoch));
+    assert(window->main_web_contents_->view.hides == 0);
+    if (mode == "preexisting-dock-reset") {
+      window->SetIsDocked(false);
+      assert(!window->is_docked_);
+      assert(!window->linux_devtools_state_.IsCurrent(ticket));
+      auto activations = f.browser.strip.activations;
+      f.Drain();
+      assert(f.browser.strip.activations == activations);
+    } else {
+      window->CloseWindow();
+      bool proceed = true;
+      if (mode == "preexisting-close-pending-reset") {
+        window->BeforeUnloadFired(window->main_web_contents_, true, &proceed);
+        assert(!proceed && window->bindings_->detached == 0);
+        f.Drain();
+        assert(window->main_web_contents_->beforeunloads == 2);
+      }
+      window->BeforeUnloadFired(window->main_web_contents_, true, &proceed);
+      assert(proceed && window->bindings_->detached == 1);
+      assert(!window->linux_devtools_state_.IsCurrent(ticket));
+    }
   } else assert(false);
 }
 '''
@@ -560,6 +591,9 @@ class BrowserWindowInterface {''')
     def test_deliberate_chrome_takeover_survives_old_revocation(self): self.run_case('chrome-takeover')
     def test_new_ardia_takeover_survives_old_revocation(self): self.run_case('ardia-takeover')
     def test_preexisting_chrome_frontend_never_becomes_owned_or_hidden(self): self.run_case('preexisting')
+    def test_preexisting_frontend_accepts_fresh_close_after_reset(self): self.run_case('preexisting-close-reset')
+    def test_preexisting_frontend_accepts_fresh_docking_without_old_posted_activation(self): self.run_case('preexisting-dock-reset')
+    def test_preexisting_frontend_rejects_old_close_then_retries_fresh_close(self): self.run_case('preexisting-close-pending-reset')
     def test_undocked_quarantine_reveal_and_no_automatic_close(self): self.run_case('undocked')
     def test_old_close_cannot_cancel_or_destroy_new_close_and_veto_preserves_edits(self): self.run_case('close-overlap')
     def test_native_update_reentrancy_revokes_remaining_show_and_focus(self): self.run_case('reentrant')

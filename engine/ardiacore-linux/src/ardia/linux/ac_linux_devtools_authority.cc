@@ -70,6 +70,8 @@ bool LinuxDevToolsState::OwnsFrontend(uint64_t epoch) const {
 }
 
 bool LinuxDevToolsState::BeginClose() {
+  if (!owns_frontend_ && !IsCurrent())
+    Begin(nullptr, false);
   if (!managed_)
     return true;
   if (close_) {

@@ -384,17 +384,20 @@
    DCHECK(is_docked_);
    life_stage_ = kClosing;
    main_web_contents_->DispatchBeforeUnload(false /* auto_cancel */);
-@@ -1775,6 +1959,9 @@
+@@ -1775,6 +1959,12 @@
  }
 
  void DevToolsWindow::SetIsDocked(bool dock_requested) {
 +#if BUILDFLAG(IS_LINUX)
++  if (!linux_devtools_state_.IsCurrent() &&
++      !linux_devtools_state_.OwnsFrontend(linux_devtools_state_.Capture().epoch))
++    BindLinuxDevToolsLease(nullptr, false);
 +  if (life_stage_ == kLoadCompleted && !linux_devtools_state_.IsCurrent()) return;
 +#endif
    if (life_stage_ == kClosing) {
      return;
    }
-@@ -2052,6 +2239,9 @@
+@@ -2052,6 +2242,9 @@
  }
 
  void DevToolsWindow::CreateDevToolsBrowser() {
@@ -404,7 +407,7 @@
    PrefService* prefs = profile_->GetPrefs();
    bool resetPrefs = false;
    if (!prefs->GetDict(prefs::kAppWindowPlacement).Find(kDevToolsApp)) {
-@@ -2134,7 +2324,21 @@
+@@ -2134,7 +2327,21 @@
  }
 
  void DevToolsWindow::LoadCompleted() {
