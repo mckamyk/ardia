@@ -107,6 +107,7 @@ struct AutoPictureInPictureTabHelper {
 struct TabBinding {
   content::WebContents value;
   std::string claim = "current";
+  int renderer_generation = 1;
   bool presented = false;
   bool presentation_applied = false;
   bool presentation_attached = false;
@@ -116,6 +117,8 @@ struct TabBinding {
   content::WebContents* contents() { return &value; }
 };
 struct ShellHostView {
+  bool handler_ = true;
+  int renderer_generation_ = 1;
   std::map<int, std::unique_ptr<TabBinding>> bindings_;
   TabBinding* Binding(int id) {
     const auto found = bindings_.find(id);

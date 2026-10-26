@@ -53,9 +53,12 @@ std::string String(const base::DictValue& args, const char* key) {
 struct TabBinding {
   int* value;
   std::string claim;
+  int renderer_generation = 1;
   int* contents() { return value; }
 };
 struct ShellHostView {
+  bool handler_ = true;
+  int renderer_generation_ = 1;
   std::map<int, TabBinding*> bindings;
   TabBinding* Binding(int id) { auto it = bindings.find(id); return it == bindings.end() ? nullptr : it->second; }
   TabBinding* ClaimedBinding(const base::DictValue&);
