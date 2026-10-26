@@ -1302,12 +1302,11 @@ bool ShellHostView::DisposeTemporary(TabBinding* binding) {
   if (index < 0) return false;
   auto weak = GetWeakPtr();
   app_operation_ = true;
-  auto contents = model->DetachWebContentsAtForInsertion(index, TabRemovedReason::kDeleted);
+  model->DetachAndDeleteWebContentsAt(index);
   if (weak) {
     weak->app_operation_ = false;
     weak->QueueTransaction(-1);
   }
-  contents.reset();
   return true;
 }
 
