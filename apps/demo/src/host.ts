@@ -6,6 +6,7 @@ export type ArdiaHost = {
     windowId: string;
     profileId: string;
     startup?: boolean;
+    utility?: { pane: string; profileId: string | null; detail: string | null; importSource?: string };
     session?: HydrateData | null;
     documents?: Record<string, string>;
     nativeModules?: Record<string, Record<string, unknown>>;

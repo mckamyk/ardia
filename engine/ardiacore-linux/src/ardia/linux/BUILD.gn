@@ -33,6 +33,7 @@ source_set("linux") {
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/tabs:tab_strip",
     "//chrome/common",
+    "//components/prefs",
     "//components/sessions",
     "//components/search_engines",
     "//components/tabs:public",

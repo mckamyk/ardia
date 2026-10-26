@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -17,6 +18,7 @@
 #include "base/base_paths.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/environment.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -47,6 +49,7 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window_state.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
@@ -55,6 +58,7 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/search_engines/template_url.h"
+#include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/sessions/core/session_id.h"
@@ -114,7 +118,34 @@ constexpr char kSessionName[] = "linux-session.json";
 
 class ShellHostView;
 class HostMessageHandler;
-std::map<int, std::string>& RequestedWindows();
+struct RequestedWindow {
+  std::string id;
+  std::string kind;
+  std::string title;
+  base::DictValue utility;
+  base::WeakPtr<BrowserWindowInterface> browser;
+};
+std::map<int, RequestedWindow>& RequestedWindows();
+
+void CloseNativeWindow(BrowserWindowInterface* browser) {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce([](base::WeakPtr<BrowserWindowInterface> target) {
+        if (target) target->GetWindow()->Close();
+      }, browser->GetWeakPtr()));
+}
+
+void FocusNativeWindow(BrowserWindowInterface* browser) {
+  const auto* command = base::CommandLine::ForCurrentProcess();
+  auto environment = base::Environment::Create();
+  if (environment->GetVar("ARDIA_BACKGROUND").value_or("") == "1" ||
+      command->HasSwitch("headless") ||
+      command->GetSwitchValueASCII("ozone-platform") == "headless") {
+    browser->GetWindow()->ShowInactive();
+  } else {
+    browser->GetWindow()->Show();
+    browser->GetWindow()->Activate();
+  }
+}
 
 std::map<int, ShellHostView*>& Hosts() {
   static base::NoDestructor<std::map<int, ShellHostView*>> hosts;
@@ -149,6 +180,20 @@ std::string ArgumentString(const base::ListValue& args, size_t index) {
 
 bool DefaultProfileId(std::string_view id) {
   return id.empty() || id == "default";
+}
+
+bool ValidUtilityPlacement(const base::DictValue* placement) {
+  if (!placement || !placement->FindBool("maximized")) return false;
+  const auto left = placement->FindInt("left");
+  const auto top = placement->FindInt("top");
+  const auto right = placement->FindInt("right");
+  const auto bottom = placement->FindInt("bottom");
+  if (!left || !top || !right || !bottom ||
+      *left < -1000000 || *left > 1000000 ||
+      *top < -1000000 || *top > 1000000) return false;
+  const int64_t width = static_cast<int64_t>(*right) - *left;
+  const int64_t height = static_cast<int64_t>(*bottom) - *top;
+  return width >= 720 && height >= 480 && width <= 16384 && height <= 16384;
 }
 
 base::FilePath DocumentDirectory(Profile* profile) {
@@ -378,7 +423,19 @@ class ShellHostView : public views::View,
   void DetachViewports();
   int id() const { return id_; }
   const std::string& window_id() const { return window_id_; }
-  void set_window_id(std::string id) { window_id_ = std::move(id); }
+  bool is_utility() const { return !kind_.empty(); }
+  void ConfigureWindow(RequestedWindow request) {
+    window_id_ = std::move(request.id);
+    kind_ = std::move(request.kind);
+    title_ = std::move(request.title);
+    utility_ = std::move(request.utility);
+  }
+  void NavigateUtility(base::DictValue utility) {
+    utility_ = std::move(utility);
+    if (utility_ready_) {
+      Event("ArdiaShell", "onUtilityNavigation", base::Value(utility_.Clone()));
+    }
+  }
   BrowserWindowInterface* browser() const { return browser_; }
   content::WebContents* shell() const { return shell_->GetWebContents(); }
   Profile* profile() const { return browser_ ? browser_->GetProfile() : nullptr; }
@@ -388,7 +445,10 @@ class ShellHostView : public views::View,
   base::DictValue Transaction(std::optional<int> command, bool advance);
   void SetHandler(HostMessageHandler* handler) { handler_ = handler; }
   void ClearHandler(HostMessageHandler* handler) {
-    if (handler_ == handler) handler_ = nullptr;
+    if (handler_ == handler) {
+      handler_ = nullptr;
+      utility_ready_ = false;
+    }
   }
   void Event(std::string_view module, std::string_view event,
              base::Value payload);
@@ -413,6 +473,9 @@ class ShellHostView : public views::View,
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
   bool CanHandleAccelerators() const override;
   void UnregisterAccelerators();
+  void ArmUtilityClose();
+  void RequestUtilityClose();
+  void CloseUtilityAfterSave();
   void LayoutOverlay();
   void ReattachViewports();
   void OnViewBoundsChanged(views::View*) override { LayoutOverlay(); }
@@ -428,6 +491,11 @@ class ShellHostView : public views::View,
   int id_;
   bool startup_;
   std::string window_id_;
+  std::string kind_;
+  std::string title_;
+  base::DictValue utility_;
+  bool utility_ready_ = false;
+  bool utility_close_pending_ = false;
   std::map<int, std::unique_ptr<TabBinding>> bindings_;
   bool app_operation_ = false;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
@@ -626,7 +694,8 @@ ShellHostView::~ShellHostView() {
 void ShellHostView::Initialize() {
   focus_manager_ = GetFocusManager();
   if (focus_manager_) {
-    for (auto key : {ui::VKEY_T, ui::VKEY_L, ui::VKEY_W, ui::VKEY_R}) {
+    for (auto key : {ui::VKEY_T, ui::VKEY_L, ui::VKEY_W, ui::VKEY_R,
+                     ui::VKEY_OEM_COMMA}) {
       focus_manager_->RegisterAccelerator(
           ui::Accelerator(key, ui::EF_CONTROL_DOWN),
           ui::AcceleratorManager::kHighPriority, this);
@@ -635,7 +704,16 @@ void ShellHostView::Initialize() {
         ui::Accelerator(ui::VKEY_T, ui::EF_CONTROL_DOWN | ui::EF_SHIFT_DOWN),
         ui::AcceleratorManager::kHighPriority, this);
   }
+  if (is_utility()) {
+    ArmUtilityClose();
+    browser_view_->SetPreferredSize(kind_ == "settings" ? gfx::Size(720, 480)
+                                                       : gfx::Size(640, 600));
+    GetWidget()->OnSizeConstraintsChanged();
+  }
   LayoutOverlay();
+  if (!title_.empty()) {
+    browser_->GetWindow()->GetNativeWindow()->SetTitle(base::UTF8ToUTF16(title_));
+  }
   shell_->LoadInitialURL(GURL("chrome://ardia/"));
 }
 
@@ -680,7 +758,7 @@ base::DictValue ShellHostView::Bootstrap() const {
                            (1024.0 * 1024 * 1024))
       .Set("locale", "en-US")
       .Set("updates", false);
-  return base::DictValue()
+  auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
       .Set("profileId", "default")
@@ -689,6 +767,8 @@ base::DictValue ShellHostView::Bootstrap() const {
                                                 "systemInfo", std::move(info))))
       .Set("environment", base::DictValue())
       .Set("capabilities", base::ListValue());
+  if (is_utility()) bootstrap.Set("utility", utility_.Clone());
+  return bootstrap;
 }
 
 void ShellHostView::LayoutOverlay() {
@@ -710,10 +790,51 @@ void ShellHostView::UnregisterAccelerators() {
 }
 
 bool ShellHostView::CanHandleAccelerators() const {
-  return browser_ && handler_;
+  return browser_ && (is_utility() || handler_);
+}
+
+void ShellHostView::ArmUtilityClose() {
+  if (!browser_ || !browser_view_ || !GetWidget() || GetWidget()->IsClosed()) return;
+  GetWidget()->MakeCloseSynchronous(base::BindOnce(
+      [](base::WeakPtr<ShellHostView> host, base::WeakPtr<views::Widget> widget,
+         views::Widget::ClosedReason) {
+        if (!host || !widget || widget->IsClosed()) return;
+        host->ArmUtilityClose();
+        host->RequestUtilityClose();
+      }, GetWeakPtr(), GetWidget()->GetWeakPtr()));
+}
+
+void ShellHostView::RequestUtilityClose() {
+  if (!browser_ || !browser_view_ || !GetWidget() || GetWidget()->IsClosed()) return;
+  utility_close_pending_ = true;
+  if (!utility_ready_ || !handler_) return;
+  Event("ArdiaShell", "onCommand", base::Value(base::DictValue()
+      .Set("command", "closeTab").Set("arg", base::Value()).Set("windowId", window_id_)));
+}
+
+void ShellHostView::CloseUtilityAfterSave() {
+  if (!browser_ || !browser_view_ || !GetWidget() || GetWidget()->IsClosed()) return;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+          [](base::WeakPtr<ShellHostView> host, base::WeakPtr<views::Widget> widget) {
+            if (!host || !widget || widget->IsClosed() ||
+                !host->browser_ || !host->browser_view_) return;
+            host->utility_close_pending_ = false;
+            widget->MakeCloseSynchronous({});
+            host->browser_->GetWindow()->Close();
+            if (host && widget && !widget->IsClosed() &&
+                host->browser_ && host->browser_view_) host->ArmUtilityClose();
+          }, GetWeakPtr(), GetWidget()->GetWeakPtr()));
 }
 
 bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
+  if (is_utility()) {
+    if (accelerator.key_code() == ui::VKEY_W) {
+      RequestUtilityClose();
+      return true;
+    }
+    if (accelerator.key_code() != ui::VKEY_OEM_COMMA) return true;
+  }
   std::string command;
   switch (accelerator.key_code()) {
     case ui::VKEY_T:
@@ -722,6 +843,7 @@ bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
     case ui::VKEY_L: command = "focusCommandBar"; break;
     case ui::VKEY_W: command = "closeTab"; break;
     case ui::VKEY_R: command = "reload"; break;
+    case ui::VKEY_OEM_COMMA: command = "openSettings"; break;
     default: return false;
   }
   Event("ArdiaShell", "onCommand", base::Value(base::DictValue()
@@ -778,7 +900,9 @@ base::DictValue ShellHostView::Strip() const {
 base::DictValue ShellHostView::Transaction(std::optional<int> command,
                                           bool advance) {
   base::ListValue strips;
-  for (const auto& [id, host] : Hosts()) strips.Append(host->Strip());
+  for (const auto& [id, host] : Hosts()) {
+    if (!host->is_utility()) strips.Append(host->Strip());
+  }
   if (advance) ++Revision();
   return base::DictValue()
       .Set("rev", Revision())
@@ -1321,12 +1445,26 @@ void ShellHostView::Invoke(
     return std::move(done).Run(true, base::Value(std::move(ids)));
   }
   if (method == "ArdiaShell.windowFrame" || method == "ArdiaShell.closeWindow" ||
+      method == "ArdiaShell.minimizeWindow" ||
+      method == "ArdiaShell.toggleMaximizeWindow" ||
+      method == "ArdiaShell.focusWindow" || method == "ArdiaShell.utilityReady" ||
       method == "ArdiaShell.setWindowTitle") {
     ShellHostView* target = nullptr;
     for (const auto& [id, host] : Hosts()) {
       if (host->window_id() == ArgumentString(values, 0)) target = host;
     }
     if (!target) return std::move(done).Run(false, base::Value("No such native window"));
+    if (method == "ArdiaShell.utilityReady") {
+      if (target != this || !is_utility()) {
+        return std::move(done).Run(false, base::Value("No such utility renderer"));
+      }
+      utility_ready_ = true;
+      if (utility_close_pending_) {
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(&ShellHostView::RequestUtilityClose, GetWeakPtr()));
+      }
+      return std::move(done).Run(true, base::Value(utility_.Clone()));
+    }
     if (method == "ArdiaShell.windowFrame") {
       const gfx::Rect bounds = target->browser()->GetWindow()->GetBounds();
       return std::move(done).Run(true, base::Value(base::ListValue()
@@ -1335,12 +1473,25 @@ void ShellHostView::Invoke(
     if (method == "ArdiaShell.setWindowTitle") {
       target->browser()->GetWindow()->GetNativeWindow()->SetTitle(
           base::UTF8ToUTF16(ArgumentString(values, 1)));
+    } else if (method == "ArdiaShell.minimizeWindow") {
+      target->browser()->GetWindow()->Minimize();
+    } else if (method == "ArdiaShell.toggleMaximizeWindow") {
+      if (target->kind_ == "import") {
+        return std::move(done).Run(false, base::Value("The Import window has a fixed size"));
+      }
+      ui::BaseWindow* window = target->browser()->GetWindow();
+      if (window->IsMaximized()) {
+        window->Restore();
+      } else {
+        window->Maximize();
+      }
+    } else if (method == "ArdiaShell.focusWindow") {
+      FocusNativeWindow(target->browser());
+    } else if (target->is_utility()) {
+      if (target == this) target->CloseUtilityAfterSave();
+      else target->RequestUtilityClose();
     } else {
-      const auto weak = target->browser()->GetWeakPtr();
-      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce([](base::WeakPtr<BrowserWindowInterface> browser) {
-            if (browser) browser->GetWindow()->Close();
-          }, weak));
+      CloseNativeWindow(target->browser());
     }
     return std::move(done).Run(true, base::Value());
   }
@@ -1348,15 +1499,35 @@ void ShellHostView::Invoke(
     const std::string id = ArgumentString(values, 0);
     const base::DictValue* options = values.size() > 1 && values[1].is_dict()
                                        ? &values[1].GetDict() : nullptr;
+    const std::string kind = options ? String(*options, "kind") : "";
+    const bool utility = kind == "settings" || kind == "import";
+    const base::DictValue* navigation = options ? options->FindDict("settings") : nullptr;
+    std::optional<base::DictValue> utility_navigation;
+    if (navigation) utility_navigation = navigation->Clone();
+    if (utility && options && options->FindString("importSource")) {
+      if (!utility_navigation) utility_navigation.emplace();
+      utility_navigation->Set("importSource", String(*options, "importSource"));
+    }
     if (id.empty() || id.size() > 256 ||
+        (utility && id != kind) ||
+        (!utility && (id == "settings" || id == "import")) ||
         (options && (options->FindBool("incognito").value_or(false) ||
                      !DefaultProfileId(String(*options, "profile"))))) {
       return std::move(done).Run(false, base::Value("Only regular default-profile windows are supported"));
     }
     for (const auto& [native_id, host] : Hosts()) {
-      if (host->window_id() == id) return std::move(done).Run(true, base::Value());
+      if (host->window_id() != id) continue;
+      if (utility_navigation && host->is_utility()) host->NavigateUtility(utility_navigation->Clone());
+      if (utility) FocusNativeWindow(host->browser());
+      return std::move(done).Run(true, base::Value());
     }
-    if (window_id_ == "main") {
+    for (auto& [native_id, request] : RequestedWindows()) {
+      if (request.id != id || !request.browser) continue;
+      if (utility_navigation) request.utility = utility_navigation->Clone();
+      if (utility) FocusNativeWindow(request.browser.get());
+      return std::move(done).Run(true, base::Value());
+    }
+    if (!utility && !is_utility() && window_id_ == "main") {
       window_id_ = id;
       if (options && options->FindList("frame") && options->FindList("frame")->size() == 4) {
         const auto& frame = *options->FindList("frame");
@@ -1369,10 +1540,36 @@ void ShellHostView::Invoke(
       return std::move(done).Run(true, base::Value());
     }
     BrowserWindowCreateParams params(profile(), true);
+    if (utility) {
+      params.type = BrowserWindowInterface::TYPE_APP;
+      params.app_name = kind == "settings" ? "ArdiaSettings" : "ArdiaImport";
+      params.is_trusted_source = true;
+      params.omit_from_session_restore = true;
+      params.should_trigger_session_restore = false;
+      params.user_title = options ? String(*options, "title") : "";
+      params.can_resize = kind == "settings";
+      params.can_maximize = kind == "settings";
+      params.can_fullscreen = kind == "settings";
+      const base::DictValue* placement = chrome::GetWindowPlacementDictionaryReadOnly(
+          params.app_name, profile()->GetPrefs());
+      const bool saved = ValidUtilityPlacement(placement);
+      if (kind == "import" || !saved) {
+        params.initial_bounds = gfx::Rect(kind == "settings" ? 820 : 640,
+                                          kind == "settings" ? 640 : 600);
+        params.initial_show_state = ui::mojom::WindowShowState::kNormal;
+      }
+    }
     BrowserWindowInterface* created = CreateBrowserWindow(std::move(params));
     if (!created) return std::move(done).Run(false, base::Value("Chrome could not create a window"));
-    RequestedWindows()[created->GetSessionID().id()] = id;
-    created->GetWindow()->ShowInactive();
+    RequestedWindow request;
+    request.id = id;
+    request.kind = utility ? kind : "";
+    request.title = options ? String(*options, "title") : "";
+    if (utility_navigation) request.utility = utility_navigation->Clone();
+    request.browser = created->GetWeakPtr();
+    RequestedWindows()[created->GetSessionID().id()] = std::move(request);
+    if (utility) FocusNativeWindow(created);
+    else created->GetWindow()->ShowInactive();
     return std::move(done).Run(true, base::Value());
   }
   if (method == "ArdiaShell.isDarkAppearance") {
@@ -1543,8 +1740,8 @@ void TabBinding::WebContentsDestroyed() {
   }
 }
 
-std::map<int, std::string>& RequestedWindows() {
-  static base::NoDestructor<std::map<int, std::string>> ids;
+std::map<int, RequestedWindow>& RequestedWindows() {
+  static base::NoDestructor<std::map<int, RequestedWindow>> ids;
   return *ids;
 }
 
@@ -1562,8 +1759,12 @@ class HostRegistry : public BrowserCollectionObserver {
  private:
   void Attach(base::WeakPtr<BrowserWindowInterface> browser, bool startup) {
     if (!browser || browser->GetProfile()->IsOffTheRecord() ||
-        browser->GetType() != BrowserWindowInterface::TYPE_NORMAL ||
         Hosts().contains(browser->GetSessionID().id())) return;
+    const auto requested = RequestedWindows().find(browser->GetSessionID().id());
+    const bool utility = requested != RequestedWindows().end() &&
+                         !requested->second.kind.empty();
+    if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL &&
+        !(utility && browser->GetType() == BrowserWindowInterface::TYPE_APP)) return;
     if (profile_path_.empty()) profile_path_ = browser->GetProfile()->GetPath();
     if (browser->GetProfile()->GetPath() != profile_path_) return;
     BrowserView* view = BrowserView::GetBrowserViewForBrowser(browser.get());
@@ -1575,7 +1776,7 @@ class HostRegistry : public BrowserCollectionObserver {
     auto* shell = overlay.get();
     if (const auto found = RequestedWindows().find(shell->id());
         found != RequestedWindows().end()) {
-      shell->set_window_id(std::move(found->second));
+      shell->ConfigureWindow(std::move(found->second));
       RequestedWindows().erase(found);
     }
     view->AddChildView(std::move(overlay));
@@ -1587,8 +1788,13 @@ class HostRegistry : public BrowserCollectionObserver {
                                   browser->GetWeakPtr(), false));
   }
   void OnBrowserClosed(BrowserWindowInterface* browser) override {
+    RequestedWindows().erase(browser->GetSessionID().id());
     const auto found = Hosts().find(browser->GetSessionID().id());
     if (found == Hosts().end()) return;
+    if (found->second->is_utility()) {
+      found->second->DetachBrowser();
+      return;
+    }
     base::DictValue strip = found->second->Strip();
     strip.Set("closed", true);
     strip.Set("tabs", base::ListValue());

@@ -62,7 +62,7 @@ export const prompt = async (options: PromptOptions) =>
   ardiaHost ? hostModuleMethod("ArdiaShell", "prompt")(options) as Promise<string | null> : window.prompt(options.message ? `${options.title}\n\n${options.message}` : options.title, options.value ?? "");
 
 const darkQuery = typeof window === "undefined" ? null : window.matchMedia("(prefers-color-scheme: dark)");
-export const isDarkAppearance = async () => !!darkQuery?.matches;
+export const isDarkAppearance = async () => appearance === "auto" ? !!darkQuery?.matches : appearance === "dark";
 let appearance: "auto" | "light" | "dark" = "auto";
 export const setAppearance = async (mode: "auto" | "light" | "dark") => {
   if (mode === appearance) return;

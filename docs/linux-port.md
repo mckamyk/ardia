@@ -1,6 +1,6 @@
 # Ardia on Linux
 
-The Linux port targets Arch Linux, Omarchy, Hyprland and Wayland. It reuses the browser UI through `apps/demo` and Chromium services through `engine/chromium`, with a separate Aura host in `engine/ardiacore-linux`.
+The Linux port targets Arch Linux, Omarchy, Hyprland and Wayland. Its desktop application lives in `apps/linux`, reuses the browser UI from `apps/browser` and Chromium services through `engine/chromium`, and has a separate Aura host in `engine/ardiacore-linux`.
 
 The x64 Chromium executable has been compiled and exercised with Ardia's native host. Verification below covers headless startup, native-tab rendering and the extracted application package. Desktop integration and full feature parity remain under verification.
 
@@ -8,7 +8,7 @@ The x64 Chromium executable has been compiled and exercised with Ardia's native 
 
 The upstream owner, `@barre_of_lube` (`mantrakp04`), requested a working Linux build and CI before merging the port into [`mantrakp04/ardia`](https://github.com/mantrakp04/ardia). The upstream PR must include `Closes #1` for [Linux Support](https://github.com/mantrakp04/ardia/issues/1), pass the linked-issue check, and have the CLA signed on its PR thread when prompted by `.github/workflows/cla.yml`.
 
-Keep macOS behavior and its CI intact. Linux additions belong behind `is_linux` in GN, with the Aura host in `engine/ardiacore-linux`. The live engine bridge activates when `window.__ardiaHost` is present; `apps/demo` must also keep working as the ardia.dev web demo.
+Keep macOS behavior and its CI intact. Linux additions belong behind `is_linux` in GN, with the Aura host in `engine/ardiacore-linux`. The desktop entry requires `window.__ardiaHost`; `apps/demo` remains the independently built ardia.dev web demo.
 
 Source, scripts and configs must contain no comments except shebangs, license headers, compiler/linter directives and a script's printed `--help` header. Put explanations here or in commit messages. Existing checks, including `pnpm typecheck`, `pnpm test` and platform-appropriate patch-series checks, remain upstream merge requirements; the verification guidance below does not establish that they have passed for a particular revision.
 
@@ -24,6 +24,20 @@ Source, scripts and configs must contain no comments except shebangs, license he
 - The native host attaches Ardia UI and real-tab WebViews to Chromium's existing BrowserView. Chromium retains BrowserWindow and TabStripModel ownership and its normal browser delegates.
 
 The first native host supports the default regular profile. Multiple profiles, private windows and further platform integrations must be enabled only after their implementations and isolation checks pass.
+
+## Desktop application boundary
+
+`apps/linux` owns the desktop entry point, window controls, current-space header, native utility-window startup and Linux component adapters. Build it with `pnpm --filter @ardia/linux build`; its output is `apps/linux/dist`. It uses the existing browser and Settings components rather than maintaining a second browser UI.
+
+`apps/demo` keeps its own website entry point, seeded session and iframe behavior. The common Vite configuration and web rendering adapters currently remain under that directory and are shared by both builds. The Linux entry does not load the demo's startup, seeded session or iframe WebView. Its build aliases select the native-backed WebView and Linux-only component adaptations.
+
+Linux behavior should follow macOS unless a platform constraint requires a difference. In particular, Settings and Import open in separate native utility windows, reuse an already open window, and leave the source browser's tabs alone. Utility renderers synchronize their edits against the canonical browser session without creating browser tabs or window records of their own.
+
+Ardia draws its window buttons inside the application, alongside the selected space and a Settings button. The buttons request native close, minimize and maximize/restore operations. They do not depend on the compositor supplying a titlebar, so the same app controls are available on decorationless desktops such as Hyprland. The compositor still decides how native window requests interact with tiling and placement.
+
+The host overlays Chromium's client view; it does not replace its outer nonclient frame. Chromium can therefore retain an additional system or custom titlebar. On Wayland, absence of the decoration protocol forces Chromium's custom frame; when server decorations are available, regular windows follow Chromium's custom-frame preference while the current legacy app utility windows use the native frame. X11 defaults depend on the window manager. Headless page captures exclude this outer frame, so a single controls row and native dragging/resizing still need compositor-level verification.
+
+Settings opens through the header button or Ctrl+comma, including when a native web page has focus. It starts at 820×640, remembers its native placement and supplies a 720×480 minimum to the window manager. Import starts at 640×600 with resizing and maximization disabled. Programmatic DevTools bounds changes can bypass window-manager minimums. Normal utility close requests wait for pending session writes before acknowledging native closure; a save failure leaves the utility open for retry. Forced process termination cannot provide that guarantee.
 
 Some native host methods remain explicitly unavailable, including tab-strip grouping, capture commands, native confirm/prompt panels and profile-data deletion. These calls reject with an unsupported error. A successful web build does not mean every existing Mac feature has a Linux implementation.
 
@@ -87,14 +101,14 @@ Add `--generate` when GN arguments change. Do not rerun source synchronization o
 Build and package the UI and runtime:
 
 ```bash
-pnpm --filter @ardia/demo build
+pnpm --filter @ardia/linux build
 python3 scripts/linux/package.py \
   --out "$CB/chromium_git/chromium/src/out/$GN_OUT_CONFIGS" \
-  --ui apps/demo/dist \
+  --ui apps/linux/dist \
   --destination "$CB/artifacts/ardia-linux-$AC_TARGET_CPU.tar.xz"
 ```
 
-The archive contains `bin/ardia`, `lib/ardia/chrome`, Chromium runtime resources, the `ardia-ui` bundle and desktop integration files. Launch the extracted `bin/ardia`; the raw build-tree `chrome` needs `--ardia-ui-dir` pointing to `apps/demo/dist` because that output directory does not contain the application UI. A real package was extracted and launched in the verification below. Run tests with a throwaway `--user-data-dir`, never an existing browser profile. Keep Chromium's sandbox enabled.
+The archive contains `bin/ardia`, `lib/ardia/chrome`, Chromium runtime resources, the `ardia-ui` bundle and desktop integration files. Launch the extracted `bin/ardia`; the raw build-tree `chrome` needs `--ardia-ui-dir` pointing to `apps/linux/dist` because that output directory does not contain the application UI. A real package was extracted and launched in the verification below. Run tests with a throwaway `--user-data-dir`, never an existing browser profile. Keep Chromium's sandbox enabled.
 
 ## Native x64 build evidence (2026-10-26 UTC)
 
@@ -130,6 +144,26 @@ Runtime checks used throwaway profiles, `--ozone-platform=headless`, software re
 The final strict series check passed all 56 steps and reproduced all 193 touched paths. Codex reviewed the patch-application and observer adaptations before and after their changes, with no unresolved findings. Evidence remains under the build root: `logs/native-build-05.log`, `logs/native-objects-03.log`, `logs/final-series-check.log`, `logs/runtime-native-tab.json`, `logs/runtime-page-visible.json`, `logs/runtime-package-host.json`, `logs/sandbox-status.json`, `logs/native-shell-large.png` and `logs/native-page.png`.
 
 This establishes a real compiled and packaged browser with a functioning native host, not complete Linux parity. The UI still reports unsupported `ArdiaExtensions.searchEngineList`; the initial 1Password integration rejected the unsigned browser. D-Bus, keyring integration, native desktop/window behavior, Wayland, GPU acceleration, extensions, networking and broader lifecycle/session behavior require separate verification. The headless backend initially chose a small window; the UI and tab captures used explicitly resized windows. No macOS build or full feature suite was run on this Linux builder.
+
+## Desktop header and utility verification (2026-10-26 UTC)
+
+The dedicated desktop entry and native utility changes were verified against `5711a8497c105d6a1d1b2835fe1be9adad0ae550` plus the working-tree changes. The final Linux bundle is `apps/linux/dist/assets/index-DuAm1ljr.js`. Linux and demo builds passed, all nine workspace typechecks passed, and the focused session/utility checks passed 50 tests. Native checks passed seven fixtures and seven bootstrap tests. The available browser suite passed 782 tests with one existing skip, core passed 81 tests, and both native PiP programs passed. The full workspace test command still requires Swift, which is absent on this Linux builder.
+
+The final production executable is 528,608,912 bytes, SHA-256 `a7f443bf90b808f454b95748ad6f1ebc9c87255a1a76d808d17b32d502ec0a0b`, build ID `547f16d7774a91beceefbd20feb9a6654b0bb010`. Earlier ordinary incremental builds completed the header and utility changes. A separate compiler-cache experiment subsequently regenerated the shared C++ module and invalidated Siso's dependency timestamps, even after its compiler-wrapper configuration was reverted. The final close correction was therefore compiled using the exact GN-generated production host command and linked using the complete GN-generated Chrome command and 23,113 ordered response-file inputs, under the Chromium flock. Host compilation took 10.37 seconds and the real final link took 206.11 seconds; both succeeded.
+
+The recovery audit checked 153,895 source files and 79,473 generated inputs against retained pre-close build state, hashing all 792 metadata-changed inputs. Only the intended `ac_linux_host.cc` content differed. The toolchain and configuration matched, the added GN dependency was already present in the successful utility build, and all 289 subsequently touched link artifacts were byte-identical to their previous contents. No build-state metadata or timestamps were changed to mark dependencies clean. Siso's invalidation remains unresolved: an ordinary future build may still schedule broad recompilation. Retain `logs/header-settings-native.log`, `logs/header-settings/native-close-input-audit.json`, `native-close-command-provenance.json` and the recorded compile/link commands for provenance.
+
+Isolated native checks used the headless Ozone backend with an explicit 1920×1080 screen and the Chromium sandbox enabled. The header showed Personal, three functional controls and Settings. Ctrl+comma from a focused real native page opened Settings; repeated opens reused it, pane navigation worked, and its 900×700 resized placement survived closure and reopening. Updating a setting and renaming the profile, followed immediately by native Ctrl+W, persisted both changes. The source page retained its target, time origin, active-tab identity and running counter. Minimize and maximize/restore changed the native window state. Source-window close requests, the utility's close button and Escape also saved before closure. Forced dark appearance rendered correctly; Import received its selected source, kept browser session tables unchanged and disabled maximize.
+
+Synthetic Alt+F4 did not reach Chromium's close accelerator in the headless shell, so compositor-driven close is covered by source inspection and the compiled close-interceptor fixture rather than a desktop runtime claim. Window-manager minimum sizing, native decorations, dragging, Wayland/GPU behavior and tiling remain desktop checks. Evidence and captures are under `logs/header-settings`, including `after-flow.json`, `close-paths.json`, `final-header.png`, `final-settings.png`, `settings-forced-dark.png` and `import-native.png`. The native multi-profile restriction remains: the generic three-way session merge can retain a concurrently created tab referring to a profile another renderer deleted.
+
+The new package is `/home/mac/ardia-linux-build/artifacts/ardia-linux-x64-header-settings-20261026.tar.xz` (142,992,332 bytes; SHA-256 `36789143e68721832d8d80d8c1ace87faad9e426aa67e18ad942ee20460b83a4`). It was extracted into `artifacts/header-settings` and its executable hash matched the real build output. The extracted `ardia/bin/ardia` launched with a fresh test profile and no UI override, loaded `chrome://ardia/assets/index-DuAm1ljr.js`, displayed the current space and three controls, and opened/reused/independently closed its separate Settings window. Evidence is `logs/header-settings/packaged.json` with `packaged-header.png` and `packaged-settings.png`. All test instances were closed; the earlier installed bundle was not replaced.
+
+Run the new extracted application with:
+
+```bash
+/home/mac/ardia-linux-build/artifacts/header-settings/ardia/bin/ardia
+```
 
 ## Patch maintenance
 
@@ -179,7 +213,7 @@ Linux CI must follow the prebuilt-engine model in [`.github/workflows/build.yml`
 1. Compile Chromium plus the pinned Helium Linux integration on the Linux build server. Key the engine artifact by the first 12 characters of `git rev-parse HEAD:engine`, and publish `ArdiaCore-<short-tree-sha>-linux-x64.tar.xz` plus its `.sha256` checksum. Define and verify the runtime payload needed by the Linux host (`chrome` and its resources, plus `libardiacore.so` if a separate library is produced). The existing application package from `scripts/linux/package.py` is not this engine-only archive.
 2. Extend `fetch-engine.sh` with `--arch linux-x86_64 --nearest`. It should walk `git rev-list HEAD -- engine` for an exact or nearest available engine release, verify SHA-256 before use, and unpack into `apps/browser/build-ardiacore/prebuilt-linux-x86_64/<short-tree-sha>/`. Preserve the current macOS archive names (`ArdiaCore-<short>.tar.xz` and `ArdiaCore-<short>-x64.tar.xz`) and behavior.
 3. Add an `app-linux-x64` job on `ubuntu-latest` alongside the existing macOS jobs. Cache `apps/browser/build-ardiacore/prebuilt-linux-x86_64` with `actions/cache@v6`, run `packages/ardiacore/scripts/fetch-engine.sh --arch linux-x86_64 --nearest`, and use `ARDIACORE_PREBUILT_REPO=mckamyk/ardia` as the repository fallback until `mantrakp04/ardia` hosts Linux archives.
-4. Build fresh `apps/demo/dist` with `pnpm --filter @ardia/demo build`, package it with the fetched Linux engine and runtime resources, and upload `Ardia-linux-x64-${{ github.sha }}.tar.xz` using `actions/upload-artifact@v7`. Add the appropriate checks and validate installation and launch of a real package before calling this job working.
+4. Build fresh `apps/linux/dist` with `pnpm --filter @ardia/linux build`, package it with the fetched Linux engine and runtime resources, and upload `Ardia-linux-x64-${{ github.sha }}.tar.xz` using `actions/upload-artifact@v7`. Add the appropriate checks and validate installation and launch of a real package before calling this job working.
 
 A roughly three-minute Ubuntu job is the intended goal once engine archives are available; no Linux fetch, cache, CI duration or runtime support has been established by this blueprint.
 

@@ -89,6 +89,7 @@ export function createSessionWriter(host: ArdiaHost, initial: HydrateData = {}, 
   let latest: SessionPair | undefined;
   let issued: SessionPair | undefined;
   let issuedFailed = false;
+  let failedWrite: Promise<void> | undefined;
   let dirty = false;
   let finalized = false;
   let finalWrite = Promise.resolve();
@@ -109,10 +110,11 @@ export function createSessionWriter(host: ArdiaHost, initial: HydrateData = {}, 
     const pair = pending;
     const version = generation;
     pending = undefined;
-    writes = writes.catch((error) => { if (!finalized) reportHostError(error); }).then(async () => {
+    const write = writes.catch((error) => { if (!finalized) reportHostError(error); }).then(async () => {
       if (finalized || version !== generation) return;
       issued = pair;
       issuedFailed = false;
+      failedWrite = undefined;
       const observed = observation;
       try {
         const reply = await host.invoke("session.write", pair);
@@ -123,11 +125,31 @@ export function createSessionWriter(host: ArdiaHost, initial: HydrateData = {}, 
         }
         if (latest === pair) dirty = false;
       } catch (error) {
-        if (issued === pair) issuedFailed = true;
+        if (issued === pair) {
+          issuedFailed = true;
+          failedWrite = write;
+        }
         throw error;
       }
     });
+    writes = write;
     return writes;
+  };
+  const drain = async () => {
+    if (issuedFailed && failedWrite === writes) {
+      if (dirty && !pending && latest) pending = latest;
+      else if (!dirty && !pending) {
+        writes = Promise.resolve();
+        issuedFailed = false;
+        failedWrite = undefined;
+      }
+    }
+    for (let pass = 0; pass < 32; pass++) {
+      const active = flush();
+      await active;
+      if (active === writes && !pending) return;
+    }
+    throw new Error("The session is still changing; save it again before closing");
   };
   const flushFinal = () => {
     if (finalized) return finalWrite;
@@ -143,7 +165,7 @@ export function createSessionWriter(host: ArdiaHost, initial: HydrateData = {}, 
     }
     return finalWrite;
   };
-  return { queue: (session: HydrateData) => reconcile(session, true), reconcile, acceptCanonical, flush, flushFinal };
+  return { queue: (session: HydrateData) => reconcile(session, true), reconcile, acceptCanonical, flush, drain, flushFinal };
 }
 
 type SessionStore = {
@@ -155,10 +177,12 @@ type SessionStore = {
 const withoutFocus = ({ focusedWindowId: _, lastProfileId: _last, ...session }: HydrateData) => session;
 const sessionSources = (s: BrowserState) => [s.profiles, s.profileOrder, s.orphanedProfileData, s.windows, s.windowOrder, s.tabs, s.groups, s.splits, s.peeks, s.closedTabs, s.closedWindows, s.closedGroups, s.deletedGroups, s.cleanedTabs, s.parkedPins, s.pinChoices, s.pinSync, s.settings, s.ui.focusOrder, s.ui.lastProfileId];
 
-export function startHostPersistence(host: ArdiaHost, store: SessionStore, initial: HydrateData = host.bootstrap.session ?? {}) {
+export function startHostPersistence(host: ArdiaHost, store: SessionStore, initial: HydrateData = host.bootstrap.session ?? {}, snapshot: (state: BrowserState, canonical: HydrateData) => HydrateData = snapshotHostSession) {
+  let canonical = initial;
+  const snapshotOf = (state: BrowserState) => snapshot(state, canonical);
   const writer = createSessionWriter(host, initial, (base, session) => receive(base, session));
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let last = "";
+  let last = canonicalSessionValue(initial)!;
   let lastSources: unknown[] = [];
   let closing = false;
   let applying = false;
@@ -172,7 +196,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
     const sources = sessionSources(s);
     if (sources.every((source, index) => source === lastSources[index])) return;
     lastSources = sources;
-    const session = snapshotHostSession(s);
+    const session = snapshotOf(s);
     const json = canonicalSessionValue(session)!;
     if (json === last) return;
     last = json;
@@ -182,9 +206,11 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
   const receive = (base: HydrateData, session: HydrateData) => {
     if (closing) return;
     const state = store.getState();
-    const local = snapshotHostSession(state);
+    const local = snapshotOf(state);
+    canonical = session;
     const merged = mergeSession(base, local, session);
-    const patch = sessionStatePatch(state, local, merged);
+    const runtime = { ...merged, settings: { ...state.settings, ...merged.settings } };
+    const patch = sessionStatePatch(state, snapshotHostSession(state), runtime);
     applying = true;
     try {
       if (Object.keys(patch).length) store.setState(patch);
@@ -192,7 +218,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
       applying = false;
     }
     const current = store.getState();
-    const snapshot = snapshotHostSession(current);
+    const snapshot = snapshotOf(current);
     const outstanding = !equalSessionValue(withoutFocus(snapshot), withoutFocus(session));
     lastSources = sessionSources(current);
     last = canonicalSessionValue(snapshot)!;
@@ -224,7 +250,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
   const stopClosing = host.onBeforeClose?.(final);
   if (!host.onBeforeClose) window.addEventListener("pagehide", final);
   document.addEventListener("visibilitychange", onVisibility);
-  return () => {
+  const dispose = () => {
     stop();
     stopEvents();
     if (!closing) flush();
@@ -232,4 +258,5 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
     window.removeEventListener("pagehide", final);
     document.removeEventListener("visibilitychange", onVisibility);
   };
+  return Object.assign(dispose, { flush: () => { queue(store.getState()); clearTimeout(timer); timer = undefined; return writer.drain(); } });
 }
