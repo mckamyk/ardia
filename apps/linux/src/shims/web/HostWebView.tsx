@@ -99,11 +99,64 @@ export const HostWebView = forwardRef<WebViewHandle, WebViewProps>(function Host
   useEffect(() => {
     const node = element.current;
     if (!node) return;
-    return watchTabViewport(node, () => {
+    let revision = 0;
+    let last = "";
+    let backdrop: Promise<boolean> | null = null;
+    let retryAfter = 0;
+    const stop = watchTabViewport(node, () => {
       const p = latest.current;
       return p.visible !== false && !menuShown() && !hostOverlayBlocked(p.transferKey);
-    }, (viewport) => void tab.current?.viewport(viewport).catch(reportHostError));
+    }, (viewport) => {
+      const current = tab.current;
+      if (!current?.identity) return;
+      if (viewport.occlusions?.length && Date.now() < retryAfter) return;
+      const json = JSON.stringify(viewport);
+      if (json === last) return;
+      last = json;
+      const mine = ++revision;
+      void (async () => {
+        if (viewport.visible && viewport.occlusions?.length) {
+          if (!backdrop) {
+            const capture: Promise<boolean> = current.command<string | null>("captureViewport").then(async (data) => {
+              if (!data) return false;
+              const image = new Image();
+              image.src = data;
+              await image.decode();
+              if (current.disposed || backdrop !== capture) return false;
+              node.style.backgroundImage = `url("${data}")`;
+              return true;
+            }).catch((error) => {
+              reportHostError(error);
+              return false;
+            });
+            backdrop = capture;
+          }
+          if (!await backdrop) {
+            if (mine === revision) {
+              backdrop = null;
+              last = "";
+              retryAfter = Date.now() + 250;
+            }
+            return;
+          }
+        }
+        if (mine !== revision || current.disposed) return;
+        await current.viewport(viewport);
+        if (mine === revision && !viewport.occlusions?.length) {
+          backdrop = null;
+          node.style.backgroundImage = "";
+        }
+      })().catch((error) => {
+        if (mine === revision) last = "";
+        reportHostError(error);
+      });
+    });
+    return () => {
+      revision++;
+      backdrop = null;
+      stop();
+    };
   }, []);
 
-  return <View style={[props.style, { backgroundColor: "transparent" }]}><div ref={element} data-ardia-native-tab={key.current} style={{ position: "absolute", inset: 0 }} /></View>;
+  return <View style={[props.style, { backgroundColor: "transparent" }]}><div ref={element} data-ardia-native-tab={key.current} style={{ position: "absolute", inset: 0, backgroundSize: "100% 100%" }} /></View>;
 });

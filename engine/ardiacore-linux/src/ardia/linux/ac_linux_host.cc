@@ -16,6 +16,7 @@
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/linux/host_bootstrap.h"
 #include "base/base_paths.h"
+#include "base/base64.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/environment.h"
@@ -63,12 +64,14 @@
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/sessions/core/session_id.h"
 #include "components/version_info/version_info.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "components/zoom/zoom_controller.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -83,6 +86,8 @@
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #include "ui/aura/window.h"
+#include "ui/aura/window_targeter.h"
+#include "ui/compositor/layer.h"
 #include "ui/base/base_window.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/accelerators/accelerator_manager.h"
@@ -94,6 +99,7 @@
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/gfx/codec/png_codec.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/native_theme/native_theme.h"
@@ -102,6 +108,8 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
+#include "ui/views/view_targeter.h"
+#include "ui/views/view_targeter_delegate.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -118,6 +126,74 @@ constexpr char kSessionName[] = "linux-session.json";
 
 class ShellHostView;
 class HostMessageHandler;
+
+class ViewportTargeter : public aura::WindowTargeter {
+ public:
+  explicit ViewportTargeter(std::vector<gfx::Rect> shape)
+      : shape_(std::move(shape)) {}
+
+  std::unique_ptr<HitTestRects> GetExtraHitTestShapeRects(
+      aura::Window* target) const override {
+    if (target != window()) return nullptr;
+    return std::make_unique<HitTestRects>(shape_);
+  }
+
+ private:
+  const std::vector<gfx::Rect> shape_;
+};
+
+class ViewportView : public views::WebView,
+                     public views::ViewTargeterDelegate {
+ public:
+  METADATA_HEADER(ViewportView, views::WebView)
+
+ public:
+  explicit ViewportView(Profile* profile) : views::WebView(profile) {
+    SetEventTargeter(std::make_unique<views::ViewTargeter>(this));
+  }
+
+  ~ViewportView() override { SetWebContents(nullptr); }
+
+  void SetShape(std::vector<gfx::Rect> paint_shape,
+                std::vector<gfx::Rect> shape) {
+    shape_ = std::move(shape);
+    paint_shape_ = std::move(paint_shape);
+    ApplyTargeter();
+  }
+
+  void SetWebContents(content::WebContents* contents) override {
+    if (auto* previous = web_contents(); previous && previous != contents) {
+      if (auto* native = previous->GetNativeView()) native->layer()->SetAlphaShape(nullptr);
+    }
+    views::WebView::SetWebContents(contents);
+    ApplyTargeter();
+  }
+
+  bool DoesIntersectRect(const views::View* target,
+                         const gfx::Rect& rect) const override {
+    return target == this && std::ranges::any_of(
+        shape_, [&](const gfx::Rect& part) { return part.Intersects(rect); });
+  }
+
+ private:
+  void ApplyTargeter() {
+    if (auto* contents = web_contents()) {
+      aura::Window* native = contents->GetNativeView();
+      if (!native) return;
+      native->layer()->SetAlphaShape(
+          std::make_unique<ui::Layer::ShapeRects>(paint_shape_));
+      native->SetEventTargeter(
+          std::make_unique<ViewportTargeter>(shape_));
+    }
+  }
+
+  std::vector<gfx::Rect> shape_;
+  std::vector<gfx::Rect> paint_shape_;
+};
+
+BEGIN_METADATA(ViewportView)
+END_METADATA
+
 struct RequestedWindow {
   std::string id;
   std::string kind;
@@ -1116,7 +1192,24 @@ void ShellHostView::TabCommand(
   auto& controller = contents->GetController();
   const std::string command = String(args, "command");
   const base::ListValue& values = Arguments(args);
-  if (command == "loadUrl") {
+  if (command == "captureViewport") {
+    auto* view = contents->GetRenderWidgetHostView();
+    if (!view || !view->IsSurfaceAvailableForCopy()) {
+      return std::move(done).Run(true, base::Value());
+    }
+    view->CopyFromSurface(
+        gfx::Rect(), gfx::Size(), base::Milliseconds(250),
+        base::BindOnce([](base::OnceCallback<void(bool, base::Value)> reply,
+                          const content::CopyFromSurfaceResult& result) {
+          const auto png = result.has_value()
+              ? gfx::PNGCodec::EncodeBGRASkBitmap(result->bitmap, false)
+              : std::nullopt;
+          std::move(reply).Run(true, png
+              ? base::Value("data:image/png;base64," + base::Base64Encode(*png))
+              : base::Value());
+        }, std::move(done)));
+    return;
+  } else if (command == "loadUrl") {
     std::string text = ArgumentString(values, 0);
     if (text.starts_with("ardia://")) text.replace(0, 8, "chrome://");
     const GURL url(text);
@@ -1200,12 +1293,63 @@ void ShellHostView::SetViewport(
   const double right = std::clamp((x + width) * scale, left, static_cast<double>(this->width()));
   const double bottom = std::clamp((y + height) * scale, top, static_cast<double>(this->height()));
   const gfx::Rect bounds = gfx::ToEnclosingRect(gfx::RectF(left, top, right - left, bottom - top));
+  std::vector<gfx::Rect> shape{gfx::Rect(bounds.size())};
+  std::vector<gfx::Rect> input_shape = shape;
+  const auto subtract = [](std::vector<gfx::Rect>& region, const gfx::Rect& cut) {
+    std::vector<gfx::Rect> remaining;
+    for (const auto& piece : region) {
+      gfx::Rect overlap = piece;
+      overlap.Intersect(cut);
+      if (overlap.IsEmpty()) {
+        remaining.push_back(piece);
+        continue;
+      }
+      for (const auto& part : {
+               gfx::Rect(piece.x(), piece.y(), piece.width(), overlap.y() - piece.y()),
+               gfx::Rect(piece.x(), overlap.bottom(), piece.width(), piece.bottom() - overlap.bottom()),
+               gfx::Rect(piece.x(), overlap.y(), overlap.x() - piece.x(), overlap.height()),
+               gfx::Rect(overlap.right(), overlap.y(), piece.right() - overlap.right(), overlap.height())}) {
+        if (!part.IsEmpty()) remaining.push_back(part);
+      }
+    }
+    region = std::move(remaining);
+  };
+  const base::ListValue* occlusions = args.FindList("occlusions");
+  if (occlusions && occlusions->size() > 16) {
+    return std::move(done).Run(false, base::Value("Too many viewport occlusions"));
+  }
+  if (occlusions) {
+    for (const auto& entry : *occlusions) {
+      const auto* occlusion = entry.GetIfDict();
+      if (!occlusion) return std::move(done).Run(false, base::Value("Invalid viewport occlusion"));
+      const double ox = occlusion->FindDouble("x").value_or(NAN);
+      const double oy = occlusion->FindDouble("y").value_or(NAN);
+      const double ow = occlusion->FindDouble("width").value_or(NAN);
+      const double oh = occlusion->FindDouble("height").value_or(NAN);
+      const double outset = occlusion->FindDouble("paintOutset").value_or(0);
+      if (!std::isfinite(ox) || !std::isfinite(oy) || !std::isfinite(ow) ||
+          !std::isfinite(oh) || !std::isfinite(outset) || ow < 0 || oh < 0 || outset < 0 || outset > 64) {
+        return std::move(done).Run(false, base::Value("Invalid viewport occlusion"));
+      }
+      const double ol = std::clamp(ox * scale, left, right);
+      const double ot = std::clamp(oy * scale, top, bottom);
+      const double oright = std::clamp((ox + ow) * scale, ol, right);
+      const double obottom = std::clamp((oy + oh) * scale, ot, bottom);
+      gfx::Rect cut = gfx::ToEnclosingRect(gfx::RectF(ol, ot, oright - ol, obottom - ot));
+      cut.Offset(-bounds.x(), -bounds.y());
+      if (cut.IsEmpty()) continue;
+      subtract(input_shape, cut);
+      cut.Outset(static_cast<int>(std::ceil(outset * scale)));
+      subtract(shape, cut);
+    }
+  }
   if (!binding->viewport()) {
-    binding->SetViewport(AddChildView(std::make_unique<views::WebView>(profile())));
+    binding->SetViewport(AddChildView(std::make_unique<ViewportView>(profile())));
   }
   views::WebView* view = binding->viewport();
   const bool visible = args.FindBool("visible").value_or(false) && !bounds.IsEmpty();
   view->SetBoundsRect(bounds);
+  static_cast<ViewportView*>(view)->SetShape(std::move(shape), std::move(input_shape));
   view->SetVisible(visible);
   if (visible) {
     browser_view_->contents_web_view()->SetWebContents(nullptr);
