@@ -34,9 +34,12 @@ registerHooks({
 const requests = [], listeners = new Set();
 globalThis.window = {
   __ardiaHost: {
-    bootstrap: { windowId: "a", profileId: "default", nativeModules: { ArdiaShell: { rendererGeneration: "1" } } },
+    bootstrap: { windowId: "a", profileId: "default" },
     onEvent(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    async invoke(method, payload) { requests.push({ method, ...payload }); return { accepted: true }; },
+    async invoke(method, payload) {
+      requests.push({ method, ...payload });
+      return method.endsWith("windowIdentity") ? { windowId: "a", rendererGeneration: "1" } : { accepted: true };
+    },
   },
 };
 const shell = await import(shellUrl);
@@ -55,5 +58,6 @@ for (const [call, kind, result] of [[shell.confirm, "confirm", { confirmed: fals
   for (const listener of listeners) listener("ArdiaShell", "shell", { name: "shell.dialogResolved", data });
   assert.deepEqual(await work, typeof result === "string" ? result.trim() : result);
 }
-assert.equal(requests.length, 4);
+assert.equal(requests.length, 8);
+assert.equal(requests.filter((request) => request.method.endsWith("windowIdentity")).length, 4);
 console.log("Linux shell exports and package Expo dialogs share the production adapter");
