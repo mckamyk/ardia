@@ -6,6 +6,7 @@ import { Symbol } from "./Symbol";
 type OpenMenu = { items: MenuItem[]; x: number; y: number; resolve: (id: string | null) => void };
 
 let open: OpenMenu | null = null;
+export const isDemoMenuShown = () => open !== null;
 const watchers = new Set<() => void>();
 const publish = (next: OpenMenu | null) => {
   open = next;

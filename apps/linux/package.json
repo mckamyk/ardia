@@ -1,0 +1,33 @@
+{
+  "name": "@ardia/linux",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p .",
+    "test:host": "node --experimental-strip-types --loader ../demo/scripts/host-test-loader.mjs --test src/session.test.mjs"
+  },
+  "dependencies": {
+    "@ardia/core": "workspace:*",
+    "@ardia/ardiacore": "workspace:*",
+    "@ardia/import": "workspace:*",
+    "@ardia/shaders": "workspace:*",
+    "@ardia/shell": "workspace:*",
+    "@ardia/sync": "workspace:*",
+    "react": "19.1.4",
+    "react-dom": "19.1.4",
+    "react-native-web": "^0.21.1",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.10",
+    "@types/react-dom": "~19.1.7",
+    "@vitejs/plugin-react": "^5.0.4",
+    "rollup-plugin-visualizer": "^6.0.4",
+    "typescript": "~5.9.2",
+    "vite": "^7.1.9"
+  }
+}

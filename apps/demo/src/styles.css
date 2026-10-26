@@ -52,6 +52,17 @@ textarea:focus,
   gap: 12px;
 }
 
+.ardia-desktop.host {
+  background: transparent;
+}
+
+.ardia-desktop.host .ardia-window {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .ardia-desktop.with-controls .ardia-window {
   height: calc(100% - 32px - 42px);
 }

@@ -1,17 +1,73 @@
 # Copyright 2026 Ardia. Apache-2.0.
 
-assert(is_mac)
+assert(is_mac || is_linux)
 
-source_set("ardia") {
-  sources = [
-    "ac_autofill.cc",
-    "ac_autofill.h",
-    "ac_autofill_edit.cc",
-    "ac_autofill_import.cc",
-    "ac_autofill_internal.h",
-    "ac_bookmarks.cc",
-    "ac_browsing_data.cc",
-    "ac_browsing_data.h",
+ardia_sources = [
+  "ac_autofill.cc",
+  "ac_autofill.h",
+  "ac_autofill_edit.cc",
+  "ac_autofill_import.cc",
+  "ac_autofill_internal.h",
+  "ac_bookmarks.cc",
+  "ac_browsing_data.cc",
+  "ac_browsing_data.h",
+  "ac_cookies.cc",
+  "ac_cookies.h",
+  "ac_downloads.cc",
+  "ac_downloads.h",
+  "ac_engine.cc",
+  "ac_engine.h",
+  "ac_extension_actions.cc",
+  "ac_extension_actions.h",
+  "ac_extensions.cc",
+  "ac_extensions.h",
+  "ac_extensions_sync.cc",
+  "ac_extensions_sync.h",
+  "ac_extensions_sync_apply.cc",
+  "ac_extensions_sync_approval.cc",
+  "ac_extensions_sync_installers.cc",
+  "ac_extensions_sync_internal.h",
+  "ac_external_apps.h",
+  "ac_favicons.cc",
+  "ac_history.cc",
+  "ac_input_frame_rate.h",
+  "ac_memory.cc",
+  "ac_memory_saver.cc",
+  "ac_omnibox.cc",
+  "ac_omnibox.h",
+  "ac_passwords.cc",
+  "ac_passwords.h",
+  "ac_process.cc",
+  "ac_process.h",
+  "ac_reauth.h",
+  "ac_scripts_policy.cc",
+  "ac_scripts_policy.h",
+  "ac_search_engines.cc",
+  "ac_search_engines.h",
+  "ac_sensitive_args.cc",
+  "ac_sensitive_args.h",
+  "ac_site_settings.cc",
+  "ac_site_settings.h",
+  "ac_tab_restore.cc",
+  "ac_tab_restore.h",
+  "ac_tab_restore_history.cc",
+  "ac_tab_restore_internal.h",
+  "ac_tabs.cc",
+  "ac_tabs.h",
+  "ac_zoom.cc",
+  "ac_zoom.h",
+  "pip/ac_pip_controls.cc",
+  "pip/ac_pip_controls.h",
+  "pip/ac_pip_mac.h",
+  "pip/ac_pip_window.cc",
+  "pip/ac_pip_window.h",
+  "public/ac_engine.h",
+  "ac_engine_dispatch.cc",
+  "pip/ac_pip_platform.h",
+]
+
+if (is_mac) {
+  ardia_sources += [
     "ac_cli_control.cc",
     "ac_cli_token_policy.cc",
     "ac_cli_token_policy.h",
@@ -20,64 +76,36 @@ source_set("ardia") {
     "ac_cli_token_policy_internal.h",
     "ac_cli_token_policy_methods.cc",
     "ac_cli_token_policy_web_targets.cc",
-    "ac_cookies.cc",
-    "ac_cookies.h",
-    "ac_downloads.cc",
-    "ac_downloads.h",
-    "ac_engine.cc",
-    "ac_engine.h",
-    "ac_extension_actions.cc",
-    "ac_extension_actions.h",
-    "ac_extensions.cc",
-    "ac_extensions.h",
-    "ac_extensions_sync.cc",
-    "ac_extensions_sync.h",
-    "ac_extensions_sync_apply.cc",
-    "ac_extensions_sync_approval.cc",
-    "ac_extensions_sync_installers.cc",
-    "ac_extensions_sync_internal.h",
-    "ac_external_apps.h",
     "ac_external_apps.mm",
-    "ac_favicons.cc",
-    "ac_history.cc",
-    "ac_input_frame_rate.h",
     "ac_input_frame_rate.mm",
-    "ac_memory.cc",
-    "ac_memory_saver.cc",
-    "ac_omnibox.cc",
-    "ac_omnibox.h",
-    "ac_passwords.cc",
-    "ac_passwords.h",
-    "ac_process.cc",
-    "ac_process.h",
     "ac_reauth.cc",
-    "ac_reauth.h",
-    "ac_scripts_policy.cc",
-    "ac_scripts_policy.h",
-    "ac_search_engines.cc",
-    "ac_search_engines.h",
-    "ac_sensitive_args.cc",
-    "ac_sensitive_args.h",
-    "ac_site_settings.cc",
-    "ac_site_settings.h",
-    "ac_tab_restore.cc",
-    "ac_tab_restore.h",
-    "ac_tab_restore_history.cc",
-    "ac_tab_restore_internal.h",
-    "ac_tabs.cc",
-    "ac_tabs.h",
-    "ac_zoom.cc",
-    "ac_zoom.h",
-    "pip/ac_pip_controls.cc",
-    "pip/ac_pip_controls.h",
-    "pip/ac_pip_mac.h",
     "pip/ac_pip_mac.mm",
-    "pip/ac_pip_window.cc",
-    "pip/ac_pip_window.h",
-    "public/ac_engine.h",
   ]
+}
+
+if (is_linux) {
+  ardia_sources += [
+    "ac_cli_control_linux.cc",
+    "ac_external_apps_linux.cc",
+    "ac_input_frame_rate_linux.cc",
+    "ac_reauth_linux.cc",
+    "pip/ac_pip_linux.cc",
+  ]
+}
+
+action("engine_dispatch_registry") {
+  script = "gen_engine_dispatch.py"
+  inputs = filter_include(ardia_sources, [ "*.cc", "*.mm" ])
+  outputs = [ "$target_gen_dir/ac_engine_dispatch.inc" ]
+  args = [ "--output", rebase_path(outputs[0], root_build_dir) ] +
+         rebase_path(inputs, root_build_dir)
+}
+
+source_set("ardia") {
+  sources = ardia_sources + get_target_outputs(":engine_dispatch_registry")
 
   deps = [
+    ":engine_dispatch_registry",
     "//ardia/core:launch_switches",
     "//base",
     "//cc/paint",
@@ -147,17 +175,20 @@ source_set("ardia") {
     "//url",
   ]
 
-  frameworks = [ "QuartzCore.framework" ]
-
-  frameworks += [
-    "AppKit.framework",
-    "Security.framework",
-  ]
+  if (is_mac) {
+    frameworks = [
+      "QuartzCore.framework",
+      "AppKit.framework",
+      "Security.framework",
+    ]
+  }
 }
 
 config("exports_config") {
-  ldflags = [ "-Wl,-exported_symbols_list," +
-              rebase_path("ac_engine.exports", root_build_dir) ]
+  if (is_mac) {
+    ldflags = [ "-Wl,-exported_symbols_list," +
+                rebase_path("ac_engine.exports", root_build_dir) ]
+  }
 }
 
 group("exports") {

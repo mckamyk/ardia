@@ -8,9 +8,11 @@
 #include <optional>
 #include <utility>
 
+#include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -180,6 +182,9 @@ extern "C" AC_ENGINE_EXPORT int ac_engine_abi_version() {
 extern "C" AC_ENGINE_EXPORT void ac_engine_set_event_sink(
     ac_engine_event_t sink,
     void* context) {
+#if BUILDFLAG(IS_LINUX)
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+#endif
   ardia::g_sink = sink;
   ardia::g_sink_context = context;
 }
