@@ -38,6 +38,7 @@ async function run(folderId: string) {
   if (!live().folders[folderId]) return;
   const refresh = beginLiveRefresh(folderId);
   const fence = refresh ? await refresh : undefined;
+  if (fence === null) return;
   const folder = live().folders[folderId];
   if (!folder) return;
   const before = live();
@@ -83,7 +84,7 @@ async function run(folderId: string) {
   applyFetch(folderId, order(next), gone, Date.now(), quiet, fence);
   if (firstFailure) setStatus(folderId, { state: "error", error: describe(firstFailure.source, firstFailure.error) });
   const leaving = Object.keys(gone);
-  if (leaving.length) setTimeout(() => finishCompleting(folderId, leaving), COMPLETION_MS);
+  if (leaving.length) setTimeout(() => finishCompleting(folderId, leaving, fence), COMPLETION_MS);
 }
 
 function describe(source: LiveSourceId, error: unknown) {
