@@ -18,6 +18,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
+#include "build/build_config.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/ardia/ac_reauth.h"
 #include "chrome/browser/ardia/ac_sensitive_args.h"
@@ -647,6 +648,14 @@ AC_ENGINE_CALL(ac_autofill_remove) {
 
 AC_ENGINE_CALL(ac_autofill_card_number) {
   AC_AUTOFILL_CALL();
+#if BUILDFLAG(IS_LINUX)
+  return call.TakeReply().Error(
+      "OS authentication is unavailable on this platform");
+#else
+  if (!ardia::ReauthAvailable()) {
+    return call.TakeReply().Error(
+        "OS authentication is unavailable on this platform");
+  }
   ardia::Load(
       call,
       base::BindOnce(
@@ -686,6 +695,7 @@ AC_ENGINE_CALL(ac_autofill_card_number) {
           },
           call.profile(), call.String("id")),
       call.TakeReply());
+#endif
 }
 
 AC_ENGINE_CALL(ac_autofill_import) {

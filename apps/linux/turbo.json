@@ -1,0 +1,26 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": [
+    "//"
+  ],
+  "tasks": {
+    "typecheck": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/browser/src/**",
+        "$TURBO_ROOT$/apps/demo/src/**"
+      ]
+    },
+    "build": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/browser/src/**",
+        "$TURBO_ROOT$/apps/demo/src/**",
+        "$TURBO_ROOT$/apps/demo/vite.shared.ts"
+      ],
+      "outputs": [
+        "dist/**"
+      ]
+    }
+  }
+}

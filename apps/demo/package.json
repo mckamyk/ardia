@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -p . && node scripts/icons/check.mjs",
+    "typecheck": "tsc -p . && node --experimental-strip-types scripts/icons/check.mjs",
+    "test:host": "node --experimental-strip-types --loader ./scripts/host-test-loader.mjs --test src/host.test.mjs src/hostSessionMerge.test.mjs src/hostSessionSync.test.mjs",
+    "test:symbols": "node --experimental-strip-types --test src/shims/web/symbols/render.test.mjs",
+    "fixture:csp": "node scripts/host-csp-fixture.mjs",
     "icons": "node scripts/icons/regenerate.mjs"
   },
   "dependencies": {

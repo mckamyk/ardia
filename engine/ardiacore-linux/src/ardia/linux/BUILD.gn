@@ -1,0 +1,56 @@
+assert(is_linux)
+
+action("bootstrap") {
+  script = "generate_bootstrap.py"
+  sources = [ "bootstrap.js" ]
+  outputs = [ "$target_gen_dir/host_bootstrap.h" ]
+  args = [
+    "--input",
+    rebase_path(sources[0], root_build_dir),
+    "--output",
+    rebase_path(outputs[0], root_build_dir),
+  ]
+}
+
+source_set("linux") {
+  sources = [
+    "ac_linux_host.cc",
+    "ac_linux_host.h",
+    "ac_linux_policy.h",
+    "ac_linux_session.cc",
+    "ac_linux_session.h",
+  ]
+  sources += get_target_outputs(":bootstrap")
+  deps = [
+    ":bootstrap",
+    "//base",
+    "//chrome/browser",
+    "//chrome/browser/ardia",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/search_engines",
+    "//chrome/browser/ui",
+    "//chrome/browser/ui/browser_window:create_browser_window",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/common",
+    "//components/prefs",
+    "//components/sessions",
+    "//components/search_engines",
+    "//components/tabs:public",
+    "//components/zoom",
+    "//components/version_info",
+    "//content/public/browser",
+    "//content/public/common",
+    "//net",
+    "//services/network/public/mojom",
+    "//third_party/blink/public/common",
+    "//ui/base",
+    "//ui/aura",
+    "//ui/base/clipboard",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/native_theme",
+    "//ui/views/controls/webview",
+    "//url",
+  ]
+}
