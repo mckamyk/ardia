@@ -225,7 +225,6 @@ LinuxDocumentResult LinuxDocuments::Flush(const LinuxDocumentClient& client,
 void LinuxDocuments::Unwatch(const LinuxDocumentClient& client) {
   if (!Authorized(client)) return;
   watchers_.erase(client.id);
-  seals_.erase(client.id);
   if (!loaded_) return;
   auto next = envelope_.Clone();
   auto owners = next.FindDict("owners")->Clone();
