@@ -33,6 +33,8 @@ Linux cannot establish the shared distribution-signing/mock-keychain test gate. 
 - Standalone GN generation of the materialized Linux launch target succeeded using the installed GN tool and fixture dependency targets: five targets, six files. `gn desc` resolved only `//base`, `//chrome/common:non_code_constants` and `//content/public/common`; the selected sources are the Linux implementation, shared declaration and Linux helper header. This establishes the target's graph/syntax in isolation, not full Chromium 156 GN compatibility.
 - `bash -n engine/ardiacore-linux/apply.sh engine/patches/build/env.sh` and `git diff --check` passed.
 
+Independent review found that legacy `ARDIA_INSTANCE` parsing truncated download paths at commas. A compiled regression reproduced the failure before correction. Linux now retains the shared comma-continuation grammar until the next recognized instance key, while exporting only `downloadsDir` and retaining explicit CLI precedence. The launch fixture now passes all ten cases, including comma-containing environment and CLI paths with spaces, embedded equals signs and empty segments. This correction adds no test or authentication authority.
+
 The stale `HELIUM_LINUX_TAG` now matches the pinned Linux `0.20.1.1`; Chromium remains `156.0.8078.47`, shared Helium `0.20.1` at `f29a25968e483f8bb85e47829ccd487bbe229199`, and Linux Helium `473c0f72d7db2e8492f0fa975b8544bc719bb027`.
 
 ## Outstanding native acceptance

@@ -186,6 +186,10 @@ int main(int argc, char** argv) {
   } else if (scenario == "empty-cli") {
     assert(!ardiacore::ExperimentOn("example"));
     assert(config.At("instance").dict->values.empty());
+  } else if (scenario == "commas") {
+    assert(ardiacore::InstanceValue("downloads-dir") == "/tmp/N05 downloads,review,part=two,, last");
+    assert(config.At("instance").dict->At("downloadsDir").text == "/tmp/N05 downloads,review,part=two,, last");
+    assert(config.At("instance").dict->values.size() == 1);
   } else if (scenario == "null-directory") {
     assert(config.At("dataDirectory").none);
     assert(!config.At("isolated").boolean);
@@ -233,7 +237,13 @@ class LaunchSwitchTests(unittest.TestCase):
         self.run_case('defaults')
 
     def test_environment_allowlist_and_real_root_isolation(self):
-        self.run_case('environment', f'user-data-dir={self.alias}', environment={'ARDIA_BACKGROUND': '1', 'ARDIA_SWITCHES': 'example=on,newTabPrewarm=on', 'ARDIA_INSTANCE': 'downloadsDir=/tmp/downloads,unknown=secret,reauth=grant'})
+        self.run_case('environment', f'user-data-dir={self.alias}', environment={'ARDIA_BACKGROUND': '1', 'ARDIA_SWITCHES': 'example=on,newTabPrewarm=on', 'ARDIA_INSTANCE': 'unknown=secret,reauth=grant,downloadsDir=/tmp/downloads,updateFeed=secret'})
+
+    def test_downloads_directory_preserves_shared_comma_grammar(self):
+        self.run_case('commas', environment={'ARDIA_INSTANCE': 'unknown=secret,downloadsDir=/tmp/N05 downloads,review,part=two,, last,updateFeed=secret'})
+
+    def test_downloads_cli_precedence_preserves_commas(self):
+        self.run_case('commas', 'ardia-downloads-dir=/tmp/N05 downloads,review,part=two,, last', environment={'ARDIA_INSTANCE': 'downloadsDir=/tmp/env,ignored'})
 
     def test_cli_precedence_duplicate_switches_and_gpu_scope(self):
         self.run_case('precedence', 'ardia-switches= example=on,example=off,malformed=bad,example=invalid,newTabPrewarm=on', 'ardia-downloads-dir=/tmp/cli', 'user-data-dir=/missing', environment={'ARDIA_SWITCHES': 'example=on', 'ARDIA_INSTANCE': 'downloadsDir=/tmp/env'})
