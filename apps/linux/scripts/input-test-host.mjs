@@ -9,3 +9,4 @@ export const reportHostError = (error) => { throw error; };
 
 export const hostSupports = () => false;
 export const hostModuleMethod = (module, method, host = ardiaHost) => (...args) => host.invoke(`${module}.${method}`, { args });
+export const callHost = (name) => Promise.reject(new Error(`Unexpected engine call in input fixture: ${name}`));
