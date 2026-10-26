@@ -207,7 +207,9 @@ class UpstreamTests(unittest.TestCase):
     def test_classification_uses_versions_not_file_names(self):
         self.assertEqual(self.classify(['engine/patches/build/env.sh']), 'ENGINE_INCREMENTAL')
         self.assertEqual(self.classify(['engine/patches/build/env.sh'], new_env='export CHROMIUM_VERSION=156\n'), 'ENGINE_FULL')
-        self.assertEqual(self.classify(['apps/demo/src/shims/web/WebView.tsx']), 'UI_ONLY')
+        for path in ('apps/linux/src/main.tsx', 'apps/linux/src/host.ts', 'apps/linux/vite.shared.ts'):
+            self.assertEqual(self.classify([path]), 'UI_ONLY')
+        self.assertEqual(self.classify(['apps/demo/src/shims/web/WebView.tsx']), 'NONE')
         self.assertEqual(self.classify(['docs/linux-port.md']), 'NONE')
         self.assertEqual(self.classify(['engine/ardiacore/src/ardia/core/ac_main_delegate.cc']), 'NONE')
         self.assertEqual(self.classify(['packages/shell/ios/AppModule.swift']), 'NONE')

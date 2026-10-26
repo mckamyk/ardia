@@ -1,6 +1,6 @@
 import { openWindow, type OpenWindowOptions } from "@ardia/shell";
 import { useSettingsNav, type SettingsPane, type SettingsPlace } from "../../browser/src/components/settings/windows";
-import { ardiaHost, reportHostError } from "../../demo/src/host";
+import { ardiaHost, reportHostError } from "./host";
 import { flushLinuxSession } from "./session";
 
 export * from "../../browser/src/components/settings/windows";

@@ -29,7 +29,7 @@ The first native host supports the default regular profile. Multiple profiles, p
 
 `apps/linux` owns the desktop entry point, window controls, current-space header, native utility-window startup and Linux component adapters. Build it with `pnpm --filter @ardia/linux build`; its output is `apps/linux/dist`. It uses the existing browser and Settings components rather than maintaining a second browser UI.
 
-`apps/demo` keeps its own website entry point, seeded session and iframe behavior. The common Vite configuration and web rendering adapters currently remain under that directory and are shared by both builds. The Linux entry does not load the demo's startup, seeded session or iframe WebView. Its build aliases select the native-backed WebView and Linux-only component adaptations.
+`apps/demo` keeps its own website entry point, seeded session and iframe behavior. Linux owns its Vite configuration, web rendering adapters, native module/event bridge, Trusted Types symbol rendering, host persistence and verification fixtures under `apps/linux`. It imports shared UI from `apps/browser` and packages without depending on `apps/demo`. Its build aliases select the native-backed WebView and Linux-only component adaptations, including the flat pinned tiles. Demo sources and configuration match `main`.
 
 Linux behavior should follow macOS unless a platform constraint requires a difference. In particular, Settings and Import open in separate native utility windows, reuse an already open window, and leave the source browser's tabs alone. Utility renderers synchronize their edits against the canonical browser session without creating browser tabs or window records of their own.
 
@@ -137,7 +137,7 @@ JOBS=6 KEEP_GOING=1 timeout -s TERM 43200 scripts/linux/build.sh --apply
 
 The resulting `out/Release_GN_linux_x64/chrome` is a 528,592,864-byte x86-64 ELF PIE with build ID `749fe824d8eb45cbd0cf14395d14f99d1ab189c8`. All dynamic dependencies resolved on the builder. `--version` returned `Chromium 155.0.8059.84 (Chromium 155.0.8059.84)`. Its SHA-256 is `2a72597a6a94277add923e7ce41a313c9dd5e45c5c53f2def8a5e564ecd516f2`.
 
-The UI was built with `npm exec --yes --package=pnpm@11.1.3 -- pnpm --filter @ardia/demo build`. `scripts/linux/package.py` packaged the real executable, runtime resources and that UI into `artifacts/ardia-linux-x64-native-20261026.tar.xz` (143,027,892 bytes; SHA-256 `2ac7b28e0e201ec1b34d8ae5b9aeae337e4e6fccf47930331372154e4ba1aaac`). Extraction into `artifacts/install-check` preserved the executable hash. The extracted launcher loaded its bundled `chrome://ardia/` UI without a development asset override.
+Before the desktop entry was separated from the demo, the UI was built with `npm exec --yes --package=pnpm@11.1.3 -- pnpm --filter @ardia/demo build`. `scripts/linux/package.py` packaged the real executable, runtime resources and that UI into `artifacts/ardia-linux-x64-native-20261026.tar.xz` (143,027,892 bytes; SHA-256 `2ac7b28e0e201ec1b34d8ae5b9aeae337e4e6fccf47930331372154e4ba1aaac`). Extraction into `artifacts/install-check` preserved the executable hash. The extracted launcher loaded its bundled `chrome://ardia/` UI without a development asset override.
 
 Runtime checks used throwaway profiles, `--ozone-platform=headless`, software rendering and no display-server connection. Extensions were disabled for the isolated checks because an initial scratch launch discovered the machine's externally installed 1Password extension. The test profiles used `--password-store=basic` and an isolated D-Bus address. No sandbox-disabling switches were used. Ardia's bridge reported `appBuild=linux-host`, the correct version and the scratch profile directory. It created a real Chrome tab, attached its native viewport and rendered a data page titled `Ardia native build verified`; that ordinary page had no `__ardiaHost`. A renderer reported `NoNewPrivs=1`, `Seccomp=2` and nested PID namespaces. Card-number access returned the expected authentication-unavailable error. Test instances closed through `Browser.close`.
 
@@ -179,7 +179,7 @@ The Web Store patch already derives OS and CPU from Chromium's build. Do not rep
 
 `check-upstream.sh` and `sync-upstream.sh` wrap `scripts/linux/upstream.py`; both accept `--help`, `--ref`, `--no-fetch` and `--json`. By default they fetch `upstream/main`, adding the `upstream` remote if absent and refusing to fetch an existing remote that points outside `mantrakp04/ardia`. Use `--no-fetch` with an existing local ref for a read-only report without changing remotes or fetching.
 
-The report compares the merge base with the selected upstream ref. `ENGINE_FULL` means actual Chromium version or selected Chromium/Helium pin identities changed; editing those files without changing the identities does not itself require a full rebuild. Ordinary engine, Linux host, patch or Linux tooling edits produce `ENGINE_INCREMENTAL`. UI and workspace dependency changes produce `UI_ONLY`; unrelated changes produce `NONE`. JSON and human output include `engine_tree`, the first 12 characters of `git rev-parse HEAD:engine`, even when upstream is already incorporated. This identifies the current committed engine tree, not the incoming tree or uncommitted edits.
+The report compares the merge base with the selected upstream ref. `ENGINE_FULL` means actual Chromium version or selected Chromium/Helium pin identities changed; editing those files without changing the identities does not itself require a full rebuild. Ordinary engine, Linux host, patch or Linux tooling edits produce `ENGINE_INCREMENTAL`. Linux/shared browser UI and workspace dependency changes produce `UI_ONLY`; independent demo and unrelated changes produce `NONE`. JSON and human output include `engine_tree`, the first 12 characters of `git rev-parse HEAD:engine`, even when upstream is already incorporated. This identifies the current committed engine tree, not the incoming tree or uncommitted edits.
 
 Preview upstream changes, then explicitly apply the rebase:
 
@@ -197,7 +197,7 @@ After resolving any rebase conflicts, install dependencies under the shared lock
 ```bash
 scripts/agent/locked pod -- pnpm install --frozen-lockfile
 pnpm typecheck
-pnpm --filter @ardia/demo build
+pnpm --filter @ardia/linux build
 ```
 
 If the report calls for engine work, follow the dedicated Linux build and packaging workflow above, preserving existing output directories. Inspect the resulting changes and choose the intended destination branch before pushing separately, for example:
@@ -240,8 +240,8 @@ Focused checks that do not need a Chromium checkout:
 
 ```bash
 pnpm typecheck
-pnpm --filter @ardia/demo test:host
-pnpm --filter @ardia/demo build
+pnpm --filter @ardia/linux test:host
+pnpm --filter @ardia/linux build
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s engine/patches/build/tests -v
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s engine/chromium/src/chrome/browser/ardia/tests -v
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s engine/ardiacore-linux/tests -v
@@ -269,8 +269,25 @@ The Linux/web sidebar resolves `apps/browser/src/components/sidebar/TileFace.web
 
 ## Context submenu positioning
 
-The Linux menu renderer lives in `apps/linux/src/menus.tsx` and portals each menu to the document body. Linux's shell exports its menu API, its entry point renders its menu host, and its Vite configuration redirects shared adapters' menu imports to that same instance. Menu visibility and subscriptions therefore follow the Linux renderer, including native-tab overlay hiding. The website demo retains its existing renderer and styles.
+The Linux menu renderer lives in `apps/linux/src/menus.tsx` and portals each menu to the document body. Linux's shell exports its menu API, its entry point renders its menu host, and its native-tab and shell adapters import that same menu instance. Menu visibility and subscriptions therefore follow the Linux renderer, including native-tab overlay hiding. The website demo retains its existing renderer and styles.
 
 Previously, the menu backdrop filter made the parent menu the containing block for a fixed-position submenu, while submenu offsets were calculated in viewport coordinates. A menu at (120, 100) reproduced a submenu displaced vertically by 100 px with a 106 px horizontal gap. Submenus now anchor to the actual parent-menu bounds and hovered row, with a 4 px overlap and a 5 px top inset. They flip left at the right viewport edge; measured menus stay within 8 px of each viewport edge and scroll when too tall. Resize and captured scroll events update open menus. Linux's stylesheet contains the expanded-row highlight and clips icons' oversized transparent SVG canvases so short menus do not acquire a spurious scrollbar.
 
 Verification passed all nine workspace typechecks, both Linux and demo production builds, and 50 host/session tests. A fixture using Linux's Vite configuration confirmed the shell and shared native-tab adapter use the Linux renderer's menu state, including visibility subscriptions. Headless browser checks exercised three menu levels, leaf selection, disabled entries, replacement, dismissal, viewport edges, resizing and scrolling. The existing packaged Linux engine loaded this checkout's production UI with a throwaway profile and confirmed a real pinned tab's context submenu aligned exactly, remained open while the pointer entered it and closed with Escape. Evidence is under `/tmp/ardia-submenu-offset`, including `linux-only-verification.json` and `native/actual-tab-submenu.png`. No demo, engine or macOS source changed.
+
+
+## Linux and demo ownership audit (2026-10-26)
+
+The branch comparison against `main` found 19 Linux host/configuration/test additions and 12 modified files still under `apps/demo`. All 19 additions now live under `apps/linux`; the 12 existing demo files have been restored byte-for-byte to `main`. The Linux flat-tile adapter also moved out of `apps/browser/src/components/sidebar/TileFace.web.tsx` into `apps/linux/src/TileFace.tsx`, selected only by Linux's Vite resolver. Shared browser source therefore retains its original behavior for demo and macOS.
+
+Linux now owns its rendering adapters and base styles as well as its entry point. Its native module providers and event listeners resolve to one Linux Expo adapter, its symbol renderer owns one Trusted Types policy, and its native-tab, utility and shell adapters use the same menu state. Window controls and their position updates share one Linux window-chrome module. Host, session, symbol and CSP verification commands are available from `@ardia/linux`; no Linux imports or configuration depend on `apps/demo`. The lockfile already contains the Linux workspace dependencies and needs no dependency changes for this relocation.
+
+`scripts/linux/upstream.py` now recognizes `apps/linux/` changes as `UI_ONLY`, with coverage for entry, host and Vite changes. Independent demo changes produce `NONE`. Build and packaging instructions target `apps/linux/dist`. The earlier demo-built package evidence above describes the historical build; prebuilt-engine CI remains planned work.
+
+Production module-graph assertions passed: Linux loaded 461 application modules with none from demo, and demo loaded 450 with none from Linux. Linux selected its flat-tile adapter while demo selected the original shared tile; Linux resolved exactly one Expo adapter, symbol renderer and menu instance.
+
+Verification passed both production UI builds, all nine workspace typechecks, 50 host/session tests, four symbol tests, 15 platform-tooling tests, five shared-engine Linux checks, seven native-host fixture checks and seven bootstrap tests. The moved CSP fixture rendered all 278 symbols under the host policy and verified rejection of raw HTML, unapproved or duplicate policies, and string evaluation. The restored demo booted with 12 seeded tabs, two profiles and its iframe renderer, even with a host-shaped global present.
+
+The existing packaged Linux executable loaded the migrated production bundle with fresh profiles, the headless Ozone backend and Chromium's sandbox enabled. Checks covered native window controls, real-tab navigation events, absence of the privileged bridge in ordinary pages, native context submenus, reusable Settings windows and save-before-close synchronization without changing browser tabs or windows. No engine sources or binaries were changed for this relocation. Wayland/compositor behavior and a macOS application build were not exercised. Evidence is under `/tmp/ardia-linux-boundary-review`.
+
+The final review found and reproduced an Escape propagation bug in Settings dropdowns. Linux's menu handler now consumes Escape before dismissing the menu, so the utility-window handler cannot close Settings during that same event. Native keyboard verification confirmed that the first Escape dismisses the dropdown while retaining Settings and a second Escape closes Settings normally. Linux typecheck and production build passed again after the correction.

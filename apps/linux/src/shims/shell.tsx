@@ -1,11 +1,11 @@
 import type { CommandEvent } from "@ardia-real/shell";
-import { emitCommand as emitWebCommand } from "../../../demo/src/shims/shell";
-import { ardiaHost, hostModuleMethod } from "../../../demo/src/host";
+import { emitCommand as emitWebCommand } from "./shellBase";
+import { ardiaHost, hostModuleMethod } from "../host";
 import { isUtilityWindowId } from "../../../browser/src/components/settings/windows";
 import { flushLinuxSession } from "../session";
 import { createUtilityWindowCloser } from "../utilityClose";
 
-export * from "../../../demo/src/shims/shell";
+export * from "./shellBase";
 export { menuShown, showMenu, watchMenus } from "../menus";
 
 export const emitCommand = (event: CommandEvent) => emitWebCommand(isUtilityWindowId(ardiaHost?.bootstrap.windowId)
