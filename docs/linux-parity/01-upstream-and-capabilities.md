@@ -26,13 +26,13 @@ The current Linux UI cannot build or typecheck, and three host-test files fail t
 
 The rebase imports 311 upstream commits that move browser/src/store, lib and component state into state/ and platform/, split feature components, and tighten native types. Linux still imports removed paths and Vite replacement/lazy maps name removed files. The current production build fails resolving browser/src/components/settings/windows from src/settingsWindows.ts. Typecheck reports 105 errors, including obsolete imports, removed WebView props, shortcut modifier typing and a nullable fetchBangList reply.
 
-- [apps/linux/src/main.tsx:7](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/main.tsx#L7)
-- [apps/linux/src/settingsWindows.ts:2](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/settingsWindows.ts#L2)
-- [apps/linux/vite.config.ts:6](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/vite.config.ts#L6)
-- [apps/linux/vite.shared.ts:62](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/vite.shared.ts#L62)
-- [apps/linux/scripts/host-test-loader.mjs:1](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/scripts/host-test-loader.mjs#L1)
-- [apps/browser/src/platform/launchConfig.ts:1](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/platform/launchConfig.ts#L1)
-- [apps/browser/src/state/browser/store.ts:1](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/browser/store.ts#L1)
+- [apps/linux/src/main.tsx:7](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/main.tsx#L7)
+- [apps/linux/src/settingsWindows.ts:2](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/settingsWindows.ts#L2)
+- [apps/linux/vite.config.ts:6](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/vite.config.ts#L6)
+- [apps/linux/vite.shared.ts:62](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/vite.shared.ts#L62)
+- [apps/linux/scripts/host-test-loader.mjs:1](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/scripts/host-test-loader.mjs#L1)
+- [apps/browser/src/platform/launchConfig.ts:1](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/platform/launchConfig.ts#L1)
+- [apps/browser/src/state/browser/store.ts:1](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/browser/store.ts#L1)
 
 ### Implementation slices
 
@@ -62,7 +62,7 @@ Scope: These are rebase integration failures, not evidence that upstream macOS i
 
 ## N02 Rebased shared UI cannot use the Linux legacy native call and event ABI
 
-[#39 N02](https://github.com/mckamyk/ardia/issues/39) · P1 · persists
+[#39 N02](https://github.com/mckamyk/ardia/issues/39) · P1 · new
 
 Rebased shared UI cannot use the Linux legacy native call and event ABI
 
@@ -70,12 +70,12 @@ Rebased shared UI cannot use the Linux legacy native call and event ABI
 
 Upstream now requires per-domain Ardia*.call(verb,profile,JSONargs) returning a JSON string and rejecting errors. Events subscribe to domain channels with {name,data}. Linux intercepts only obsolete ArdiaCEF.engineCall and emits legacy ArdiaCEF.onEngineEvent/onTabStrip. Current history/bookmarks/strip/engine/extension/download-setting and auto-PiP calls cannot use existing backends. Raw C {error} replies also must become rejections rather than apparent success.
 
-- [packages/ardiacore/src/engine/call.ts:24](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/engine/call.ts#L24)
-- [packages/ardiacore/src/engine/call.ts:47](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/engine/call.ts#L47)
-- [packages/ardiacore/src/engine/call.ts:68](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/engine/call.ts#L68)
-- [apps/linux/src/shims/ardiacore.tsx:8](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/ardiacore.tsx#L8)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1181](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1181)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1835](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1835)
+- [packages/ardiacore/src/engine/call.ts:24](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/engine/call.ts#L24)
+- [packages/ardiacore/src/engine/call.ts:47](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/engine/call.ts#L47)
+- [packages/ardiacore/src/engine/call.ts:68](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/engine/call.ts#L68)
+- [apps/linux/src/shims/ardiacore.tsx:8](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/ardiacore.tsx#L8)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1181](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1181)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1835](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1835)
 
 ### Implementation slices
 
@@ -101,7 +101,7 @@ Scope: Source-confirmed compatibility regression; N01 currently prevents runtime
 
 ## N03 Rebased tabId contract diverges from Linux random native binding keys
 
-[#40 N03](https://github.com/mckamyk/ardia/issues/40) · P1 · persists
+[#40 N03](https://github.com/mckamyk/ardia/issues/40) · P1 · new
 
 Rebased tabId contract diverges from Linux random native binding keys
 
@@ -109,11 +109,11 @@ Rebased tabId contract diverges from Linux random native binding keys
 
 Current shared WebView supplies tabId and zero-argument onReady; Linux reads removed transferKey, falls back to random host_UUID and uses missing transferKey for overlay checks. Native binding keys therefore diverge from store tab IDs. Current permissions/media/extension/task events also use stable string tab IDs, while Linux transport still works with numeric IDs internally.
 
-- [packages/ardiacore/src/pageTypes.ts:147](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/pageTypes.ts#L147)
-- [apps/browser/src/components/window/TabWebView.tsx:121](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/window/TabWebView.tsx#L121)
-- [apps/linux/src/shims/web/HostWebView.tsx:26](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/web/HostWebView.tsx#L26)
-- [apps/linux/src/shims/web/HostWebView.tsx:112](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/web/HostWebView.tsx#L112)
-- [packages/ardiacore/src/module.ts:33](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/module.ts#L33)
+- [packages/ardiacore/src/pageTypes.ts:147](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/pageTypes.ts#L147)
+- [apps/browser/src/components/window/TabWebView.tsx:121](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/window/TabWebView.tsx#L121)
+- [apps/linux/src/shims/web/HostWebView.tsx:26](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/web/HostWebView.tsx#L26)
+- [apps/linux/src/shims/web/HostWebView.tsx:112](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/web/HostWebView.tsx#L112)
+- [packages/ardiacore/src/module.ts:33](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/module.ts#L33)
 
 ### Implementation slices
 
@@ -139,7 +139,7 @@ Scope: Do not globally remove numeric IDs: strip/window/native transport identif
 
 ## N04 Synchronous launchConfig contract has no Linux provider and can break startup
 
-[#41 N04](https://github.com/mckamyk/ardia/issues/41) · P1 · persists
+[#41 N04](https://github.com/mckamyk/ardia/issues/41) · P1 · new
 
 Synchronous launchConfig contract has no Linux provider and can break startup
 
@@ -147,12 +147,12 @@ Synchronous launchConfig contract has no Linux provider and can break startup
 
 New synchronous ArdiaApp.launchConfig() returns LaunchConfig; shared switchOverride immediately indexes result.switches. Linux has no launchConfig local provider or synchronous host mapping and returns an async hostModuleMethod for unknown methods, so code indexes a Promise and native invocation later rejects. Existing systemInfo has a Linux local adapter and should not be falsely counted as equally missing.
 
-- [packages/shell/src/app.ts:49](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/shell/src/app.ts#L49)
-- [packages/shell/src/app.ts:145](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/shell/src/app.ts#L145)
-- [apps/browser/src/platform/launchConfig.ts:5](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/platform/launchConfig.ts#L5)
-- [apps/browser/src/platform/killSwitches.ts:127](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/platform/killSwitches.ts#L127)
-- [apps/linux/src/hostModules.ts:16](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/hostModules.ts#L16)
-- [apps/linux/src/shims/shellBase.tsx:85](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/shellBase.tsx#L85)
+- [packages/shell/src/app.ts:49](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/shell/src/app.ts#L49)
+- [packages/shell/src/app.ts:145](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/shell/src/app.ts#L145)
+- [apps/browser/src/platform/launchConfig.ts:5](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/platform/launchConfig.ts#L5)
+- [apps/browser/src/platform/killSwitches.ts:127](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/platform/killSwitches.ts#L127)
+- [apps/linux/src/hostModules.ts:16](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/hostModules.ts#L16)
+- [apps/linux/src/shims/shellBase.tsx:85](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/shellBase.tsx#L85)
 
 ### Implementation slices
 
@@ -186,13 +186,13 @@ A matching Linux native engine is not established for the rebased source. The sh
 
 Main advances Chromium to156.0.8078.47 and shared Helium 0.20.1. The rebased shared Ardia BUILD depends on //ardia/core:launch_switches, whose BUILD asserts is_mac and whose ac_launch_switches.cc includes Apple Security frameworks. Linux apply copies only the hook headers, not the new launch-switch contract. ac_downloads.cc now includes that header. Linux pins have been aligned to Helium Linux 0.20.1.1 (473c0f72…), whose shared submodule matches f29a2596…; no Linux 156 build/strict series/package qualification was run. One tooling test still hardcodes 155 and fails after the corrected pin.
 
-- [engine/patches/build/helium-pins.ini:1](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/patches/build/helium-pins.ini#L1)
-- [engine/chromium/src/chrome/browser/ardia/BUILD.gn:110](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/chromium/src/chrome/browser/ardia/BUILD.gn#L110)
-- [engine/ardiacore/src/ardia/core/BUILD.gn:1](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore/src/ardia/core/BUILD.gn#L1)
-- [engine/ardiacore/src/ardia/core/ac_launch_switches.cc:3](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore/src/ardia/core/ac_launch_switches.cc#L3)
-- [engine/chromium/src/chrome/browser/ardia/ac_downloads.cc:13](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/chromium/src/chrome/browser/ardia/ac_downloads.cc#L13)
-- [engine/ardiacore-linux/apply.sh:27](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/apply.sh#L27)
-- [engine/patches/build/tests/test_platform_tooling.py:197](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/patches/build/tests/test_platform_tooling.py#L197)
+- [engine/patches/build/helium-pins.ini:1](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/patches/build/helium-pins.ini#L1)
+- [engine/chromium/src/chrome/browser/ardia/BUILD.gn:110](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/chromium/src/chrome/browser/ardia/BUILD.gn#L110)
+- [engine/ardiacore/src/ardia/core/BUILD.gn:1](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore/src/ardia/core/BUILD.gn#L1)
+- [engine/ardiacore/src/ardia/core/ac_launch_switches.cc:3](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore/src/ardia/core/ac_launch_switches.cc#L3)
+- [engine/chromium/src/chrome/browser/ardia/ac_downloads.cc:13](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/chromium/src/chrome/browser/ardia/ac_downloads.cc#L13)
+- [engine/ardiacore-linux/apply.sh:27](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/apply.sh#L27)
+- [engine/patches/build/tests/test_platform_tooling.py:197](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/patches/build/tests/test_platform_tooling.py#L197)
 
 ### Implementation slices
 
@@ -220,7 +220,7 @@ Scope: Matching pins are source metadata, not build or runtime evidence. Do not 
 
 ## N06 Linux shortcut hints and conflict resolution diverge from the actual native shortcut catalog
 
-[#43 N06](https://github.com/mckamyk/ardia/issues/43) · P2 · new_confirmed_source_probe
+[#43 N06](https://github.com/mckamyk/ardia/issues/43) · P2 · new
 
 Linux shortcut hints and conflict resolution diverge from the actual native shortcut catalog
 
@@ -228,14 +228,14 @@ Linux shortcut hints and conflict resolution diverge from the actual native shor
 
 The new shared resolver uses Mac catalog defaults for remappable items and only uses native defaults for fixed sources; all Linux items are remappable. Linux native Downloads defaults Ctrl+J, while shared catalog resolves Shift+command+J. Native tabSwitcher uses semantic command/physical Ctrl but shared catalog uses semantic control. Glyph formatting moved into state, outside Linux's components-only Vite translation.
 
-- [apps/browser/src/state/commands/commandShortcuts.ts:32](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/commands/commandShortcuts.ts#L32)
-- [apps/browser/src/state/commands/commandCatalog.ts:93](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/commands/commandCatalog.ts#L93)
-- [apps/browser/src/state/commands/commandCatalog.ts:118](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/commands/commandCatalog.ts#L118)
-- [apps/browser/src/state/commands/shortcuts.ts:13](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/commands/shortcuts.ts#L13)
-- [apps/linux/src/shortcuts.ts:27](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shortcuts.ts#L27)
-- [apps/linux/src/shortcuts.ts:81](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shortcuts.ts#L81)
-- [apps/linux/src/shortcuts.ts:90](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shortcuts.ts#L90)
-- [apps/linux/vite.config.ts:20](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/vite.config.ts#L20)
+- [apps/browser/src/state/commands/commandShortcuts.ts:32](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/commands/commandShortcuts.ts#L32)
+- [apps/browser/src/state/commands/commandCatalog.ts:93](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/commands/commandCatalog.ts#L93)
+- [apps/browser/src/state/commands/commandCatalog.ts:118](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/commands/commandCatalog.ts#L118)
+- [apps/browser/src/state/commands/shortcuts.ts:13](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/commands/shortcuts.ts#L13)
+- [apps/linux/src/shortcuts.ts:27](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shortcuts.ts#L27)
+- [apps/linux/src/shortcuts.ts:81](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shortcuts.ts#L81)
+- [apps/linux/src/shortcuts.ts:90](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shortcuts.ts#L90)
+- [apps/linux/vite.config.ts:20](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/vite.config.ts#L20)
 
 ### Implementation slices
 
@@ -267,12 +267,12 @@ A user can create and select an isolated profile whose real pages and services f
 
 The isolated-profile default still creates generated profile IDs; the Linux resolver permits only empty/default identities for native tabs, services and regular windows and rejects incognito. No upstream commit adds Linux profile ownership.
 
-- [apps/browser/src/components/profiles/CreateProfile.tsx:41](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/profiles/CreateProfile.tsx#L41)
-- [apps/browser/src/state/profiles/profiles.ts:79](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/profiles/profiles.ts#L79)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:271](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L271)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:738](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L738)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1218](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1218)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1961](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1961)
+- [apps/browser/src/components/profiles/CreateProfile.tsx:41](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/profiles/CreateProfile.tsx#L41)
+- [apps/browser/src/state/profiles/profiles.ts:79](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/profiles/profiles.ts#L79)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:271](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L271)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:738](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L738)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1218](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1218)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1961](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1961)
 
 ### Implementation slices
 
@@ -306,19 +306,19 @@ Default-browser/autostart actions reject or fail silently. Choosing WebKit chang
 
 Default-browser/autostart still call absent ArdiaSystem methods with false/notRegistered fallbacks. WebKit remains selectable although Linux always creates Chromium; now protectedVideoInWebKit defaults true and automatically labels/routes streaming sites as WebKit. App drag region remains non-native. Incoming pageScrollBars adds another exposed preference: nativeSync calls absent ArdiaSystem.setThinScrollBars on startup and preference changes.
 
-- [packages/shell/src/system.tsx:44](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/shell/src/system.tsx#L44)
-- [apps/browser/src/state/settings/paneData.ts:29](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/settings/paneData.ts#L29)
-- [apps/browser/src/components/settings/panes/General.tsx:257](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/settings/panes/General.tsx#L257)
-- [apps/browser/src/components/settings/panes/Engines.tsx:23](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/settings/panes/Engines.tsx#L23)
-- [apps/browser/src/state/settings/settings.ts:171](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/settings/settings.ts#L171)
-- [apps/browser/src/state/engines/engines.ts:58](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/engines/engines.ts#L58)
-- [apps/linux/src/shims/web/HostWebView.tsx:63](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/web/HostWebView.tsx#L63)
-- [apps/linux/src/shims/web/chrome.tsx:244](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/web/chrome.tsx#L244)
-- [apps/browser/src/state/settings/settings.ts:61](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/settings/settings.ts#L61)
-- [apps/browser/src/state/app/nativeSync.ts:70](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/app/nativeSync.ts#L70)
-- [apps/browser/src/state/app/nativeSync.ts:129](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/app/nativeSync.ts#L129)
-- [packages/shell/src/system.tsx:38](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/shell/src/system.tsx#L38)
-- [packages/shell/src/system.tsx:59](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/shell/src/system.tsx#L59)
+- [packages/shell/src/system.tsx:44](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/shell/src/system.tsx#L44)
+- [apps/browser/src/state/settings/paneData.ts:29](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/settings/paneData.ts#L29)
+- [apps/browser/src/components/settings/panes/General.tsx:257](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/settings/panes/General.tsx#L257)
+- [apps/browser/src/components/settings/panes/Engines.tsx:23](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/settings/panes/Engines.tsx#L23)
+- [apps/browser/src/state/settings/settings.ts:171](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/settings/settings.ts#L171)
+- [apps/browser/src/state/engines/engines.ts:58](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/engines/engines.ts#L58)
+- [apps/linux/src/shims/web/HostWebView.tsx:63](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/web/HostWebView.tsx#L63)
+- [apps/linux/src/shims/web/chrome.tsx:244](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/web/chrome.tsx#L244)
+- [apps/browser/src/state/settings/settings.ts:61](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/settings/settings.ts#L61)
+- [apps/browser/src/state/app/nativeSync.ts:70](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/app/nativeSync.ts#L70)
+- [apps/browser/src/state/app/nativeSync.ts:129](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/app/nativeSync.ts#L129)
+- [packages/shell/src/system.tsx:38](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/shell/src/system.tsx#L38)
+- [packages/shell/src/system.tsx:59](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/shell/src/system.tsx#L59)
 
 ### Implementation slices
 

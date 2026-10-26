@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "repository": "mckamyk/ardia",
-  "source_commit": "6907d6831980c3b6d686ccba0d3abdb8be2d5ebe",
+  "source_commit": "b70711df2af16cee08146b78f7d3405c57d6d1de",
   "upstream_main": "a2ca6bdf8f69ef1b5818525ca79e9d85de2fc962",
   "previous_linux": "82ecec2af452dcb9ef088e0a3a0fd8a8af32b699",
   "coordination_issue": "https://github.com/mckamyk/ardia/issues/10",
@@ -220,7 +220,7 @@
       ],
       "caveat": "Source revalidated after rebase; current UI cannot be runtime-tested until N01/N02/N03/N04 bootstrap compatibility is repaired. Chromium context-menu alternatives may exist.",
       "verify": "On a loaded native page, search for known text, print, save and open each DevTools mode. Require a successful visible result, not merely a dispatched command.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Implement typed per-tab find, print/system-print/save-page and DevTools modes using Chromium helpers.",
@@ -230,6 +230,8 @@
         "Find known text with counts, previous/next and dismissal on two real tabs.",
         "Print/save and all DevTools modes produce actual correct-tab results from shell and page focus."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 11,
         "id": 6045125790,
@@ -265,7 +267,7 @@
       ],
       "caveat": "Sharing default engine data can work as spaces. This is unsupported behavior, not demonstrated cross-profile leakage. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Create an independent profile and browse in it; create a private window; then test cookie, history and storage isolation, disposal and restart exclusion.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Add a Linux Profile/OTR registry and route tabs, services, windows and adoption through it.",
@@ -277,6 +279,8 @@
         "Private windows create real OTR pages, clear on disposal and never persist.",
         "Cross-profile adoption rejects and failed creation leaves no phantom window."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 12,
         "id": 6045126217,
@@ -311,7 +315,7 @@
       ],
       "caveat": "This is incorrect Ardia presentation, not evidence of a TLS validation bypass. Runtime recheck waits on bootstrap migration.",
       "verify": "Compare the site panel on HTTPS, HTTP, mixed content, an invalid certificate and an internal page. Unknown security must not be labeled local.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Observe native security state and implement getSecurityInfo with the current public schema.",
@@ -321,6 +325,8 @@
         "Check HTTPS, HTTP, mixed content, invalid certificate and internal pages.",
         "Unknown never renders local and previous-document certificates cannot persist."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 13,
         "id": 6045126639,
@@ -354,7 +360,7 @@
       ],
       "caveat": "Schema versioning does not fix stale caches or concurrent whole-document overwrites. Pre-rebase adapter reproduction showed disk/Settings false and browser cache true. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Open two browser windows and Settings; edit/delete a live folder and a Calendar preference; close immediately and after 800 ms; change the peer window; restart and compare all copies.",
-      "proof": "Source + adapter reproduction",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Define revisioned document snapshots, canonical updates and identity-aware live-folder merge/tombstones.",
@@ -366,6 +372,8 @@
         "Close immediately and after 800ms; restart preserves the same final state.",
         "Concurrent edits survive; save failures retain the utility for retry."
       ],
+      "historical_proof": "Source + adapter reproduction",
+      "validation_scope": "source_only",
       "issue": {
         "number": 14,
         "id": 6045127028,
@@ -406,7 +414,7 @@
       ],
       "caveat": "Inline row rename is separate; website JS dialogs are Chromium-owned. Last-tab confirmation depends on effective last-tab policy. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Exercise one prompt and every destructive confirmation, including Cancel, keyboard dismissal, suppression and native-page focus.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Implement requester-owned native Linux confirm/prompt helpers with suppression, keyboard semantics and promise cancellation.",
@@ -418,6 +426,8 @@
         "Cancel/confirm group, last-tab, profile and credential deletion dialogs.",
         "Suppression persists; Escape/Enter work; closing owner leaves no orphan dialog."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 15,
         "id": 6045127438,
@@ -453,7 +463,7 @@
       ],
       "caveat": "Chromium enforcement/native permission bubbles may work independently. N02 migration can restore transport but is not itself a Linux blocker implementation.",
       "verify": "Grant and revoke camera/location/notifications; clear a cookie and site storage; toggle a blocker list and site exception; reload and verify the actual engine state.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "After N02, map typed per-profile site settings/data clearing/zoom operations to supported services.",
@@ -465,6 +475,8 @@
         "Clear fixture cookies/storage/cache/history with scope and cancellation checks.",
         "Toggle filter lists/site exception and verify network behavior rather than successful dispatch only."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 16,
         "id": 6045127926,
@@ -499,7 +511,7 @@
       ],
       "caveat": "Native Chromium save/fill is separate. Keyring encryption/passkeys are not established. Secret operations must not fall back to generic JSON, logs, unprotected storage or bypass authentication.",
       "verify": "Use fixture credentials and addresses to test list/edit/delete/fill, restart encryption and OS authentication. An unavailable service must be shown as unavailable, not as an empty vault.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Wire metadata/config and address CRUD via typed domain handlers.",
@@ -511,6 +523,8 @@
         "Authentication denied/cancelled/expired never reveals secrets; inspect encryption at rest.",
         "No passwords/full card numbers in generic request JSON, logs or telemetry."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 17,
         "id": 6045128402,
@@ -546,7 +560,7 @@
       ],
       "caveat": "Actual Chromium downloading is separate and may work. Source revalidation does not establish native download failure.",
       "verify": "Download a known file; require progress and completion in Ctrl+J; pause/resume/cancel; restart; open/reveal; change the destination directory.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Initialize native download observation/snapshot and deliver current domain event schema.",
@@ -558,6 +572,8 @@
         "Restart has no duplicate or stale live entry; open/reveal target selected file.",
         "Download destination and ask-where settings alter actual engine behavior."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 18,
         "id": 6045128827,
@@ -593,7 +609,7 @@
       ],
       "caveat": "An installed extension may execute in native Chromium. Listing support exists only in the legacy native contract, not current UI. Native messaging/1Password require separate evidence.",
       "verify": "Install a fixture extension with an action, side panel and search provider, then enable/disable/reload/uninstall it and test toolbar activation.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Restore listing through current typed domain contract then implement management and registry events.",
@@ -605,6 +621,8 @@
         "Action badge/popup/side panel target correct tab/profile; search provider updates and removes.",
         "Handle cancelled install, increased permissions and native view lifecycle."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 19,
         "id": 6045129250,
@@ -635,7 +653,7 @@
       ],
       "caveat": "Local tabs/history/bookmarks are separate sources; their new transport additionally depends on N02. No runtime claim for the presently unbuildable UI.",
       "verify": "Run the packaged chrome://ardia UI with suggestions enabled and type a non-URL query. Verify both successful suggestions and cancellation, using a controlled endpoint.",
-      "proof": "Source + CSP/native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Provide a narrow policy-aware native suggestion request path with bounded replies and provider validation.",
@@ -646,6 +664,8 @@
         "Disabled sends zero requests; stale/cancelled/malformed/oversized/offline replies cannot replace current suggestions.",
         "Do not introduce unrestricted privileged fetch or inadvertently forward cookies/secrets."
       ],
+      "historical_proof": "Source + CSP/native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 20,
         "id": 6045129727,
@@ -678,7 +698,7 @@
       ],
       "caveat": "Persisted cached rows can render. This is not a missing startLive call. F04 remains a separate persistence defect. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Connect each supported source, restart with protected credentials, refresh, disconnect and test revoked credentials and offline behavior.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Add narrow bounded/cancellable Linux service networking; keep privileged shell CSP restrictive.",
@@ -690,6 +710,8 @@
         "Test revoked tokens, renewal, offline/retry and cancellation.",
         "Ordinary pages cannot invoke privileged network/secret operations."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 21,
         "id": 6045130199,
@@ -727,7 +749,7 @@
       ],
       "caveat": "Do not require Safari/Apple automation on Linux. Generic HTML/CSV and supported Linux browsers remain required. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Import fixture HTML/CSV and scratch Chromium/Firefox data; verify counts, duplicates, partial errors and cancellation without reading real user profiles.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Implement portable HTML/CSV import and Linux browser discovery/readers against scratch fixtures.",
@@ -739,6 +761,8 @@
         "Import scratch Chromium/Firefox profiles with partial errors and cancellation.",
         "Source files are unchanged; temporary secrets and cancelled jobs are cleaned up."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 22,
         "id": 6045130662,
@@ -773,7 +797,7 @@
       ],
       "caveat": "The unavailable UI is honest. Preserve existing encrypted formats and new sync document version/migration rules. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Build a Linux-native secure-storage/crypto transport and exercise two-device merge, locked state, recovery and restart behavior.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Implement Linux secure storage, compatible cryptography/recovery and atomic folder transport.",
@@ -785,6 +809,8 @@
         "Wrong phrase/tampering/locked storage fail safely; recovery and interruption/restart work.",
         "No cleartext credential material appears in sync artifacts."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 23,
         "id": 6045131127,
@@ -819,7 +845,7 @@
       ],
       "caveat": "Calendar websites still browse normally. Backend choice is a product/platform decision; gating unavailable controls can proceed first. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Either connect a supported Linux calendar source and verify alerts/previews, or clearly gate the unsupported integration.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Define Linux calendar provider/status capabilities and select EDS/CalDAV or another supported backend.",
@@ -831,6 +857,8 @@
         "Filtering, countdowns, Join alerts, disconnect and permission errors work.",
         "Settings changes reach browser windows and persist immediately on close."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 24,
         "id": 6045131534,
@@ -866,7 +894,7 @@
       ],
       "caveat": "Existing native automatic PiP code/events remain present, but current UI integration needs domain migration before claiming it works. Native playback/mute/page-requested PiP/portal sharing are distinct fallbacks.",
       "verify": "Play audio/video, switch tabs, use manual and automatic PiP separately, control playback and test a PipeWire/portal share with capture indicators.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Add media/audibility/session/capture events and native transport/manual PiP commands with user-activation validation.",
@@ -878,6 +906,8 @@
         "Manual and automatic PiP pass separate entry/return/dismissal tests.",
         "Real portal sharing reports capture state and stop/change-source accurately."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 25,
         "id": 6045132008,
@@ -910,7 +940,7 @@
       ],
       "caveat": "Store-driven split creation/layout remains distinct. Ordinary pages must never obtain privileged shell bridge; incoming page messages are untrusted.",
       "verify": "Exercise each modifier on a real link, text selection tools, editable-field replacement and Escape while a page has native focus.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Add bounded page-message/request-response substrate with frame/document lifetime checks.",
@@ -922,6 +952,8 @@
         "Navigation invalidates pending replies; cross-origin/iframe spoof attempts cannot execute privileged operations.",
         "No __ardiaHost in ordinary tabs."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 26,
         "id": 6045132487,
@@ -954,7 +986,7 @@
       ],
       "caveat": "Chromium fullscreen, popup enforcement and native crash UI may remain functional; the issue is shared Ardia chrome/recovery state. Direct host-specific callback transport can remain if it meets public schema.",
       "verify": "Enter/exit video and document fullscreen; terminate a scratch renderer; simulate a hung page; hover a link; trigger a blocked pop-up and verify Ardia\u2019s state.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Add native observers and initial/rebind/navigation state delivery.",
@@ -966,6 +998,8 @@
         "Terminate/hang a scratch renderer and recover; hovered links clear status; blocked popup can be reviewed/opened.",
         "Repeat after split/transfer/navigation/destruction without stale state."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 27,
         "id": 6045132951,
@@ -1001,7 +1035,7 @@
       ],
       "caveat": "Chromium background throttling is separate. Dirty-input uncertainty still declines destructive sleep. Do not enable policies until protections are reliable.",
       "verify": "Test policy transitions with scratch tabs, dirty forms, active media/PiP and mocked power/memory states; confirm wake restores navigation.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Inventory per-process/per-renderer startup and register supported shared policies once.",
@@ -1013,6 +1047,8 @@
         "Dirty forms, visible splits, active media/capture/PiP and pending prompts remain protected.",
         "Unknown state fails safely; mocked pressure/power transitions and restart do not double-register policies."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 28,
         "id": 6045133419,
@@ -1047,7 +1083,7 @@
       ],
       "caveat": "Middle-click, Shift range and ordinary web-page input are separate. This persists despite the useful upstream helper consolidation. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Use real pointer Ctrl/Shift combinations on bookmarks, sidebar rows and top tabs. Confirm active-tab identity, new-tab disposition and selection membership.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Normalize Linux primary pointer modifier at an explicit Linux boundary or injected helper.",
@@ -1059,6 +1095,8 @@
         "Ctrl selection toggle and Shift ranges work in sidebar/top tabs.",
         "Middle-click/text editing/native webpage modifiers remain unchanged."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 29,
         "id": 6045133870,
@@ -1092,7 +1130,7 @@
       ],
       "caveat": "Do not repeat the old metadata-check evidence. Internal PanResponder reorder and webpage upload-drop are distinct. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Drop a scratch file, URL and text onto each supported chrome target, then drag a downloaded file to another scratch application.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Provide Linux FileDropArea with DOM URL/text handling and native brokered file payloads.",
@@ -1104,6 +1142,8 @@
         "Drag a downloaded scratch file into a scratch target application.",
         "Malformed payload/cancel works; internal reorder/page drop remain valid."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 30,
         "id": 6045134321,
@@ -1140,7 +1180,7 @@
       ],
       "caveat": "Chromium beforeunload remains separate. New unconditional animateWindowClose introduces an additional synchronous failure if the guard becomes reachable; do not count a missing animation as missing warning itself. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "With two ordinary tabs and the warning enabled, test header close and compositor close; Cancel must keep the window and its tabs.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Unify header/compositor/shortcut close into request/approve/cancel protocol.",
@@ -1152,6 +1192,8 @@
         "Cancel retains native window/tabs; repeated requests yield one dialog.",
         "Suppression, save failures and beforeunload cancellation leave no stuck pending close."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 31,
         "id": 6045134762,
@@ -1185,7 +1227,7 @@
       ],
       "caveat": "Actual compositor behavior needs physical input; explicit focus after creation can mask the missing option. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "On the target compositor, use Ctrl+N and immediately type. Verify focus=true, focus=false, restore-behind and window reuse separately.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Honor focus/behind/reuse intent through readiness-aware native activation.",
@@ -1197,6 +1239,8 @@
         "focus=false and restore-behind never activate unexpectedly.",
         "Reuse/utility focus work and background test windows never steal focus."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 32,
         "id": 6045135174,
@@ -1229,7 +1273,7 @@
       ],
       "caveat": "Basic native back/forward/actual zoom code remains present. Current UI runtime still blocked by bootstrap/identity migration.",
       "verify": "Navigate through at least four pages, jump back two entries, then zoom through multiple levels and compare page scale, percentage and saved per-site zoom.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Implement validated native history offset jumps and zoom observer/initial report.",
@@ -1240,6 +1284,8 @@
         "Native page scale, displayed percentage, nondefault indicator and reset agree.",
         "Per-site zoom persists and resets without stale navigation feedback."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 33,
         "id": 6045135602,
@@ -1273,7 +1319,7 @@
       ],
       "caveat": "Do not claim all artwork broken: persisted data URLs/predefined art can render. Frequency not screenshot-verified on rebased UI.",
       "verify": "Visit a controlled uncached site with a favicon, change the favicon, restart and compare the sidebar/top-strip/essentials output.",
-      "proof": "Source + native probe",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Map cached favicons.get/set then implement bounded native fetch/download result contracts.",
@@ -1283,6 +1329,8 @@
         "Uncached controlled favicon appears in row/essentials/top strip, changes, and survives restart.",
         "Malformed/oversized/unreachable images fall back without stale repaint or persistent error."
       ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
       "issue": {
         "number": 34,
         "id": 6045135993,
@@ -1313,7 +1361,7 @@
       ],
       "caveat": "Different shaders/fonts/blur are expected rendering adaptations and excluded. Theme reporting is independent of full page-script implementation; scroll-hide depends only on its narrow message substrate.",
       "verify": "Use a controlled theme-color page with scrollable content; toggle each setting and verify live transitions and scroll direction.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Report native theme color/source and clear state correctly on navigation.",
@@ -1324,6 +1372,8 @@
         "Scroll down/up hides/reveals toolbar; disabling either setting restores normal behavior.",
         "Background/iframe/stale-document events cannot control another tab."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 35,
         "id": 6045136418,
@@ -1364,7 +1414,7 @@
       ],
       "caveat": "WebKit is not required on Linux; honest capability gating is. The new automatic protected-video route enlarges the existing F26 mismatch rather than proving DRM failure. Outer compositor decoration may supply dragging. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Check every rendered setting against an advertised host capability. Verify actual default URL routing/login registration; ensure engine labels match reality; test custom-header dragging.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Add granular Linux capabilities and filter unavailable engines/platform settings.",
@@ -1378,6 +1428,8 @@
         "Streaming sites retain correct Chromium identity and header dragging works on target compositor.",
         "Toggle system/thin on a real page, restart, and verify actual page scrollbar behavior and no unhandled startup errors."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 36,
         "id": 6045136862,
@@ -1417,7 +1469,7 @@
       ],
       "caveat": "Do not blindly start Apple scripting/telemetry. Setup code application itself is shared pure state and is not established broken merely because onboarding startup is missing. N01 and the new LaunchConfig/domain prerequisites must land before runtime acceptance. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Inventory all startup services and visible commands; exercise each from Linux UI/command dispatch. Register only supported services and ensure first-window callbacks run once.",
-      "proof": "Source",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "persists",
       "suggested_steps": [
         "Inventory startup service ownership and add a Linux startup registry/command adapter.",
@@ -1429,6 +1481,8 @@
         "Visible app commands work from correct browser/utility ownership.",
         "Setup code preserves search/privacy choices and applies layouts/pins across windows without duplicate services."
       ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
       "issue": {
         "number": 37,
         "id": 6045137321,
@@ -1502,7 +1556,7 @@
     },
     {
       "id": "N02",
-      "status": "persists",
+      "status": "new",
       "refs": [
         "packages/ardiacore/src/engine/call.ts:24",
         "packages/ardiacore/src/engine/call.ts:47",
@@ -1553,7 +1607,7 @@
     },
     {
       "id": "N03",
-      "status": "persists",
+      "status": "new",
       "refs": [
         "packages/ardiacore/src/pageTypes.ts:147",
         "apps/browser/src/components/window/TabWebView.tsx:121",
@@ -1599,7 +1653,7 @@
     },
     {
       "id": "N04",
-      "status": "persists",
+      "status": "new",
       "refs": [
         "packages/shell/src/app.ts:49",
         "packages/shell/src/app.ts:145",
@@ -1708,7 +1762,7 @@
         "Recording/reset/conflict displacement and open command/menu hints agree with native dispatch."
       ],
       "title": "Linux shortcut hints and conflict resolution diverge from the actual native shortcut catalog",
-      "status": "new_confirmed_source_probe",
+      "status": "new",
       "proof": "Executed actual stripped TypeScript catalog, shortcut resolver and linuxMenuShortcuts against rebased sources: Downloads resolves shift+command+j but native default command+j; DevTools resolves option+command+i but native primary command+shift+i; tabSwitcher resolves control+Tab but native default command+Tab. Rendered hints are Mac glyphs outside components-only Vite translation.",
       "caveat": "The build blocker N01 still prevents packaged UI reproduction on this revision, but this independent pure-source probe establishes resolver/native catalog disagreement. Linux uses semantic command for physical Ctrl and semantic control for physical Super.",
       "suggested_steps": [
@@ -1748,7 +1802,7 @@
       ],
       "caveat": "Hypothesis retained, not a confirmed compositor failure. Runtime reproduction of rebased UI requires N01-N04 migration; keyboard pane navigation can still differ from pointer activation.",
       "verify": "Create two real split pages, select A, physically click a text field in B, type, then use reload/close/Ctrl+L and inspect the shared activeTabId.",
-      "proof": "Source risk",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "risk",
       "suggested_steps": [
         "Reproduce with physical native input before implementing a fix.",
@@ -1759,6 +1813,8 @@
         "Select A, physically click/type B, assert native and shared active target agree.",
         "Reload/close/Ctrl+L act on B; test menu/dialog return, keyboard switching, transfers and background windows."
       ],
+      "historical_proof": "Source risk",
+      "validation_scope": "source_only",
       "issue": {
         "number": 44,
         "id": 6045140394,
@@ -1792,7 +1848,7 @@
       ],
       "caveat": "Original physical cross-window failure remains a risk, not a confirmed desktop repro. Explicit native adoption and same-window reorder have paths. New unconditional calls are a separate source-confirmed compatibility hazard. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Drag within and between two windows on monitors with different origin/scale; drop into a specific row, outside all windows, and cancel during transfer.",
-      "proof": "Source risk",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "risk",
       "suggested_steps": [
         "Reproduce on target compositor before claiming exact gesture failure.",
@@ -1804,6 +1860,8 @@
         "Tear-off, cancellation and mixed-origin/mixed-scale monitors.",
         "Native tab identity/playback retained; unsupported global placement handled honestly."
       ],
+      "historical_proof": "Source risk",
+      "validation_scope": "source_only",
       "issue": {
         "number": 45,
         "id": 6045140801,
@@ -1837,7 +1895,7 @@
       ],
       "caveat": "Keep as a desktop verification risk until comparing actual compositor, store and session. Chromium can independently restore native placement. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
       "verify": "Move/resize/focus two windows and toggle fullscreen through the compositor; inspect store values, saved session and post-restart actual bounds.",
-      "proof": "Source risk",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
       "status": "risk",
       "suggested_steps": [
         "Observe native widget activation/bounds/fullscreen and deliver owned-window events.",
@@ -1849,6 +1907,8 @@
         "Restart reproduces intended sizes/state; document compositor-managed origins.",
         "Utility events stay isolated and background test windows remain inactive."
       ],
+      "historical_proof": "Source risk",
+      "validation_scope": "source_only",
       "issue": {
         "number": 46,
         "id": 6045141218,
