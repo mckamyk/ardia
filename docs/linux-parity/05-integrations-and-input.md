@@ -24,9 +24,9 @@ Turning on search suggestions does not enable remote suggestions in the Linux co
 
 Omnibox still gives renderer fetch to createSuggestFetcher; production chrome://ardia retains connect-src none. No narrow Linux suggestion request service replaces that path. Domain refactoring does not change the CSP constraint.
 
-- [apps/browser/src/components/omnibox/useSuggestions.ts:98](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/omnibox/useSuggestions.ts#L98)
-- [packages/core/src/suggestFetcher.ts:55](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/core/src/suggestFetcher.ts#L55)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:788](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L788)
+- [apps/browser/src/components/omnibox/useSuggestions.ts:98](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/omnibox/useSuggestions.ts#L98)
+- [packages/core/src/suggestFetcher.ts:55](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/core/src/suggestFetcher.ts#L55)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:788](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L788)
 
 ### Implementation slices
 
@@ -59,12 +59,12 @@ GitHub/Bitbucket pull requests and Notion/Confluence/Drive documents cannot conn
 
 Live startup remains present through sidebar effects. Service HTTP calls still use renderer fetch under connect-src none; ArdiaKeychain credentials still have no Linux handler. Moving networking/state behind platform reexports did not supply Linux implementations.
 
-- [apps/browser/src/state/sidebar/effects.ts:18](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/sidebar/effects.ts#L18)
-- [apps/browser/src/state/live/net.ts:26](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/live/net.ts#L26)
-- [apps/browser/src/state/live/net.ts:64](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/live/net.ts#L64)
-- [packages/shell/src/live.ts:58](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/shell/src/live.ts#L58)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:788](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L788)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2074)
+- [apps/browser/src/state/sidebar/effects.ts:18](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/sidebar/effects.ts#L18)
+- [apps/browser/src/state/live/net.ts:26](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/live/net.ts#L26)
+- [apps/browser/src/state/live/net.ts:64](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/live/net.ts#L64)
+- [packages/shell/src/live.ts:58](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/shell/src/live.ts#L58)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:788](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L788)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2074)
 
 ### Implementation slices
 
@@ -100,12 +100,12 @@ Browser discovery yields an empty/error chooser, and Linux-relevant bookmark HTM
 
 Import flow was split into a hook/actions and importModule moved to platform. The Linux shim still merely reexports ArdiaImport APIs; discovery, portable-file selection/parsing, import jobs and cancellation have no native handlers.
 
-- [apps/linux/src/shims/import.tsx:1](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/import.tsx#L1)
-- [packages/import/src/index.ts:212](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/import/src/index.ts#L212)
-- [packages/import/src/index.ts:227](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/import/src/index.ts#L227)
-- [apps/browser/src/platform/importModule.ts:23](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/platform/importModule.ts#L23)
-- [apps/browser/src/components/import/useImportFlow.ts:42](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/import/useImportFlow.ts#L42)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2074)
+- [apps/linux/src/shims/import.tsx:1](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/import.tsx#L1)
+- [packages/import/src/index.ts:212](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/import/src/index.ts#L212)
+- [packages/import/src/index.ts:227](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/import/src/index.ts#L227)
+- [apps/browser/src/platform/importModule.ts:23](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/platform/importModule.ts#L23)
+- [apps/browser/src/components/import/useImportFlow.ts:42](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/import/useImportFlow.ts#L42)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2074)
 
 ### Implementation slices
 
@@ -139,11 +139,11 @@ Linux cannot create/join an encrypted sync folder or synchronize browser data wi
 
 Sync state was split into several modules but still relies on optional ArdiaSync. Linux advertises no module/capabilities and starts no sync service, so the shared status remains unavailable.
 
-- [packages/sync/src/native.ts:53](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/sync/src/native.ts#L53)
-- [apps/linux/src/shims/expo-modules-core.ts:86](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/expo-modules-core.ts#L86)
-- [apps/browser/src/state/sync/engine.ts:41](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/sync/engine.ts#L41)
-- [apps/browser/src/components/settings/panes/Sync.tsx:38](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/settings/panes/Sync.tsx#L38)
-- [apps/linux/src/main.tsx:40](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/main.tsx#L40)
+- [packages/sync/src/native.ts:53](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/sync/src/native.ts#L53)
+- [apps/linux/src/shims/expo-modules-core.ts:86](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/expo-modules-core.ts#L86)
+- [apps/browser/src/state/sync/engine.ts:41](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/sync/engine.ts#L41)
+- [apps/browser/src/components/settings/panes/Sync.tsx:38](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/settings/panes/Sync.tsx#L38)
+- [apps/linux/src/main.tsx:40](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/main.tsx#L40)
 
 ### Implementation slices
 
@@ -177,11 +177,11 @@ Pinned calendar sites cannot supply the promised native previews or upcoming-mee
 
 Calendar authorization remains hardcoded denied; no Linux access/calendar/event provider exists. The shared denied-state UI still links macOS System Settings. Shared Calendar state moved without adding a Linux backend.
 
-- [apps/linux/src/hostModules.ts:17](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/hostModules.ts#L17)
-- [packages/shell/src/live.ts:37](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/shell/src/live.ts#L37)
-- [apps/browser/src/state/live/calendar.ts:101](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/live/calendar.ts#L101)
-- [apps/browser/src/components/settings/panes/Calendar.tsx:36](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/settings/panes/Calendar.tsx#L36)
-- [apps/browser/src/components/settings/panes/Calendar.tsx:41](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/settings/panes/Calendar.tsx#L41)
+- [apps/linux/src/hostModules.ts:17](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/hostModules.ts#L17)
+- [packages/shell/src/live.ts:37](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/shell/src/live.ts#L37)
+- [apps/browser/src/state/live/calendar.ts:101](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/live/calendar.ts#L101)
+- [apps/browser/src/components/settings/panes/Calendar.tsx:36](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/settings/panes/Calendar.tsx#L36)
+- [apps/browser/src/components/settings/panes/Calendar.tsx:41](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/settings/panes/Calendar.tsx#L41)
 
 ### Implementation slices
 
@@ -217,11 +217,11 @@ Linux does not run the shared sleep/freeze/battery-saving policies represented b
 
 Current browser main still starts resource lifecycle and memory trim; Linux starts only explicit tab close/unload ownership. Shared policy needs unsupported evaluate/discard/setFrozen and engine.tasks/systemState/batterySaver plus synchronous input-idle facilities, now using domain architecture.
 
-- [apps/browser/src/main.tsx:35](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/main.tsx#L35)
-- [apps/browser/src/main.tsx:42](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/main.tsx#L42)
-- [apps/linux/src/main.tsx:43](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/main.tsx#L43)
-- [apps/browser/src/state/tabs/tabLifecycle.ts:66](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/tabs/tabLifecycle.ts#L66)
-- [apps/browser/src/state/tabs/tabLifecycle.ts:265](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/tabs/tabLifecycle.ts#L265)
+- [apps/browser/src/main.tsx:35](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/main.tsx#L35)
+- [apps/browser/src/main.tsx:42](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/main.tsx#L42)
+- [apps/linux/src/main.tsx:43](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/main.tsx#L43)
+- [apps/browser/src/state/tabs/tabLifecycle.ts:66](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/tabs/tabLifecycle.ts#L66)
+- [apps/browser/src/state/tabs/tabLifecycle.ts:265](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/tabs/tabLifecycle.ts#L265)
 
 ### Implementation slices
 
@@ -255,11 +255,11 @@ Ctrl-clicking a bookmark can replace the current page instead of opening a backg
 
 Upstream centralized click modifiers in lib/keys and selection logic in state/drag; these types/helpers still recognize metaKey/shiftKey/altKey and omit ctrlKey. Linux Pressable still forwards physical DOM modifiers without primary-button normalization.
 
-- [apps/linux/src/shims/web/motion/macView.tsx:202](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/web/motion/macView.tsx#L202)
-- [apps/browser/src/lib/keys.ts:3](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/lib/keys.ts#L3)
-- [apps/browser/src/state/bookmarks/actions.ts:11](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/bookmarks/actions.ts#L11)
-- [apps/browser/src/state/drag/drops.ts:34](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/drag/drops.ts#L34)
-- [apps/browser/src/state/drag/drops.ts:160](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/drag/drops.ts#L160)
+- [apps/linux/src/shims/web/motion/macView.tsx:202](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/web/motion/macView.tsx#L202)
+- [apps/browser/src/lib/keys.ts:3](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/lib/keys.ts#L3)
+- [apps/browser/src/state/bookmarks/actions.ts:11](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/bookmarks/actions.ts#L11)
+- [apps/browser/src/state/drag/drops.ts:34](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/drag/drops.ts#L34)
+- [apps/browser/src/state/drag/drops.ts:160](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/drag/drops.ts#L160)
 
 ### Implementation slices
 
@@ -293,12 +293,12 @@ Dropping URLs/files/text onto the sidebar or top strip never reaches the shared 
 
 UPDATED MECHANISM: upstream removed the metadata fallback and now always requests ArdiaFileDrop. Linux requireNativeViewManager returns a placeholder View with no drag/drop producer, so shared onDropUpdate still never runs. Outbound MouseArea still discards path.
 
-- [packages/shell/src/system.tsx:87](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/shell/src/system.tsx#L87)
-- [packages/shell/src/system.tsx:117](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/shell/src/system.tsx#L117)
-- [apps/linux/src/shims/expo-modules-core.ts:93](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/expo-modules-core.ts#L93)
-- [apps/browser/src/components/window/TabDropArea.tsx:105](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/window/TabDropArea.tsx#L105)
-- [apps/linux/src/shims/web/MouseArea.tsx:12](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/web/MouseArea.tsx#L12)
-- [apps/linux/src/shims/web/motion/macView.tsx:158](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/web/motion/macView.tsx#L158)
+- [packages/shell/src/system.tsx:87](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/shell/src/system.tsx#L87)
+- [packages/shell/src/system.tsx:117](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/shell/src/system.tsx#L117)
+- [apps/linux/src/shims/expo-modules-core.ts:93](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/expo-modules-core.ts#L93)
+- [apps/browser/src/components/window/TabDropArea.tsx:105](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/window/TabDropArea.tsx#L105)
+- [apps/linux/src/shims/web/MouseArea.tsx:12](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/web/MouseArea.tsx#L12)
+- [apps/linux/src/shims/web/motion/macView.tsx:158](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/web/motion/macView.tsx#L158)
 
 ### Implementation slices
 
@@ -334,14 +334,14 @@ Automatic onboarding/version tracking and handlers for app-level commands such a
 
 Linux still starts only its historical subset and imports WindowRoot rather than browser main. App-level command/onboarding/first-window service registration remains absent. Incoming setup-code UI is bundled but does not start onboarding; incoming synchronous LaunchConfig also needs a Linux provider.
 
-- [apps/browser/src/main.tsx:34](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/main.tsx#L34)
-- [apps/browser/src/main.tsx:40](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/main.tsx#L40)
-- [apps/browser/src/main.tsx:59](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/main.tsx#L59)
-- [apps/linux/src/main.tsx:40](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/main.tsx#L40)
-- [apps/browser/src/state/app/appIntegration.ts:39](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/app/appIntegration.ts#L39)
-- [apps/browser/src/state/onboarding/onboarding.ts:378](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/onboarding/onboarding.ts#L378)
-- [apps/browser/src/state/presets/actions.ts:50](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/presets/actions.ts#L50)
-- [apps/browser/src/platform/launchConfig.ts:5](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/platform/launchConfig.ts#L5)
+- [apps/browser/src/main.tsx:34](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/main.tsx#L34)
+- [apps/browser/src/main.tsx:40](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/main.tsx#L40)
+- [apps/browser/src/main.tsx:59](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/main.tsx#L59)
+- [apps/linux/src/main.tsx:40](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/main.tsx#L40)
+- [apps/browser/src/state/app/appIntegration.ts:39](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/app/appIntegration.ts#L39)
+- [apps/browser/src/state/onboarding/onboarding.ts:378](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/onboarding/onboarding.ts#L378)
+- [apps/browser/src/state/presets/actions.ts:50](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/presets/actions.ts#L50)
+- [apps/browser/src/platform/launchConfig.ts:5](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/platform/launchConfig.ts#L5)
 
 ### Implementation slices
 
