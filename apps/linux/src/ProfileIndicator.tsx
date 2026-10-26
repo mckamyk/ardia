@@ -1,19 +1,18 @@
 import { Symbol } from "@ardia/shell";
-import { openProfileMenu } from "../../browser/src/components/ProfileIndicator";
+import { openProfileMenu } from "../../browser/src/state/browser/actions";
 import { openSettings } from "./settingsWindows";
-import { profileNameColor, useTheme } from "../../browser/src/lib/theme";
-import { useBrowser } from "../../browser/src/store/browser";
-import { useWindowId } from "../../browser/src/store/hooks";
+import { profileNameColor, useTheme } from "../../browser/src/components/ui/theme";
+import { useIsIncognito, useWindowId, useWindowProfile } from "../../browser/src/state/browser/hooks";
 
-export { PROFILE_INDICATOR_X, openProfileMenu } from "../../browser/src/components/ProfileIndicator";
+export { PROFILE_INDICATOR_X } from "../../browser/src/components/profiles/ProfileIndicator";
 
 export const useProfileIndicatorWidth = (room: number) => Math.max(0, Math.min(room, 140));
 
 export function ProfileIndicator({ room }: { room: number }) {
   const theme = useTheme();
   const windowId = useWindowId();
-  const profile = useBrowser((s) => s.profiles[s.windows[windowId]?.profileId ?? ""]);
-  const incognito = useBrowser((s) => !!s.windows[windowId]?.incognito);
+  const profile = useWindowProfile();
+  const incognito = useIsIncognito();
   const name = incognito ? "Incognito" : profile?.name ?? "Personal";
   const color = !incognito && profile ? profileNameColor(profile, theme.dark) : theme.textPrimary;
   return (

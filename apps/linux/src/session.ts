@@ -1,5 +1,5 @@
 import type { ArdiaHost } from "./host";
-import type { BrowserState, HydrateData } from "../../browser/src/store/browser";
+import type { BrowserState, HydrateData } from "../../browser/src/state/browser/store";
 import { initialHostSession, snapshotHostSession } from "./hostSession";
 import { mergeSession } from "./hostSessionMerge";
 

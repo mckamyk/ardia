@@ -1,4 +1,5 @@
-import { useBrowser } from "../../browser/src/store/browser";
+import type { ShortcutModifier } from "@ardia-real/shell";
+import { useBrowser } from "../../browser/src/state/browser/store";
 import { emitNativeEvent, provideNativeModuleProvider } from "./shims/expo-modules-core";
 import { ardiaHost, reportHostError, type ArdiaHost } from "./host";
 import { keyboardCombo, linuxBindings, linuxNativeBindings, type Binding } from "./shortcuts";
@@ -7,7 +8,7 @@ let capturing = false;
 let holding = 0;
 let holdingCode: number | null = null;
 let pointerMoved = false;
-let recording: { resolve: (combo: { key: string; modifiers: string[] } | null) => void } | null = null;
+let recording: { resolve: (combo: { key: string; modifiers: ShortcutModifier[] } | null) => void } | null = null;
 const appEvent = (payload: unknown) => emitNativeEvent("ArdiaShell", "onAppEvent", payload);
 const releaseSwitcher = () => {
   if (!holding && !holdingCode && !capturing) return;
@@ -27,7 +28,7 @@ export async function cancelShortcutRecording() {
   }
 }
 
-export async function recordShortcut(): Promise<{ key: string; modifiers: string[] } | null> {
+export async function recordShortcut(): Promise<{ key: string; modifiers: ShortcutModifier[] } | null> {
   await cancelShortcutRecording();
   return new Promise((resolve) => {
     recording = { resolve };
