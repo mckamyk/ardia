@@ -287,6 +287,25 @@ bool ValidUtilityPlacement(const base::DictValue* placement) {
   return width >= 720 && height >= 480 && width <= 16384 && height <= 16384;
 }
 
+std::optional<base::DictValue> ExtensionConfiguration(const base::DictValue& input) {
+  const auto* id = input.FindString("id");
+  const auto* options = input.FindDict("options");
+  if (input.size() != 2 || !id || id->empty() || !options || options->empty()) return std::nullopt;
+  base::DictValue result;
+  result.Set("id", *id);
+  for (const auto& [key, value] : *options) {
+    if (key == "pinned" || key == "fileAccess" || key == "incognito") {
+      if (!value.is_bool()) return std::nullopt;
+    } else if (key == "siteAccess") {
+      if (!value.is_string() || (value.GetString() != "allSites" && value.GetString() != "specificSites" && value.GetString() != "onClick")) return std::nullopt;
+    } else {
+      return std::nullopt;
+    }
+    result.Set(key, value.Clone());
+  }
+  return result;
+}
+
 base::FilePath DocumentDirectory(Profile* profile) {
   return profile->GetPath().AppendASCII("Ardia");
 }
@@ -469,6 +488,7 @@ class TabBinding : public content::WebContentsObserver {
   ~TabBinding() override;
   const std::string& key() const { return key_; }
   std::string claim;
+  uint64_t renderer_generation = 0;
   bool transferable = false;
   bool temporary = false;
   content::WebContents* contents() const { return contents_; }
@@ -565,24 +585,47 @@ class ShellHostView : public views::View,
   base::DictValue Bootstrap() const;
   base::DictValue Strip() const;
   base::DictValue Transaction(std::optional<int> command, bool advance);
-  void SetHandler(HostMessageHandler* handler) { handler_ = handler; }
+  uint64_t SetHandler(HostMessageHandler* handler) {
+    if (handler_ == handler) return renderer_generation_;
+    handler_ = nullptr;
+    auto weak = GetWeakPtr();
+    RetireRenderer();
+    if (!weak) return 0;
+    weak->handler_ = handler;
+    return weak->renderer_generation_;
+  }
+  bool OwnsHandler(HostMessageHandler* handler, uint64_t generation) const {
+    return handler && handler_ == handler && renderer_generation_ == generation;
+  }
   bool ClearHandler(HostMessageHandler* handler) {
-    if (handler_ == handler) {
-      handler_ = nullptr;
-      for (auto& [id, binding] : bindings_) {
-        binding->claim.clear();
-        binding->transferable = false;
-      }
-      utility_ready_ = false;
-      switcher_capture_ = false;
-      switcher_source_.reset();
-      if (focus_manager_ && shortcut_recording_) {
-        focus_manager_->set_shortcut_handling_suspended(false);
-        shortcut_recording_ = false;
-      }
-      return true;
+    if (!handler || handler_ != handler) return false;
+    handler_ = nullptr;
+    RetireRenderer();
+    return true;
+  }
+  void RetireRenderer() {
+    ++renderer_generation_;
+    std::vector<int> temporary;
+    for (auto& [id, binding] : bindings_) {
+      binding->claim.clear();
+      binding->renderer_generation = 0;
+      binding->transferable = false;
+      if (binding->temporary && binding->contents()) temporary.push_back(id);
     }
-    return false;
+    utility_ready_ = false;
+    switcher_capture_ = false;
+    switcher_source_.reset();
+    if (focus_manager_ && shortcut_recording_) {
+      focus_manager_->set_shortcut_handling_suspended(false);
+      shortcut_recording_ = false;
+    }
+    DetachViewports();
+    auto weak = GetWeakPtr();
+    for (const int id : temporary) {
+      if (!weak) return;
+      auto* binding = weak->Binding(id);
+      if (binding && binding->temporary && binding->contents()) weak->CloseTab(binding);
+    }
   }
   void Event(std::string_view module, std::string_view event,
              base::Value payload);
@@ -633,6 +676,9 @@ class ShellHostView : public views::View,
   TabBinding* Binding(int id);
   TabBinding* ClaimedBinding(const base::DictValue& args);
   bool CloseTab(TabBinding* binding);
+  void ClaimLaunchTab(const base::ListValue& values, base::OnceCallback<void(bool, base::Value)> done);
+  bool AdoptLaunchOffer(int tab, std::string_view key, std::string_view url);
+  ardiacore::linux_contract::LaunchDecision launch_decision_;
   TabBinding* BindingForKey(std::string_view key);
   void CreateTab(const base::DictValue& args,
                  base::OnceCallback<void(bool, base::Value)> done);
@@ -665,6 +711,7 @@ class ShellHostView : public views::View,
   raw_ptr<BrowserView> browser_view_;
   raw_ptr<views::WebView> shell_ = nullptr;
   raw_ptr<HostMessageHandler> handler_ = nullptr;
+  uint64_t renderer_generation_ = 0;
   raw_ptr<views::FocusManager> focus_manager_ = nullptr;
   std::unique_ptr<WindowKeyboardHandler> input_handler_;
   std::map<ui::Accelerator, base::DictValue> shortcuts_;
@@ -705,7 +752,7 @@ class HostMessageHandler : public content::WebUIMessageHandler {
   }
   void SendEvent(std::string_view module, std::string_view event,
                  const base::Value& payload) {
-    if (!IsJavascriptAllowed() || !host_ || !host_->Trusted(web_ui())) return;
+    if (!IsJavascriptAllowed() || !host_ || !host_->OwnsHandler(this, generation_) || !host_->Trusted(web_ui())) return;
     CallJavascriptFunction("__ardiaEvent", base::Value(module),
                            base::Value(event), payload);
   }
@@ -717,16 +764,17 @@ class HostMessageHandler : public content::WebUIMessageHandler {
     std::string id;
   };
   void RegisterMessages() override {
+    if (host_) generation_ = host_->SetHandler(this);
     web_ui()->RegisterMessageCallback(
         "ardiaRequest", base::BindRepeating(&HostMessageHandler::Request,
                                             base::Unretained(this)));
   }
   void OnJavascriptDisallowed() override {
     weak_factory_.InvalidateWeakPtrs();
-    if (host_ && host_->ClearHandler(this)) host_->DetachViewports();
+    if (host_) host_->ClearHandler(this);
   }
   void Reply(std::string id, bool success, base::Value response) {
-    if (!host_ || !host_->Trusted(web_ui()) || !IsJavascriptAllowed()) return;
+    if (!host_ || !host_->OwnsHandler(this, generation_) || !host_->Trusted(web_ui()) || !IsJavascriptAllowed()) return;
     CallJavascriptFunction("__ardiaReply", base::Value(id), base::Value(success),
                            response);
   }
@@ -778,13 +826,12 @@ class HostMessageHandler : public content::WebUIMessageHandler {
   }
   void Request(const base::ListValue& arguments) {
     CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-    if (!host_ || !host_->Trusted(web_ui()) || arguments.size() != 3 ||
+    if (!host_ || !host_->OwnsHandler(this, generation_) || !host_->Trusted(web_ui()) || arguments.size() != 3 ||
         !arguments[0].is_string() || !arguments[1].is_string() ||
         !arguments[2].is_dict()) return;
     const std::string id = arguments[0].GetString();
     if (id.empty() || id.size() > 256) return;
     AllowJavascript();
-    host_->SetHandler(this);
     const auto& args = arguments[2].GetDict();
     if (arguments[1].GetString() == "engine.call") {
       const std::string name = String(args, "name");
@@ -798,7 +845,7 @@ class HostMessageHandler : public content::WebUIMessageHandler {
       if (!value || (!value->is_none() && !value->is_string())) {
         return Reply(id, false, base::Value("Engine arguments must be JSON text or null"));
       }
-      const std::string json = value->is_string() ? value->GetString() : "{}";
+      std::string json = value->is_string() ? value->GetString() : "{}";
       if (name.size() > 128 || name.find('\0') != std::string::npos ||
           json.size() > kDocumentLimit || json.find('\0') != std::string::npos) {
         return Reply(id, false, base::Value("Invalid or oversized engine request"));
@@ -847,6 +894,13 @@ class HostMessageHandler : public content::WebUIMessageHandler {
       const auto* route = ardiacore::linux_contract::FindRoute(name);
       if (!route) return Fail(id, "ERR_UNKNOWN_CALL", "This call is unavailable on Linux");
       const std::string path = host_->profile()->GetPath().value();
+      if (name == "extensions.configure") {
+        const auto configured = ExtensionConfiguration(input);
+        if (!configured) return Fail(id, "ERR_ENGINE", "Unsupported or invalid extension options");
+        const auto serialized = base::WriteJson(*configured);
+        if (!serialized) return Fail(id, "ERR_BAD_REPLY", "Extension options are not JSON");
+        json = *serialized;
+      }
       const std::string service(route->service);
       ac_engine_call(service.c_str(), path.c_str(), json.c_str(), Replied,
                      new EngineReply{name, weak_factory_.GetWeakPtr(), id});
@@ -863,6 +917,7 @@ class HostMessageHandler : public content::WebUIMessageHandler {
   }
 
   base::WeakPtr<ShellHostView> host_;
+  uint64_t generation_ = 0;
   base::WeakPtrFactory<HostMessageHandler> weak_factory_{this};
 };
 
@@ -1200,7 +1255,7 @@ TabBinding* ShellHostView::Binding(int id) {
 
 TabBinding* ShellHostView::ClaimedBinding(const base::DictValue& args) {
   auto* binding = Binding(args.FindInt("id").value_or(0));
-  return binding && binding->contents() && ardiacore::linux_contract::OwnsClaim(binding->claim, String(args, "claim")) ? binding : nullptr;
+  return handler_ && binding && binding->contents() && binding->renderer_generation == renderer_generation_ && ardiacore::linux_contract::OwnsClaim(binding->claim, String(args, "claim")) ? binding : nullptr;
 }
 
 bool ShellHostView::CloseTab(TabBinding* binding) {
@@ -1347,6 +1402,34 @@ void ShellHostView::OnTabStripModelChanged(
   QueueTransaction(std::nullopt);
 }
 
+void ShellHostView::ClaimLaunchTab(
+    const base::ListValue& values,
+    base::OnceCallback<void(bool, base::Value)> done) {
+  if (values.size() != 3 || !values[0].is_string() || !values[1].is_string() || !values[2].is_string()) {
+    return std::move(done).Run(false, base::Value("A launch key, URL and profile are required"));
+  }
+  const auto tab = launch_decision_.Consume(values[0].GetString(), values[1].GetString(), values[2].GetString());
+  if (!tab || !DefaultProfileId(values[2].GetString())) return std::move(done).Run(false, base::Value("No matching unconsumed native launch offer"));
+  if (*tab == 0) return std::move(done).Run(true, base::Value());
+  const bool adopted = AdoptLaunchOffer(*tab, values[0].GetString(), values[1].GetString());
+  std::move(done).Run(adopted, adopted ? base::Value() : base::Value("The native launch offer is no longer available"));
+}
+
+bool ShellHostView::AdoptLaunchOffer(int tab, std::string_view key, std::string_view url) {
+  if (!browser_ || BindingForKey(key) || Binding(tab)) return false;
+  auto* model = browser_->GetTabStripModel();
+  for (int index = 0; index < model->count(); ++index) {
+    auto* contents = model->GetWebContentsAt(index);
+    if (TabId(contents) != tab) continue;
+    if (contents->GetBrowserContext() != profile() || contents->GetVisibleURL() != GURL(url)) return false;
+    bindings_[tab] = std::make_unique<TabBinding>(this, contents, std::string(key));
+    bindings_[tab]->renderer_generation = renderer_generation_;
+    QueueTransaction(-1);
+    return true;
+  }
+  return false;
+}
+
 void ShellHostView::CreateTab(
     const base::DictValue& args,
     base::OnceCallback<void(bool, base::Value)> done) {
@@ -1485,6 +1568,7 @@ void ShellHostView::CreateTab(
   }
   binding->temporary = args.FindBool("temporary").value_or(false);
   binding->claim = claim;
+  binding->renderer_generation = renderer_generation_;
   binding->transferable = false;
   const int id = TabId(binding->contents());
   base::DictValue result = base::DictValue()
@@ -1827,21 +1911,7 @@ void ShellHostView::Invoke(
     }
     return std::move(done).Run(true, base::Value());
   }
-  if (method == "ArdiaTabs.claimLaunchTab") {
-    const std::string key = ArgumentString(values, 0);
-    if (key.empty()) return std::move(done).Run(true, base::Value());
-    base::DictValue options = base::DictValue().Set("key", key)
-        .Set("url", ArgumentString(values, 1)).Set("profile", ArgumentString(values, 2))
-        .Set("claim", "launch");
-    return CreateTab(options, base::BindOnce(
-        [](base::WeakPtr<ShellHostView> host, std::string key,
-           base::OnceCallback<void(bool, base::Value)> done, bool success, base::Value result) {
-          if (host && success) {
-            if (auto* binding = host->BindingForKey(key); binding && binding->claim == "launch") binding->claim.clear();
-          }
-          std::move(done).Run(success, success ? base::Value() : std::move(result));
-        }, GetWeakPtr(), key, std::move(done)));
-  }
+  if (method == "ArdiaTabs.claimLaunchTab") return ClaimLaunchTab(values, std::move(done));
   if (method == "ArdiaTabs.prepareTransfer" || method == "ArdiaTabs.releaseTransfer") {
     auto* binding = BindingForKey(ArgumentString(values, 0));
     if (!binding) return std::move(done).Run(false, base::Value("No owned tab to transfer"));
