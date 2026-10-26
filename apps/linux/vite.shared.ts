@@ -23,7 +23,7 @@ const ASSET = /\.(png|jpe?g|gif|webp|svg)$/;
 function commonJsRequires(): Plugin {
   const scope = [`${repo}apps/browser/src/`, `${repo}packages/`];
   return {
-    name: "ardia-demo:requires",
+    name: "ardia-linux:requires",
     enforce: "pre",
     transform(code, id) {
       if (!/\.(t|j)sx?$/.test(id) || !scope.some((dir) => id.startsWith(dir)) || !code.includes("require(")) return null;
@@ -56,7 +56,7 @@ const EAGER_QUERY = "?ardia-eager";
 
 function lazyComponents(): Plugin {
   return {
-    name: "ardia-demo:lazy-components",
+    name: "ardia-linux:lazy-components",
     enforce: "pre",
     async resolveId(source, importer, options) {
       if (!importer || source.endsWith(EAGER_QUERY) || importer.startsWith(LAZY_PREFIX)) return null;
@@ -81,7 +81,7 @@ function lazyComponents(): Plugin {
   };
 }
 
-const analyze = !!process.env.ARDIA_DEMO_ANALYZE;
+const analyze = !!process.env.ARDIA_LINUX_ANALYZE;
 
 export function webShellConfig(options: { plugins?: Plugin[]; aliases?: { find: string | RegExp; replacement: string }[] } = {}) {
   return defineConfig({

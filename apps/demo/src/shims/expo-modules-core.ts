@@ -1,16 +1,12 @@
 import { createElement, forwardRef, type ComponentType } from "react";
 import { View } from "react-native-web";
 import { noteMissing } from "./missing";
-import { ardiaHost, hostSupports } from "../host";
-import { resolveHostModule } from "../hostModules";
 
 export type EventSubscription = { remove(): void };
 
 type Listener = (event: unknown) => void;
 const listeners = new Map<string, Set<Listener>>();
 const channel = (module: string, event: string) => `${module}:${event}`;
-
-ardiaHost?.onEvent((module, event, payload) => emitNativeEvent(module, event, payload));
 
 export function emitNativeEvent(module: string, event: string, payload: unknown) {
   for (const listener of listeners.get(channel(module, event)) ?? []) listener(payload);
@@ -25,17 +21,6 @@ const moduleValues: Record<string, Record<string, unknown>> = {
 
 export function provideNativeModule(name: string, values: Record<string, unknown>) {
   moduleValues[name] = { ...moduleValues[name], ...values };
-}
-
-type ModuleProvider = (name: string, method: string) => unknown;
-const moduleProviders: ModuleProvider[] = [];
-
-export function provideNativeModuleProvider(provider: ModuleProvider) {
-  moduleProviders.push(provider);
-  return () => {
-    const index = moduleProviders.indexOf(provider);
-    if (index >= 0) moduleProviders.splice(index, 1);
-  };
 }
 
 const inert = (module: string, key: string) => () => {
@@ -53,6 +38,8 @@ function nativeModule(name: string): object {
     {
       get(_target, key) {
         if (typeof key === "symbol" || key === "then" || key === "$$typeof") return undefined;
+        const values = moduleValues[name];
+        if (values && key in values) return values[key];
         if (key === "addListener")
           return (event: string, listener: Listener): EventSubscription => {
             const id = channel(name, event);
@@ -62,15 +49,6 @@ function nativeModule(name: string): object {
             return { remove: () => void set.delete(listener) };
           };
         if (key === "removeListeners" || key === "removeAllListeners") return () => {};
-        for (const provider of moduleProviders) {
-          const value = provider(name, key);
-          if (value !== undefined) return value;
-        }
-        if (ardiaHost) {
-          return resolveHostModule(ardiaHost, name, key);
-        }
-        const values = moduleValues[name];
-        if (values && key in values) return values[key];
         return inert(name, key);
       },
     },
@@ -84,7 +62,6 @@ export function requireNativeModule<T = unknown>(name: string): T {
 }
 
 export function requireOptionalNativeModule<T = unknown>(name: string): T | null {
-  if (ardiaHost) return ardiaHost.bootstrap.nativeModules?.[name] || ardiaHost.bootstrap.capabilities?.some((method) => method.startsWith(`${name}.`)) || hostSupports(name) ? (nativeModule(name) as T) : null;
   return moduleValues[name] ? (nativeModule(name) as T) : null;
 }
 

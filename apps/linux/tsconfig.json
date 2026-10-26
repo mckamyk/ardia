@@ -14,7 +14,7 @@
         "../../node_modules/react-native-macos"
       ],
       "react-native-web": [
-        "../demo/src/shims/react-native-web.d.ts"
+        "./src/shims/react-native-web.d.ts"
       ],
       "@ardia/shell": [
         "./src/shims/shell.tsx"
@@ -23,13 +23,13 @@
         "./src/shims/ardiacore.tsx"
       ],
       "@ardia/shaders": [
-        "../demo/src/shims/shaders.tsx"
+        "./src/shims/shaders.tsx"
       ],
       "@ardia/sync": [
-        "../demo/src/shims/sync.tsx"
+        "./src/shims/sync.tsx"
       ],
       "@ardia/import": [
-        "../demo/src/shims/import.tsx"
+        "./src/shims/import.tsx"
       ],
       "@ardia-real/shell": [
         "../../packages/shell/src/index.tsx"

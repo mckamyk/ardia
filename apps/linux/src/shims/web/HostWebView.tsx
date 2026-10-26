@@ -5,7 +5,7 @@ import type { NavigationState, WebViewHandle, WebViewProps } from "@ardia-real/a
 import { ardiaHost, reportHostError } from "../../host";
 import { HostTab, type HostTabEvent } from "../../hostTab";
 import { hostOverlayBlocked, watchTabViewport } from "../../hostViewport";
-import { isDemoMenuShown } from "./menus";
+import { menuShown } from "../../menus";
 
 const EVENT_CALLBACKS: Record<string, keyof WebViewProps> = {
   media: "onMedia", nowPlaying: "onNowPlaying", mediaAccess: "onMediaAccess", openWindow: "onOpenWindow",
@@ -101,7 +101,7 @@ export const HostWebView = forwardRef<WebViewHandle, WebViewProps>(function Host
     if (!node) return;
     return watchTabViewport(node, () => {
       const p = latest.current;
-      return p.visible !== false && !isDemoMenuShown() && !hostOverlayBlocked(p.transferKey);
+      return p.visible !== false && !menuShown() && !hostOverlayBlocked(p.transferKey);
     }, (viewport) => void tab.current?.viewport(viewport).catch(reportHostError));
   }, []);
 
