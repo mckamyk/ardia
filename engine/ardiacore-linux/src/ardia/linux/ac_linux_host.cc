@@ -13,13 +13,15 @@
 #include <vector>
 
 #include "ardia/linux/ac_linux_policy.h"
+#include "ardia/linux/ac_linux_contract.h"
+#include "ardia/linux/ac_linux_launch_config.h"
+#include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/linux/host_bootstrap.h"
 #include "base/base_paths.h"
 #include "base/base64.h"
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/environment.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -226,8 +228,7 @@ void CloseNativeWindow(BrowserWindowInterface* browser) {
 
 void FocusNativeWindow(BrowserWindowInterface* browser) {
   const auto* command = base::CommandLine::ForCurrentProcess();
-  auto environment = base::Environment::Create();
-  if (environment->GetVar("ARDIA_BACKGROUND").value_or("") == "1" ||
+  if (ardiacore::BackgroundInstance() ||
       command->HasSwitch("headless") ||
       command->GetSwitchValueASCII("ozone-platform") == "headless") {
     browser->GetWindow()->ShowInactive();
@@ -467,6 +468,9 @@ class TabBinding : public content::WebContentsObserver {
              std::string key);
   ~TabBinding() override;
   const std::string& key() const { return key_; }
+  std::string claim;
+  bool transferable = false;
+  bool temporary = false;
   content::WebContents* contents() const { return contents_; }
   views::WebView* viewport() const { return viewport_; }
   base::DictValue Navigation() const;
@@ -562,9 +566,13 @@ class ShellHostView : public views::View,
   base::DictValue Strip() const;
   base::DictValue Transaction(std::optional<int> command, bool advance);
   void SetHandler(HostMessageHandler* handler) { handler_ = handler; }
-  void ClearHandler(HostMessageHandler* handler) {
+  bool ClearHandler(HostMessageHandler* handler) {
     if (handler_ == handler) {
       handler_ = nullptr;
+      for (auto& [id, binding] : bindings_) {
+        binding->claim.clear();
+        binding->transferable = false;
+      }
       utility_ready_ = false;
       switcher_capture_ = false;
       switcher_source_.reset();
@@ -572,7 +580,9 @@ class ShellHostView : public views::View,
         focus_manager_->set_shortcut_handling_suspended(false);
         shortcut_recording_ = false;
       }
+      return true;
     }
+    return false;
   }
   void Event(std::string_view module, std::string_view event,
              base::Value payload);
@@ -581,6 +591,9 @@ class ShellHostView : public views::View,
   void Invoke(std::string method, const base::DictValue& args,
               base::OnceCallback<void(bool, base::Value)> done);
   void ReportTab(int id, base::DictValue event);
+  void OfferTab(content::WebContents* contents) {
+    if (contents && contents->GetBrowserContext() == profile()) offered_[TabId(contents)] = contents->GetWeakPtr();
+  }
   int TabShown(content::WebContents* contents) const {
     for (const auto& [id, binding] : bindings_) {
       if (binding->contents() == contents) {
@@ -615,7 +628,11 @@ class ShellHostView : public views::View,
   base::WeakPtr<ShellHostView> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
  private:
+  std::map<int, base::WeakPtr<content::WebContents>> offered_;
+  friend class HostMessageHandler;
   TabBinding* Binding(int id);
+  TabBinding* ClaimedBinding(const base::DictValue& args);
+  bool CloseTab(TabBinding* binding);
   TabBinding* BindingForKey(std::string_view key);
   void CreateTab(const base::DictValue& args,
                  base::OnceCallback<void(bool, base::Value)> done);
@@ -695,6 +712,7 @@ class HostMessageHandler : public content::WebUIMessageHandler {
 
  private:
   struct EngineReply {
+    std::string name;
     base::WeakPtr<HostMessageHandler> handler;
     std::string id;
   };
@@ -705,10 +723,7 @@ class HostMessageHandler : public content::WebUIMessageHandler {
   }
   void OnJavascriptDisallowed() override {
     weak_factory_.InvalidateWeakPtrs();
-    if (host_) {
-      host_->ClearHandler(this);
-      host_->DetachViewports();
-    }
+    if (host_ && host_->ClearHandler(this)) host_->DetachViewports();
   }
   void Reply(std::string id, bool success, base::Value response) {
     if (!host_ || !host_->Trusted(web_ui()) || !IsJavascriptAllowed()) return;
@@ -717,10 +732,49 @@ class HostMessageHandler : public content::WebUIMessageHandler {
   }
   static void Replied(void* context, const char* json) {
     std::unique_ptr<EngineReply> reply(static_cast<EngineReply*>(context));
-    if (reply->handler) {
-      reply->handler->Reply(std::move(reply->id), true,
-                             base::Value(json ? json : "{\"error\":\"empty engine reply\"}"));
+    if (!reply->handler) return;
+    auto value = json ? base::JSONReader::Read(json, base::JSON_PARSE_RFC) : std::nullopt;
+    if (!value) return reply->handler->Fail(reply->id, "ERR_BAD_REPLY", "The engine reply is not JSON");
+    if (value->is_dict() && value->GetDict().Find("error")) {
+      const auto& error = *value->GetDict().Find("error");
+      return reply->handler->Fail(reply->id, "ERR_ENGINE", error.is_string() ? error.GetString() : "Engine service failed");
     }
+    if (reply->name == "search.engines" && value->is_dict()) {
+      auto* engines = value->GetDict().FindList("engines");
+      if (!engines) return reply->handler->Fail(reply->id, "ERR_BAD_REPLY", "Missing search engines");
+      value = base::Value(base::DictValue().Set("list", base::DictValue().Set("engines", engines->Clone())));
+    }
+    const auto* route = ardiacore::linux_contract::FindRoute(reply->name);
+    if (route && route->field == "null") value = base::Value();
+    else if (route && !route->field.empty()) {
+      const auto* field = value->is_dict() ? value->GetDict().Find(route->field) : nullptr;
+      if (!field) return reply->handler->Fail(reply->id, "ERR_BAD_REPLY", "Missing engine response field");
+      value = field->Clone();
+    }
+    if (reply->name == "engine.tasks" && value->is_list()) {
+      for (auto& task : value->GetList()) {
+        if (!task.is_dict()) continue;
+        base::ListValue translated;
+        if (const auto* ids = task.GetDict().FindList("tabIds")) {
+          for (const auto& id : *ids) {
+            if (!id.is_int()) continue;
+            auto* binding = reply->handler->host_ ? reply->handler->host_->Binding(id.GetInt()) : nullptr;
+            if (binding && binding->contents()) translated.Append(binding->key());
+          }
+        }
+        task.GetDict().Set("tabIds", std::move(translated));
+        task.GetDict().Remove("browserIds");
+      }
+    }
+    reply->handler->Resolve(reply->id, std::move(*value));
+  }
+  void Resolve(const std::string& id, base::Value value) {
+    const auto json = base::WriteJson(value);
+    if (!json) return Fail(id, "ERR_BAD_REPLY", "The native reply is not JSON");
+    Reply(id, true, base::Value(*json));
+  }
+  void Fail(const std::string& id, std::string_view code, std::string_view message) {
+    Reply(id, false, base::Value(base::DictValue().Set("code", code).Set("message", message)));
   }
   void Request(const base::ListValue& arguments) {
     CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
@@ -734,10 +788,11 @@ class HostMessageHandler : public content::WebUIMessageHandler {
     const auto& args = arguments[2].GetDict();
     if (arguments[1].GetString() == "engine.call") {
       const std::string name = String(args, "name");
+      if (!args.FindString("profile")) return Fail(id, "ERR_ENGINE", "Profile must be a string");
       const std::string profile = String(args, "profile");
       if (!DefaultProfileId(profile) || !host_->profile() ||
           host_->profile()->IsOffTheRecord()) {
-        return Reply(id, false, base::Value("Only the default regular profile is supported"));
+        return Reply(id, false, base::Value(base::DictValue().Set("code", "ERR_ENGINE").Set("message", "Only the default regular profile is supported")));
       }
       const base::Value* value = args.Find("args");
       if (!value || (!value->is_none() && !value->is_string())) {
@@ -748,9 +803,53 @@ class HostMessageHandler : public content::WebUIMessageHandler {
           json.size() > kDocumentLimit || json.find('\0') != std::string::npos) {
         return Reply(id, false, base::Value("Invalid or oversized engine request"));
       }
+      auto parsed = base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+      if (!parsed || !parsed->is_dict() || parsed->GetDict().contains("profile") ||
+          parsed->GetDict().contains("offTheRecord") || parsed->GetDict().contains("incognito")) {
+        return Fail(id, "ERR_ENGINE", "Engine arguments require a regular-profile JSON object");
+      }
+      const auto& input = parsed->GetDict();
+      if (const auto* engine = input.FindString("engine"); engine && *engine != "chromium") {
+        return Fail(id, "ERR_UNKNOWN_CALL", "This page engine is unavailable on Linux");
+      }
+      if (name == "tabs.devBrowserId" || name == "tabs.devWindowNumber" || name == "tabs.devFocusPage") {
+        auto* binding = host_->BindingForKey(String(input, "tabId"));
+        if (!binding || !binding->contents()) return Fail(id, "ERR_ENGINE", "The tab is not owned by this window");
+        if (name == "tabs.devFocusPage") binding->contents()->Focus();
+        base::Value value = name == "tabs.devFocusPage" ? base::Value(true) :
+            base::Value(name == "tabs.devBrowserId" ? TabId(binding->contents()) : host_->id());
+        return Resolve(id, std::move(value));
+      }
+      if (name == "engine.info" || name == "tabs.strips" || name == "tabs.stripCommand" ||
+          name == "windows.list" || name == "search.setEngineName" || name == "webView.setAutoPictureInPicture") {
+        base::ListValue values;
+        if (name == "search.setEngineName") values.Append(String(input, "name"));
+        if (name == "tabs.stripCommand") {
+          const auto* command = input.FindDict("command");
+          const auto command_id = input.FindInt("id");
+          if (!command || !command_id) return Fail(id, "ERR_ENGINE", "A strip command and id are required");
+          values.Append(*command_id).Append(command->Clone());
+        }
+        if (name == "webView.setAutoPictureInPicture") {
+          const auto enabled = input.FindBool("enabled");
+          if (!enabled) return Fail(id, "ERR_ENGINE", "A boolean auto-PiP setting is required");
+          values.Append(*enabled);
+        }
+        host_->Invoke(name, base::DictValue().Set("args", std::move(values)),
+            base::BindOnce([](base::WeakPtr<HostMessageHandler> handler, std::string id,
+                              bool success, base::Value result) {
+              if (!handler) return;
+              if (!success) return handler->Fail(id, "ERR_ENGINE", result.is_string() ? result.GetString() : "Native call failed");
+              handler->Resolve(id, std::move(result));
+            }, weak_factory_.GetWeakPtr(), id));
+        return;
+      }
+      const auto* route = ardiacore::linux_contract::FindRoute(name);
+      if (!route) return Fail(id, "ERR_UNKNOWN_CALL", "This call is unavailable on Linux");
       const std::string path = host_->profile()->GetPath().value();
-      ac_engine_call(name.c_str(), path.c_str(), json.c_str(), Replied,
-                     new EngineReply{weak_factory_.GetWeakPtr(), id});
+      const std::string service(route->service);
+      ac_engine_call(service.c_str(), path.c_str(), json.c_str(), Replied,
+                     new EngineReply{name, weak_factory_.GetWeakPtr(), id});
       return;
     }
     if (arguments[1].GetString() != "host.invoke") {
@@ -919,6 +1018,8 @@ base::DictValue ShellHostView::Bootstrap() const {
                            (1024.0 * 1024 * 1024))
       .Set("locale", "en-US")
       .Set("updates", false);
+  base::FilePath user_data_directory;
+  base::PathService::Get(chrome::DIR_USER_DATA, &user_data_directory);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
@@ -926,8 +1027,8 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Set("nativeModules", base::DictValue().Set(
                                 "ArdiaApp", base::DictValue().Set(
                                                 "systemInfo", std::move(info))))
-      .Set("environment", base::DictValue())
-      .Set("capabilities", base::ListValue().Append("ArdiaCEF.setAutoPictureInPicture"));
+      .Set("launchConfig", ardiacore::LinuxLaunchConfig(DocumentDirectory(profile()), user_data_directory))
+      .Set("capabilities", base::ListValue().Append("ArdiaWebView.call"));
   if (is_utility()) bootstrap.Set("utility", utility_.Clone());
   return bootstrap;
 }
@@ -1097,6 +1198,23 @@ TabBinding* ShellHostView::Binding(int id) {
   return found == bindings_.end() ? nullptr : found->second.get();
 }
 
+TabBinding* ShellHostView::ClaimedBinding(const base::DictValue& args) {
+  auto* binding = Binding(args.FindInt("id").value_or(0));
+  return binding && binding->contents() && ardiacore::linux_contract::OwnsClaim(binding->claim, String(args, "claim")) ? binding : nullptr;
+}
+
+bool ShellHostView::CloseTab(TabBinding* binding) {
+  if (!browser_ || !binding || !binding->contents()) return false;
+  const int index = browser_->GetTabStripModel()->GetIndexOfWebContents(binding->contents());
+  if (index < 0) return false;
+  app_operation_ = true;
+  browser_->GetTabStripModel()->CloseWebContentsAt(
+      index, TabCloseTypes::CLOSE_USER_GESTURE | TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+  app_operation_ = false;
+  QueueTransaction(-1);
+  return true;
+}
+
 TabBinding* ShellHostView::BindingForKey(std::string_view key) {
   for (auto& [id, binding] : bindings_) {
     if (binding->key() == key && binding->contents()) return binding.get();
@@ -1159,8 +1277,8 @@ void ShellHostView::QueueTransaction(std::optional<int> command) {
           [](base::WeakPtr<ShellHostView> host, base::DictValue transaction) {
             if (!host) return;
             for (const auto& [id, target] : Hosts()) {
-              target->Event("ArdiaCEF", "onTabStrip",
-                             base::Value(transaction.Clone()));
+              target->Event("ArdiaTabs", "tabs", base::Value(base::DictValue()
+                  .Set("name", "tabs.strips").Set("data", transaction.Clone())));
             }
           },
           GetWeakPtr(), std::move(transaction)));
@@ -1171,16 +1289,35 @@ void ShellHostView::EngineEvent(std::string_view topic,
   if (!profile()) return;
   base::DictValue translated = payload.Clone();
   if (translated.FindBool("offTheRecord").value_or(false)) return;
+  if (!translated.FindString("profile")) return;
   if (const std::string* path = translated.FindString("profile")) {
     if (*path != profile()->GetPath().value() ||
         translated.FindBool("offTheRecord").value_or(false)) return;
     translated.Set("profile", "");
   }
-  const auto json = base::WriteJson(translated);
-  if (json) {
-    Event("ArdiaCEF", "onEngineEvent", base::Value(
-        base::DictValue().Set("topic", topic).Set("payload", *json)));
+  if (topic == "downloads.changed") {
+    const auto* download = translated.FindDict("download");
+    if (!download || download->FindBool("offTheRecord").value_or(false)) return;
+    translated = download->Clone();
+    translated.Set("profile", "");
   }
+  const auto name = ardiacore::linux_contract::EventName(topic);
+  if (name.empty()) return;
+  for (const auto field : {"tabId", "browserId"}) {
+    if (const auto* key = translated.FindString(field)) {
+      if (!BindingForKey(*key)) return;
+    }
+    if (const auto id = translated.FindInt(field)) {
+      auto* binding = Binding(*id);
+      if (!binding || !binding->contents()) return;
+      translated.Set("tabId", binding->key());
+      if (std::string_view(field) != "tabId") translated.Remove(field);
+    }
+  }
+  const std::string domain(name.substr(0, name.find('.')));
+  std::string module = "Ardia" + domain;
+  module[5] = base::ToUpperASCII(module[5]);
+  Event(module, domain, base::Value(base::DictValue().Set("name", name).Set("data", std::move(translated))));
 }
 
 void ShellHostView::ReattachViewports() {
@@ -1214,8 +1351,10 @@ void ShellHostView::CreateTab(
     const base::DictValue& args,
     base::OnceCallback<void(bool, base::Value)> done) {
   const std::string key = String(args, "key");
+  const std::string claim = String(args, "claim");
+  if (claim.empty() || claim.size() > 256) return std::move(done).Run(false, base::Value("A bounded tab claim is required"));
   if (!browser_ || key.empty() || key.size() > 256 ||
-      !DefaultProfileId(String(args, "profile"))) {
+      !args.FindString("profile") || !DefaultProfileId(String(args, "profile"))) {
     return std::move(done).Run(false, base::Value("A key and the default regular profile are required"));
   }
   TabStripModel* model = browser_->GetTabStripModel();
@@ -1227,11 +1366,15 @@ void ShellHostView::CreateTab(
     return std::move(done).Run(false, base::Value("Invalid or reserved tab URL"));
   }
   TabBinding* binding = BindingForKey(key);
+  if (binding && !ardiacore::linux_contract::CanReclaim(binding->claim, String(args, "previousClaim"))) {
+    return std::move(done).Run(false, base::Value("This tab already has an active owner"));
+  }
   if (!binding) {
     for (const auto& [window, source] : Hosts()) {
       if (source == this) continue;
       TabBinding* existing = source->BindingForKey(key);
       if (!existing || !existing->contents()) continue;
+      if (!ardiacore::linux_contract::CanTransfer(existing->transferable, existing->temporary, source->profile() == profile())) return std::move(done).Run(false, base::Value("This tab has not been offered for transfer"));
       const int id = TabId(existing->contents());
       TabStripModel* source_model = source->browser()->GetTabStripModel();
       const int index = source_model->GetIndexOfWebContents(existing->contents());
@@ -1265,6 +1408,12 @@ void ShellHostView::CreateTab(
           !base::StringToInt(adopt.substr(colon + 1), &wanted)) {
         return std::move(done).Run(false, base::Value("Invalid tab adoption id"));
       }
+      bool offered = false;
+      for (auto& [window, source] : Hosts()) {
+        const auto offer = source->offered_.find(wanted);
+        if (source->profile() == profile() && offer != source->offered_.end() && offer->second) offered = true;
+      }
+      if (!offered) return std::move(done).Run(false, base::Value("This tab has not been offered for adoption"));
       GlobalBrowserCollection::GetInstance()->ForEach(
           [&](BrowserWindowInterface* candidate) {
             if (candidate->GetProfile() != profile() || candidate->GetProfile()->IsOffTheRecord()) return true;
@@ -1330,9 +1479,13 @@ void ShellHostView::CreateTab(
     }
     const int id = TabId(contents);
     bindings_[id] = std::make_unique<TabBinding>(this, contents, key);
+    for (auto& [window, source] : Hosts()) source->offered_.erase(id);
     binding = bindings_[id].get();
     app_operation_ = false;
   }
+  binding->temporary = args.FindBool("temporary").value_or(false);
+  binding->claim = claim;
+  binding->transferable = false;
   const int id = TabId(binding->contents());
   base::DictValue result = base::DictValue()
       .Set("browserId", id).Set("chromeTabId", id).Set("state", binding->Navigation());
@@ -1348,9 +1501,8 @@ void ShellHostView::CreateTab(
 void ShellHostView::TabCommand(
     const base::DictValue& args,
     base::OnceCallback<void(bool, base::Value)> done) {
-  const int id = args.FindInt("id").value_or(0);
-  TabBinding* binding = Binding(id);
-  if (!browser_ || !binding || !binding->contents()) {
+  TabBinding* binding = ClaimedBinding(args);
+  if (!browser_ || !binding) {
     return std::move(done).Run(false, base::Value("No such live tab"));
   }
   content::WebContents* contents = binding->contents();
@@ -1423,13 +1575,7 @@ void ShellHostView::TabCommand(
     }
     return std::move(done).Run(true, base::Value(std::move(entries)));
   } else if (command == "close") {
-    const int index = browser_->GetTabStripModel()->GetIndexOfWebContents(contents);
-    if (index < 0) return std::move(done).Run(false, base::Value("Tab is no longer in this window"));
-    app_operation_ = true;
-    browser_->GetTabStripModel()->CloseWebContentsAt(
-        index, TabCloseTypes::CLOSE_USER_GESTURE | TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
-    app_operation_ = false;
-    QueueTransaction(-1);
+    if (!CloseTab(binding)) return std::move(done).Run(false, base::Value("Tab is no longer in this window"));
   } else {
     return std::move(done).Run(false, base::Value("Unsupported tab command: " + command));
   }
@@ -1439,9 +1585,9 @@ void ShellHostView::TabCommand(
 void ShellHostView::SetViewport(
     const base::DictValue& args,
     base::OnceCallback<void(bool, base::Value)> done) {
-  TabBinding* binding = Binding(args.FindInt("id").value_or(0));
+  TabBinding* binding = ClaimedBinding(args);
   const base::DictValue* rect = args.FindDict("rect");
-  if (!binding || !binding->contents() || !rect) {
+  if (!binding || !rect) {
     return std::move(done).Run(false, base::Value("A live tab and viewport rectangle are required"));
   }
   const double x = rect->FindDouble("x").value_or(NAN);
@@ -1536,8 +1682,8 @@ void ShellHostView::SetPresentations(
   }
   for (const auto& tab : *tabs) {
     const auto* item = tab.GetIfDict();
-    TabBinding* binding = item ? Binding(item->FindInt("id").value_or(0)) : nullptr;
-    if (!binding || !binding->contents() || !item->FindBool("visible")) {
+    TabBinding* binding = item ? ClaimedBinding(*item) : nullptr;
+    if (!binding || !item->FindBool("visible")) {
       return std::move(done).Run(false, base::Value("A claimed tab and boolean visibility are required"));
     }
   }
@@ -1623,7 +1769,7 @@ void ShellHostView::StripCommand(
           [](base::WeakPtr<ShellHostView> host, base::DictValue transaction) {
             if (!host) return;
             for (const auto& [id, target] : Hosts()) {
-              target->Event("ArdiaCEF", "onTabStrip", base::Value(transaction.Clone()));
+              target->Event("ArdiaTabs", "tabs", base::Value(base::DictValue().Set("name", "tabs.strips").Set("data", transaction.Clone())));
             }
           }, GetWeakPtr(), std::move(transaction)));
 }
@@ -1681,11 +1827,32 @@ void ShellHostView::Invoke(
     }
     return std::move(done).Run(true, base::Value());
   }
+  if (method == "ArdiaTabs.claimLaunchTab") {
+    const std::string key = ArgumentString(values, 0);
+    if (key.empty()) return std::move(done).Run(true, base::Value());
+    base::DictValue options = base::DictValue().Set("key", key)
+        .Set("url", ArgumentString(values, 1)).Set("profile", ArgumentString(values, 2))
+        .Set("claim", "launch");
+    return CreateTab(options, base::BindOnce(
+        [](base::WeakPtr<ShellHostView> host, std::string key,
+           base::OnceCallback<void(bool, base::Value)> done, bool success, base::Value result) {
+          if (host && success) {
+            if (auto* binding = host->BindingForKey(key); binding && binding->claim == "launch") binding->claim.clear();
+          }
+          std::move(done).Run(success, success ? base::Value() : std::move(result));
+        }, GetWeakPtr(), key, std::move(done)));
+  }
+  if (method == "ArdiaTabs.prepareTransfer" || method == "ArdiaTabs.releaseTransfer") {
+    auto* binding = BindingForKey(ArgumentString(values, 0));
+    if (!binding) return std::move(done).Run(false, base::Value("No owned tab to transfer"));
+    binding->transferable = method == "ArdiaTabs.prepareTransfer";
+    return std::move(done).Run(true, base::Value());
+  }
   if (method == "tab.create") return CreateTab(args, std::move(done));
   if (method == "tab.command") return TabCommand(args, std::move(done));
   if (method == "tab.viewport") return SetViewport(args, std::move(done));
   if (method == "tab.presentations") return SetPresentations(args, std::move(done));
-  if (method == "ArdiaCEF.setAutoPictureInPicture") {
+  if (method == "webView.setAutoPictureInPicture") {
     if (values.size() != 1 || !values[0].is_bool()) {
       return std::move(done).Run(false, base::Value("A boolean auto-PiP setting is required"));
     }
@@ -1722,13 +1889,17 @@ void ShellHostView::Invoke(
     if (!binding || !binding->contents()) {
       return std::move(done).Run(true, base::Value());
     }
-    base::DictValue close = base::DictValue()
-        .Set("id", TabId(binding->contents())).Set("command", "close");
-    return TabCommand(close, std::move(done));
+    const bool closed = CloseTab(binding);
+    return std::move(done).Run(closed, closed ? base::Value() : base::Value("Tab is no longer in this window"));
   }
   if (method == "tab.release") {
-    TabBinding* binding = Binding(args.FindInt("id").value_or(0));
-    if (!binding) return std::move(done).Run(false, base::Value("No such live tab"));
+    TabBinding* binding = ClaimedBinding(args);
+    if (!binding) return std::move(done).Run(false, base::Value("No owned live tab"));
+    if (binding->temporary) {
+      return TabCommand(base::DictValue().Set("id", args.FindInt("id").value_or(0))
+          .Set("claim", binding->claim).Set("command", "close"), std::move(done));
+    }
+    binding->claim.clear();
     binding->RememberPendingAutoPictureInPicture();
     binding->presented = false;
     binding->presentation_applied = false;
@@ -1832,20 +2003,20 @@ void ShellHostView::Invoke(
     return;
   }
 
-  if (method == "ArdiaCEF.tabStrips") {
+  if (method == "tabs.strips") {
     return std::move(done).Run(true, base::Value(Transaction(std::nullopt, false)));
   }
-  if (method == "ArdiaCEF.tabStripCommand") {
+  if (method == "tabs.stripCommand") {
     if (values.size() < 2 || !values[0].is_int() || !values[1].is_dict()) {
       return std::move(done).Run(false, base::Value("A command id and tab strip command are required"));
     }
     ShellHostView* target = this;
     const int strip = values[1].GetDict().FindInt("strip").value_or(0);
     const auto found = Hosts().find(strip);
-    if (found != Hosts().end()) target = found->second;
+    if (found == Hosts().end() || found->second != this) return std::move(done).Run(false, base::Value("The strip is not owned by this window"));
     return target->StripCommand(values[0].GetInt(), values[1].GetDict(), std::move(done));
   }
-  if (method == "ArdiaCEF.engineInfo") {
+  if (method == "engine.info") {
     int tabs = 0;
     int windows = 0;
     int popups = 0;
@@ -1865,7 +2036,7 @@ void ShellHostView::Invoke(
         .Set("liveBrowsers", tabs).Set("popupWindows", popups)
         .Set("chromeWindows", windows)));
   }
-  if (method == "ArdiaCEF.chromeWindows") {
+  if (method == "windows.list") {
     base::ListValue windows;
     for (const auto& [id, host] : Hosts()) {
       const auto* window = host->browser()->GetWindow();
@@ -2027,15 +2198,10 @@ void ShellHostView::Invoke(
     writer.WriteText(base::UTF8ToUTF16(ArgumentString(values, 0)));
     return std::move(done).Run(true, base::Value());
   }
-  if (method == "ArdiaShell.setMenuState" || method == "ArdiaShell.setMenuBookmarks" ||
-      method == "ArdiaCEF.setDisplayMediaPicker" || method == "ArdiaChromeUI.watchCastRoutes" ||
-      method == "ArdiaCEF.prepareTransfer" || method == "ArdiaCEF.releaseTransfer") {
+  if (method == "ArdiaShell.setMenuState" || method == "ArdiaShell.setMenuBookmarks") {
     return std::move(done).Run(true, base::Value());
   }
-  if (method == "ArdiaCEF.releaseProfile" && DefaultProfileId(ArgumentString(values, 0))) {
-    return std::move(done).Run(true, base::Value());
-  }
-  if (method == "ArdiaCEF.setSearchEngineName") {
+  if (method == "search.setEngineName") {
     const std::string name = ArgumentString(values, 0);
     if (name.empty()) return std::move(done).Run(true, base::Value());
     TemplateURLService* service = TemplateURLServiceFactory::GetForProfile(profile());
@@ -2050,26 +2216,6 @@ void ShellHostView::Invoke(
       }
     }
     return std::move(done).Run(false, base::Value("No installed search engine named " + name));
-  }
-  if (method == "ArdiaExtensions.list") {
-    if (!DefaultProfileId(ArgumentString(values, 0))) {
-      return std::move(done).Run(false, base::Value("Only the default profile is supported"));
-    }
-    struct Pending {
-      base::OnceCallback<void(bool, base::Value)> done;
-    };
-    ac_engine_call("ac_extensions_list", profile()->GetPath().value().c_str(), "{}",
-                   [](void* context, const char* json) {
-                     std::unique_ptr<Pending> pending(static_cast<Pending*>(context));
-                     auto value = base::JSONReader::Read(json ? json : "{}", base::JSON_PARSE_RFC);
-                     if (!value || !value->is_dict()) {
-                       return std::move(pending->done).Run(false, base::Value("Invalid extensions service response"));
-                     }
-                     const std::string* error = value->GetDict().FindString("error");
-                     if (error) return std::move(pending->done).Run(false, base::Value(*error));
-                     std::move(pending->done).Run(true, std::move(*value));
-                   }, new Pending{std::move(done)});
-    return;
   }
   std::move(done).Run(false, base::Value("Unsupported Linux host method: " + method));
 }
@@ -2126,6 +2272,7 @@ void TabBinding::DidOpenRequestedURL(
   }
   const int id = TabId(opened);
   if (id <= 0 || opened->GetBrowserContext() != contents_->GetBrowserContext()) return;
+  owner_->OfferTab(opened);
   owner_->ReportTab(TabId(contents_), base::DictValue()
       .Set("type", "openWindow").Set("value", base::DictValue()
           .Set("url", url.spec()).Set("disposition", target)
@@ -2314,7 +2461,7 @@ class HostRegistry : public BrowserCollectionObserver,
         .Set("rev", ++Revision()).Set("cmd", base::Value())
         .Set("strips", base::ListValue().Append(std::move(strip)));
     for (const auto& [id, host] : Hosts()) {
-      host->Event("ArdiaCEF", "onTabStrip", base::Value(tx.Clone()));
+      host->Event("ArdiaTabs", "tabs", base::Value(base::DictValue().Set("name", "tabs.strips").Set("data", tx.Clone())));
     }
   }
 
@@ -2342,6 +2489,8 @@ void StartLinuxHost() {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   static bool started = false;
   if (std::exchange(started, true)) return;
+  ardiacore::InitializeLinuxLaunchConfig();
+  ardiacore::DecideTestGateAtStartup();
   g_ardia_auto_picture_in_picture_off = true;
   g_ardia_linux_tab_shown = [](content::WebContents* contents) {
     for (const auto& [id, host] : Hosts()) {

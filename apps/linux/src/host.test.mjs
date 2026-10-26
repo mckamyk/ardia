@@ -8,11 +8,11 @@ import { HostTab } from "./hostTab.ts";
 import { tabViewport, watchTabViewport } from "./hostViewport.ts";
 import { startHostTabLifecycle } from "./hostTabLifecycle.ts";
 import { startHostData } from "./hostData.ts";
-import { useBrowser } from "../../browser/src/store/browser.ts";
-import { adoptParkedPins } from "../../browser/src/store/parkedPins.ts";
-import { reloadBookmarks } from "../../browser/src/lib/bookmarks.ts";
-import { reloadHistory } from "../../browser/src/lib/history.ts";
-import * as native from "../../browser/src/test-native-stub.mjs";
+import { useBrowser } from "../../browser/src/state/browser/store.ts";
+import { adoptParkedPins } from "../../browser/src/state/pins/parkedPins.ts";
+import { reloadBookmarks } from "../../browser/src/state/bookmarks/engineSync.ts";
+import { reloadHistory } from "../../browser/src/state/history/engineSync.ts";
+import * as native from "../../browser/src/test-native/index.ts";
 
 function fixture(invoke = async () => null) {
   const listeners = new Set();
@@ -28,18 +28,18 @@ function fixture(invoke = async () => null) {
 
 test("engine transport preserves JSON and translates the empty default profile to its host ID", async () => {
   const { host, requests } = fixture();
-  assert.equal(await callHost("ac_history_query", "", '{"query":"linux"}', host), '{"ok":true}');
-  assert.deepEqual(requests, [["call", ["ac_history_query", "default", '{"query":"linux"}']]]);
-  await callHost("ac_history_query", "work", null, host);
-  assert.deepEqual(requests.at(-1), ["call", ["ac_history_query", "work", null]]);
+  assert.equal(await callHost("history.query", "", '{"query":"linux"}', host), '{"ok":true}');
+  assert.deepEqual(requests, [["call", ["history.query", "default", '{"query":"linux"}']]]);
+  await callHost("history.query", "work", null, host);
+  assert.deepEqual(requests.at(-1), ["call", ["history.query", "work", null]]);
 });
 
 test("unknown required methods reject while optional methods need an advertised capability", async () => {
   const { host } = fixture(async (method) => { throw new Error(`Unsupported: ${method}`); });
-  await assert.rejects(resolveHostModule(host, "ArdiaCEF", "futureMethod")(7), /Unsupported: ArdiaCEF.futureMethod/);
-  assert.equal(resolveHostModule(host, "ArdiaCEF", "setVideoUpscaling"), undefined);
-  host.bootstrap.capabilities = ["ArdiaCEF.setVideoUpscaling"];
-  await assert.rejects(resolveHostModule(host, "ArdiaCEF", "setVideoUpscaling")(true), /Unsupported/);
+  await assert.rejects(resolveHostModule(host, "ArdiaTabs", "futureMethod")(7), /Unsupported: ArdiaTabs.futureMethod/);
+  assert.equal(resolveHostModule(host, "ArdiaShell", "dragPreviewBegin"), undefined);
+  host.bootstrap.capabilities = ["ArdiaShell.dragPreviewBegin"];
+  await assert.rejects(resolveHostModule(host, "ArdiaShell", "dragPreviewBegin")(true), /Unsupported/);
   assert.equal(resolveHostModule(host, "ArdiaTranslate", "available"), false);
   assert.equal(resolveHostModule(host, "ArdiaCalendar", "authorizationStatus")(), "denied");
   await assert.rejects(invokeHost("missing", {}, undefined), /host unavailable/);
@@ -377,11 +377,11 @@ test("tab creation buffers early native events and reports real native IDs", asy
   assert.equal(events[0].browserId, 41);
   assert.equal(events[0].chromeTabId, 9);
   await tab.command("goBack");
-  assert.deepEqual(f.requests.at(-1), ["tab.command", { id: 41, command: "goBack", args: [] }]);
+  assert.deepEqual(f.requests.at(-1), ["tab.command", { id: 41, claim: tab.claim, command: "goBack", args: [] }]);
   tab.dispose();
   await new Promise(setImmediate);
   assert.equal(f.listeners.size, 0);
-  assert.deepEqual(f.requests.at(-1), ["tab.release", { id: 41 }]);
+  assert.deepEqual(f.requests.at(-1), ["tab.release", { id: 41, claim: tab.claim }]);
   await assert.rejects(tab.command("reload"), /released/);
 });
 
@@ -426,7 +426,7 @@ test("viewports deduplicate geometry and send explicit visibility changes", asyn
   await tab.viewport({ ...viewport, visible: false });
   const updates = requests.filter(([method]) => method === "tab.viewport");
   assert.equal(updates.length, 2);
-  assert.deepEqual(updates[0][1], { id: 13, ...viewport });
+  assert.deepEqual(updates[0][1], { id: 13, claim: tab.claim, ...viewport });
   assert.equal(updates[1][1].visible, false);
   assert.equal(tabViewport({ x: -900, y: 0, width: 800, height: 600 }, { width: 1200, height: 800 }, true).visible, false);
   assert.equal(tabViewport({ x: NaN, y: 0, width: 800, height: 600 }, { width: 1200, height: 800 }, true).visible, false);
@@ -444,7 +444,7 @@ test("logical tab presentations batch returns and departures independently of vi
   await outgoing.viewport({ rect: { x: 10, y: 20, width: 500, height: 300 }, visible: false });
   assert.equal(requests.filter(([method]) => method === "tab.presentations").length, baseline);
   await Promise.all([outgoing.presentation(false), incoming.presentation(true)]);
-  assert.deepEqual(requests.filter(([method]) => method === "tab.presentations").at(-1), ["tab.presentations", { tabs: [{ id: 21, visible: false }, { id: 22, visible: true }] }]);
+  assert.deepEqual(requests.filter(([method]) => method === "tab.presentations").at(-1), ["tab.presentations", { tabs: [{ claim: outgoing.claim, id: 21, visible: false }, { claim: incoming.claim, id: 22, visible: true }] }]);
   outgoing.dispose();
   incoming.dispose();
 });
@@ -460,7 +460,7 @@ test("presentations wait for identity and ignore released or superseded views", 
   assert.equal(requests.filter(([method]) => method === "tab.presentations").length, 0);
   finish({ browserId: 30, chromeTabId: 30 });
   await Promise.all([oldUpdate, currentUpdate]);
-  assert.deepEqual(requests.filter(([method]) => method === "tab.presentations"), [["tab.presentations", { tabs: [{ id: 30, visible: true }] }]]);
+  assert.deepEqual(requests.filter(([method]) => method === "tab.presentations"), [["tab.presentations", { tabs: [{ claim: current.claim, id: 30, visible: true }] }]]);
   const releasedUpdate = current.presentation(false);
   current.dispose();
   old.dispose();
@@ -478,7 +478,7 @@ test("a presentation batch retains its final visibility and reports transport er
   await tab.ready;
   const results = await Promise.allSettled([tab.presentation(false), tab.presentation(true)]);
   assert.ok(results.every((result) => result.status === "rejected" && result.reason.message === "presentation failed"));
-  assert.deepEqual(requests.filter(([method]) => method === "tab.presentations"), [["tab.presentations", { tabs: [{ id: 31, visible: true }] }]]);
+  assert.deepEqual(requests.filter(([method]) => method === "tab.presentations"), [["tab.presentations", { tabs: [{ claim: tab.claim, id: 31, visible: true }] }]]);
   tab.dispose();
 });
 

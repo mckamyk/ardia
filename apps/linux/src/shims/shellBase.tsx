@@ -3,6 +3,7 @@ import { unstable_batchedUpdates } from "react-dom";
 import { emitNativeEvent, provideNativeModule, provideNativeModuleProvider } from "./expo-modules-core";
 import { NATIVE_CHANGE } from "./react-native";
 import { ardiaHost, hostModuleMethod, reportHostError } from "../host";
+import { hostLaunchConfig } from "../hostLaunchConfig";
 import { createHostDocuments } from "../hostDocuments";
 
 export * from "@ardia-real/shell";
@@ -34,17 +35,16 @@ const SYSTEM_INFO: SystemInfo = {
   model: "Linux",
   memoryGB: 8,
   locale: typeof navigator === "undefined" ? "en-US" : navigator.language,
-  updates: false,
 };
 
-provideNativeModule("ArdiaApp", { launchEnvironment: () => null, systemInfo: () => SYSTEM_INFO });
+provideNativeModule("ArdiaApp", { launchConfig: () => hostLaunchConfig(), systemInfo: () => SYSTEM_INFO });
 provideNativeModule("ArdiaCalendar", { authorizationStatus: () => "notDetermined" });
 
 const documents = new Map<string, string>();
 const hostDocuments = ardiaHost ? createHostDocuments(ardiaHost) : undefined;
 export const readDocument = (name: string) => hostDocuments ? hostDocuments.read(name) : documents.get(name) ?? null;
 export const writeDocument = (name: string, contents: string) => hostDocuments ? void hostDocuments.write(name, contents).catch(reportHostError) : void documents.set(name, contents);
-export const fetchBangList = (_etag: string | null): Promise<{ status: number; etag: string | null; contentType: string | null; body: string | null; bytes: number }> | null => null;
+export const fetchBangList = async (_etag: string | null): Promise<{ status: number; etag: string | null; contentType: string | null; body: string | null; bytes: number }> => { throw Object.assign(new Error("Bang list fetching is unavailable on Linux"), { code: "ERR_UNAVAILABLE" }); };
 export const saveDocument = async (name: string, contents: string) => hostDocuments ? hostDocuments.write(name, contents) : void documents.set(name, contents);
 export const removeDocument = (name: string) => hostDocuments ? void hostDocuments.remove(name).catch(reportHostError) : void documents.delete(name);
 
@@ -74,7 +74,7 @@ darkQuery?.addEventListener("change", (e) => appearance === "auto" && emitAppEve
 export const windowIds = async () => ardiaHost ? hostModuleMethod("ArdiaShell", "windowIds")() as Promise<string[]> : [] as string[];
 export const windowFrame = async (id: string): Promise<[number, number, number, number] | null> => ardiaHost ? hostModuleMethod("ArdiaShell", "windowFrame")(id) as Promise<[number, number, number, number] | null> : null;
 export const systemInfo = (): SystemInfo => ardiaHost ? (ardiaHost.bootstrap.nativeModules?.ArdiaApp?.systemInfo as SystemInfo | undefined) ?? { ...SYSTEM_INFO, appVersion: "linux-dev", appBuild: "host", bundleId: "dev.ardia.linux", osVersion: "Linux", osBuild: "Linux", arch: "unknown", model: "Linux" } : SYSTEM_INFO;
-export const launchEnvironment = (name: string) => ardiaHost?.bootstrap.environment?.[name] ?? null;
+export const launchConfig = () => hostLaunchConfig(ardiaHost);
 
 const claimHostFocus = async (generation: number, tag: number) => {
   const node = tag as unknown;
@@ -82,7 +82,7 @@ const claimHostFocus = async (generation: number, tag: number) => {
   else await hostModuleMethod("ArdiaShell", "claimFocus")(generation, tag);
 };
 const hostShellLocals: Record<string, unknown> = { readDocument, writeDocument, saveDocument, removeDocument, claimFocus: claimHostFocus };
-const hostAppLocals: Record<string, unknown> = { systemInfo, launchEnvironment, killSwitchEnvironment: launchEnvironment };
+const hostAppLocals: Record<string, unknown> = { systemInfo, launchConfig };
 provideNativeModuleProvider((module, method) => ardiaHost ? (module === "ArdiaShell" ? hostShellLocals[method] : module === "ArdiaApp" ? hostAppLocals[method] : undefined) : undefined);
 
 const valueSetter = typeof window === "undefined" ? undefined : Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;

@@ -41,7 +41,7 @@ test("only the trusted top-level WebUI installs the bridge", () => {
 
 test("requests correlate out-of-order replies and preserve engine arguments", async () => {
   const { context, host, calls, timers } = fixture();
-  const engine = host.call("ac_history_query", "default", '{"maxUrls":5}');
+  const engine = host.call("history.query", "default", '{"maxUrls":5}');
   const invoke = host.invoke("tab.command", { id: 4, command: "goBack" });
   const first = calls[0][1];
   const second = calls[1][1];
@@ -61,7 +61,10 @@ test("native failures, transport errors and timeouts reject", async () => {
   const f = fixture();
   const failed = f.host.invoke("unknown");
   f.context.__ardiaReply(f.calls[0][1][0], false, "unsupported");
-  await assert.rejects(failed, /unsupported/);
+  await assert.rejects(failed, { code: "ERR_ENGINE", message: "unsupported" });
+  const structured = f.host.call("history.query", "default", "{}");
+  f.context.__ardiaReply(f.calls.at(-1)[1][0], false, { code: "ERR_BAD_REPLY", message: "Malformed engine reply" });
+  await assert.rejects(structured, { code: "ERR_BAD_REPLY", message: "Malformed engine reply" });
   const waiting = f.host.invoke("slow");
   const timeout = [...f.timers.values()][0];
   timeout();
@@ -111,7 +114,7 @@ test("final native writes are issued before the transport closes", async () => {
 
 test("malformed requests and excessive concurrency fail before transport", async () => {
   const { host, calls, handlers } = fixture();
-  await assert.rejects(host.call("ac_history_query", "default", {}), /Invalid engine/);
+  await assert.rejects(host.call("history.query", "default", {}), /Invalid engine/);
   await assert.rejects(host.invoke("method", []), /Invalid host/);
   assert.equal(calls.length, 0);
   const pending = Array.from({ length: 256 }, () => host.invoke("test").catch(() => {}));
