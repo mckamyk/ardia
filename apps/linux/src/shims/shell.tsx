@@ -1,5 +1,7 @@
-import type { CommandEvent } from "@ardia-real/shell";
-import { emitCommand as emitWebCommand } from "./shellBase";
+import type { CommandEvent, ConfirmOptions, PromptOptions } from "@ardia-real/shell";
+import { emitCommand as emitWebCommand, confirm as webConfirm, prompt as webPrompt } from "./shellBase";
+import { provideNativeModuleProvider } from "./expo-modules-core";
+import { linuxHostDialogs } from "../hostDialogs";
 import { ardiaHost, hostModuleMethod, reportHostError } from "../host";
 import { departLinuxWindow, flushLinuxSession, isLinuxUtility, keepLinuxWindow } from "../session";
 import { createWindowCloseBarrier, type WindowCloseRequest } from "../utilityClose";
@@ -13,6 +15,10 @@ import { createWindowCloseCoordinator, type DecideClose, type DrainReply } from 
 export * from "./shellBase";
 export { menuShown, showMenu, watchMenus } from "../menus";
 export { recordShortcut, cancelShortcutRecording } from "../shortcutsRuntime";
+
+export const confirm = (options: ConfirmOptions) => ardiaHost ? linuxHostDialogs().confirm(options) : webConfirm(options);
+export const prompt = (options: PromptOptions) => ardiaHost ? linuxHostDialogs().prompt(options) : webPrompt(options);
+provideNativeModuleProvider((name, method) => name === "ArdiaShell" && method === "confirm" ? confirm : name === "ArdiaShell" && method === "prompt" ? prompt : undefined);
 
 export const emitCommand = (event: CommandEvent) => emitWebCommand(ardiaHost
   ? { ...event, windowId: ardiaHost!.bootstrap.windowId }
