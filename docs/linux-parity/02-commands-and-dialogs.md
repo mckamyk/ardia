@@ -22,10 +22,10 @@ Ctrl+F opens a search bar that cannot search a native page. Print, system print,
 
 Shared FindBar still calls find/stopFinding and command dispatch calls print/runPageCommand/showDevTools. Linux HostWebView forwards them as tab.command, whose native dispatcher still lacks these methods. Linux shortcuts consume matched accelerators, preventing normal Chromium shortcut fallback. Domain migration does not supply per-tab commands.
 
-- [apps/browser/src/components/find/FindBar.tsx:48](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/find/FindBar.tsx#L48)
-- [apps/browser/src/state/commands/commands.ts:168](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/commands/commands.ts#L168)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1434)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1045](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1045)
+- [apps/browser/src/components/find/FindBar.tsx:48](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/find/FindBar.tsx#L48)
+- [apps/browser/src/state/commands/commands.ts:168](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/commands/commands.ts#L168)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1434)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1045](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1045)
 
 ### Implementation slices
 
@@ -57,13 +57,13 @@ Essential-tile rename, bookmark-folder creation, pinned-URL editing, profile del
 
 Shared callers moved into state and now import platform/dialogs. That platform module still reaches the Linux shell override, which sends unsupported ArdiaShell.confirm/prompt operations. Awaited destructive/rename actions therefore remain blocked.
 
-- [apps/linux/src/shims/shellBase.tsx:74](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/shims/shellBase.tsx#L74)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2074)
-- [apps/browser/src/state/sidebar/actions.ts:45](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/sidebar/actions.ts#L45)
-- [apps/browser/src/state/sidebar/actions.ts:125](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/sidebar/actions.ts#L125)
-- [apps/browser/src/state/browser/actions.ts:47](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/browser/actions.ts#L47)
-- [apps/browser/src/state/browser/actions.ts:65](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/browser/actions.ts#L65)
-- [apps/browser/src/state/browser/actions.ts:95](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/browser/actions.ts#L95)
+- [apps/linux/src/shims/shellBase.tsx:74](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/shims/shellBase.tsx#L74)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2074)
+- [apps/browser/src/state/sidebar/actions.ts:45](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/sidebar/actions.ts#L45)
+- [apps/browser/src/state/sidebar/actions.ts:125](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/sidebar/actions.ts#L125)
+- [apps/browser/src/state/browser/actions.ts:47](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/browser/actions.ts#L47)
+- [apps/browser/src/state/browser/actions.ts:65](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/browser/actions.ts#L65)
+- [apps/browser/src/state/browser/actions.ts:95](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/browser/actions.ts#L95)
 
 ### Implementation slices
 
@@ -97,11 +97,11 @@ Selecting an older history entry fails when it requires a multi-step jump. Page 
 
 Native navigationEntries and actual zoomStep still exist; goToOffset does not. Shared history selection uses normal back/forward for +/-1 but goToOffset for longer jumps. No native zoom event updates shared tab.zoom. New domain sites.zoomLevels/setZoom additionally need N02 mapping.
 
-- [apps/browser/src/state/tabs/navigation.ts:123](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/tabs/navigation.ts#L123)
-- [apps/browser/src/components/window/TabWebView.tsx:187](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/window/TabWebView.tsx#L187)
-- [apps/browser/src/components/site/ZoomControls.tsx:11](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/site/ZoomControls.tsx#L11)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1406](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1406)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1434)
+- [apps/browser/src/state/tabs/navigation.ts:123](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/tabs/navigation.ts#L123)
+- [apps/browser/src/components/window/TabWebView.tsx:187](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/window/TabWebView.tsx#L187)
+- [apps/browser/src/components/site/ZoomControls.tsx:11](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/site/ZoomControls.tsx#L11)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1406](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1406)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1434)
 
 ### Implementation slices
 
