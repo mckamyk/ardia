@@ -90,6 +90,11 @@ class DevToolsWindow {
   static void ToggleDevToolsWindow(content::WebContents*, Profile*, bool, const DevToolsToggleAction&,
       const std::string&, DevToolsOpenedByAction,
       const content::DevToolsManagerDelegate::DevToolsOptions& = {});
+  static DevToolsWindow* AsDevToolsWindow(content::WebContents*);
+  static bool HandleBeforeUnload(content::WebContents*, bool, bool*);
+  static bool InterceptPageBeforeUnload(content::WebContents*);
+  static bool NeedsToInterceptBeforeUnload(content::WebContents*);
+  static void OnPageCloseCanceled(content::WebContents*);
   static void RegisterLinuxDevToolsLifecycle();
   void BindLinuxDevToolsLease(std::shared_ptr<ardiacore::LinuxDevToolsLease>, bool);
   void RevokeLinuxDevToolsLease(uint64_t);
@@ -150,3 +155,9 @@ class DevToolsWindow {
   static inline std::function<void(DevToolsWindow*)> on_create;
   static inline std::function<void()> on_toolbar;
 };
+
+inline std::vector<DevToolsWindow*> GetDevToolsWindowInstances() {
+  std::vector<DevToolsWindow*> instances;
+  for (const auto& [contents, window] : DevToolsWindow::instances) instances.push_back(window.get());
+  return instances;
+}

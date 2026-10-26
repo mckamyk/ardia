@@ -338,13 +338,13 @@
    if (is_docked_) {
      WebContents* inspected_tab = GetInspectedWebContents();
      if (inspected_tab) {
-@@ -1671,6 +1830,23 @@
+@@ -1671,6 +1830,24 @@
  void DevToolsWindow::BeforeUnloadFired(WebContents* tab,
                                         bool proceed,
                                         bool* proceed_to_fire_unload) {
 +#if BUILDFLAG(IS_LINUX)
 +  auto decision = linux_devtools_state_.FinishClose(proceed);
-+  if (linux_devtools_state_.managed() && !decision.proceed) {
++  if (decision.handled && !decision.proceed) {
 +    *proceed_to_fire_unload = false;
 +    if (life_stage_ == kClosing) life_stage_ = linux_close_stage_;
 +    if (decision.retry) {
@@ -356,13 +356,14 @@
 +                  window->CloseWindow();
 +              }, weak_factory_.GetWeakPtr(), std::move(*decision.retry)));
 +    }
-+    return;
++    if (!intercepted_page_beforeunload_) return;
++    proceed = false;
 +  }
 +#endif
    if (!intercepted_page_beforeunload_) {
      // Docked devtools window closed directly.
      if (proceed) {
-@@ -1706,6 +1882,9 @@
+@@ -1706,6 +1883,9 @@
  }
 
  void DevToolsWindow::ActivateWindow() {
@@ -372,7 +373,7 @@
    if (life_stage_ != kLoadCompleted) {
      return;
    }
-@@ -1735,6 +1914,10 @@
+@@ -1735,6 +1915,10 @@
  }
 
  void DevToolsWindow::Close(DevToolsClosedByAction closed_by) {
@@ -383,7 +384,7 @@
    DCHECK(is_docked_);
    life_stage_ = kClosing;
    main_web_contents_->DispatchBeforeUnload(false /* auto_cancel */);
-@@ -1775,6 +1958,9 @@
+@@ -1775,6 +1959,9 @@
  }
 
  void DevToolsWindow::SetIsDocked(bool dock_requested) {
@@ -393,7 +394,7 @@
    if (life_stage_ == kClosing) {
      return;
    }
-@@ -2052,6 +2238,9 @@
+@@ -2052,6 +2239,9 @@
  }
 
  void DevToolsWindow::CreateDevToolsBrowser() {
@@ -403,7 +404,7 @@
    PrefService* prefs = profile_->GetPrefs();
    bool resetPrefs = false;
    if (!prefs->GetDict(prefs::kAppWindowPlacement).Find(kDevToolsApp)) {
-@@ -2134,7 +2323,21 @@
+@@ -2134,7 +2324,21 @@
  }
 
  void DevToolsWindow::LoadCompleted() {

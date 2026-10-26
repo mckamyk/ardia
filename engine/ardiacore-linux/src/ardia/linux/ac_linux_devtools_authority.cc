@@ -82,12 +82,12 @@ bool LinuxDevToolsState::BeginClose() {
 
 LinuxDevToolsCloseDecision LinuxDevToolsState::FinishClose(bool proceed) {
   if (!close_)
-    return {proceed, std::nullopt};
+    return {false, proceed, std::nullopt};
   auto closing = std::exchange(close_, std::nullopt);
   auto retry = std::exchange(retry_, std::nullopt);
   if (IsCurrent(*closing))
-    return {proceed, std::nullopt};
-  return {false, retry && IsCurrent(*retry) ? retry : std::nullopt};
+    return {true, proceed, std::nullopt};
+  return {true, false, retry && IsCurrent(*retry) ? retry : std::nullopt};
 }
 
 ScopedLinuxDevToolsOperation::ScopedLinuxDevToolsOperation(

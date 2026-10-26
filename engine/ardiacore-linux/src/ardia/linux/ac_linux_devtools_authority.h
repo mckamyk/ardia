@@ -39,6 +39,7 @@ struct LinuxDevToolsTicket {
 };
 
 struct LinuxDevToolsCloseDecision {
+  bool handled;
   bool proceed;
   std::optional<LinuxDevToolsTicket> retry;
 };

@@ -36,6 +36,11 @@ METHODS = [
     'void DevToolsWindow::Close(',
     'void DevToolsWindow::CloseWindow()',
     'void DevToolsWindow::BeforeUnloadFired(',
+    'DevToolsWindow* DevToolsWindow::AsDevToolsWindow(',
+    'bool DevToolsWindow::HandleBeforeUnload(',
+    'bool DevToolsWindow::InterceptPageBeforeUnload(',
+    'bool DevToolsWindow::NeedsToInterceptBeforeUnload(',
+    'void DevToolsWindow::OnPageCloseCanceled(',
     'content::WebContents* DevToolsWindow::GetInTabWebContents(',
 ]
 
@@ -67,6 +72,7 @@ struct Fixture {
     else ardiacore::InstallLinuxDevToolsDispatcher(nullptr);
     GlobalBrowserCollection::GetInstance()->owners[&b] = &browser;
     commands = Make();
+    b.delegate.on_cancel = [this] { DevToolsWindow::OnPageCloseCanceled(&b); };
   }
   ~Fixture() {
     commands.reset();
@@ -312,6 +318,119 @@ int main(int argc, char** argv) {
     assert(error && error->at("code").GetString() == "ERR_PAGE_DISPATCH");
     f.Reset(); f.Load(); f.Drain();
     assert(f.tools()->main_web_contents_->view.hides == 0 && f.presented == 0);
+  } else if (mode.starts_with("page-veto") || mode.starts_with("unhosted-page-veto")) {
+    Fixture f;
+    const bool undocked = mode.ends_with("-undocked");
+    f.b.can_dock = !undocked;
+    if (mode.starts_with("page-veto")) f.Open();
+    else DevToolsWindow::OpenDevToolsWindow(&f.b, DevToolsToggleAction::Show(), DevToolsOpenedByAction::kUnknown);
+    f.Load(!undocked); f.Drain();
+    auto* window = f.tools();
+    assert(!window->linux_devtools_state_.has_pending_close());
+    assert(DevToolsWindow::NeedsToInterceptBeforeUnload(&f.b));
+    assert(DevToolsWindow::InterceptPageBeforeUnload(&f.b));
+    assert(!DevToolsWindow::InterceptPageBeforeUnload(&f.b));
+    bool proceed = true;
+    auto reply = [&](bool allow) {
+      if (undocked) assert(DevToolsWindow::HandleBeforeUnload(window->main_web_contents_, allow, &proceed));
+      else window->BeforeUnloadFired(window->main_web_contents_, allow, &proceed);
+    };
+    reply(false);
+    assert(!proceed && f.b.delegate.cancellations == 1);
+    assert(!window->intercepted_page_beforeunload_);
+    assert(DevToolsWindow::NeedsToInterceptBeforeUnload(&f.b));
+    assert(window->bindings_->detached == 0 && f.b.beforeunloads == 0);
+    assert(DevToolsWindow::InterceptPageBeforeUnload(&f.b));
+    reply(true);
+    assert(!proceed && f.b.beforeunloads == 1);
+    assert(window->intercepted_page_beforeunload_ && window->bindings_->detached == 0);
+    f.b.delegate.BeforeUnloadFired(&f.b, false, &proceed);
+    assert(!window->intercepted_page_beforeunload_ && f.b.delegate.cancellations == 2);
+    assert(DevToolsWindow::InterceptPageBeforeUnload(&f.b));
+    reply(true);
+    assert(!proceed && f.b.beforeunloads == 2);
+    window->InspectedContentsClosing();
+    assert(!f.tools());
+  } else if (mode.starts_with("page-overlap")) {
+    Fixture f;
+    f.Open(); f.Load(); f.Drain(); f.Open("toggle");
+    auto* window = f.tools();
+    auto old = std::move(f.commands);
+    if (mode.find("chrome") != std::string::npos) {
+      DevToolsWindow::OpenDevToolsWindow(&f.b, DevToolsToggleAction::Show(), DevToolsOpenedByAction::kUnknown);
+      f.commands = f.Make();
+    } else {
+      f.commands = f.Make(); f.Open();
+    }
+    old->Reset();
+    const bool retry = mode.find("retry") != std::string::npos;
+    if (retry) window->CloseWindow();
+    auto frontend = window->main_web_contents_->GetWeakPtr();
+    frontend->controller.entry.url = "unsaved://latest-owner";
+    assert(DevToolsWindow::InterceptPageBeforeUnload(&f.b));
+    assert(!DevToolsWindow::NeedsToInterceptBeforeUnload(&f.b));
+    bool proceed = true;
+    window->BeforeUnloadFired(frontend.get(), mode.find("allow") != std::string::npos, &proceed);
+    assert(!proceed && f.b.delegate.cancellations == 1);
+    assert(!window->intercepted_page_beforeunload_ && f.b.beforeunloads == 0);
+    assert(!window->linux_devtools_state_.has_pending_close());
+    assert(DevToolsWindow::NeedsToInterceptBeforeUnload(&f.b));
+    f.Drain();
+    assert(frontend && window->main_web_contents_.get() == frontend.get());
+    assert(frontend->controller.entry.url == "unsaved://latest-owner");
+    assert(window->bindings_->detached == 0 && frontend->view.hides == 0);
+    if (retry) {
+      assert(window->linux_devtools_state_.has_pending_close());
+      assert(frontend->beforeunloads == 3);
+      window->BeforeUnloadFired(frontend.get(), false, &proceed);
+      assert(!proceed && !window->linux_devtools_state_.has_pending_close());
+      assert(window->life_stage_ == DevToolsWindow::kLoadCompleted);
+    }
+    window->CloseWindow();
+    window->BeforeUnloadFired(frontend.get(), true, &proceed);
+    assert(proceed && window->bindings_->detached == 1);
+    assert(frontend && frontend->controller.entry.url == "unsaved://latest-owner");
+  } else if (mode == "page-cancel-new-owner") {
+    Fixture f;
+    f.Open(); f.Load(); f.Drain(); f.Open("toggle");
+    auto* window = f.tools();
+    auto first = std::move(f.commands);
+    f.commands = f.Make(); f.Open(); window->CloseWindow();
+    assert(DevToolsWindow::InterceptPageBeforeUnload(&f.b));
+    auto frontend = window->main_web_contents_->GetWeakPtr();
+    f.b.delegate.on_cancel = [&f, window] {
+      DevToolsWindow::OnPageCloseCanceled(&f.b);
+      auto previous = std::move(f.commands);
+      f.commands = f.Make(); f.Open();
+      previous->Reset();
+      window->main_web_contents_->controller.entry.url = "unsaved://reentrant-owner";
+      window->CloseWindow();
+    };
+    bool proceed = true;
+    window->BeforeUnloadFired(frontend.get(), true, &proceed);
+    assert(!proceed && f.b.delegate.cancellations == 1);
+    assert(!window->intercepted_page_beforeunload_ && f.b.beforeunloads == 0);
+    assert(window->linux_devtools_state_.has_pending_close());
+    first->Reset(); f.Drain();
+    assert(frontend->beforeunloads == 3);
+    assert(frontend->controller.entry.url == "unsaved://reentrant-owner");
+    window->BeforeUnloadFired(frontend.get(), true, &proceed);
+    assert(proceed && window->bindings_->detached == 1);
+  } else if (mode == "page-cancel-destroy" || mode == "page-cancel-destroy-page") {
+    Fixture f;
+    f.Open(); f.Load(); f.Drain();
+    auto* window = f.tools();
+    assert(DevToolsWindow::InterceptPageBeforeUnload(&f.b));
+    f.b.delegate.on_cancel = [&f, &mode] {
+      DevToolsWindow::OnPageCloseCanceled(&f.b);
+      if (mode == "page-cancel-destroy-page") f.b.Destroy();
+      f.commands.reset();
+      DevToolsWindow::instances.clear();
+    };
+    bool proceed = true;
+    window->BeforeUnloadFired(window->main_web_contents_, false, &proceed);
+    assert(!proceed && f.b.delegate.cancellations == 1 && !f.tools());
+    f.Drain();
   } else assert(false);
 }
 '''
@@ -361,7 +480,18 @@ struct DevToolsManagerDelegate { struct DevToolsOptions { std::optional<std::str
 struct ChildProcessHost { static constexpr int kInvalidUniqueID = -1; };
 class WebContents;''')
         fixture = fixture.replace('class WebContents {\n public:', '''struct FixtureRenderView { void Hide() { hides++; auto callback = on_hide; if (callback) callback(); } int hides = 0; std::function<void()> on_hide; };
-struct FixtureDelegate { void ActivateContents(WebContents*) {} void BeforeUnloadFired(WebContents*,bool,bool*) {} };
+struct FixtureDelegate {
+  void ActivateContents(WebContents*) {}
+  void BeforeUnloadFired(WebContents*, bool proceed, bool* fire_unload) {
+    assert(!proceed);
+    cancellations++;
+    *fire_unload = false;
+    auto callback = on_cancel;
+    if (callback) callback();
+  }
+  int cancellations = 0;
+  std::function<void()> on_cancel;
+};
 class WebContents {
  public:
   FixtureRenderView* GetRenderWidgetHostView() { return &view; }
@@ -440,6 +570,31 @@ class BrowserWindowInterface {''')
     def test_native_show_update_can_destroy_its_frontend(self): self.run_case('show-destroy')
     def test_new_chrome_close_survives_stale_ardia_close_and_reset(self): self.run_case('chrome-close')
     def test_unhosted_chrome_lifecycle_and_veto_behavior_stay_default(self): self.run_case('unhosted')
+
+    def test_managed_page_veto_and_page_body_veto_preserve_chrome_cleanup_and_retry(self):
+        self.run_case('page-veto')
+        self.run_case('page-veto-undocked')
+
+    def test_unhosted_page_veto_remains_the_control(self):
+        self.run_case('unhosted-page-veto')
+        self.run_case('unhosted-page-veto-undocked')
+
+    def test_stale_frontend_close_settles_overlapping_page_close_after_ardia_or_chrome_takeover(self):
+        for owner in ['ardia', 'chrome']:
+            for response in ['allow', 'veto']:
+                with self.subTest(owner=owner, response=response):
+                    self.run_case(f'page-overlap-{owner}-{response}')
+
+    def test_page_cancellation_retains_newer_frontend_close_retry_and_latest_edits(self):
+        self.run_case('page-overlap-ardia-allow-retry')
+        self.run_case('page-overlap-chrome-veto-retry')
+
+    def test_page_cancellation_callback_can_replace_owner_and_start_a_new_close(self):
+        self.run_case('page-cancel-new-owner')
+
+    def test_page_cancellation_callback_can_destroy_helper_frontend_and_inspected_contents(self):
+        self.run_case('page-cancel-destroy')
+        self.run_case('page-cancel-destroy-page')
 
     def test_zero_fuzz_patch_and_guard_placement(self):
         self.assertEqual(self.patch_output.count('patching file'), 3)
