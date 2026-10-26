@@ -1,4 +1,5 @@
-import type { HydrateData } from "../../browser/src/store/browser";
+import type { LaunchConfig } from "../../../packages/shell/src/app";
+import type { HydrateData } from "../../browser/src/state/browser/store";
 
 export type HostListener = (module: string, event: string, payload: unknown) => void;
 export type ArdiaHost = {
@@ -11,7 +12,7 @@ export type ArdiaHost = {
     documents?: Record<string, string>;
     nativeModules?: Record<string, Record<string, unknown>>;
     capabilities?: string[];
-    environment?: Record<string, string>;
+    launchConfig?: LaunchConfig;
   };
   call(name: string, profile: string, args: string | null): Promise<string>;
   invoke(method: string, args: Record<string, unknown>): Promise<unknown>;
@@ -46,7 +47,16 @@ export function hostModuleMethod(module: string, method: string, host: ArdiaHost
 
 export function callHost(name: string, profile: string, args: string | null, host: ArdiaHost = ardiaHost!) {
   if (!host) return Promise.reject(new Error(`Ardia host unavailable: ${name}`));
-  return Promise.resolve().then(() => host.call(name, hostProfile(profile, host), args));
+  if (typeof profile !== "string") return Promise.reject(Object.assign(new Error("Profile must be a string"), { code: "ERR_ENGINE" }));
+  return Promise.resolve().then(() => host.call(name, hostProfile(profile, host), args)).then((reply) => {
+    if (typeof reply !== "string") throw Object.assign(new Error("The engine reply is not JSON text"), { code: "ERR_BAD_REPLY" });
+    let parsed: unknown;
+    try { parsed = JSON.parse(reply); } catch { throw Object.assign(new Error("The engine reply is not JSON"), { code: "ERR_BAD_REPLY" }); }
+    if (parsed && typeof parsed === "object" && "error" in parsed) {
+      throw Object.assign(new Error(String(parsed.error)), { code: "ERR_ENGINE" });
+    }
+    return reply;
+  });
 }
 
 export function reportHostError(error: unknown) {
