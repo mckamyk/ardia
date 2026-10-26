@@ -65,6 +65,7 @@ class LinuxDocuments {
   base::DictValue envelope_;
   bool loaded_ = false;
   std::map<std::string, Changed> watchers_;
+  std::map<std::string, int> retired_generations_;
   std::map<std::string, std::pair<std::string, int>> seals_;
 };
 
