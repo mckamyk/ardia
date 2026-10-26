@@ -77,6 +77,7 @@ class NativeCallbackTests(unittest.TestCase):
         struct ShellHostView {
           std::vector<std::pair<int, base::DictValue>> events;
           int removed_views = 0;
+          void OfferTab(content::WebContents*) {}
           void ReportTab(int id, base::DictValue event) { events.emplace_back(id, std::move(event)); }
           void RemoveChildViewT(views::WebView*) { ++removed_views; }
         };

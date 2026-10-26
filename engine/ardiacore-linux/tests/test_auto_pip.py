@@ -14,6 +14,9 @@ class AutoPictureInPictureTests(unittest.TestCase):
         start = source.index('void ShellHostView::SetPresentations(')
         end = source.index('\nvoid ShellHostView::StripCommand(', start)
         method = source[start:end]
+        claim_start = source.index('TabBinding* ShellHostView::ClaimedBinding(')
+        claim_end = source.index('\nbool ShellHostView::CloseTab(', claim_start)
+        claim_method = source[claim_start:claim_end]
         shown_start = source.index('  int TabShown(')
         shown_brace = source.index('{', shown_start)
         shown_end = shown_brace + 1
@@ -23,6 +26,7 @@ class AutoPictureInPictureTests(unittest.TestCase):
             shown_end += 1
         shown = source[shown_start:shown_end]
         prelude = r'''
+#include "ardia/linux/ac_linux_contract.h"
 #include <cassert>
 #include <functional>
 #include <map>
@@ -61,6 +65,7 @@ struct Value {
 };
 using ListValue = std::vector<Value>;
 struct DictValue {
+  std::map<std::string, std::string> strings;
   std::map<std::string, int> ints;
   std::map<std::string, bool> bools;
   std::map<std::string, ListValue> lists;
@@ -78,6 +83,10 @@ struct DictValue {
   }
 };
 Value::Value(DictValue value) : dict(std::make_shared<DictValue>(std::move(value))) {}
+}
+std::string String(const base::DictValue& value, const char* key) {
+  const auto found = value.strings.find(key);
+  return found == value.strings.end() ? "" : found->second;
 }
 namespace content {
 struct WebContents {
@@ -97,6 +106,7 @@ struct AutoPictureInPictureTabHelper {
 };
 struct TabBinding {
   content::WebContents value;
+  std::string claim = "current";
   bool presented = false;
   bool presentation_applied = false;
   bool presentation_attached = false;
@@ -111,6 +121,7 @@ struct ShellHostView {
     const auto found = bindings_.find(id);
     return found == bindings_.end() ? nullptr : found->second.get();
   }
+  TabBinding* ClaimedBinding(const base::DictValue& args);
   ARDIA_SHOWN_METHOD
   void SetPresentations(const base::DictValue&, base::OnceCallback<void(bool, base::Value)>);
 };
@@ -123,6 +134,7 @@ int main() {
   auto item = [](int id, bool visible) {
     base::DictValue value;
     value.ints["id"] = id;
+    value.strings["claim"] = "current";
     value.bools["visible"] = visible;
     return base::Value(std::move(value));
   };
@@ -157,6 +169,12 @@ int main() {
   assert(events.empty());
   assert(!send({item(1, false), base::Value()}));
   assert(host.Binding(1)->presented);
+  auto stale = item(1, false);
+  stale.dict->strings["claim"] = "stale";
+  assert(!send({item(2, false), stale}));
+  assert(host.Binding(2)->presented);
+  assert(host.Binding(1)->presented);
+  assert(events.empty());
   assert(send({item(1, false), item(1, true)}));
   assert(events.empty());
   assert(send({}));
@@ -178,9 +196,9 @@ int main() {
         with tempfile.TemporaryDirectory(prefix='ardia-auto-pip-test-') as scratch:
             scratch = Path(scratch)
             cpp = scratch / 'auto_pip.cc'
-            cpp.write_text(prelude.replace('ARDIA_SHOWN_METHOD', shown) + method + main)
+            cpp.write_text(prelude.replace('ARDIA_SHOWN_METHOD', shown) + claim_method + method + main)
             binary = scratch / 'auto_pip'
-            subprocess.run([compiler, '-std=c++20', '-Wall', '-Werror', str(cpp), '-o', str(binary)], check=True, capture_output=True)
+            subprocess.run([compiler, '-std=c++20', '-Wall', '-Werror', '-I', str(Path(__file__).resolve().parents[1] / 'src'), str(cpp), '-o', str(binary)], check=True, capture_output=True)
             subprocess.run([str(binary)], check=True)
 
 
