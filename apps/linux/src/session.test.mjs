@@ -458,3 +458,47 @@ for (const peerInterleaving of [false, true]) for (const eventFirst of [true, fa
     }
   });
 }
+
+test("session close tokens freeze producers before draining and only final cancellation resumes", async () => {
+  const { quiesceLinuxSession, resumeLinuxSession } = await import("./sessionClose.ts");
+  const previousWindow = globalThis.window, previousDocument = globalThis.document;
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} };
+  const initial = browserSession();
+  useBrowser.getState().hydrate(initial);
+  let canonical = initial;
+  const writes = [];
+  const native = {
+    ...host(),
+    async invoke(method, pair) {
+      assert.equal(method, "session.write");
+      writes.push(pair);
+      canonical = mergeSession(pair.base, pair.session, canonical);
+      return canonical;
+    },
+    onEvent() { return () => {}; },
+    onBeforeClose() { return () => {}; },
+  };
+  const persistence = startHostPersistence(native, useBrowser, initial);
+  try {
+    useBrowser.getState().updateSettings({ sidebarWidth: 301 });
+    quiesceLinuxSession("close-one");
+    quiesceLinuxSession("close-two");
+    await persistence.flush();
+    const count = writes.length;
+    assert.equal(canonical.settings.sidebarWidth, 301);
+    useBrowser.getState().updateSettings({ sidebarWidth: 302 });
+    await persistence.flush();
+    assert.equal(writes.length, count);
+    resumeLinuxSession("close-one");
+    await persistence.flush();
+    assert.equal(writes.length, count);
+    resumeLinuxSession("close-two");
+    await persistence.flush();
+    assert.equal(canonical.settings.sidebarWidth, 302);
+  } finally {
+    resumeLinuxSession("close-one"); resumeLinuxSession("close-two");
+    persistence();
+    globalThis.window = previousWindow; globalThis.document = previousDocument;
+  }
+});
