@@ -1,7 +1,6 @@
-import { readDocument, writeDocument } from "../../platform/documents";
+import { createLivePersistence, type LivePersistenceIntent, type LiveProjection } from "../../platform/livePersistence";
 import { create } from "zustand";
 import type { CompletedItem, CompletionState, FolderStatus, LiveAccount, LiveFolder, LiveFolderKind, LiveItem, LiveSourceId } from "./types";
-import { parseSaved, unchanged, versionedJson, type Migrations } from "../../lib/savedDocument";
 
 export type LiveConfig = {
   githubClientId: string;
@@ -60,20 +59,9 @@ export const DEFAULT_CALENDAR: CalendarSettings = {
   prompted: false,
 };
 
-const DOC = "live.json";
-const DOC_VERSION = 1;
-const DOC_MIGRATIONS: Migrations = { 0: unchanged };
 const PERSISTED = ["folders", "folderOrder", "items", "known", "unread", "hidden", "completed", "expandedStacks", "accounts", "config", "calendar", "meetingGroups", "dismissedAlerts"] as const;
-
-function load(): Partial<LiveState> {
-  try {
-    return (parseSaved(readDocument(DOC), DOC_VERSION, DOC_MIGRATIONS) as Partial<LiveState> | null) ?? {};
-  } catch {
-    return {};
-  }
-}
-
-const saved = load();
+const persistence = createLivePersistence();
+const saved = persistence.load() as Partial<LiveState>;
 
 const FOLDER_OPTION_DEFAULTS = { groupStacks: true, showCompleted: true } satisfies Partial<LiveFolder>;
 
@@ -100,24 +88,31 @@ export const useLive = create<LiveState>()(() => ({
 }));
 
 export const live = () => useLive.getState();
-export const setLive = (patch: Partial<LiveState> | ((s: LiveState) => Partial<LiveState>)) => useLive.setState(patch);
-
-let timer: ReturnType<typeof setTimeout> | undefined;
-useLive.subscribe((s, prev) => {
-  if (PERSISTED.every((k) => s[k] === prev[k])) return;
-  clearTimeout(timer);
-  timer = setTimeout(() => {
-    const s = live();
-    try {
-      writeDocument(DOC, versionedJson(Object.fromEntries(PERSISTED.map((k) => [k, s[k]])), DOC_VERSION));
-    } catch (error) {
-      console.warn("Couldn't save live folders", error);
-    }
-  }, 800);
+let applyingCanonical = false;
+let localIntent: LivePersistenceIntent | undefined;
+export const setLive = (patch: Partial<LiveState> | ((s: LiveState) => Partial<LiveState>), intent?: LivePersistenceIntent) => {
+  localIntent = intent;
+  try { useLive.setState(patch); }
+  finally { localIntent = undefined; }
+};
+const projection = (state: LiveState): LiveProjection => Object.fromEntries(PERSISTED.map((key) => [key, state[key]]));
+useLive.subscribe((state, previous) => {
+  if (applyingCanonical || PERSISTED.every((key) => state[key] === previous[key])) return;
+  persistence.changed(projection(previous), projection(state), localIntent);
 });
-
-let counter = 0;
-const newId = () => `lf-${Date.now().toString(36)}-${(++counter).toString(36)}`;
+persistence.start((payload) => {
+  const saved = payload as Partial<LiveState>;
+  applyingCanonical = true;
+  try {
+    useLive.setState({
+      ...Object.fromEntries(PERSISTED.filter((key) => key in saved).map((key) => [key, saved[key]])),
+      folders: withOptionDefaults(saved.folders),
+      config: { ...DEFAULT_CONFIG, ...saved.config },
+      calendar: { ...DEFAULT_CALENDAR, ...saved.calendar },
+    });
+  } finally { applyingCanonical = false; }
+});
+export const beginLiveRefresh = (folderId: string) => persistence.beginRefresh(folderId);
 
 export const FOLDER_DEFAULTS: Record<LiveFolderKind, { name: string; sources: LiveSourceId[] }> = {
   pullRequests: { name: "Pull Requests", sources: ["github"] },
@@ -125,7 +120,7 @@ export const FOLDER_DEFAULTS: Record<LiveFolderKind, { name: string; sources: Li
 };
 
 export function createFolder(profileId: string, kind: LiveFolderKind, sources?: LiveSourceId[]): string {
-  const id = newId();
+  const id = persistence.newFolderId();
   const folder: LiveFolder = {
     id,
     profileId,
@@ -184,13 +179,13 @@ export function arrangeFolders(placed: { id: string; after: string | null }[]) {
     const reordered = folderOrder.some((id, i) => id !== s.folderOrder[i]);
     if (!moved.length && !reordered) return {};
     return { folders, folderOrder: reordered ? folderOrder : s.folderOrder };
-  });
+  }, { kind: "placement", placed });
 }
 
 const MAX_KNOWN = 600;
 const MAX_COMPLETED = 20;
 
-export function applyFetch(folderId: string, fetched: LiveItem[], gone: Record<string, CompletionState>, now = Date.now(), quiet: Set<string> = new Set()) {
+export function applyFetch(folderId: string, fetched: LiveItem[], gone: Record<string, CompletionState>, now = Date.now(), quiet: Set<string> = new Set(), fence?: unknown) {
   setLive((s) => {
     if (!s.folders[folderId]) return {};
     const closed = (id: string) => gone[id] === "merged" || gone[id] === "closed";
@@ -221,7 +216,7 @@ export function applyFetch(folderId: string, fetched: LiveItem[], gone: Record<s
       completing: leaving.length ? { ...s.completing, [folderId]: [...(s.completing[folderId] ?? []), ...leaving.map((l) => l.id)] } : s.completing,
       status: { ...s.status, [folderId]: { state: "idle", lastFetch: now, error: null } },
     };
-  });
+  }, { kind: "refresh", folderId, fence });
 }
 
 export function finishCompleting(folderId: string, ids: string[]) {

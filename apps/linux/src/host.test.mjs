@@ -60,11 +60,12 @@ test("documents read their native bootstrap and persist writes and removals in o
   assert.equal(documents.read("settings.json"), '{"theme":"dark"}');
   const write = documents.write("settings.json", '{"theme":"light"}');
   const remove = documents.remove("settings.json");
-  assert.equal(documents.read("settings.json"), null);
+  assert.equal(documents.read("settings.json"), '{"theme":"dark"}');
   await new Promise(setImmediate);
   assert.equal(requests.length, 1);
   finish();
   await Promise.all([write, remove]);
+  assert.equal(documents.read("settings.json"), null);
   assert.deepEqual(requests.map(([method]) => method), ["ArdiaShell.writeDocument", "ArdiaShell.removeDocument"]);
 });
 
