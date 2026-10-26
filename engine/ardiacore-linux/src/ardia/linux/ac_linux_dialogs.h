@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 
 #include "base/functional/callback.h"
@@ -54,6 +55,7 @@ using LinuxDialogCompletion = base::OnceCallback<void(base::DictValue)>;
 class LinuxDialogController {
  public:
   static constexpr size_t kMaxPending = 16;
+  static constexpr size_t kMaxRetiredGenerations = 1024;
 
   LinuxDialogController(std::string window_id,
                         std::string profile_identity,
@@ -90,7 +92,8 @@ class LinuxDialogController {
   const std::string profile_identity_;
   LinuxDialogPresenter presenter_;
   std::string generation_;
-  std::string last_generation_;
+  std::set<std::string> retired_generations_;
+  bool renderer_history_exhausted_ = false;
   bool parent_alive_ = true;
   bool canceling_ = false;
   bool pumping_ = false;
