@@ -1648,7 +1648,7 @@
       "area": "Upstream integration",
       "title": "Provide Linux launch switches and qualify the Chromium 156 native build and package",
       "impact": "A matching Linux native engine is not established for the rebased source. The shared engine now depends on a Mac-only GN target/source, so the existing Chromium 155 package cannot stand in for a current native build.",
-      "evidence": "Main advances Chromium to156.0.8078.47 and shared Helium0.20.1. The rebased shared Ardia BUILD depends on //ardia/core:launch_switches, whose BUILD asserts is_mac and whose ac_launch_switches.cc includes Apple Security frameworks. Linux apply copies only the hook headers, not the new launch-switch contract. ac_downloads.cc now includes that header. Linux pins have been aligned to HeliumLinux0.20.1.1 (473c0f72\u2026), whose shared submodule matches f29a2596\u2026; no Linux156 build/strict series/package qualification was run. One tooling test still hardcodes155 and fails after the corrected pin.",
+      "evidence": "Main advances Chromium to156.0.8078.47 and shared Helium 0.20.1. The rebased shared Ardia BUILD depends on //ardia/core:launch_switches, whose BUILD asserts is_mac and whose ac_launch_switches.cc includes Apple Security frameworks. Linux apply copies only the hook headers, not the new launch-switch contract. ac_downloads.cc now includes that header. Linux pins have been aligned to Helium Linux 0.20.1.1 (473c0f72\u2026), whose shared submodule matches f29a2596\u2026; no Linux 156 build/strict series/package qualification was run. One tooling test still hardcodes 155 and fails after the corrected pin.",
       "refs": [
         "engine/patches/build/helium-pins.ini:1",
         "engine/chromium/src/chrome/browser/ardia/BUILD.gn:110",
@@ -1658,18 +1658,18 @@
         "engine/ardiacore-linux/apply.sh:27",
         "engine/patches/build/tests/test_platform_tooling.py:197"
       ],
-      "caveat": "Matching pins are source metadata, not build or runtime evidence. Do not weaken the test/authentication gate, route Linux to Apple-only code, clean existing Chromium outputs, or reuse the155 binary as validation of156 APIs.",
+      "caveat": "Matching pins are source metadata, not build or runtime evidence. Do not weaken the test/authentication gate, route Linux to Apple-only code, clean existing Chromium outputs, or reuse the 155 binary as validation of 156 APIs.",
       "suggested_steps": [
         "Supply a Linux implementation of the shared launch-switch contract and select its GN target under is_linux; retain the existing macOS implementation and behavior.",
         "Extend Linux layer materialization/drift manifests to include the required shared declarations and Linux implementation. Reconcile all156 hook signatures, selected patch contexts and GN dependencies on a separate/version-correct source tree.",
         "Update version-sensitive fixture expectations meaningfully, retaining the Linux/shared Helium compatibility check and failing closed for unavailable OS authentication.",
-        "Prepare a matching156 tree without cleaning or synchronizing an existing build cache, compile incrementally under the Chromium lock, package the current Linux UI, and retain engine-tree/build provenance."
+        "Prepare a matching 156 tree without cleaning or synchronizing an existing build cache, compile incrementally under the Chromium lock, package the current Linux UI, and retain engine-tree/build provenance."
       ],
       "acceptance": [
         "GN generation and header checks resolve Linux launch-switch dependencies without evaluating the is_mac-only target.",
         "Strict Linux patch/materialization checks and platform tooling pass for the selected156 pins; no Mac-only changes leak into Linux or vice versa.",
-        "A real matching Linux156 engine/package boots with scratch profiles, Chromium sandbox, ordinary-page bridge isolation and correct native service ABI.",
-        "Re-run native keyboard/restored-session/auto-PiP checks with the migrated UI and record binary/UI/source identities; do not infer current support from historical155 evidence."
+        "A real matching Linux 156 engine/package boots with scratch profiles, Chromium sandbox, ordinary-page bridge isolation and correct native service ABI.",
+        "Re-run native keyboard/restored-session/auto-PiP checks with the migrated UI and record binary/UI/source identities; do not infer current support from historical 155 evidence."
       ],
       "proof": "Rebased source / failing version-sensitive tooling fixture",
       "issue": {

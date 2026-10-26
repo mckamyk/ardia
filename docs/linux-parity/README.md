@@ -2,7 +2,7 @@
 
 These six draft planning PRs hand off36 issues:27 original gaps,3 desktop investigations and6 new upstream integration regressions. [#10 coordination](https://github.com/mckamyk/ardia/issues/10) is the live coordination tracker. Plans describe work and acceptance; they do not implement repairs or close issues.
 
-The Linux branch was rebased onto main `a2ca6bdf8f69ef1b5818525ca79e9d85de2fc962` and published at `6907d6831980c3b6d686ccba0d3abdb8be2d5ebe`. The311 incoming commits reorganize shared UI/state/platform layers, native domain calls/events, stable tab identity, configuration and Chromium156. All30 original findings remain applicable on current-source review. Issue links pin evidence to this rebased source, replacing obsolete pre-rebase paths.
+The Linux branch was rebased onto main `a2ca6bdf8f69ef1b5818525ca79e9d85de2fc962` and published at `6907d6831980c3b6d686ccba0d3abdb8be2d5ebe`. The 311 incoming commits reorganize shared UI/state/platform layers, native domain calls/events, stable tab identity, configuration and Chromium 156. All 30 original findings remain applicable on current-source review. Issue links pin evidence to this rebased source, replacing obsolete pre-rebase paths.
 
 ## Validation status
 
@@ -10,15 +10,15 @@ The Linux branch was rebased onto main `a2ca6bdf8f69ef1b5818525ca79e9d85de2fc962
 | --- | --- |
 | Frozen dependency installation | Passed |
 | Linux UI production build | Failed on removed shared import paths; N01 |
-| Linux typecheck | Failed with105 errors; N01/N03 and exact Linux signatures |
+| Linux typecheck | Failed with 105 errors; N01/N03 and exact Linux signatures |
 | Linux host tests | Three test files cannot load removed paths; N01 |
 | Native host fixtures |11 passed |
 | Native bootstrap |7 passed |
-| Linux platform tooling |14 passed;1 stale hardcoded155 expectation fails; N05 |
-| Matching Chromium156 engine/package | Not built or qualified; N05 |
+| Linux platform tooling |14 passed;1 stale hardcoded 155 expectation fails; N05 |
+| Matching Chromium 156 engine/package | Not built or qualified; N05 |
 | Shared browser and demo relative to new main | No application-source changes |
 
-The Linux/shared Helium pins now match0.20.1 at `f29a25968e483f8bb85e47829ccd487bbe229199`; HeliumLinux0.20.1.1 is pinned at `473c0f72d7db2e8492f0fa975b8544bc719bb027`. This is source alignment, not native build evidence. Historical Chromium155 native probes do not validate the rebased tree.
+The Linux/shared Helium pins now match 0.20.1 at `f29a25968e483f8bb85e47829ccd487bbe229199`; Helium Linux 0.20.1.1 is pinned at `473c0f72d7db2e8492f0fa975b8544bc719bb027`. This is source alignment, not native build evidence. Historical Chromium 155 native probes do not validate the rebased tree.
 
 ## Stack and primary ownership
 
@@ -71,14 +71,14 @@ flowchart LR
 
 ## Agent lanes and file ownership
 
-- Start N01 import/Vite/test migration, N02 native domain mapping, N03 tab identity, N04 launch config, N05 native156 GN/patch qualification and N06 shortcut resolution as separate agreed sublanes. Their acceptance joins at a runnable current-source app.
+- Start N01 import/Vite/test migration, N02 native domain mapping, N03 tab identity, N04 launch config, N05 native 156 GN/patch qualification and N06 shortcut resolution as separate agreed sublanes. Their acceptance joins at a runnable current-source app.
 - F05 dialog helpers, F04 document protocol, F19 pointer normalization, F10 narrow suggestions, F24 favicon helpers, F25 native theme-color, import parsing and R01–R03 reproduction can begin independently.
 - F15 media and F18 policy development run concurrently; automatic destructive policy remains disabled until its protection-state contract is reliable. Do not wait for all of F16 when only a narrow dirty-input/scroll primitive is needed.
 - F07 metadata/configuration can precede secret operations. Real protected storage and authentication are mandatory before revealing/exporting secrets. F11/F12/F13 should coordinate typed secret writes and network/filesystem primitives without routing secrets through generic service JSON.
 - Give `engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc` one integration owner. Native agents own separate Linux helper files and hand over narrow dispatch/observer/bootstrap registration changes.
 - Give `apps/linux/src/main.tsx`, `hostModules.ts`, `shims/expo-modules-core.ts`, `shims/shellBase.tsx`, `shims/web/HostWebView.tsx` and `vite.config.ts` one owner each. Claim exact file boundaries before editing and do not stage other agents’ hunks.
 - Follow current shared `state/`/`platform/`/component direction, tokens and store APIs. Do not resurrect old shared files, duplicate stores or native compatibility aliases. Keep Linux adapters under `apps/linux`, host helpers under `engine/ardiacore-linux`, and shared engine services under `engine/chromium`; preserve macOS/demo behavior.
-- Do not create worktrees. Use scratch profiles and non-focusing test instances. Batch integrated native work into a matching incremental156 build under the Chromium lock; never clean/sync existing output trees to fix an integration problem.
+- Do not create worktrees. Use scratch profiles and non-focusing test instances. Batch integrated native work into a matching incremental 156 build under the Chromium lock; never clean/sync existing output trees to fix an integration problem.
 
 ## Complete issue inventory
 

@@ -1,6 +1,6 @@
 # Linux upstream baseline, capabilities and profile boundaries
 
-Draft planning layer1/6. This workstream describes repairs owned by [#38 N01](https://github.com/mckamyk/ardia/issues/38), [#39 N02](https://github.com/mckamyk/ardia/issues/39), [#40 N03](https://github.com/mckamyk/ardia/issues/40), [#41 N04](https://github.com/mckamyk/ardia/issues/41), [#42 N05](https://github.com/mckamyk/ardia/issues/42), [#43 N06](https://github.com/mckamyk/ardia/issues/43), [#12 F02](https://github.com/mckamyk/ardia/issues/12), [#36 F26](https://github.com/mckamyk/ardia/issues/36). It adds no application behavior and closes no repair issue. The Git base chain is document order; use the [coordination tracker](https://github.com/mckamyk/ardia/issues/10) and [index](README.md) for actual blockers and parallel lanes.
+Draft planning layer 1/6. This workstream describes repairs owned by [#38 N01](https://github.com/mckamyk/ardia/issues/38), [#39 N02](https://github.com/mckamyk/ardia/issues/39), [#40 N03](https://github.com/mckamyk/ardia/issues/40), [#41 N04](https://github.com/mckamyk/ardia/issues/41), [#42 N05](https://github.com/mckamyk/ardia/issues/42), [#43 N06](https://github.com/mckamyk/ardia/issues/43), [#12 F02](https://github.com/mckamyk/ardia/issues/12), [#36 F26](https://github.com/mckamyk/ardia/issues/36). It adds no application behavior and closes no repair issue. The Git base chain is document order; use the [coordination tracker](https://github.com/mckamyk/ardia/issues/10) and [index](README.md) for actual blockers and parallel lanes.
 
 ## Integration contract
 
@@ -14,7 +14,7 @@ Suggested role: **Linux baseline and capability integrator**. File boundary: app
 
 N01–N05 are new runnable-baseline prerequisites after main’s311 incoming commits. Agree their interfaces first, then implement separate Vite/import, domain-routing, identity, launch-config and native-build slices concurrently. N06 corrects shortcut defaults/display independently. F02 first gates unsupported identities safely, then supplies real profile/private ownership; F26 treats absent integrations honestly. Do not claim a compile-only fix completes this baseline.
 
-The native build requires Chromium156 and aligned Helium pins. Existing155 binaries are historical artifacts. Keep app/engine contracts current together rather than adding shared aliases for removed ArdiaCEF methods.
+The native build requires Chromium 156 and aligned Helium pins. Existing155 binaries are historical artifacts. Keep app/engine contracts current together rather than adding shared aliases for removed ArdiaCEF methods.
 
 ## N01 Migrate Linux imports, Vite adapters and type contracts after the upstream layer move
 
@@ -184,7 +184,7 @@ A matching Linux native engine is not established for the rebased source. The sh
 
 ### Current source evidence
 
-Main advances Chromium to156.0.8078.47 and shared Helium0.20.1. The rebased shared Ardia BUILD depends on //ardia/core:launch_switches, whose BUILD asserts is_mac and whose ac_launch_switches.cc includes Apple Security frameworks. Linux apply copies only the hook headers, not the new launch-switch contract. ac_downloads.cc now includes that header. Linux pins have been aligned to HeliumLinux0.20.1.1 (473c0f72…), whose shared submodule matches f29a2596…; no Linux156 build/strict series/package qualification was run. One tooling test still hardcodes155 and fails after the corrected pin.
+Main advances Chromium to156.0.8078.47 and shared Helium 0.20.1. The rebased shared Ardia BUILD depends on //ardia/core:launch_switches, whose BUILD asserts is_mac and whose ac_launch_switches.cc includes Apple Security frameworks. Linux apply copies only the hook headers, not the new launch-switch contract. ac_downloads.cc now includes that header. Linux pins have been aligned to Helium Linux 0.20.1.1 (473c0f72…), whose shared submodule matches f29a2596…; no Linux 156 build/strict series/package qualification was run. One tooling test still hardcodes 155 and fails after the corrected pin.
 
 - [engine/patches/build/helium-pins.ini:1](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/patches/build/helium-pins.ini#L1)
 - [engine/chromium/src/chrome/browser/ardia/BUILD.gn:110](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/chromium/src/chrome/browser/ardia/BUILD.gn#L110)
@@ -199,14 +199,14 @@ Main advances Chromium to156.0.8078.47 and shared Helium0.20.1. The rebased shar
 1. Supply a Linux implementation of the shared launch-switch contract and select its GN target under is_linux; retain the existing macOS implementation and behavior.
 2. Extend Linux layer materialization/drift manifests to include the required shared declarations and Linux implementation. Reconcile all156 hook signatures, selected patch contexts and GN dependencies on a separate/version-correct source tree.
 3. Update version-sensitive fixture expectations meaningfully, retaining the Linux/shared Helium compatibility check and failing closed for unavailable OS authentication.
-4. Prepare a matching156 tree without cleaning or synchronizing an existing build cache, compile incrementally under the Chromium lock, package the current Linux UI, and retain engine-tree/build provenance.
+4. Prepare a matching 156 tree without cleaning or synchronizing an existing build cache, compile incrementally under the Chromium lock, package the current Linux UI, and retain engine-tree/build provenance.
 
 ### Acceptance
 
 - [ ] GN generation and header checks resolve Linux launch-switch dependencies without evaluating the is_mac-only target.
 - [ ] Strict Linux patch/materialization checks and platform tooling pass for the selected156 pins; no Mac-only changes leak into Linux or vice versa.
-- [ ] A real matching Linux156 engine/package boots with scratch profiles, Chromium sandbox, ordinary-page bridge isolation and correct native service ABI.
-- [ ] Re-run native keyboard/restored-session/auto-PiP checks with the migrated UI and record binary/UI/source identities; do not infer current support from historical155 evidence.
+- [ ] A real matching Linux 156 engine/package boots with scratch profiles, Chromium sandbox, ordinary-page bridge isolation and correct native service ABI.
+- [ ] Re-run native keyboard/restored-session/auto-PiP checks with the migrated UI and record binary/UI/source identities; do not infer current support from historical 155 evidence.
 
 ### Dependencies and parallel handoff
 
@@ -216,7 +216,7 @@ No issue-wide downstream block is declared.
 
 Coordinate contracts/shared files with [#39 N02](https://github.com/mckamyk/ardia/issues/39), [#41 N04](https://github.com/mckamyk/ardia/issues/41), [#17 F07](https://github.com/mckamyk/ardia/issues/17). These are not additional whole-issue blockers.
 
-Scope: Matching pins are source metadata, not build or runtime evidence. Do not weaken the test/authentication gate, route Linux to Apple-only code, clean existing Chromium outputs, or reuse the155 binary as validation of156 APIs.
+Scope: Matching pins are source metadata, not build or runtime evidence. Do not weaken the test/authentication gate, route Linux to Apple-only code, clean existing Chromium outputs, or reuse the 155 binary as validation of 156 APIs.
 
 ## N06 Linux shortcut hints and conflict resolution diverge from the actual native shortcut catalog
 
