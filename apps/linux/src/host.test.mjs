@@ -449,7 +449,7 @@ test("logical tab presentations batch returns and departures independently of vi
   incoming.dispose();
 });
 
-test("presentations wait for identity and ignore released or superseded views", async () => {
+test("presentations retain queue order across pending replacements and ignore released views", async () => {
   let finish;
   const pending = new Promise((resolve) => { finish = resolve; });
   const { host, requests } = fixture(async (method) => method === "tab.create" ? pending : null);
@@ -460,12 +460,12 @@ test("presentations wait for identity and ignore released or superseded views", 
   assert.equal(requests.filter(([method]) => method === "tab.presentations").length, 0);
   finish({ browserId: 30, chromeTabId: 30 });
   await Promise.all([oldUpdate, currentUpdate]);
-  assert.deepEqual(requests.filter(([method]) => method === "tab.presentations"), [["tab.presentations", { tabs: [{ claim: current.claim, id: 30, visible: true }] }]]);
+  assert.deepEqual(requests.filter(([method]) => method === "tab.presentations"), [["tab.presentations", { tabs: [{ claim: old.claim, id: 30, visible: false }] }], ["tab.presentations", { tabs: [{ claim: current.claim, id: 30, visible: true }] }]]);
   const releasedUpdate = current.presentation(false);
   current.dispose();
   old.dispose();
   await releasedUpdate;
-  assert.equal(requests.filter(([method]) => method === "tab.presentations").length, 1);
+  assert.equal(requests.filter(([method]) => method === "tab.presentations").length, 2);
 });
 
 test("a presentation batch retains its final visibility and reports transport errors", async () => {

@@ -72,3 +72,25 @@ Correction verification, from repository root:
 - `git diff --check` — passed.
 
 The parent integrator must include `src/hostTabReplacement.test.mjs` alongside the contract test in its default host-test script. Package/Vite files were not changed in this correction. F04 documents and close-barrier integration are deliberately outside this commit. Matching Chromium 156 compilation/runtime, real temporary-page teardown and compositor/renderer replacement acceptance remain unverified; these extracted fixtures do not establish those results.
+
+## Second independent review correction
+
+The review of `51551e93` found three further P2 races. Before editing, both independent probes reproduced them: `/tmp/ardia-bridge-round2-presentation-before.log` and `/tmp/ardia-bridge-round2-native-before.log`. The owned presentation tests also failed the exact one-microtask replacement and held-reply multikey sequences before repair.
+
+Renderer activation now occurs only in the native `PrimaryPageChanged` callback. `RegisterMessages` registers transport without acquiring authority. `SetHandler(handler, ui)` validates the actual live primary frame and WebUI, stores a native `WeakDocumentPtr`, and retires the previous document when a real replacement commits. Native document validity rejects old authority even when a RenderFrameHost is reused. Canceled speculative registration and its destructor leave the still-committed renderer authorized. Temporary JavaScript disallow does not retire a still-owned committed document; actual renderer-process loss performs cleanup. Extracted production registration, activation, trust, generation and destructor methods exercise cancellation, real commit, wrong hosts, subframes, reused frames/documents and crashes.
+
+Private temporary surfaces now use `DisposeTemporary`. It detaches the owned WebContents with the native deleted reason into a local `unique_ptr` and destroys it, so a deferred or canceled ordinary beforeunload cannot orphan the surface. Native ownership remains local across reentrant TabStrip, browser or host destruction. The ordinary `CloseTab` user-close path is unchanged. The compiled disposal fixture uses ASan/UBSan and exercises deferred/canceled unload, nested disposal, owner destruction during detach and transaction callbacks, late callbacks, and ordinary-page retention.
+
+Presentation batching now reserves each affected stable-key queue synchronously when requested. Ownership changes on those keys wait until native batch submission/reply completes. Independently ready keys flush without waiting for an unrelated stalled replacement. Queue reservations retain preceding work even when a failed mount's presentation rejects. The existing pending-creation presentation test now verifies both valid ordered presentations: the predecessor update occurs before the replacement claims the key, followed by the replacement update. It no longer expects the earlier requested update to disappear.
+
+Verification from repository root:
+
+- `node --experimental-strip-types --test apps/linux/src/hostTabPresentation.test.mjs apps/linux/src/hostTabReplacement.test.mjs apps/linux/src/hostContract.test.mjs engine/ardiacore-linux/tests/bootstrap.test.mjs` — 25 passed, retaining all original review regressions.
+- `npm exec --yes --package=pnpm@11.1.3 -- pnpm --filter @ardia/linux test:host` — 76 passed.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s engine/ardiacore-linux/tests -v` — 34 passed, including the sanitizer disposal fixture.
+- Linux `typecheck` and `build` through pnpm 11.1.3 — passed; build transformed 1163 modules.
+- Staged diff checks — passed.
+
+F04 integration conflicts are limited to these Linux host seams: `ShellHostView::SetHandler(handler, content::WebUI*)`, `OwnsHandler`, `RetireRenderer`, `Trusted`, the new `DisposeTemporary`, and the temporary branch of `Invoke(tab.release)`; `HostMessageHandler` gains WebContents observation, committed activation, process-loss handling and revised JavaScript-disallow cleanup. Its constructor and `RegisterMessages` also change. Document-client activation must follow committed native activation rather than speculative registration. No F04 helper, registry, dispatcher, barrier, GN, Vite or package file is changed here. The parent should add `hostTabPresentation.test.mjs` to its default test script.
+
+The public Chromium API references were read only from the existing 155 source headers; they are not 156 compile evidence. Complete Chromium 156 host compilation and actual navigation cancellation, unload and compositor acceptance remain open. The fixture results do not establish full native runtime behavior.
