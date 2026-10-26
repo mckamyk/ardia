@@ -7,7 +7,7 @@ import { formatShortcut, comboKey, sameShortcut } from "../../browser/src/state/
 import { shortcutSources } from "../../browser/src/state/commands/commandCatalog.ts";
 import { menuShortcuts } from "../../browser/src/platform/commands.ts";
 import { modifiersOf } from "../../browser/src/lib/keys.ts";
-import { openModeFor, openUrl } from "../../browser/src/state/bookmarks/actions.ts";
+import { openModeFor, openUrl } from "./rawBookmarkActions.ts";
 import { primaryModifiers } from "./clickModifiers.ts";
 import { keyboardCombo, linuxBindings, linuxMenuShortcuts, linuxNativeBindings } from "./shortcuts.ts";
 

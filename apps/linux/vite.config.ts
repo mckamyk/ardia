@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { webShellConfig } from "./vite.shared";
-import { inputAdapters } from "./inputAdapters";
+import { inputAdapters, rawBookmarkAdapter, resolveInputAdapter } from "./inputAdapters";
 
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const replacements = new Map([
@@ -12,7 +12,7 @@ const replacements = new Map([
   [here("../browser/src/components/sidebar/AddressBar.tsx"), here("./src/SidebarAddressBar.tsx")],
   [here("../browser/src/components/sidebar/TileFace.tsx"), here("./src/TileFace.tsx")],
 ]);
-const adapters = new Set(replacements.values());
+const adapters = new Set([...replacements.values(), rawBookmarkAdapter.replacement]);
 
 function linuxComponents(): Plugin {
   return {
@@ -26,7 +26,7 @@ function linuxComponents(): Plugin {
     async resolveId(source, importer, options) {
       if (!importer || adapters.has(importer)) return null;
       const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
-      return resolved ? replacements.get(resolved.id) ?? null : null;
+      return resolved ? resolveInputAdapter(resolved.id, importer) ?? replacements.get(resolved.id) ?? null : null;
     },
   };
 }

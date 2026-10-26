@@ -1,4 +1,4 @@
-import { shortcutSources as sharedSources, staticShortcutSources as sharedStaticSources } from "../../browser/src/state/commands/commandCatalog";
+import { COMMANDS, shortcutSources as sharedSources, staticShortcutSources as sharedStaticSources } from "../../browser/src/state/commands/commandCatalog";
 import { parseShortcut, storedShortcut, type ShortcutSource } from "../../browser/src/state/commands/shortcuts";
 
 export * from "../../browser/src/state/commands/commandCatalog";
@@ -21,7 +21,7 @@ const linuxKeys: Record<string, readonly string[]> = {
   "tabSwitcher:backward": ["⇧⌘⇥"],
 };
 const shiftedKeys: Record<string, string> = { "+": "=", "{": "[", "}": "]" };
-const adapt = (sources: ShortcutSource[]): ShortcutSource[] => sources.filter((source) => !source.id.startsWith("std:")).map((source) => ({
+const adapt = (sources: ShortcutSource[]): ShortcutSource[] => sources.filter((source) => !source.id.startsWith("std:") && (source.id.includes(":") || COMMANDS[source.id as keyof typeof COMMANDS]?.title)).map((source) => ({
   ...source,
   keys: (linuxKeys[source.id]?.map(parseShortcut) ?? source.keys).map((shortcut) => {
     const key = shiftedKeys[shortcut.key];
