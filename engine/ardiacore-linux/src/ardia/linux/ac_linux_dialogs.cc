@@ -121,15 +121,19 @@ bool LinuxDialogController::Authorized(const LinuxDialogClient& client) const {
 
 bool LinuxDialogController::ReplaceRenderer(const std::string& generation) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!parent_alive_ || canceling_ || !Generation(generation)) return false;
+  if (!parent_alive_ || canceling_ || renderer_history_exhausted_ || !Generation(generation)) return false;
   if (generation == generation_) return true;
-  if (generation == last_generation_) return false;
+  if (retired_generations_.contains(generation)) return false;
+  const std::string incoming = generation;
+  if (!generation_.empty()) {
+    if (retired_generations_.size() >= kMaxRetiredGenerations) renderer_history_exhausted_ = true;
+    else retired_generations_.insert(generation_);
+  }
   generation_.clear();
-  last_generation_ = generation;
   auto weak = GetWeakPtr();
   CancelAll();
-  if (!weak || !weak->parent_alive_ || weak->last_generation_ != generation) return false;
-  weak->generation_ = generation;
+  if (!weak || !weak->parent_alive_ || weak->renderer_history_exhausted_ || !weak->generation_.empty()) return false;
+  weak->generation_ = incoming;
   return true;
 }
 
@@ -162,7 +166,9 @@ bool LinuxDialogController::Cancel(const LinuxDialogClient& client,
 
 void LinuxDialogController::RetireRenderer(const std::string& generation) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (generation != generation_) return;
+  if (generation_.empty() || generation != generation_) return;
+  if (retired_generations_.size() >= kMaxRetiredGenerations) renderer_history_exhausted_ = true;
+  else retired_generations_.insert(generation_);
   generation_.clear();
   CancelAll();
 }

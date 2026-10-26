@@ -174,6 +174,39 @@ void ReplacementCancelsBeforePublication() {
   assert(f.controller->pending() == 1 && f.results.empty());
 }
 
+void RetiredGenerationsCannotReturn() {
+  Fixture f;
+  const auto old = f.client;
+  assert(f.controller->ReplaceRenderer("9007199254740994"));
+  assert(!f.controller->ReplaceRenderer(old.renderer_generation));
+  std::string error;
+  assert(!f.controller->Begin(old, Request("dialog:retired-direct"), [](auto) {}, &error));
+  assert(f.controller->ReplaceRenderer("9007199254740995"));
+  assert(!f.controller->ReplaceRenderer(old.renderer_generation));
+  assert(!f.controller->ReplaceRenderer("9007199254740994"));
+  f.controller->RetireRenderer("9007199254740995");
+  assert(!f.controller->ReplaceRenderer(old.renderer_generation));
+  assert(!f.controller->ReplaceRenderer("9007199254740995"));
+  assert(f.controller->ReplaceRenderer("9007199254740996"));
+  f.client.renderer_generation = "9007199254740996";
+  assert(f.Begin("dialog:current-after-retirement"));
+  assert(!f.controller->Cancel(old, "dialog:current-after-retirement"));
+  assert(f.controller->pending() == 1);
+}
+
+void RendererHistoryExhaustion() {
+  Fixture f;
+  for (size_t i = 1; i <= LinuxDialogController::kMaxRetiredGenerations; ++i) {
+    assert(f.controller->ReplaceRenderer(std::to_string(i)));
+  }
+  f.client.renderer_generation = std::to_string(LinuxDialogController::kMaxRetiredGenerations);
+  assert(f.Begin("dialog:before-history-exhaustion"));
+  assert(!f.controller->ReplaceRenderer(std::to_string(LinuxDialogController::kMaxRetiredGenerations + 1)));
+  assert(f.controller->pending() == 0 && f.results.size() == 1);
+  assert(!f.Begin("dialog:after-history-exhaustion"));
+  assert(!f.controller->ReplaceRenderer(f.client.renderer_generation));
+}
+
 void ReentrantCompletionAndDestruction() {
   Fixture f;
   std::string error;
@@ -268,6 +301,8 @@ int main() {
   AuthorizationAndBounds();
   RetirementAndStaleCallbacks();
   ReplacementCancelsBeforePublication();
+  RetiredGenerationsCannotReturn();
+  RendererHistoryExhaustion();
   ReentrantCompletionAndDestruction();
   SynchronousPresenterAndFailure();
   InvalidRequestsAndOptionalOwner();
