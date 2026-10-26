@@ -386,3 +386,75 @@ test("a matching older canonical event cannot discard newer unsaved edits after 
   await closing;
   assert.deepEqual(closed, ["settings"]);
 });
+
+for (const peerInterleaving of [false, true]) for (const eventFirst of [true, false]) {
+  test(`closing a tab during its pending creation save survives the source notification with ${eventFirst ? "event" : "ack"} first${peerInterleaving ? " and an intervening peer save" : ""}`, async () => {
+    const savedWindow = globalThis.window;
+    const savedDocument = globalThis.document;
+    globalThis.window = new EventTarget();
+    globalThis.document = Object.assign(new EventTarget(), { hidden: false });
+    const initial = browserSession();
+    let canonical = initial;
+    let delaySave = false;
+    let held;
+    const listeners = new Set();
+    const native = {
+      ...host(),
+      invoke(method, pair) {
+        assert.equal(method, "session.write");
+        let response;
+        const commit = () => {
+          if (!response) {
+            canonical = mergeSession(pair.base, pair.session, canonical);
+            response = canonical;
+          }
+          return response;
+        };
+        const emit = () => { const session = commit(); for (const listener of listeners) listener("ArdiaHost", "session", { base: pair.session, session, sourceWindowId: "main" }); };
+        if (delaySave) {
+          delaySave = false;
+          return new Promise((resolve) => { held = { emit, resolve: () => resolve(commit()) }; });
+        }
+        emit();
+        return Promise.resolve(commit());
+      },
+      onEvent(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+      onBeforeClose() { return () => {}; },
+    };
+    useBrowser.getState().hydrate(initial);
+    const persistence = startHostPersistence(native, useBrowser, initial);
+    try {
+      await persistence.flush();
+      const created = useBrowser.getState().newTab("main");
+      delaySave = true;
+      const saving = persistence.flush();
+      await new Promise(setImmediate);
+      assert.ok(held);
+      useBrowser.getState().closeTab(created);
+      assert.equal(useBrowser.getState().tabs[created], undefined);
+      if (peerInterleaving) {
+        const base = canonical;
+        canonical = { ...canonical, settings: { ...canonical.settings, sidebarWidth: 388 } };
+        for (const listener of listeners) listener("ArdiaHost", "session", { base, session: canonical, sourceWindowId: "peer" });
+      }
+      if (eventFirst) held.emit();
+      held.resolve();
+      await new Promise(setImmediate);
+      if (!eventFirst) held.emit();
+      await saving;
+      await persistence.flush();
+      assert.equal(useBrowser.getState().tabs[created], undefined);
+      assert.equal(canonical.tabs[created], undefined);
+      assert.ok(!canonical.windows.main.tabIds.includes(created));
+      if (peerInterleaving) assert.equal(canonical.settings.sidebarWidth, 388);
+      const base = canonical;
+      canonical = { ...canonical, settings: { ...canonical.settings, sidebarWidth: 377 } };
+      for (const listener of listeners) listener("ArdiaHost", "session", { base, session: canonical, sourceWindowId: "peer" });
+      assert.equal(useBrowser.getState().settings.sidebarWidth, 377);
+    } finally {
+      persistence();
+      globalThis.window = savedWindow;
+      globalThis.document = savedDocument;
+    }
+  });
+}

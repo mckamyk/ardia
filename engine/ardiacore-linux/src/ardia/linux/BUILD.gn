@@ -29,6 +29,7 @@ source_set("linux") {
     "//chrome/browser/profiles:profile",
     "//chrome/browser/search_engines",
     "//chrome/browser/ui",
+    "//chrome/browser/ui:browser_window_state",
     "//chrome/browser/ui/browser_window:create_browser_window",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/tabs:tab_strip",
@@ -54,6 +55,7 @@ source_set("linux") {
     "//ui/views",
     "//ui/native_theme",
     "//ui/views/controls/webview",
+    "//ui/wm",
     "//url",
   ]
 }
