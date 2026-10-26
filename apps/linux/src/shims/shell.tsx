@@ -4,7 +4,7 @@ import { ardiaHost, hostModuleMethod } from "../host";
 import { flushLinuxSession } from "../session";
 import { createUtilityWindowCloser } from "../utilityClose";
 import { linuxMenuShortcuts } from "../shortcuts";
-import { useBrowser } from "../../../browser/src/store/browser";
+import { useBrowser } from "../../../browser/src/state/browser/store";
 
 export * from "./shellBase";
 export { menuShown, showMenu, watchMenus } from "../menus";
