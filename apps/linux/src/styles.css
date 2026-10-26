@@ -105,3 +105,12 @@
 .ardia-window-control:disabled .ardia-window-control-mark {
   opacity: 0;
 }
+
+.ardia-menu-item {
+  overflow: hidden;
+}
+
+.ardia-menu-item.expanded:not(.disabled) {
+  background: #0a63e0;
+  color: #fff;
+}

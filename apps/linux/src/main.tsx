@@ -14,7 +14,7 @@ import { startHostPersistence } from "../../demo/src/hostSession";
 import { startHostData } from "../../demo/src/hostData";
 import { startHostTabLifecycle } from "../../demo/src/hostTabLifecycle";
 import { setHostOverlayCheck } from "../../demo/src/hostViewport";
-import { MenuHost } from "../../demo/src/shims/web/menus";
+import { MenuHost } from "./menus";
 import "../../demo/src/shims/web/motion/shortcuts";
 import { TrafficLights } from "./TrafficLights";
 import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setSessionFlush } from "./session";
