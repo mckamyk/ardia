@@ -51,6 +51,7 @@
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_removed_reason.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -77,6 +78,8 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/page.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/url_data_source.h"
@@ -585,17 +588,23 @@ class ShellHostView : public views::View,
   base::DictValue Bootstrap() const;
   base::DictValue Strip() const;
   base::DictValue Transaction(std::optional<int> command, bool advance);
-  uint64_t SetHandler(HostMessageHandler* handler) {
-    if (handler_ == handler) return renderer_generation_;
+  uint64_t SetHandler(HostMessageHandler* handler, content::WebUI* ui) {
+    if (!Trusted(ui)) return 0;
+    auto* frame = ui->GetRenderFrameHost();
+    if (handler_ == handler && renderer_document_.AsRenderFrameHostIfValid() == frame) return renderer_generation_;
+    auto document = frame->GetWeakDocumentPtr();
     handler_ = nullptr;
     auto weak = GetWeakPtr();
     RetireRenderer();
-    if (!weak) return 0;
+    auto* committed = document.AsRenderFrameHostIfValid();
+    if (!weak || !committed || committed != weak->shell()->GetPrimaryMainFrame() || committed->GetWebUI() != ui) return 0;
     weak->handler_ = handler;
+    weak->renderer_document_ = std::move(document);
     return weak->renderer_generation_;
   }
   bool OwnsHandler(HostMessageHandler* handler, uint64_t generation) const {
-    return handler && handler_ == handler && renderer_generation_ == generation;
+    auto* frame = renderer_document_.AsRenderFrameHostIfValid();
+    return handler && handler_ == handler && renderer_generation_ == generation && frame && frame == shell()->GetPrimaryMainFrame();
   }
   bool ClearHandler(HostMessageHandler* handler) {
     if (!handler || handler_ != handler) return false;
@@ -605,6 +614,7 @@ class ShellHostView : public views::View,
   }
   void RetireRenderer() {
     ++renderer_generation_;
+    renderer_document_ = content::WeakDocumentPtr();
     std::vector<int> temporary;
     for (auto& [id, binding] : bindings_) {
       binding->claim.clear();
@@ -624,7 +634,7 @@ class ShellHostView : public views::View,
     for (const int id : temporary) {
       if (!weak) return;
       auto* binding = weak->Binding(id);
-      if (binding && binding->temporary && binding->contents()) weak->CloseTab(binding);
+      if (binding && binding->temporary && binding->contents()) weak->DisposeTemporary(binding);
     }
   }
   void Event(std::string_view module, std::string_view event,
@@ -676,6 +686,7 @@ class ShellHostView : public views::View,
   TabBinding* Binding(int id);
   TabBinding* ClaimedBinding(const base::DictValue& args);
   bool CloseTab(TabBinding* binding);
+  bool DisposeTemporary(TabBinding* binding);
   void ClaimLaunchTab(const base::ListValue& values, base::OnceCallback<void(bool, base::Value)> done);
   bool AdoptLaunchOffer(int tab, std::string_view key, std::string_view url);
   ardiacore::linux_contract::LaunchDecision launch_decision_;
@@ -712,6 +723,7 @@ class ShellHostView : public views::View,
   raw_ptr<views::WebView> shell_ = nullptr;
   raw_ptr<HostMessageHandler> handler_ = nullptr;
   uint64_t renderer_generation_ = 0;
+  content::WeakDocumentPtr renderer_document_;
   raw_ptr<views::FocusManager> focus_manager_ = nullptr;
   std::unique_ptr<WindowKeyboardHandler> input_handler_;
   std::map<ui::Accelerator, base::DictValue> shortcuts_;
@@ -743,10 +755,12 @@ ShellHostView* HostFor(content::WebContents* contents) {
   return nullptr;
 }
 
-class HostMessageHandler : public content::WebUIMessageHandler {
+class HostMessageHandler : public content::WebUIMessageHandler,
+                           public content::WebContentsObserver {
  public:
   explicit HostMessageHandler(base::WeakPtr<ShellHostView> host)
-      : host_(std::move(host)) {}
+      : content::WebContentsObserver(host ? host->shell() : nullptr),
+        host_(std::move(host)) {}
   ~HostMessageHandler() override {
     if (host_) host_->ClearHandler(this);
   }
@@ -764,14 +778,25 @@ class HostMessageHandler : public content::WebUIMessageHandler {
     std::string id;
   };
   void RegisterMessages() override {
-    if (host_) generation_ = host_->SetHandler(this);
     web_ui()->RegisterMessageCallback(
         "ardiaRequest", base::BindRepeating(&HostMessageHandler::Request,
                                             base::Unretained(this)));
   }
+  void ActivateCommittedRenderer() {
+    if (!host_ || !host_->Trusted(web_ui())) return;
+    auto weak = weak_factory_.GetWeakPtr();
+    const uint64_t generation = host_->SetHandler(this, web_ui());
+    if (weak) weak->generation_ = generation;
+  }
+  void PrimaryPageChanged(content::Page& page) override {
+    if (&page.GetMainDocument() == web_ui()->GetRenderFrameHost()) ActivateCommittedRenderer();
+  }
+  void PrimaryMainFrameRenderProcessGone(base::TerminationStatus) override {
+    if (host_) host_->ClearHandler(this);
+  }
   void OnJavascriptDisallowed() override {
     weak_factory_.InvalidateWeakPtrs();
-    if (host_) host_->ClearHandler(this);
+    if (host_ && !host_->OwnsHandler(this, generation_)) host_->ClearHandler(this);
   }
   void Reply(std::string id, bool success, base::Value response) {
     if (!host_ || !host_->OwnsHandler(this, generation_) || !host_->Trusted(web_ui()) || !IsJavascriptAllowed()) return;
@@ -1052,9 +1077,9 @@ void ShellHostView::DetachBrowser() {
 }
 
 bool ShellHostView::Trusted(content::WebUI* ui) const {
-  if (!browser_ || ui->GetWebContents() != shell()) return false;
-  const auto* frame = shell()->GetPrimaryMainFrame();
-  return frame && frame->GetLastCommittedOrigin() ==
+  if (!browser_ || !ui || ui->GetWebContents() != shell()) return false;
+  auto* frame = shell()->GetPrimaryMainFrame();
+  return frame && frame->IsRenderFrameLive() && ui->GetRenderFrameHost() == frame && frame->GetWebUI() == ui && frame->GetLastCommittedOrigin() ==
                       url::Origin::Create(GURL("chrome://ardia/")) &&
          shell()->GetLastCommittedURL().host() == "ardia";
 }
@@ -1267,6 +1292,22 @@ bool ShellHostView::CloseTab(TabBinding* binding) {
       index, TabCloseTypes::CLOSE_USER_GESTURE | TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
   app_operation_ = false;
   QueueTransaction(-1);
+  return true;
+}
+
+bool ShellHostView::DisposeTemporary(TabBinding* binding) {
+  if (!binding || !binding->temporary || !binding->contents() || !browser_) return false;
+  auto* model = browser_->GetTabStripModel();
+  const int index = model->GetIndexOfWebContents(binding->contents());
+  if (index < 0) return false;
+  auto weak = GetWeakPtr();
+  app_operation_ = true;
+  auto contents = model->DetachWebContentsAtForInsertion(index, TabRemovedReason::kDeleted);
+  if (weak) {
+    weak->app_operation_ = false;
+    weak->QueueTransaction(-1);
+  }
+  contents.reset();
   return true;
 }
 
@@ -1966,8 +2007,8 @@ void ShellHostView::Invoke(
     TabBinding* binding = ClaimedBinding(args);
     if (!binding) return std::move(done).Run(false, base::Value("No owned live tab"));
     if (binding->temporary) {
-      return TabCommand(base::DictValue().Set("id", args.FindInt("id").value_or(0))
-          .Set("claim", binding->claim).Set("command", "close"), std::move(done));
+      const bool disposed = DisposeTemporary(binding);
+      return std::move(done).Run(disposed, disposed ? base::Value() : base::Value("The temporary surface is no longer owned by this window"));
     }
     binding->claim.clear();
     binding->RememberPendingAutoPictureInPicture();
