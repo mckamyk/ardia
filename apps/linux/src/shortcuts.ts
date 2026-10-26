@@ -1,6 +1,6 @@
 import type { BrowserCommand, MenuShortcut, ShortcutModifier } from "@ardia-real/shell";
 import { COMMANDS, shortcutSources } from "./commandCatalog";
-import { resolveShortcuts, type ShortcutOverrides } from "../../browser/src/state/commands/shortcuts";
+import { resolveShortcuts, type ShortcutOverrides } from "./shortcutFormat";
 
 export type Binding = { keyCode: number; modifiers: number; command: BrowserCommand; arg: string | null; notInText: boolean };
 

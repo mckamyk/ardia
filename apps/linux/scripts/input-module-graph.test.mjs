@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { build } from "vite";
-import { inputAdapters } from "../inputAdapters.ts";
+import { inputAdapters, rawBookmarkAdapter } from "../inputAdapters.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const shared = fileURLToPath(new URL("../../browser/src/", import.meta.url));
@@ -43,9 +43,16 @@ test("production Vite graph routes command state, Settings, sidebar, top tabs an
     ["components/sidebar/PinnedGrid.tsx", "clickModifiers.ts"],
     ["components/tabstrip/TabChip.tsx", "clickModifiers.ts"],
     ["components/tabstrip/PinnedDock.tsx", "clickModifiers.ts"],
-    ["components/bookmarks/BarItem.tsx", "bookmarkActions.ts"],
+    ["components/bookmarks/BarItem.tsx", "rawBookmarkActions.ts"],
+    ["components/pages/HistoryRow.tsx", "rawBookmarkActions.ts"],
   ];
   for (const [consumer, adapter] of routes) assert.ok(graph.get(`${shared}${consumer}`)?.importedIds.includes(`${linux}${adapter}`), consumer);
+  assert.ok(graph.get(rawBookmarkAdapter.replacement).importedIds.includes(rawBookmarkAdapter.source));
+  assert.deepEqual(graph.get(rawBookmarkAdapter.replacement).importers.toSorted(), [...rawBookmarkAdapter.importers].toSorted());
+  for (const consumer of ["components/window/HistoryPopover.tsx", "components/toolbar/NavButtons.tsx", "state/site/selection.ts"]) {
+    assert.ok(graph.get(`${shared}${consumer}`).importedIds.includes(rawBookmarkAdapter.source), consumer);
+    assert.ok(!graph.get(`${shared}${consumer}`).importedIds.includes(rawBookmarkAdapter.replacement), consumer);
+  }
   assert.ok(graph.get(`${linux}menus.tsx`).importedIds.includes(`${linux}shortcutFormat.ts`));
   assert.ok(graph.get(`${linux}menus.tsx`).importedIds.includes(`${linux}clickModifiers.ts`));
   assert.deepEqual(ids.filter((id) => id.includes("/apps/demo/")), []);

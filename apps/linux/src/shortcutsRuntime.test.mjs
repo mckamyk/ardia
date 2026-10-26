@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
+import { runCommand } from "../../browser/src/state/commands/commands.ts";
+import { activeTabId } from "../../browser/src/state/browser/model.ts";
+import { setShortcutOverride } from "../../browser/src/state/settings/actions.ts";
+import { shortcutItems } from "../../browser/src/state/settings/paneData.ts";
+import { load } from "../../browser/src/state/settings/resources.ts";
+import { sameShortcut } from "../../browser/src/state/commands/shortcuts.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { shortcutHint, setMenuBarShortcuts } from "../../browser/src/state/commands/commandShortcuts.ts";
 import { ardiaHost } from "../scripts/input-test-host.mjs";
@@ -109,4 +115,39 @@ test("text input keeps notInText commands and ordinary keys, recording cancellat
   key("keydown", "Escape", "Escape");
   assert.equal(await cancelled, null);
   await cancelShortcutRecording();
+});
+
+test("invokable Settings variants survive actual recording, native registration and current shared command dispatch with their required arguments", async () => {
+  const dispatch = requireNativeModule("ArdiaShell").addListener("onCommand", runCommand);
+  try {
+    for (const command of ["setAppearance", "setBookmarksBar", "selectTab", "switchProfile"]) {
+      state().hydrate({});
+      const windowId = state().createWindow({ id: ardiaHost.bootstrap.windowId, url: "https://first.test" });
+      const first = activeTabId(state(), windowId);
+      state().newTab(windowId, { url: "https://second.test" });
+      const profile = state().createProfile({ name: "Recorded target" });
+      const arg = { setAppearance: "light", setBookmarksBar: "always", selectTab: "1", switchProfile: profile }[command];
+      const id = `${command}:${arg}`;
+      const rows = await load(shortcutItems, []);
+      assert.ok(!rows.some((row) => row.id === command));
+      const row = rows.find((row) => row.id === id);
+      assert.ok(row?.remappable);
+      const recording = recordShortcut();
+      await flush();
+      key("keydown", "KeyT", "t", { ctrlKey: true });
+      const combo = await recording;
+      setShortcutOverride(row.id, sameShortcut(combo, { key: row.defaultKey, modifiers: row.defaultModifiers }) ? null : combo);
+      await flush();
+      const binding = table().find((binding) => binding.keyCode === 84 && binding.modifiers === 4);
+      assert.equal(binding.command, command);
+      assert.equal(binding.arg, arg);
+      key("keydown", "KeyT", "t", { ctrlKey: true });
+      if (command === "setAppearance") assert.equal(state().settings.appearance, "light");
+      if (command === "setBookmarksBar") assert.equal(state().settings.bookmarksBar, "always");
+      if (command === "selectTab") assert.equal(activeTabId(state(), windowId), first);
+      if (command === "switchProfile") assert.equal(state().windows[windowId].profileId, profile);
+    }
+  } finally {
+    dispatch.remove();
+  }
 });
