@@ -13,6 +13,7 @@ if [[ -e "$CB/chromium_git/chromium/src/out" ]]; then
   echo "01-sync.sh: an output tree already exists; use incremental patch/build steps" >&2
   exit 64
 fi
+if [[ "$AC_TARGET_OS" == linux ]]; then "$CB/depot_tools/ensure_bootstrap"; fi
 mkdir -p "$CB/chromium_git/chromium"
 cd "$CB/chromium_git/chromium"
 cat > .gclient <<GCLIENT
@@ -29,3 +30,8 @@ if [ -d src/.git ]; then
 fi
 lowprio_net timeout 7200 gclient sync --no-history --nohooks --reset --force -D -j 16
 lowprio_net gclient runhooks
+if [[ "$AC_TARGET_OS" == linux ]]; then
+  python3 "$AC_REPO/engine/patches/build/normalize-sysroot.py" "$PWD/src"
+  omitted_search_assets="$PWD/src/third_party/search_engines_data/resources_internal"
+  if [[ -d "$omitted_search_assets" ]]; then rmdir "$omitted_search_assets"; fi
+fi

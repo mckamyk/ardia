@@ -2,7 +2,7 @@
 
 The Linux port targets Arch Linux, Omarchy, Hyprland and Wayland. It reuses the browser UI through `apps/demo` and Chromium services through `engine/chromium`, with a separate Aura host in `engine/ardiacore-linux`.
 
-The implementation is under active verification. Passing web builds and patch-context checks do not establish a working Linux browser. The full Chromium executable must still be compiled and exercised on Linux before this port can be called supported.
+The x64 Chromium executable has been compiled and exercised with Ardia's native host. Verification below covers headless startup, native-tab rendering and the extracted application package. Desktop integration and full feature parity remain under verification.
 
 ## Upstream merge objective (`Closes #1`)
 
@@ -47,12 +47,13 @@ The shell keeps Chromium's Trusted Types enforcement. Its private `ardia-symbols
 
 Use a dedicated Linux build root. Never reuse or clean the owner's Mac Chromium build cache. The initial source preparation is for a fresh tree; `01-sync.sh` refuses to run when an output directory already exists. Subsequent builds are incremental.
 
-Chromium's Linux prerequisites, a compatible Node/pnpm installation, Python, Git, util-linux `flock`, and ImageMagick or Pillow must be provisioned first. Helium's Docker build environment is a useful reference for dependencies. This fork's source-preparation flow has not yet been validated end to end on a Linux builder.
+Chromium's Linux prerequisites, a compatible Node/pnpm installation, Python, Git, util-linux `flock`, and ImageMagick or Pillow must be provisioned first. Helium's Docker build environment is a useful reference for dependencies. The x64 source preparation, pinned Helium integration and complete executable build were exercised on the dedicated builder described below.
 
 ```bash
 export AC_CHROMIUM_BUILD="$HOME/ardia-linux-build"
 export AC_TARGET_OS=linux
 export AC_TARGET_CPU=x64
+export PYTHONDONTWRITEBYTECODE=1
 mkdir -p "$AC_CHROMIUM_BUILD"
 
 git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git "$AC_CHROMIUM_BUILD/depot_tools"
@@ -93,7 +94,42 @@ python3 scripts/linux/package.py \
   --destination "$CB/artifacts/ardia-linux-$AC_TARGET_CPU.tar.xz"
 ```
 
-The archive contains `bin/ardia`, `lib/ardia/chrome`, Chromium runtime resources, the `ardia-ui` bundle and desktop integration files. Packaging fixtures validate layout; a package produced from real Linux outputs still needs an installation and launch test. Run tests with a throwaway `--user-data-dir`, never an existing browser profile. Keep Chromium's sandbox enabled.
+The archive contains `bin/ardia`, `lib/ardia/chrome`, Chromium runtime resources, the `ardia-ui` bundle and desktop integration files. Launch the extracted `bin/ardia`; the raw build-tree `chrome` needs `--ardia-ui-dir` pointing to `apps/demo/dist` because that output directory does not contain the application UI. A real package was extracted and launched in the verification below. Run tests with a throwaway `--user-data-dir`, never an existing browser profile. Keep Chromium's sandbox enabled.
+
+## Native x64 build evidence (2026-10-26 UTC)
+
+The dedicated build root was `/home/mac/ardia-linux-build`. The checkout was based on `4101c2b366aef174fddbb026d04e79ecc2af0b4d`, with the uncommitted Linux compilation and preparation fixes described here. The committed engine tree was `5242855102f952fca7b477ee6f4582583c1ceb4a`; this is not an identifier for the additional working-tree fixes, and no engine archive was published.
+
+Chromium was `155.0.8059.84` at `5869fe313571d75152b77813cf0a4ee26a4e6df0`, with Helium Chromium `832faa7822566270e10c0d3262f702f9d0fea81f` and Helium Linux `cf878d4aaff58d063beada276c437ae756a142aa`. The build retained the official release configuration, phase-2 PGO, ThinLTO, CFI and the Chromium sandbox. Six local compile jobs ran on an eight-CPU machine with 24 GB RAM and 46 GB swap.
+
+The real preparation uncovered and fixed these issues:
+
+- A fresh `depot_tools` checkout needed its Python bootstrap before GN and autoninja could run with automatic updates disabled.
+- The official Debian sysroot contained hard-linked driver libraries. Linux preparation now replaces those regular files with private copies under the Chromium lock, preserving their contents and keeping the alias guard intact. It also removes Chromium's empty search-assets gitlink directory; a populated directory is rejected rather than deleted.
+- Helium's Linux default-browser message contained a `helium.desktop` placeholder example. Linux branding now replaces it with `ardia.desktop` before the naming check.
+- Reapplying overlapping scheduler patches failed because later patches changed the earlier reverse-check context. Linux application now recognizes files that exactly match the fully materialized final series; unexplained differences still follow the existing apply path.
+- The native host needed Chromium 155 metadata declarations, public access restored after the metadata macro, an explicit URL path string conversion, its inherited accelerator interface and Chromium's native tab-observer registration and cleanup.
+- Linux autofill no longer references a platform-unavailable authentication prompt string. Card-number access keeps returning the existing OS-authentication-unavailable error on Linux; the non-Linux implementation is preserved.
+
+All 32 production Ardia host and service objects compiled. The subsequent full `chrome` invocation completed 44,510 build steps in `5h1m02.02s`, including the final native executable link, with `BUILD_EXIT=0`:
+
+```bash
+export AC_CHROMIUM_BUILD=/home/mac/ardia-linux-build
+export AC_TARGET_OS=linux
+export AC_TARGET_CPU=x64
+export PYTHONDONTWRITEBYTECODE=1
+JOBS=6 KEEP_GOING=1 timeout -s TERM 43200 scripts/linux/build.sh --apply
+```
+
+The resulting `out/Release_GN_linux_x64/chrome` is a 528,592,864-byte x86-64 ELF PIE with build ID `749fe824d8eb45cbd0cf14395d14f99d1ab189c8`. All dynamic dependencies resolved on the builder. `--version` returned `Chromium 155.0.8059.84 (Chromium 155.0.8059.84)`. Its SHA-256 is `2a72597a6a94277add923e7ce41a313c9dd5e45c5c53f2def8a5e564ecd516f2`.
+
+The UI was built with `npm exec --yes --package=pnpm@11.1.3 -- pnpm --filter @ardia/demo build`. `scripts/linux/package.py` packaged the real executable, runtime resources and that UI into `artifacts/ardia-linux-x64-native-20261026.tar.xz` (143,027,892 bytes; SHA-256 `2ac7b28e0e201ec1b34d8ae5b9aeae337e4e6fccf47930331372154e4ba1aaac`). Extraction into `artifacts/install-check` preserved the executable hash. The extracted launcher loaded its bundled `chrome://ardia/` UI without a development asset override.
+
+Runtime checks used throwaway profiles, `--ozone-platform=headless`, software rendering and no display-server connection. Extensions were disabled for the isolated checks because an initial scratch launch discovered the machine's externally installed 1Password extension. The test profiles used `--password-store=basic` and an isolated D-Bus address. No sandbox-disabling switches were used. Ardia's bridge reported `appBuild=linux-host`, the correct version and the scratch profile directory. It created a real Chrome tab, attached its native viewport and rendered a data page titled `Ardia native build verified`; that ordinary page had no `__ardiaHost`. A renderer reported `NoNewPrivs=1`, `Seccomp=2` and nested PID namespaces. Card-number access returned the expected authentication-unavailable error. Test instances closed through `Browser.close`.
+
+The final strict series check passed all 56 steps and reproduced all 193 touched paths. Codex reviewed the patch-application and observer adaptations before and after their changes, with no unresolved findings. Evidence remains under the build root: `logs/native-build-05.log`, `logs/native-objects-03.log`, `logs/final-series-check.log`, `logs/runtime-native-tab.json`, `logs/runtime-page-visible.json`, `logs/runtime-package-host.json`, `logs/sandbox-status.json`, `logs/native-shell-large.png` and `logs/native-page.png`.
+
+This establishes a real compiled and packaged browser with a functioning native host, not complete Linux parity. The UI still reports unsupported `ArdiaExtensions.searchEngineList`; the initial 1Password integration rejected the unsigned browser. D-Bus, keyring integration, native desktop/window behavior, Wayland, GPU acceleration, extensions, networking and broader lifecycle/session behavior require separate verification. The headless backend initially chose a small window; the UI and tab captures used explicitly resized windows. No macOS build or full feature suite was run on this Linux builder.
 
 ## Patch maintenance
 
