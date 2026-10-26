@@ -1,6 +1,6 @@
 import { closeWindow } from "@ardia/shell";
-import { TrafficLight, useTrafficLightsCenter } from "../../demo/src/shims/web/windowChrome";
-import { hostModuleMethod, reportHostError } from "../../demo/src/host";
+import { TrafficLight, useTrafficLightsCenter } from "./shims/web/windowChrome";
+import { hostModuleMethod, reportHostError } from "./host";
 import { useBrowser } from "../../browser/src/store/browser";
 import { useFullscreenTab } from "../../browser/src/components/layout/pageState";
 

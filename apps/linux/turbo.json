@@ -7,16 +7,13 @@
     "typecheck": {
       "inputs": [
         "$TURBO_DEFAULT$",
-        "$TURBO_ROOT$/apps/browser/src/**",
-        "$TURBO_ROOT$/apps/demo/src/**"
+        "$TURBO_ROOT$/apps/browser/src/**"
       ]
     },
     "build": {
       "inputs": [
         "$TURBO_DEFAULT$",
-        "$TURBO_ROOT$/apps/browser/src/**",
-        "$TURBO_ROOT$/apps/demo/src/**",
-        "$TURBO_ROOT$/apps/demo/vite.shared.ts"
+        "$TURBO_ROOT$/apps/browser/src/**"
       ],
       "outputs": [
         "dist/**"

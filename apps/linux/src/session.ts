@@ -1,7 +1,7 @@
-import type { ArdiaHost } from "../../demo/src/host";
+import type { ArdiaHost } from "./host";
 import type { BrowserState, HydrateData } from "../../browser/src/store/browser";
-import { initialHostSession, snapshotHostSession } from "../../demo/src/hostSession";
-import { mergeSession } from "../../demo/src/hostSessionMerge";
+import { initialHostSession, snapshotHostSession } from "./hostSession";
+import { mergeSession } from "./hostSessionMerge";
 
 export const isLinuxUtility = (id: string) => id === "settings" || id === "import";
 
