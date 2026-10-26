@@ -433,6 +433,55 @@ test("viewports deduplicate geometry and send explicit visibility changes", asyn
   tab.dispose();
 });
 
+test("logical tab presentations batch returns and departures independently of viewport coverage", async () => {
+  let next = 20;
+  const { host, requests } = fixture(async (method) => method === "tab.create" ? { browserId: ++next, chromeTabId: next } : null);
+  const outgoing = new HostTab(host, { key: "outgoing" }, () => {});
+  const incoming = new HostTab(host, { key: "incoming" }, () => {});
+  await Promise.all([outgoing.ready, incoming.ready]);
+  await Promise.all([outgoing.presentation(true), incoming.presentation(false)]);
+  const baseline = requests.filter(([method]) => method === "tab.presentations").length;
+  await outgoing.viewport({ rect: { x: 10, y: 20, width: 500, height: 300 }, visible: false });
+  assert.equal(requests.filter(([method]) => method === "tab.presentations").length, baseline);
+  await Promise.all([outgoing.presentation(false), incoming.presentation(true)]);
+  assert.deepEqual(requests.filter(([method]) => method === "tab.presentations").at(-1), ["tab.presentations", { tabs: [{ id: 21, visible: false }, { id: 22, visible: true }] }]);
+  outgoing.dispose();
+  incoming.dispose();
+});
+
+test("presentations wait for identity and ignore released or superseded views", async () => {
+  let finish;
+  const pending = new Promise((resolve) => { finish = resolve; });
+  const { host, requests } = fixture(async (method) => method === "tab.create" ? pending : null);
+  const old = new HostTab(host, { key: "moving" }, () => {});
+  const oldUpdate = old.presentation(false);
+  const current = new HostTab(host, { key: "moving" }, () => {});
+  const currentUpdate = current.presentation(true);
+  assert.equal(requests.filter(([method]) => method === "tab.presentations").length, 0);
+  finish({ browserId: 30, chromeTabId: 30 });
+  await Promise.all([oldUpdate, currentUpdate]);
+  assert.deepEqual(requests.filter(([method]) => method === "tab.presentations"), [["tab.presentations", { tabs: [{ id: 30, visible: true }] }]]);
+  const releasedUpdate = current.presentation(false);
+  current.dispose();
+  old.dispose();
+  await releasedUpdate;
+  assert.equal(requests.filter(([method]) => method === "tab.presentations").length, 1);
+});
+
+test("a presentation batch retains its final visibility and reports transport errors", async () => {
+  const { host, requests } = fixture(async (method) => {
+    if (method === "tab.create") return { browserId: 31, chromeTabId: 31 };
+    if (method === "tab.presentations") throw new Error("presentation failed");
+    return null;
+  });
+  const tab = new HostTab(host, { key: "rapid" }, () => {});
+  await tab.ready;
+  const results = await Promise.allSettled([tab.presentation(false), tab.presentation(true)]);
+  assert.ok(results.every((result) => result.status === "rejected" && result.reason.message === "presentation failed"));
+  assert.deepEqual(requests.filter(([method]) => method === "tab.presentations"), [["tab.presentations", { tabs: [{ id: 31, visible: true }] }]]);
+  tab.dispose();
+});
+
 test("viewport observation tracks transforms, scroll, visual zoom, overlays, and document visibility", () => {
   const previous = Object.fromEntries(["window", "document", "getComputedStyle", "ResizeObserver", "requestAnimationFrame", "cancelAnimationFrame"].map((key) => [key, globalThis[key]]));
   const windowEvents = new EventTarget();

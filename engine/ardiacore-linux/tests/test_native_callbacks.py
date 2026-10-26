@@ -83,6 +83,13 @@ class NativeCallbackTests(unittest.TestCase):
         int TabId(content::WebContents* contents) { return contents->id; }
         class TabBinding {
          public:
+          bool presented = false;
+          bool presentation_applied = false;
+          bool presentation_attached = false;
+          bool presentation_departed = false;
+          int cancelled_auto_pip_until = 0;
+          int requested_auto_pip_until = 0;
+          void RememberPendingAutoPictureInPicture() {}
           TabBinding(ShellHostView* owner, content::WebContents* contents, views::WebView* viewport = nullptr)
               : owner_(owner), contents_(contents), viewport_(viewport) { Observe(contents); }
           ~TabBinding() { Observe(nullptr); }
@@ -151,7 +158,15 @@ class NativeCallbackTests(unittest.TestCase):
           binding.Rebind(&replacement);
           original.Destroy();
           assert(first.events.empty());
+          binding.presented = true;
+          binding.presentation_applied = true;
+          binding.presentation_attached = true;
+          binding.presentation_departed = true;
           binding.MoveTo(&second);
+          assert(!binding.presented);
+          assert(!binding.presentation_applied);
+          assert(!binding.presentation_attached);
+          assert(!binding.presentation_departed);
           assert(first.events.empty());
           assert(second.events.empty());
           assert(first.removed_views == 1);

@@ -7,6 +7,7 @@ export type HostTabOptions = { key: string; profile?: string; url?: string; adop
 export type TabViewport = { rect: { x: number; y: number; width: number; height: number }; visible: boolean };
 
 const claims = new WeakMap<ArdiaHost, Map<string, HostTab>>();
+const presentations = new WeakMap<ArdiaHost, Map<HostTab, { id: number; visible: boolean; resolve: () => void; reject: (error: unknown) => void }[]>>();
 
 export class HostTab {
   host: ArdiaHost;
@@ -56,6 +57,31 @@ export class HostTab {
     const { browserId } = await this.ready;
     if (this.disposed || claims.get(this.host)?.get(this.key) !== this) throw new Error(`Ardia tab released: ${this.key}`);
     return invokeHost<T>("tab.command", { id: browserId, command, args }, this.host);
+  }
+
+  async presentation(visible: boolean): Promise<void> {
+    const { browserId } = await this.ready;
+    if (this.disposed || claims.get(this.host)?.get(this.key) !== this) return;
+    let pending = presentations.get(this.host);
+    if (!pending) {
+      pending = new Map();
+      presentations.set(this.host, pending);
+      const batch = pending;
+      queueMicrotask(() => {
+        presentations.delete(this.host);
+        const tabs = [...batch].filter(([tab]) => !tab.disposed && claims.get(tab.host)?.get(tab.key) === tab)
+          .map(([, updates]) => ({ id: updates.at(-1)!.id, visible: updates.at(-1)!.visible }));
+        const updates = [...batch.values()].flat();
+        if (!tabs.length) { updates.forEach((update) => update.resolve()); return; }
+        void invokeHost("tab.presentations", { tabs }, this.host).then(
+          () => updates.forEach((update) => update.resolve()),
+          (error) => updates.forEach((update) => update.reject(error)),
+        );
+      });
+    }
+    const updates = pending.get(this) ?? [];
+    pending.set(this, updates);
+    return new Promise<void>((resolve, reject) => updates.push({ id: browserId, visible, resolve, reject }));
   }
 
   viewport(viewport: TabViewport) {
