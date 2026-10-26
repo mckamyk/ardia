@@ -23,6 +23,7 @@ source_set("linux") {
   sources += get_target_outputs(":bootstrap")
   deps = [
     ":bootstrap",
+    "//ardia/core:launch_switches",
     "//base",
     "//chrome/browser",
     "//chrome/browser/ardia",
