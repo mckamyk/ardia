@@ -262,3 +262,7 @@ Before claiming Linux support, verify a real build and package, restart persiste
 - VA-API and PipeWire are enabled in Linux flags. GPU/driver decoding, codec support and Hyprland portal screen sharing still need runtime checks.
 - Folder sync is not implemented by setting `ARDIA_SYNC_DIR`. The current sync module contains Swift/CryptoKit and native storage integration and needs a Linux implementation.
 - Apple Translation, VideoToolbox and Metal features remain platform-specific. No AI features are planned.
+
+## Essentials styling
+
+The Linux/web sidebar resolves `apps/browser/src/components/sidebar/TileFace.web.tsx` through the existing Vite web extension priority. Essentials use flat translucent fills and thin neutral borders, with separate hover, pressed, active and multi-selection states in both appearances. Their dimensions stay shared with macOS: 41 pt tall, 10 pt corner radius, 6 pt grid gaps and centered 16 pt favicons. Folder tiles use the same treatment and keep their existing badges and interactions. The native `TileFace.tsx` stays unchanged; the web variant reuses its drag positioning and folder drop ring. This deliberately avoids relying on AppKit glass or the incomplete web `DockSelection` shim for essential tiles.
