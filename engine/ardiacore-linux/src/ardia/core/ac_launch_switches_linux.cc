@@ -60,6 +60,44 @@ bool ExplicitUserDataDirectory(const base::FilePath& actual) {
   return !resolved.empty() && resolved == base::MakeAbsoluteFilePath(actual);
 }
 
+bool KnownInstanceKey(std::string_view key) {
+  return key == "jsLocation" || key == "chromiumSwitches" ||
+         key == "downloadsDir" || key == "updateFeed" || key == "allowAudio" ||
+         key == "allowOcclusion" || key == "releaseNotes" || key == "cliHome" ||
+         key == "cliBinDir" || key == "cliUrl" || key == "syncFolder" ||
+         key == "importSourceDir" || key == "importSafariHome";
+}
+
+std::optional<std::string> DownloadsDirectory(std::string_view text) {
+  std::optional<std::string> value;
+  bool collecting = false;
+  while (true) {
+    const size_t comma = text.find(',');
+    const std::string_view piece = text.substr(0, comma);
+    const size_t equals = piece.find('=');
+    const std::string_view key =
+        base::TrimWhitespaceASCII(piece.substr(0, equals), base::TRIM_ALL);
+    if (KnownInstanceKey(key)) {
+      collecting = key == "downloadsDir";
+      if (collecting) {
+        value = equals == std::string_view::npos
+                    ? "1"
+                    : std::string(piece.substr(equals + 1));
+      }
+    } else if (collecting) {
+      value->append(",").append(piece);
+    }
+    if (comma == std::string_view::npos) {
+      break;
+    }
+    text.remove_prefix(comma + 1);
+  }
+  if (value) {
+    *value = std::string(base::TrimWhitespaceASCII(*value, base::TRIM_ALL));
+  }
+  return value;
+}
+
 }
 
 void InitializeLinuxLaunchConfig() {
@@ -81,19 +119,10 @@ void InitializeLinuxLaunchConfig() {
     }
   }
   if (!command->HasSwitch("ardia-downloads-dir")) {
-    for (const std::string& listed : base::SplitString(
-             environment->GetVar("ARDIA_INSTANCE").value_or(""), ",",
-             base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
-      const std::string_view entry(listed);
-      const size_t equals = entry.find('=');
-      if (equals != std::string::npos &&
-          base::TrimWhitespaceASCII(entry.substr(0, equals), base::TRIM_ALL) ==
-              "downloadsDir") {
-        command->AppendSwitchNative(
-            "ardia-downloads-dir",
-            std::string(base::TrimWhitespaceASCII(entry.substr(equals + 1),
-                                                 base::TRIM_ALL)));
-      }
+    const auto downloads =
+        DownloadsDirectory(environment->GetVar("ARDIA_INSTANCE").value_or(""));
+    if (downloads) {
+      command->AppendSwitchNative("ardia-downloads-dir", *downloads);
     }
   }
 }
