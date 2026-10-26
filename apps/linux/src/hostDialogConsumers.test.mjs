@@ -28,16 +28,19 @@ function fixture() {
   const tab = state().windows[windowId].tabIds[0];
   const listeners = new Set(), requests = [];
   const host = {
-    bootstrap: { windowId, profileId: "default", nativeModules: { ArdiaShell: { rendererGeneration: "1" } } },
+    bootstrap: { windowId, profileId: "default" },
     onEvent(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    async invoke(method, payload) { requests.push({ method, ...payload }); return { accepted: true }; },
+    async invoke(method, payload) {
+      requests.push({ method, ...payload });
+      return method.endsWith("windowIdentity") ? { windowId, rendererGeneration: "1" } : { accepted: true };
+    },
   };
   current = createHostDialogs(host);
   const respond = (result) => {
     const { dialogId } = requests.findLast((r) => r.method.endsWith("beginDialog")).args[0];
     for (const listener of listeners) listener("ArdiaShell", "shell", { name: "shell.dialogResolved", data: { dialogId, windowId, rendererGeneration: "1", result } });
   };
-  return { windowId, tab, requests, respond, adapter: current };
+  return { windowId, tab, requests, respond, adapter: current, host };
 }
 
 test("real essential rename awaits trimmed prompt; ordinary row stays inline", async () => {
@@ -45,13 +48,13 @@ test("real essential rename awaits trimmed prompt; ordinary row stays inline", a
   state().pinTabs([f.tab], true);
   const work = startRename(f.windowId, { kind: "tab", id: f.tab });
   await turn();
-  assert.equal(f.requests[0].args[0].options.confirmTitle, "Update");
+  assert.equal(f.requests[1].args[0].options.confirmTitle, "Update");
   assert.equal(state().tabs[f.tab].customTitle, null);
   f.respond("  Essential  "); await work;
   assert.equal(state().tabs[f.tab].customTitle, "Essential");
   state().pinTabs([f.tab], true, true);
   await startRename(f.windowId, { kind: "tab", id: f.tab });
-  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests.length, 2);
   assert.equal(sidebarUi().renaming.id, f.tab);
   f.adapter.retire();
 });
@@ -102,11 +105,24 @@ test("real window warning deduplicates and persists checkbox on Cancel without r
   windows.emit({ type: "closeRequest", id: f.windowId });
   windows.emit({ type: "closeRequest", id: f.windowId });
   await turn();
-  assert.equal(f.requests.length, 1);
-  assert.equal(f.requests[0].args[0].options.confirmTitle, "Close All Tabs");
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.requests[1].args[0].options.confirmTitle, "Close All Tabs");
   f.respond({ confirmed: false, suppressed: true });
   await turn();
   assert.equal(state().settings.warnBeforeClosingWindow, false);
   assert.deepEqual(state().windows[f.windowId].tabIds, before);
+  f.adapter.retire();
+});
+
+test("real profile delete rejects an unavailable identity backend without deleting data", async () => {
+  const f = fixture();
+  const profile = state().createProfile({ name: "Keep" });
+  f.host.invoke = async (method, payload) => {
+    f.requests.push({ method, ...payload });
+    throw Object.assign(new Error("Unsupported ArdiaShell.windowIdentity"), { code: "ERR_UNAVAILABLE" });
+  };
+  await assert.rejects(deleteProfile(profile, f.windowId), { code: "ERR_UNAVAILABLE" });
+  assert.ok(state().profiles[profile]);
+  assert.deepEqual(f.requests.map((request) => request.method), ["ArdiaShell.windowIdentity"]);
   f.adapter.retire();
 });
