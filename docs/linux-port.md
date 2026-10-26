@@ -61,6 +61,21 @@ Linux and demo UI builds and all nine workspace typechecks passed. The available
 
 The packaged test build is `/home/mac/ardia-linux-build/artifacts/ardia-linux-x64-auto-pip-20261026.tar.xz` (142,976,736 bytes; SHA-256 `4e901d6ee5c9432721eaf742005bf7510947598f296ec1d3ea556d7ebc39f6d9`). Its extracted executable matches the verified build. `/home/mac/ardia-linux-build/artifacts/auto-pip/ardia/bin/ardia` launched with its bundled UI and no development override, and passed the playback checks again. All test instances were closed. The installed browser was not replaced.
 
+### PiP placement and corner throws on Hyprland
+
+The corner-throw gesture and spring animation currently live in the macOS adapter, `packages/ardiacore/ios/ArdiaCorePictureInPicture.mm`. Linux has bounds persistence and fade adapters, but no throw implementation. Standard Wayland [`xdg_toplevel`](https://wayland.app/protocols/xdg-shell#xdg_toplevel) delegates interactive movement to the compositor and does not expose arbitrary global placement for regular application windows. Supporting the same throw on Hyprland would require compositor integration; the current Linux port does not provide it.
+
+Hyprland 0.56.2 also has a separate initial-placement bug. Its [floating layout](https://github.com/hyprwm/Hyprland/blob/v0.56.2/src/layout/algorithm/floating/default/DefaultFloatingAlgorithm.cpp#L55-L75) updates the position animation instead of the size animation after evaluating a size rule. A subsequent `window_w` expression therefore sees the initial client width. Omarchy sizes PiP to 600×338 and positions it with `monitor_w-window_w-40`; an initially 360-pixel-wide window ends up 200 pixels beyond the right edge.
+
+The local workaround in `~/.config/hypr/hyprland.lua`, after loading Omarchy defaults, uses the width already specified by Omarchy's PiP size rule:
+
+```lua
+o.window({ tag = "pip" }, {
+  move = { "(monitor_w-600-40)", "(monitor_h*0.04)" },
+})
+```
+
+This applies to Omarchy's PiP tag, including other applications, and retains its existing size and vertical position. Match the fixed width to any future customization of the PiP size rule. On 2026-10-26, isolated GTK Wayland fixtures on an unshown special workspace reproduced the default rule's incorrect placement at initial widths of 360 and 800 pixels. Both opened at 600×338 with an exact 40-pixel right margin after the override. Focus remained with the owner's window, the temporary fixture rules were disabled, and `hyprctl reload` plus `hyprctl configerrors` passed. Evidence is in `/home/mac/ardia-linux-build/logs/pip-placement`. These checks cover the compositor rule, not Ardia's complete video window lifecycle. No browser rebuild or macOS change was needed.
 
 ## Architecture and boundaries
 
