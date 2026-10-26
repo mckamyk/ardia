@@ -23,10 +23,10 @@ Ardia’s site panel gives incorrect connection information and cannot show the 
 
 SiteControls still asks getSecurityInfo; Linux has no command or security event producer. Security remains null, which SiteConnection converts to Local Page and local/internal description for an ordinary HTTP/HTTPS page.
 
-- [apps/browser/src/components/site/SiteControls.tsx:136](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/site/SiteControls.tsx#L136)
-- [apps/browser/src/components/site/SiteConnection.tsx:9](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/site/SiteConnection.tsx#L9)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1434)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2153](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2153)
+- [apps/browser/src/components/site/SiteControls.tsx:136](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/site/SiteControls.tsx#L136)
+- [apps/browser/src/components/site/SiteConnection.tsx:9](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/site/SiteConnection.tsx#L9)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1434)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2153](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2153)
 
 ### Implementation slices
 
@@ -58,11 +58,11 @@ The shared site panel and Privacy settings cannot reliably read, change or reset
 
 Current APIs use sites.*, profiles.clearBrowsingData and contentBlocker.* domain calls. Linux implements neither the new domain dispatch nor underlying missing site/blocker Expo equivalents. Settings still catches unavailable resources as empty origins/exceptions or null blocker.
 
-- [packages/ardiacore/src/siteSettings.ts:14](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/siteSettings.ts#L14)
-- [packages/ardiacore/src/contentBlocker.ts:34](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/contentBlocker.ts#L34)
-- [packages/ardiacore/src/module.ts:145](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/module.ts#L145)
-- [apps/browser/src/state/settings/paneData.ts:36](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/settings/paneData.ts#L36)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2074)
+- [packages/ardiacore/src/siteSettings.ts:14](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/siteSettings.ts#L14)
+- [packages/ardiacore/src/contentBlocker.ts:34](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/contentBlocker.ts#L34)
+- [packages/ardiacore/src/module.ts:145](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/module.ts#L145)
+- [apps/browser/src/state/settings/paneData.ts:36](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/settings/paneData.ts#L36)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2074)
 
 ### Implementation slices
 
@@ -96,11 +96,11 @@ The Passwords pane cannot unlock/manage/export saved credentials, and addresses/
 
 Non-secret management now uses passwords.* and autofill.* domain calls; secret writes deliberately use dedicated ArdiaPasswords.save/update and ArdiaAutofill.saveCard. Linux has no implementations. Pane resources still hide unavailable state as enabled defaults/empty collections. Linux ReauthAvailable remains false.
 
-- [packages/ardiacore/src/passwords.ts:6](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/passwords.ts#L6)
-- [packages/ardiacore/src/autofill.ts:32](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/autofill.ts#L32)
-- [packages/ardiacore/src/nativeModules.ts:17](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/nativeModules.ts#L17)
-- [apps/browser/src/state/settings/paneData.ts:40](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/settings/paneData.ts#L40)
-- [engine/chromium/src/chrome/browser/ardia/ac_reauth_linux.cc:12](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/chromium/src/chrome/browser/ardia/ac_reauth_linux.cc#L12)
+- [packages/ardiacore/src/passwords.ts:6](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/passwords.ts#L6)
+- [packages/ardiacore/src/autofill.ts:32](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/autofill.ts#L32)
+- [packages/ardiacore/src/nativeModules.ts:17](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/nativeModules.ts#L17)
+- [apps/browser/src/state/settings/paneData.ts:40](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/settings/paneData.ts#L40)
+- [engine/chromium/src/chrome/browser/ardia/ac_reauth_linux.cc:12](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/chromium/src/chrome/browser/ardia/ac_reauth_linux.cc#L12)
 
 ### Implementation slices
 
@@ -134,11 +134,11 @@ Downloads can occur in Chromium without appearing in Ardia’s popover or intern
 
 Downloads now subscribes to downloads.changed through ArdiaDownloads and calls downloads.cancel/pause/resume/settings. Linux still emits legacy ArdiaCEF.onEngineEvent and has no current domain handlers, download initialization/translation or file open/reveal backend. Unlike the old baseline, settings also cannot be claimed currently working until N02.
 
-- [packages/ardiacore/src/module.ts:129](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/module.ts#L129)
-- [packages/ardiacore/src/module.ts:135](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/module.ts#L135)
-- [apps/browser/src/state/app/nativeSync.ts:66](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/app/nativeSync.ts#L66)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1181](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1181)
-- [packages/shell/src/system.tsx:50](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/shell/src/system.tsx#L50)
+- [packages/ardiacore/src/module.ts:129](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/module.ts#L129)
+- [packages/ardiacore/src/module.ts:135](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/module.ts#L135)
+- [apps/browser/src/state/app/nativeSync.ts:66](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/app/nativeSync.ts#L66)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1181](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1181)
+- [packages/shell/src/system.tsx:50](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/shell/src/system.tsx#L50)
 
 ### Implementation slices
 
@@ -172,11 +172,11 @@ Enable/disable, install/reload/uninstall, action popups, side panels and extensi
 
 Shared extension APIs now use extensions.* and search.engines calls and domain events. Linux retains legacy ArdiaExtensions.list, but current listExtensions calls ArdiaExtensions.call(list,...), so even listing regresses until N02; management/action/panel implementations remain absent afterward.
 
-- [packages/ardiacore/src/extensions.ts:114](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/extensions.ts#L114)
-- [packages/ardiacore/src/extensions.ts:118](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/extensions.ts#L118)
-- [packages/ardiacore/src/extensions.ts:152](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/extensions.ts#L152)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2054](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2054)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2074)
+- [packages/ardiacore/src/extensions.ts:114](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/extensions.ts#L114)
+- [packages/ardiacore/src/extensions.ts:118](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/extensions.ts#L118)
+- [packages/ardiacore/src/extensions.ts:152](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/extensions.ts#L152)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2054](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2054)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2074)
 
 ### Implementation slices
 
@@ -210,11 +210,11 @@ Playing-audio badges, sidebar/mini-player transport and camera/microphone/screen
 
 Linux still lacks media/nowPlaying/mediaAccess producers and manual media/PiP commands. Shared startup now calls webView.setDisplayMediaPicker/setAutoPictureInPicture/setVideoUpscaling unconditionally; the old ArdiaCEF auto-PiP implementation is unreachable until N02. Cast/capture controls also lack current handlers.
 
-- [apps/browser/src/components/window/TabWebView.tsx:195](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/window/TabWebView.tsx#L195)
-- [apps/browser/src/state/media/pip.ts:23](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/media/pip.ts#L23)
-- [packages/ardiacore/src/module.ts:120](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/module.ts#L120)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1688](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1688)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2153](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2153)
+- [apps/browser/src/components/window/TabWebView.tsx:195](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/window/TabWebView.tsx#L195)
+- [apps/browser/src/state/media/pip.ts:23](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/media/pip.ts#L23)
+- [packages/ardiacore/src/module.ts:120](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/module.ts#L120)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1688](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1688)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2153](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2153)
 
 ### Implementation slices
 
@@ -248,11 +248,11 @@ Configured link modifiers, selection search/popovers, quote/highlight links, jum
 
 Peek/selection settings now call webView.* domain methods rather than optional ArdiaCEF methods. Linux still lacks page-script/channel installation, command/pageMessage producers, evaluate and executeJavaScript. Updating transport alone will not implement the page tools.
 
-- [packages/ardiacore/src/module.ts:123](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/module.ts#L123)
-- [apps/browser/src/state/peek/actions.ts:102](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/peek/actions.ts#L102)
-- [apps/browser/src/state/site/selection.ts:79](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/site/selection.ts#L79)
-- [apps/browser/src/components/window/TabWebView.tsx:224](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/window/TabWebView.tsx#L224)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1434)
+- [packages/ardiacore/src/module.ts:123](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/module.ts#L123)
+- [apps/browser/src/state/peek/actions.ts:102](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/peek/actions.ts#L102)
+- [apps/browser/src/state/site/selection.ts:79](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/site/selection.ts#L79)
+- [apps/browser/src/components/window/TabWebView.tsx:224](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/window/TabWebView.tsx#L224)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1434)
 
 ### Implementation slices
 
@@ -286,10 +286,10 @@ Ardia cannot reliably hide its chrome for page fullscreen, show its own crash/un
 
 Linux observer still produces only navigation/progress/title/error/favicon/open-window/destruction and PiP. Fullscreen/crashed/unresponsive/responsive/status/popupBlocked are not produced. Shared callbacks moved to TabWebView and public page-event schema now uses name/data, with find/focus special names.
 
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:464](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L464)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2153](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2153)
-- [apps/browser/src/components/window/TabWebView.tsx:203](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/window/TabWebView.tsx#L203)
-- [packages/ardiacore/src/pageEvents.ts:59](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/pageEvents.ts#L59)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:464](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L464)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2153](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2153)
+- [apps/browser/src/components/window/TabWebView.tsx:203](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/window/TabWebView.tsx#L203)
+- [packages/ardiacore/src/pageEvents.ts:59](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/pageEvents.ts#L59)
 
 ### Implementation slices
 
@@ -323,11 +323,11 @@ Newly visited or changed sites can keep generic icons in the sidebar, essentials
 
 Favicon events still call unsupported per-tab downloadFavicon. Fallback now calls favicons.fetch domain API with no Linux implementation. Cached get/set also moved to favicons domain, so existing cache service availability depends on N02; the original refresh gap survives transport repair.
 
-- [apps/browser/src/state/favicons/favicons.ts:126](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/favicons/favicons.ts#L126)
-- [apps/browser/src/state/favicons/favicons.ts:139](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/favicons/favicons.ts#L139)
-- [packages/ardiacore/src/favicons.ts:6](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/favicons.ts#L6)
-- [packages/ardiacore/src/favicons.ts:19](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/packages/ardiacore/src/favicons.ts#L19)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1434)
+- [apps/browser/src/state/favicons/favicons.ts:126](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/favicons/favicons.ts#L126)
+- [apps/browser/src/state/favicons/favicons.ts:139](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/favicons/favicons.ts#L139)
+- [packages/ardiacore/src/favicons.ts:6](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/favicons.ts#L6)
+- [packages/ardiacore/src/favicons.ts:19](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/packages/ardiacore/src/favicons.ts#L19)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1434)
 
 ### Implementation slices
 
@@ -359,10 +359,10 @@ Scope: Do not claim all artwork broken: persisted data URLs/predefined art can r
 
 Linux Navigation still omits themeColor/themeColorSource. Shared TabWebView expects theme state and pageMessage(scroll) for toolbar auto-hide; native host installs no producer. Settings still exposes both behaviors.
 
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2135](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2135)
-- [apps/browser/src/components/window/TabWebView.tsx:230](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/window/TabWebView.tsx#L230)
-- [apps/browser/src/components/settings/panes/Tabs.tsx:85](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/settings/panes/Tabs.tsx#L85)
-- [apps/browser/src/components/settings/panes/Tabs.tsx:117](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/components/settings/panes/Tabs.tsx#L117)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2135](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L2135)
+- [apps/browser/src/components/window/TabWebView.tsx:230](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/window/TabWebView.tsx#L230)
+- [apps/browser/src/components/settings/panes/Tabs.tsx:85](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/settings/panes/Tabs.tsx#L85)
+- [apps/browser/src/components/settings/panes/Tabs.tsx:117](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/components/settings/panes/Tabs.tsx#L117)
 
 ### Implementation slices
 
