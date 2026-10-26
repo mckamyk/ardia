@@ -22,12 +22,12 @@ A setting changed in the utility window does not reach an already open browser. 
 
 live.json moved into state/live and gained versioned JSON serialization; it still loads one module-local store and writes whole snapshots after 800ms. Linux caches remain per-renderer, document writes have no broadcast/merge, and utility close flushes only session persistence.
 
-- [apps/browser/src/state/live/store.ts:63](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/live/store.ts#L63)
-- [apps/browser/src/state/live/store.ts:105](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/browser/src/state/live/store.ts#L105)
-- [apps/linux/src/hostDocuments.ts:4](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/hostDocuments.ts#L4)
-- [apps/linux/src/hostSession.ts:67](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/hostSession.ts#L67)
-- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1813](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1813)
-- [apps/linux/src/utilityClose.ts:9](https://github.com/mckamyk/ardia/blob/6907d6831980c3b6d686ccba0d3abdb8be2d5ebe/apps/linux/src/utilityClose.ts#L9)
+- [apps/browser/src/state/live/store.ts:63](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/live/store.ts#L63)
+- [apps/browser/src/state/live/store.ts:105](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/browser/src/state/live/store.ts#L105)
+- [apps/linux/src/hostDocuments.ts:4](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/hostDocuments.ts#L4)
+- [apps/linux/src/hostSession.ts:67](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/hostSession.ts#L67)
+- [engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1813](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc#L1813)
+- [apps/linux/src/utilityClose.ts:9](https://github.com/mckamyk/ardia/blob/b70711df2af16cee08146b78f7d3405c57d6d1de/apps/linux/src/utilityClose.ts#L9)
 
 ### Implementation slices
 
