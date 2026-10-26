@@ -1,11 +1,11 @@
 import { closeWindow, isDarkAppearance, onAppEvent, onCommand, setAppearance } from "@ardia/shell";
 import { Appearance } from "react-native";
-import { reportHostError, type ArdiaHost } from "../../demo/src/host";
+import { reportHostError, type ArdiaHost } from "./host";
 import { useBrowser } from "../../browser/src/store/browser";
 import { openImport, openSettings, useSettingsNav, type SettingsPlace } from "../../browser/src/components/settings/windows";
 import { PANES } from "../../browser/src/components/settings/settingsIndex";
 import { focusSettingsSearch } from "../../browser/src/components/settings/searchState";
-import { isDemoMenuShown } from "../../demo/src/shims/web/menus";
+import { menuShown } from "./menus";
 import { startUtilityNavigation } from "./utilityNavigation";
 import { setPreferredImportSource } from "./settingsWindows";
 
@@ -29,7 +29,7 @@ export function startUtility(host: ArdiaHost) {
     else if (command === "importBrowserData") openImport();
   });
   window.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape" || event.defaultPrevented || isDemoMenuShown()) return;
+    if (event.key !== "Escape" || event.defaultPrevented || menuShown()) return;
     event.preventDefault();
     void closeWindow(id).catch(reportHostError);
   });

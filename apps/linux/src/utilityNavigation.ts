@@ -1,4 +1,4 @@
-import type { ArdiaHost } from "../../demo/src/host";
+import type { ArdiaHost } from "./host";
 
 export function startUtilityNavigation(host: ArdiaHost, navigate: (value: unknown) => void) {
   let version = 0;

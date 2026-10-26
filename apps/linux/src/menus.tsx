@@ -2,13 +2,12 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import { createPortal } from "react-dom";
 import type { MenuItem } from "@ardia-real/shell";
 import { useBrowser } from "../../browser/src/store/browser";
-import { Symbol } from "../../demo/src/shims/web/Symbol";
+import { Symbol } from "./shims/web/Symbol";
 
 type OpenMenu = { items: MenuItem[]; x: number; y: number; resolve: (id: string | null) => void };
 
 let open: OpenMenu | null = null;
 export const menuShown = () => open !== null;
-export const isDemoMenuShown = menuShown;
 const watchers = new Set<() => void>();
 export const watchMenus = (watcher: () => void) => {
   watchers.add(watcher);
@@ -128,7 +127,12 @@ export function MenuHost() {
   useEffect(() => {
     if (!menu) return;
     const outside = () => close(null);
-    const key = (e: KeyboardEvent) => e.key === "Escape" && close(null);
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      close(null);
+    };
     document.addEventListener("pointerdown", outside);
     document.addEventListener("keydown", key);
     return () => {

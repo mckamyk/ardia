@@ -1,13 +1,13 @@
 import type { ReactNode } from "react";
 import { View } from "react-native";
-import { layout, useTheme } from "../../lib/theme";
-import { useTab } from "../../store/hooks";
-import { TabBadges } from "../media/TabBadges";
-import { TabIcon } from "./TabIcon";
-import { TILE_RADIUS } from "./TileFace.tsx";
-import { useSidebarTokens } from "./tokens";
+import { layout, useTheme } from "../../browser/src/lib/theme";
+import { useTab } from "../../browser/src/store/hooks";
+import { TabBadges } from "../../browser/src/components/media/TabBadges";
+import { TabIcon } from "../../browser/src/components/sidebar/TabIcon";
+import { TILE_RADIUS } from "../../browser/src/components/sidebar/TileFace.tsx";
+import { useSidebarTokens } from "../../browser/src/components/sidebar/tokens";
 
-export { FolderDropRing, TILE_RADIUS, useSlotPosition } from "./TileFace.tsx";
+export { FolderDropRing, TILE_RADIUS, useSlotPosition } from "../../browser/src/components/sidebar/TileFace.tsx";
 
 const DARK = {
   resting: "rgba(255,255,255,0.04)",

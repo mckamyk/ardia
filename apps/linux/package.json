@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p .",
-    "test:host": "node --experimental-strip-types --loader ../demo/scripts/host-test-loader.mjs --test src/session.test.mjs"
+    "test:host": "node --experimental-strip-types --loader ./scripts/host-test-loader.mjs --test src/host.test.mjs src/hostSessionMerge.test.mjs src/hostSessionSync.test.mjs src/session.test.mjs",
+    "test:symbols": "node --experimental-strip-types --test src/shims/web/symbols/render.test.mjs",
+    "fixture:csp": "node scripts/host-csp-fixture.mjs"
   },
   "dependencies": {
     "@ardia/core": "workspace:*",
