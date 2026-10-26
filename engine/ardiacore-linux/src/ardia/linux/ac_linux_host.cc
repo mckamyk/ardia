@@ -42,8 +42,12 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/ardia/public/ac_engine.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
@@ -59,6 +63,7 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/search_engines/template_url.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/sessions/content/session_tab_helper.h"
@@ -84,6 +89,7 @@
 #include "net/base/net_errors.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "third_party/blink/public/common/frame/user_activation_state.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_targeter.h"
@@ -121,6 +127,9 @@
 
 extern bool (*g_ardia_keeps_window_without_tabs)(
     const BrowserWindowInterface* browser);
+extern bool g_ardia_auto_picture_in_picture_off;
+extern int (*g_ardia_linux_tab_shown)(content::WebContents*);
+extern void (*g_ardia_linux_auto_pip_requested)(content::WebContents*);
 
 namespace ardia {
 namespace {
@@ -465,8 +474,25 @@ class TabBinding : public content::WebContentsObserver {
   void MoveTo(ShellHostView* owner);
   void Rebind(content::WebContents* contents);
   void SetViewport(views::WebView* view) { viewport_ = view; }
+  bool presented = false;
+  bool presentation_applied = false;
+  bool presentation_attached = false;
+  bool presentation_departed = false;
+  base::TimeTicks cancelled_auto_pip_until;
+  base::TimeTicks requested_auto_pip_until;
+  void RememberPendingAutoPictureInPicture() {
+    auto* helper = contents_ ? AutoPictureInPictureTabHelper::FromWebContents(contents_) : nullptr;
+    if (base::TimeTicks::Now() < requested_auto_pip_until ||
+        (helper && helper->AreAutoPictureInPicturePreconditionsMet())) {
+      cancelled_auto_pip_until = base::TimeTicks::Now() + blink::kActivationLifespan;
+    }
+  }
 
  private:
+  void PrimaryPageChanged(content::Page&) override {
+    cancelled_auto_pip_until = {};
+    requested_auto_pip_until = {};
+  }
   void DidFinishNavigation(content::NavigationHandle* handle) override;
   void DidStartLoading() override;
   void DidStopLoading() override;
@@ -555,6 +581,37 @@ class ShellHostView : public views::View,
   void Invoke(std::string method, const base::DictValue& args,
               base::OnceCallback<void(bool, base::Value)> done);
   void ReportTab(int id, base::DictValue event);
+  int TabShown(content::WebContents* contents) const {
+    for (const auto& [id, binding] : bindings_) {
+      if (binding->contents() == contents) {
+        if (binding->presented) return 1;
+        return binding->presentation_attached && binding->presentation_departed ? 0 : 2;
+      }
+    }
+    return -1;
+  }
+  bool AutoPictureInPictureCancelled(content::WebContents* contents) const {
+    for (const auto& [id, binding] : bindings_) {
+      if (binding->contents() == contents) {
+        return base::TimeTicks::Now() < binding->cancelled_auto_pip_until;
+      }
+    }
+    return false;
+  }
+  void NoteAutoPictureInPictureRequested(content::WebContents* contents) {
+    for (const auto& [id, binding] : bindings_) {
+      if (binding->contents() != contents) continue;
+      binding->requested_auto_pip_until = base::TimeTicks::Now() + blink::kActivationLifespan;
+      binding->cancelled_auto_pip_until = {};
+    }
+  }
+  void ConsumeAutoPictureInPictureCancellation(content::WebContents* contents) {
+    for (const auto& [id, binding] : bindings_) {
+      if (binding->contents() != contents) continue;
+      binding->requested_auto_pip_until = {};
+      binding->cancelled_auto_pip_until = {};
+    }
+  }
   base::WeakPtr<ShellHostView> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
  private:
@@ -566,6 +623,8 @@ class ShellHostView : public views::View,
                   base::OnceCallback<void(bool, base::Value)> done);
   void SetViewport(const base::DictValue& args,
                    base::OnceCallback<void(bool, base::Value)> done);
+  void SetPresentations(const base::DictValue& args,
+                       base::OnceCallback<void(bool, base::Value)> done);
   void StripCommand(int command, const base::DictValue& args,
                     base::OnceCallback<void(bool, base::Value)> done);
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
@@ -868,7 +927,7 @@ base::DictValue ShellHostView::Bootstrap() const {
                                 "ArdiaApp", base::DictValue().Set(
                                                 "systemInfo", std::move(info))))
       .Set("environment", base::DictValue())
-      .Set("capabilities", base::ListValue());
+      .Set("capabilities", base::ListValue().Append("ArdiaCEF.setAutoPictureInPicture"));
   if (is_utility()) bootstrap.Set("utility", utility_.Clone());
   return bootstrap;
 }
@@ -1468,6 +1527,47 @@ void ShellHostView::SetViewport(
   std::move(done).Run(true, base::Value());
 }
 
+void ShellHostView::SetPresentations(
+    const base::DictValue& args,
+    base::OnceCallback<void(bool, base::Value)> done) {
+  const base::ListValue* tabs = args.FindList("tabs");
+  if (!tabs || tabs->size() > 1024) {
+    return std::move(done).Run(false, base::Value("A tab presentation list is required"));
+  }
+  for (const auto& tab : *tabs) {
+    const auto* item = tab.GetIfDict();
+    TabBinding* binding = item ? Binding(item->FindInt("id").value_or(0)) : nullptr;
+    if (!binding || !binding->contents() || !item->FindBool("visible")) {
+      return std::move(done).Run(false, base::Value("A claimed tab and boolean visibility are required"));
+    }
+  }
+  for (const auto& tab : *tabs) {
+    const auto& item = tab.GetDict();
+    auto* binding = Binding(*item.FindInt("id"));
+    if (*item.FindBool("visible") && !binding->presented) binding->RememberPendingAutoPictureInPicture();
+    binding->presentation_attached = true;
+    binding->presented = *item.FindBool("visible");
+  }
+  std::vector<std::pair<base::WeakPtr<content::WebContents>, bool>> changes;
+  for (const bool visible : {true, false}) {
+    for (const auto& [id, binding] : bindings_) {
+      if (!binding->contents() || binding->presented != visible ||
+          binding->presentation_applied == visible) continue;
+      binding->presentation_applied = visible;
+      binding->presentation_departed = !visible;
+      if (!visible) binding->cancelled_auto_pip_until = {};
+      changes.emplace_back(binding->contents()->GetWeakPtr(), visible);
+    }
+  }
+  for (const auto& [contents, visible] : changes) {
+    if (!contents) continue;
+    if (auto* helper = AutoPictureInPictureTabHelper::FromWebContents(contents.get())) {
+      helper->OnTabActivatedChanged(visible);
+    }
+  }
+  std::move(done).Run(true, base::Value());
+}
+
 void ShellHostView::StripCommand(
     int command, const base::DictValue& args,
     base::OnceCallback<void(bool, base::Value)> done) {
@@ -1584,6 +1684,39 @@ void ShellHostView::Invoke(
   if (method == "tab.create") return CreateTab(args, std::move(done));
   if (method == "tab.command") return TabCommand(args, std::move(done));
   if (method == "tab.viewport") return SetViewport(args, std::move(done));
+  if (method == "tab.presentations") return SetPresentations(args, std::move(done));
+  if (method == "ArdiaCEF.setAutoPictureInPicture") {
+    if (values.size() != 1 || !values[0].is_bool()) {
+      return std::move(done).Run(false, base::Value("A boolean auto-PiP setting is required"));
+    }
+    const bool enabled = values[0].GetBool();
+    if (!enabled) {
+      for (const auto& [window, host] : Hosts()) {
+        for (const auto& [id, binding] : host->bindings_) {
+          binding->RememberPendingAutoPictureInPicture();
+        }
+      }
+    }
+    g_ardia_auto_picture_in_picture_off = !enabled;
+    HostContentSettingsMapFactory::GetForProfile(profile())->SetDefaultContentSetting(
+        ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
+        enabled ? CONTENT_SETTING_ALLOW : CONTENT_SETTING_BLOCK);
+    if (!enabled) {
+      std::vector<base::WeakPtr<content::WebContents>> contents;
+      for (const auto& [window, host] : Hosts()) {
+        for (const auto& [id, binding] : host->bindings_) {
+          if (binding->contents()) contents.push_back(binding->contents()->GetWeakPtr());
+        }
+      }
+      for (const auto& tab : contents) {
+        if (!tab) continue;
+        if (auto* helper = AutoPictureInPictureTabHelper::FromWebContents(tab.get())) {
+          helper->OnTabBecameActive();
+        }
+      }
+    }
+    return std::move(done).Run(true, base::Value());
+  }
   if (method == "tab.close") {
     TabBinding* binding = BindingForKey(String(args, "key"));
     if (!binding || !binding->contents()) {
@@ -1596,6 +1729,16 @@ void ShellHostView::Invoke(
   if (method == "tab.release") {
     TabBinding* binding = Binding(args.FindInt("id").value_or(0));
     if (!binding) return std::move(done).Run(false, base::Value("No such live tab"));
+    binding->RememberPendingAutoPictureInPicture();
+    binding->presented = false;
+    binding->presentation_applied = false;
+    binding->presentation_attached = false;
+    binding->presentation_departed = false;
+    if (binding->contents()) {
+      if (auto* helper = AutoPictureInPictureTabHelper::FromWebContents(binding->contents())) {
+        helper->OnTabBecameActive();
+      }
+    }
     if (binding->viewport()) {
       binding->viewport()->SetVisible(false);
       binding->viewport()->SetWebContents(nullptr);
@@ -1946,12 +2089,19 @@ TabBinding::~TabBinding() {
 }
 
 void TabBinding::Rebind(content::WebContents* contents) {
+  cancelled_auto_pip_until = {};
+  requested_auto_pip_until = {};
   Observe(contents);
   contents_ = contents;
   if (viewport_ && viewport_->GetVisible()) viewport_->SetWebContents(contents);
 }
 
 void TabBinding::MoveTo(ShellHostView* owner) {
+  RememberPendingAutoPictureInPicture();
+  presented = false;
+  presentation_applied = false;
+  presentation_attached = false;
+  presentation_departed = false;
   if (viewport_) {
     views::WebView* view = viewport_.get();
     viewport_ = nullptr;
@@ -2047,9 +2197,11 @@ std::map<int, RequestedWindow>& RequestedWindows() {
   return *ids;
 }
 
-class HostRegistry : public BrowserCollectionObserver {
+class HostRegistry : public BrowserCollectionObserver,
+                     public PictureInPictureWindowManager::Observer {
  public:
   void Start() {
+    pip_observation_.Observe(PictureInPictureWindowManager::GetInstance());
     observation_.Observe(GlobalBrowserCollection::GetInstance());
     GlobalBrowserCollection::GetInstance()->ForEach(
         [this](BrowserWindowInterface* browser) {
@@ -2059,6 +2211,63 @@ class HostRegistry : public BrowserCollectionObserver {
   }
 
  private:
+  void ReportPictureInPicture(bool active) {
+    if (!pip_opener_) return;
+    for (const auto& [id, host] : Hosts()) {
+      if (host->TabShown(pip_opener_.get()) < 0) continue;
+      host->ReportTab(TabId(pip_opener_.get()), base::DictValue()
+          .Set("type", "pictureInPicture").Set("value", base::DictValue()
+              .Set("active", active).Set("kind", pip_kind_)));
+    }
+  }
+  void OnEnterPictureInPicture() override {
+    ++pip_generation_;
+    auto* manager = PictureInPictureWindowManager::GetInstance();
+    auto* opener = manager->GetWebContents();
+    if (pip_opener_ && pip_opener_.get() != opener) ReportPictureInPicture(false);
+    pip_opener_ = opener ? opener->GetWeakPtr() : nullptr;
+    pip_kind_ = manager->GetChildWebContents() ? "document" : "video";
+    ReportPictureInPicture(true);
+    auto* helper = opener ? AutoPictureInPictureTabHelper::FromWebContents(opener) : nullptr;
+    bool cancelled = false;
+    for (const auto& [id, host] : Hosts()) {
+      cancelled |= host->AutoPictureInPictureCancelled(opener);
+    }
+    if (!cancelled) {
+      for (const auto& [id, host] : Hosts()) host->ConsumeAutoPictureInPictureCancellation(opener);
+    }
+    if (cancelled || (helper && (helper->IsInAutoPictureInPicture() ||
+                                helper->AreAutoPictureInPicturePreconditionsMet()))) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&HostRegistry::CloseCancelledPictureInPicture,
+                                    base::Unretained(this), pip_generation_, pip_opener_));
+    }
+  }
+  void OnExitPictureInPicture() override {
+    ++pip_generation_;
+    ReportPictureInPicture(false);
+    if (pip_opener_) {
+      for (const auto& [id, host] : Hosts()) {
+        host->ConsumeAutoPictureInPictureCancellation(pip_opener_.get());
+      }
+    }
+    pip_opener_ = nullptr;
+  }
+  void CloseCancelledPictureInPicture(
+      uint64_t generation, base::WeakPtr<content::WebContents> contents) {
+    auto* manager = PictureInPictureWindowManager::GetInstance();
+    if (generation != pip_generation_ || !contents ||
+        manager->GetWebContents() != contents.get()) return;
+    bool released = true;
+    bool cancelled = false;
+    for (const auto& [id, host] : Hosts()) {
+      const int shown = host->TabShown(contents.get());
+      if (shown >= 0 && shown < 2) released = false;
+      cancelled |= host->AutoPictureInPictureCancelled(contents.get());
+    }
+    if (released || cancelled || g_ardia_auto_picture_in_picture_off) manager->ExitPictureInPicture();
+  }
+
   void Attach(base::WeakPtr<BrowserWindowInterface> browser, bool startup) {
     if (!browser || browser->GetProfile()->IsOffTheRecord() ||
         Hosts().contains(browser->GetSessionID().id())) return;
@@ -2110,6 +2319,11 @@ class HostRegistry : public BrowserCollectionObserver {
   }
 
   base::FilePath profile_path_;
+  base::WeakPtr<content::WebContents> pip_opener_;
+  std::string pip_kind_;
+  uint64_t pip_generation_ = 0;
+  base::ScopedObservation<PictureInPictureWindowManager,
+                          PictureInPictureWindowManager::Observer> pip_observation_{this};
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
       observation_{this};
 };
@@ -2128,6 +2342,17 @@ void StartLinuxHost() {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   static bool started = false;
   if (std::exchange(started, true)) return;
+  g_ardia_auto_picture_in_picture_off = true;
+  g_ardia_linux_tab_shown = [](content::WebContents* contents) {
+    for (const auto& [id, host] : Hosts()) {
+      const int shown = host->TabShown(contents);
+      if (shown >= 0) return shown;
+    }
+    return -1;
+  };
+  g_ardia_linux_auto_pip_requested = [](content::WebContents* contents) {
+    for (const auto& [id, host] : Hosts()) host->NoteAutoPictureInPictureRequested(contents);
+  };
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(std::make_unique<ShellConfig>());
   g_ardia_keeps_window_without_tabs = [](const BrowserWindowInterface* browser) {
     return browser && Hosts().contains(browser->GetSessionID().id());

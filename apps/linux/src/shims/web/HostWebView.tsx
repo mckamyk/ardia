@@ -78,6 +78,10 @@ export const HostWebView = forwardRef<WebViewHandle, WebViewProps>(function Host
     void tab.current?.command("loadUrl", [toEngineUrl(props.url)]).catch(reportHostError);
   }, [props.url]);
 
+  useEffect(() => {
+    void tab.current?.presentation(props.visible !== false).catch(reportHostError);
+  }, [props.visible]);
+
   useImperativeHandle(ref, () => new Proxy({} as WebViewHandle, {
     get(_target, property) {
       if (typeof property !== "string" || property === "then") return undefined;
