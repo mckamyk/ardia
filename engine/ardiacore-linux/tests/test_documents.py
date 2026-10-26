@@ -28,6 +28,8 @@ class DocumentsTests(unittest.TestCase):
         }
         for suffix in ['b', 'c', 'd']:
             operations['create_' + suffix] = [{'type': 'create', 'id': 'lf-' + suffix, 'incarnation': 'folder:lf-' + suffix, 'value': {**folder, 'id': 'lf-' + suffix}}]
+        operations['claim_c'] = [{'type': 'claim', 'id': 'lf-c', 'incarnation': 'folder:lf-c'}]
+        operations['refresh_c'] = [{'type': 'refresh', 'id': 'lf-c', 'incarnation': 'folder:lf-c', 'generation': 2, 'owner': 'a', 'operations': [{'type': 'member', 'target': 'known', 'id': 'lf-c', 'incarnation': 'folder:lf-c', 'member': 'retired-fetch', 'present': True}]}]
         operations['claim_b'] = [{'type': 'claim', 'id': 'lf-b', 'incarnation': 'folder:lf-b'}]
         operations['filter_b'] = [{'type': 'field', 'target': 'folder', 'id': 'lf-b', 'incarnation': 'folder:lf-b', 'field': 'filters.authored', 'expected': True, 'value': False}]
         operations['filter_review_b'] = [{'type': 'field', 'target': 'folder', 'id': 'lf-b', 'incarnation': 'folder:lf-b', 'field': 'filters.reviewRequests', 'expected': True, 'value': False}]
@@ -157,6 +159,13 @@ int main() {
   assert(service.CancelSeal(a, "close-1").ok());
   assert(commit(a, 8, hidden_b).ok());
   assert(!service.Seal(forged, "close-1", 0).ok());
+  assert(commit(a, 9, claim_c).ok());
+  fail = true;
+  service.Unwatch(a);
+  assert(service.Watch(a, [](auto) {}).ok());
+  fail = false;
+  assert(commit(a, 10, refresh_c).value.Find("superseded")->GetBool());
+  assert(!disk->FindDict("payload")->FindDict("known")->contains("lf-c"));
   service.Unwatch(a);
   assert(!commit(a, 4, hidden_b).ok());
   LinuxDocuments restarted("scope", "other-epoch", read, write);

@@ -1,5 +1,6 @@
 #include "ardia/linux/ac_linux_documents.h"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -154,9 +155,13 @@ LinuxDocumentResult LinuxDocuments::Commit(const LinuxDocumentClient& client,
     auto owners = next.FindDict("owners")->Clone();
     auto generations = next.FindDict("generations")->Clone();
     for (const auto& [id, owner] : *next.FindDict("owners")) {
-      if (watchers_.contains(owner.GetString())) continue;
+      const auto retired = retired_generations_.find(std::string(id));
+      const int generation = LinuxDocumentInteger(generations, id, 0);
+      if (watchers_.contains(owner.GetString()) &&
+          (retired == retired_generations_.end() || retired->second <= generation)) continue;
       owners.Remove(id);
-      generations.Set(id, base::Value(LinuxDocumentInteger(generations, id, 0) + 1));
+      generations.Set(id, base::Value(std::max(generation + 1,
+          retired == retired_generations_.end() ? 0 : retired->second)));
     }
     next.Set("owners", std::move(owners));
     next.Set("generations", std::move(generations));
@@ -232,7 +237,9 @@ void LinuxDocuments::Unwatch(const LinuxDocumentClient& client) {
   for (const auto& [id, owner] : *envelope_.FindDict("owners")) {
     if (owner.GetString() != client.id) continue;
     owners.Remove(id);
-    generations.Set(id, base::Value(LinuxDocumentInteger(generations, id, 0) + 1));
+    auto& retired = retired_generations_[std::string(id)];
+    retired = std::max(retired, LinuxDocumentInteger(generations, id, 0)) + 1;
+    generations.Set(id, base::Value(retired));
   }
   next.Set("owners", std::move(owners));
   next.Set("generations", std::move(generations));
