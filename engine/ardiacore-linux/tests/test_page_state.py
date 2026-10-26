@@ -31,7 +31,8 @@ class PageStateTests(unittest.TestCase):
         cls.directory.cleanup()
 
     def run_case(self, name):
-        subprocess.run([str(self.binary), name], check=True, text=True, timeout=10)
+        subprocess.run([str(self.binary), name], check=True, text=True, timeout=10,
+                       env={**os.environ, "UBSAN_OPTIONS": "halt_on_error=1"})
 
     def test_original_claim_browser_profile_window_shell_and_contents(self):
         self.run_case('authority')
@@ -50,6 +51,9 @@ class PageStateTests(unittest.TestCase):
 
     def test_native_history_integer_boundaries_and_zoom_factors(self):
         self.run_case('history')
+
+    def test_history_bounds_prevent_native_signed_overflow(self):
+        self.run_case('history-bounds')
 
     def test_domain_zoom_payload_conversion(self):
         self.run_case('domain')

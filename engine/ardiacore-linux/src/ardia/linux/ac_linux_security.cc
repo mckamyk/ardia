@@ -95,9 +95,10 @@ base::DictValue LinuxSecurity::Snapshot() const {
   const bool displayed = state->displayed_mixed_content || state->displayed_content_with_cert_errors || state->contained_mixed_form;
   const char* level = errors ? "certificateError" : ran || displayed ? "mixed" :
       state->certificate && !state->is_error_page ? "secure" : "none";
-  result.Set("level", level).Set("certificateErrors", Errors(errors))
-      .Set("mixedContent", ran ? base::Value("ran") : displayed ? base::Value("displayed") : base::Value())
-      .Set("isEV", (state->cert_status & net::CERT_STATUS_IS_EV) != 0);
+  result.Set("level", level);
+  result.Set("certificateErrors", Errors(errors));
+  result.Set("mixedContent", ran ? base::Value("ran") : displayed ? base::Value("displayed") : base::Value());
+  result.Set("isEV", (state->cert_status & net::CERT_STATUS_IS_EV) != 0);
   auto protocol = Protocol(state->connection_status);
   if (!protocol.empty()) result.Set("protocol", std::move(protocol));
   if (state->certificate) result.Set("certificate", Certificate(*state->certificate));

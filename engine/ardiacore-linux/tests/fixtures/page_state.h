@@ -54,7 +54,7 @@ class DictValue {
   DictValue(DictValue&&) = default;
   DictValue& operator=(DictValue&&) = default;
   DictValue(const DictValue&) = delete;
-  template<class T> DictValue& Set(std::string key, T v) & { data_.insert_or_assign(std::move(key), Value(std::move(v))); return *this; }
+  template<class T> Value* Set(std::string key, T v) & { auto entry=data_.insert_or_assign(std::move(key), Value(std::move(v))); return &entry.first->second; }
   template<class T> DictValue&& Set(std::string key, T v) && { Set(std::move(key), std::move(v)); return std::move(*this); }
   Value* Find(std::string_view key) const { auto it=data_.find(std::string(key)); return it==data_.end()?nullptr:const_cast<Value*>(&it->second); }
   const std::string* FindString(std::string_view key) const { auto* v=Find(key); if (!v) return nullptr; try { return &v->GetString(); } catch (...) { return nullptr; } }
@@ -204,7 +204,9 @@ struct NavigationController {
   NavigationEntry* GetPendingEntry() { return pending; }
   int current=2, size=4, last=0, checks=0, goes=0;
   NavigationEntry* GetVisibleEntry() { return entry; }
-  bool CanGoToOffset(int n) { ++checks; return static_cast<int64_t>(current)+n>=0 && static_cast<int64_t>(current)+n<size; }
+  int GetCurrentEntryIndex() { return current; }
+  int GetEntryCount() { return size; }
+  bool CanGoToOffset(int n) { ++checks; return current+n>=0 && current+n<size; }
   void GoToOffset(int n) { ++goes;last=n;current+=n; }
 };
 struct NavigationHandle {

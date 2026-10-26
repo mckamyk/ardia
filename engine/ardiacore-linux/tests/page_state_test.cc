@@ -141,6 +141,18 @@ void History() {
   assert(zoom.ZoomStep(Arg(1)) && controller.level==2);assert(!zoom.ZoomStep(Arg(2)));
 }
 
+void HistoryBounds() {
+  Harness h;zoom::ZoomController controller;h.page.zoom=&controller;LinuxHistoryZoom zoom(h.lease->GetWeakPtr());
+  for (int current:{-1,0,2,INT_MAX-2}) {
+    h.page.controller.current=current;
+    h.page.controller.size=current<0?0:INT_MAX;
+    assert(zoom.GoToOffset(Arg(INT_MIN)) && zoom.GoToOffset(Arg(INT_MAX)));
+    assert(h.page.controller.current==current && h.page.controller.goes==0 && h.page.controller.checks==0);
+  }
+  h.page.controller.current=INT_MAX-2;
+  assert(zoom.GoToOffset(Arg(1)) && h.page.controller.current==INT_MAX-1 && h.page.controller.checks==1);
+}
+
 void Domain() {
   auto request=PrepareLinuxZoomDomain("sites.zoomLevels",base::DictValue());assert(request && request->service=="ac_zoom_list" && request->args.empty());
   auto set=PrepareLinuxZoomDomain("sites.setZoom",base::DictValue().Set("host","EXAMPLE.TEST").Set("zoom",1.44));assert(set && Text(set->args,"host")=="example.test" && std::abs(Number(set->args,"level")-2)<1e-12 && !set->args.Find("zoom"));
@@ -191,5 +203,5 @@ void Reentrant() {
 
 int main(int argc,char** argv) {
   assert(argc==2);std::string mode=argv[1];
-  if(mode=="authority") Authority();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else return 2;
+  if(mode=="authority") Authority();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else return 2;
 }

@@ -1,6 +1,7 @@
 #include "ardia/linux/ac_linux_history_zoom.h"
 
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <utility>
 
@@ -85,6 +86,8 @@ bool LinuxHistoryZoom::GoToOffset(const base::ListValue& args) {
   if (!offset || !contents) return false;
   if (*offset == 0) return true;
   auto& controller = contents->GetController();
+  const auto destination = static_cast<std::int64_t>(controller.GetCurrentEntryIndex()) + *offset;
+  if (destination < 0 || destination >= controller.GetEntryCount()) return true;
   if (controller.CanGoToOffset(*offset)) controller.GoToOffset(*offset);
   return true;
 }

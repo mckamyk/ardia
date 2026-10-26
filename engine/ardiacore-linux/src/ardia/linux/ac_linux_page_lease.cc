@@ -153,7 +153,8 @@ bool LinuxPageLease::EmitSnapshot(const LinuxPageRequest& request, base::ListVal
   if (!ValidPresentation(request)) return false;
   auto envelope = Envelope("pageLifecycle");
   if (!envelope) return false;
-  envelope->Set("action", "snapshot").Set("events", std::move(events));
+  envelope->Set("action", "snapshot");
+  envelope->Set("events", std::move(events));
   Send(std::move(*envelope));
   return true;
 }
@@ -171,7 +172,8 @@ std::optional<base::DictValue> LinuxPageLease::CreationState(const LinuxPageRequ
 void LinuxPageLease::Control(std::string reason) {
   auto envelope = Envelope("pageLifecycle");
   if (!envelope) return;
-  envelope->Set("action", "reset").Set("reason", std::move(reason));
+  envelope->Set("action", "reset");
+  envelope->Set("reason", std::move(reason));
   Send(std::move(*envelope));
 }
 
