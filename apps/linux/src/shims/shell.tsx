@@ -6,6 +6,7 @@ import { flushLinuxSession } from "../session";
 import { createUtilityWindowCloser } from "../utilityClose";
 
 export * from "../../../demo/src/shims/shell";
+export { menuShown, showMenu, watchMenus } from "../menus";
 
 export const emitCommand = (event: CommandEvent) => emitWebCommand(isUtilityWindowId(ardiaHost?.bootstrap.windowId)
   ? { ...event, windowId: ardiaHost!.bootstrap.windowId }
