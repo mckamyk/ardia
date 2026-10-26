@@ -149,6 +149,9 @@ int main() {
   assert(service.Seal(a, "close-1", 7).ok());
   assert(service.Seal(a, "close-2", 7).code == "ERR_DOCUMENT_CLOSING");
   assert(commit(a, 8, hidden_b).code == "ERR_DOCUMENT_CLOSING");
+  service.Unwatch(a);
+  assert(service.Watch(a, [](auto) {}).ok());
+  assert(commit(a, 8, hidden_b).code == "ERR_DOCUMENT_CLOSING");
   assert(!service.CancelSeal(a, "forged-close").ok());
   assert(service.CancelSeal(a, "close-1").ok());
   assert(service.CancelSeal(a, "close-1").ok());
