@@ -1,6 +1,6 @@
 # Linux page-state host join (lane A)
 
-Branch `t3/linux-page-state-join`, rebased onto `linux` at `2376f370` (after #67, #61, #64, #90 and #65). It carries the first-slice helpers (`page-state-first-slice-handoff.md`, cherry-picked unchanged except as noted below) and joins them into the native host, BUILD.gn and the Linux WebView. It is the source-level join for #33 F23 and #13 F03, fixes #84 and #69 (discard), and provides the lease, reset and snapshot substrate that #27 F17 and #35 F25 producers build on.
+Branch `t3/linux-page-state-join`, rebased onto `linux` at `72a49259` (after #67, #61, #64, #90, #65, #68 and #62). It carries the first-slice helpers (`page-state-first-slice-handoff.md`, cherry-picked unchanged except as noted below) and joins them into the native host, BUILD.gn and the Linux WebView. It is the source-level join for #33 F23 and #13 F03, fixes #84 and #69 (discard), and provides the lease, reset and snapshot substrate that #27 F17 and #35 F25 producers build on.
 
 No Chromium 156 compile, GN check, link or runtime run was possible in this lane. Everything below is source-level and fixture-level evidence only.
 
@@ -24,6 +24,8 @@ No Chromium 156 compile, GN check, link or runtime run was possible in this lane
   - `tab.create` keeps `browserId`, `chromeTabId` and `state`, and merges `{lease, snapshot}`. If no creation state is available, the claim is cleared and the call fails. The posted ID-only `ReportNavigation` is removed, along with `ShellHostView::ReportTab`.
   - Events now use the envelope: `navigation` (complete, with `committedUrl` and nullable theme), `progress`, `loadError`, `openWindow`, `pictureInPicture` (presentation); `favicon` as `{url, urls}` (document); `windowClose` (terminal). Title changes emit one complete navigation snapshot.
   - `tab.command`: `getSecurityInfo` (zero args; returns the security snapshot, or null with no current document request), `goToOffset`, and `zoomStep` through the helper (real `PageZoom` steps; 0 resets to the actual default).
+  - Profiles (#62): page state lives on the window's page profile. The mount authority captures the shell's app profile separately and checks each contents against the profile it was mounted with. The zoom domain uses the window's `page_profile()` zoom map, so isolated profiles get their own map. A private page profile is refused with `kPrivateService`, and a non-default profile the window does not host is refused with `kWindowMismatch`, mirroring #62's downloads branch.
+  - Capabilities (#68): `kLinuxZoomDomainRoutes` names the two intercepted routes. The bootstrap advertises them after the route table, and the dispatcher tests membership against the same list. Page commands stay covered by `ArdiaWebView.call`.
   - `engine.call` intercepts `sites.zoomLevels` and `sites.setZoom` ahead of the route table, using `PrepareLinuxZoomDomain`, `ac_zoom_list` or `ac_zoom_set`, and `CompleteLinuxZoomDomain`. Invalid requests fail with `ERR_ENGINE`, malformed replies with `ERR_BAD_REPLY`, and service `{error}` replies keep `ERR_ENGINE`.
 - `BUILD.gn`: the ten helper files, `//components/security_state/content` and `//skia`.
 
@@ -66,12 +68,13 @@ For events that must keep flowing during a provisional navigation, `binding->Rep
 
 | Command | Result |
 | --- | --- |
-| `ARDIA_F01_PINNED_SOURCE=/tmp/ardia-f01-156 python3 -m unittest discover -s engine/ardiacore-linux/tests` | 318 passed, 0 skipped, including `test_page_state.py` 20 (ASan/UBSan), `test_page_host_join.py` 7, `test_linux_features.py` 1, and #65's `test_page_commands.py` (with the new `migration` and `envelope` cases), `test_devtools_authority.py`, `test_pane_layout.py`, plus `test_window_lifecycle.py` and `test_downloads.py` |
+| `ARDIA_F01_PINNED_SOURCE=/tmp/ardia-f01-156 python3 -m unittest discover -s engine/ardiacore-linux/tests` | 335 passed, 0 skipped, including `test_page_state.py` 21 (ASan/UBSan), `test_page_host_join.py` 7, `test_linux_features.py`, `test_page_commands.py` 24, `test_profile_host.py`, `test_suggest_policy.py`, `test_launch_steps.py`, `test_devtools_authority.py`, `test_pane_layout.py`, `test_window_lifecycle.py` and `test_downloads.py` |
 | `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs` | 7 passed |
 | `pnpm --filter @ardia/linux typecheck` | passed |
-| `pnpm --filter @ardia/linux test:host` | 257 passed, including `hostPageEvents.test.mjs` 17, `hostTabPage.test.mjs` 8 and `hostPageCommands.test.mjs` 4 |
+| `pnpm --filter @ardia/linux test:host` | 316 passed, including `hostProfiles.test.mjs` and `hostCapabilities.test.mjs`, including `hostPageEvents.test.mjs` 17, `hostTabPage.test.mjs` 8 and `hostPageCommands.test.mjs` 4 |
 | `pnpm --filter @ardia/linux test:graph` | 3 passed |
-| `pnpm --filter @ardia/linux acceptance:self-test` | 46 passed |
+| `pnpm --filter @ardia/linux acceptance:self-test` | 47 passed |
+| `pnpm --filter @ardia/linux fixture:csp:check` | passed |
 | `pnpm --filter @ardia/linux build` | passed |
 
 The F03 and F23 acceptance scenarios (#90) read the site panel text, `s.tabs[].zoom` and `sites.zoomLevels` factors. None of those contracts changed.
