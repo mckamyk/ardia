@@ -69,6 +69,11 @@ const HostTabWebView = forwardRef<WebViewHandle, WebViewProps>(function HostTabW
           args[0] = toEngineUrl(args[0] as string);
         }
         if (property === "getSecurityInfo") return current.pageResult(property, args);
+        if (property === "evaluate") {
+          const json = await current.pageResult<string | null>(property, args).catch(() => null);
+          if (typeof json !== "string") return null;
+          try { return JSON.parse(json); } catch { return null; }
+        }
         const result = await current.command(property, args);
         if (property === "navigationEntries" && Array.isArray(result)) return result.map((entry: { url: string }) => ({ ...entry, url: toAppUrl(entry.url) }));
         return result;

@@ -47,6 +47,7 @@ std::string String(const base::DictValue& value, std::string_view key) { auto* t
 namespace ardiacore::linux_contract { inline bool OwnsClaim(const std::string& owner, const std::string& claim) { return !owner.empty() && owner == claim; } }
 class ShellHostView;
 struct HostMessageHandler {};
+namespace ardiacore { struct LinuxPageChannel { int detached = 0; static std::map<const content::WebContents*, LinuxPageChannel>& All() { static std::map<const content::WebContents*, LinuxPageChannel> all; return all; } static LinuxPageChannel* FromWebContents(content::WebContents* contents) { return &All()[contents]; } void Detach() { ++detached; } }; }
 struct AutoPictureInPictureTabHelper {
   static AutoPictureInPictureTabHelper* FromWebContents(content::WebContents*) { return nullptr; }
   void OnTabActivatedChanged(bool) {}
@@ -78,6 +79,7 @@ class TabBinding : public content::WebContentsObserver {
   ardiacore::LinuxPageState* page() const { return page_.get(); }
   uint64_t contents_generation() const { return contents_generation_; }
   void AttachPage(std::unique_ptr<ardiacore::LinuxPageState> page);
+  void AttachPageChannel() {}
   void RetirePage();
   std::unique_ptr<ardiacore::LinuxPageState> TakePage();
   void ReportPresentation(std::string name, base::DictValue data);
@@ -184,7 +186,9 @@ void Reclaim() {
   const auto old_generation = Text(*w.binding->page()->CreationState()->FindDict("lease"), "bindingGeneration");
   auto stale = w.binding->page()->Capture();
   w.host.sent.clear();
+  const int detached = ardiacore::LinuxPageChannel::All()[w.first.get()].detached;
   w.Swap();
+  assert(ardiacore::LinuxPageChannel::All()[w.first.get()].detached > detached);
   assert(w.host.Binding(9) == w.binding && !w.host.Binding(7) && w.binding->contents() == w.second.get());
   assert(w.second->observers.front() == w.binding);
   assert(w.host.sent.size() == 1);
