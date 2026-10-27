@@ -2211,8 +2211,11 @@ void ShellHostView::RendererReady() {
   for (const auto& [id, host] : Hosts()) {
     for (auto& event : host->WindowState()) replay.push_back(std::move(event));
   }
-  std::ranges::stable_partition(replay, [](const base::DictValue& event) { return *event.FindString("type") != "focus"; });
-  for (auto& event : replay) Event("ArdiaShell", "onWindowEvent", base::Value(std::move(event)));
+  for (const bool focus : {false, true}) {
+    for (const auto& event : replay) {
+      if ((*event.FindString("type") == "focus") == focus) Event("ArdiaShell", "onWindowEvent", base::Value(event.Clone()));
+    }
+  }
 }
 
 bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
