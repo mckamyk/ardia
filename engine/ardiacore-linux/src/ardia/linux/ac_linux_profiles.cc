@@ -53,6 +53,14 @@ std::optional<ProfileName> ParseProfileName(std::string_view value) {
   return name;
 }
 
+StartupProfiles PinnedStartupProfiles(const StartupProfiles& current, std::string_view app_directory) {
+  StartupProfiles pinned;
+  pinned.last_used = std::string(app_directory);
+  if (!current.last_active.empty()) pinned.last_active.emplace_back(app_directory);
+  pinned.picker_on_startup = false;
+  return pinned;
+}
+
 std::string ProfileDirectoryName(std::string_view isolated_id) {
   return isolated_id.empty() ? std::string() : "Profile " + std::string(isolated_id);
 }
@@ -66,6 +74,7 @@ std::string_view ProfileErrorCode(ProfileError error) {
     case ProfileError::kUnavailable: return "ERR_PROFILE_UNAVAILABLE";
     case ProfileError::kWindowMismatch: return "ERR_PROFILE_WINDOW";
     case ProfileError::kPrivateService: return "ERR_PROFILE_PRIVATE";
+    case ProfileError::kPrivateEnding: return "ERR_PROFILE_ENDING";
   }
   return "ERR_PROFILE_UNAVAILABLE";
 }
@@ -79,8 +88,23 @@ std::string_view ProfileErrorMessage(ProfileError error) {
     case ProfileError::kUnavailable: return "Chrome could not open this profile";
     case ProfileError::kWindowMismatch: return "This window hosts a different profile";
     case ProfileError::kPrivateService: return "This service is unavailable in private windows";
+    case ProfileError::kPrivateEnding: return "The previous private session is still closing";
   }
   return "Chrome could not open this profile";
+}
+
+bool PrivateWindow(const WindowAccess& window) {
+  const auto name = ParseProfileName(window.page_profile);
+  return !name || name->kind == ProfileKind::kPrivate;
+}
+
+bool WindowVisibleTo(const WindowAccess& window, std::string_view requester) {
+  return !PrivateWindow(window) || (!requester.empty() && requester == window.id);
+}
+
+bool WindowClosableBy(const WindowAccess& window, std::string_view requester) {
+  if (!PrivateWindow(window)) return true;
+  return !requester.empty() && (requester == window.id || requester == window.opener);
 }
 
 bool ProfileOpensWindow(const ProfileName& name, bool incognito, bool utility) {

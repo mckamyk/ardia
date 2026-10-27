@@ -2,6 +2,7 @@
 #define ARDIA_LINUX_AC_LINUX_PROFILES_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -24,6 +25,7 @@ enum class ProfileError {
   kUnavailable,
   kWindowMismatch,
   kPrivateService,
+  kPrivateEnding,
 };
 
 struct ProfileName {
@@ -35,12 +37,79 @@ struct ProfileName {
 
 inline constexpr std::string_view kPrivatePrefix = "incognito:";
 inline constexpr size_t kMaxProfileTokenLength = 128;
+inline constexpr int kPrivateEndingRetries = 50;
+
+struct StartupProfiles {
+  std::string last_used;
+  std::vector<std::string> last_active;
+  bool picker_on_startup = true;
+  bool operator==(const StartupProfiles&) const = default;
+};
+
+struct WindowAccess {
+  std::string id;
+  std::string page_profile;
+  std::string opener;
+};
+
+enum class OpeningAdmission { kStarted, kJoined, kMismatch };
+
+struct OpeningTicket {
+  OpeningAdmission admission;
+  uint64_t generation;
+};
 
 std::optional<ProfileName> ParseProfileName(std::string_view value);
+bool PrivateWindow(const WindowAccess& window);
+bool WindowVisibleTo(const WindowAccess& window, std::string_view requester);
+bool WindowClosableBy(const WindowAccess& window, std::string_view requester);
+StartupProfiles PinnedStartupProfiles(const StartupProfiles& current, std::string_view app_directory);
 std::string ProfileDirectoryName(std::string_view isolated_id);
 std::string_view ProfileErrorCode(ProfileError error);
 std::string_view ProfileErrorMessage(ProfileError error);
 bool ProfileOpensWindow(const ProfileName& name, bool incognito, bool utility);
+
+template <class Done>
+class OpeningLedger {
+ public:
+  OpeningTicket Begin(const std::string& id, const std::string& profile, Done& done) {
+    const auto found = pending_.find(id);
+    if (found != pending_.end()) {
+      if (found->second.profile != profile) return {OpeningAdmission::kMismatch, 0};
+      found->second.waiters.push_back(std::move(done));
+      return {OpeningAdmission::kJoined, found->second.generation};
+    }
+    Entry& entry = pending_[id];
+    entry.profile = profile;
+    entry.generation = ++generation_;
+    entry.waiters.push_back(std::move(done));
+    return {OpeningAdmission::kStarted, entry.generation};
+  }
+
+  bool Current(const std::string& id, uint64_t generation) const {
+    const auto found = pending_.find(id);
+    return found != pending_.end() && found->second.generation == generation;
+  }
+
+  std::vector<Done> Finish(const std::string& id, uint64_t generation) {
+    const auto found = pending_.find(id);
+    if (found == pending_.end() || found->second.generation != generation) return {};
+    std::vector<Done> waiters = std::move(found->second.waiters);
+    pending_.erase(found);
+    return waiters;
+  }
+
+  size_t Pending() const { return pending_.size(); }
+
+ private:
+  struct Entry {
+    std::string profile;
+    uint64_t generation = 0;
+    std::vector<Done> waiters;
+  };
+  std::map<std::string, Entry> pending_;
+  uint64_t generation_ = 0;
+};
 
 template <class P>
 class ProfileRegistry {
@@ -51,9 +120,11 @@ class ProfileRegistry {
    public:
     virtual ~Backend() = default;
     virtual void Load(const std::string& directory, std::function<void(P*)> done) = 0;
-    virtual P* OffTheRecord(P* original) = 0;
+    virtual P* ExistingOffTheRecord(P* original) = 0;
+    virtual P* CreateOffTheRecord(P* original) = 0;
     virtual bool Usable(P* profile) const = 0;
     virtual bool OffTheRecordProfile(P* profile) const = 0;
+    virtual void Later(std::function<void()> task) = 0;
   };
 
   explicit ProfileRegistry(Backend& backend) : backend_(backend) {}
@@ -187,28 +258,44 @@ class ProfileRegistry {
     auto& waiters = private_waiting_[name.id];
     waiters.push_back(std::move(done));
     if (waiters.size() > 1) return;
-    ResolveRegular(name.original, [this, alive = alive_, id = name.id](P* original, ProfileError error) {
+    ResolveRegular(name.original, [this, alive = alive_, id = name.id, original_id = name.original](P* original, ProfileError error) {
       if (!*alive) return;
-      auto node = private_waiting_.extract(id);
-      if (node.empty()) return;
-      P* otr = nullptr;
-      if (released_.contains(id)) {
-        error = ProfileError::kReleased;
-      } else if (original) {
-        otr = backend_.OffTheRecord(original);
-        if (!otr || otr == original || !backend_.Usable(otr) || !backend_.OffTheRecordProfile(otr)) {
-          otr = nullptr;
-          error = ProfileError::kUnavailable;
-        } else {
-          private_[id] = otr;
-          error = ProfileError::kNone;
-        }
-      }
-      for (auto& waiter : node.mapped()) {
-        waiter(otr, error);
-        if (!*alive) return;
-      }
+      if (!original) return FinishPrivate(id, nullptr, error);
+      AcquirePrivate(id, original_id, kPrivateEndingRetries);
     });
+  }
+
+  void AcquirePrivate(const std::string& id, const std::string& original_id, int attempts) {
+    if (!private_waiting_.contains(id)) return;
+    if (released_.contains(id)) return FinishPrivate(id, nullptr, ProfileError::kReleased);
+    P* original = Lookup(original_id);
+    if (!original) {
+      return FinishPrivate(id, nullptr, deleted_.contains(original_id) ? ProfileError::kDeleted : ProfileError::kUnavailable);
+    }
+    P* existing = backend_.ExistingOffTheRecord(original);
+    if (existing && !backend_.Usable(existing)) {
+      if (attempts <= 0) return FinishPrivate(id, nullptr, ProfileError::kPrivateEnding);
+      backend_.Later([this, alive = alive_, id, original_id, attempts] {
+        if (*alive) AcquirePrivate(id, original_id, attempts - 1);
+      });
+      return;
+    }
+    P* otr = existing ? existing : backend_.CreateOffTheRecord(original);
+    if (!otr || otr == original || !backend_.Usable(otr) || !backend_.OffTheRecordProfile(otr)) {
+      return FinishPrivate(id, nullptr, ProfileError::kUnavailable);
+    }
+    private_[id] = otr;
+    FinishPrivate(id, otr, ProfileError::kNone);
+  }
+
+  void FinishPrivate(const std::string& id, P* otr, ProfileError error) {
+    auto node = private_waiting_.extract(id);
+    if (node.empty()) return;
+    auto alive = alive_;
+    for (auto& waiter : node.mapped()) {
+      waiter(otr, error);
+      if (!*alive) return;
+    }
   }
 
   Backend& backend_;

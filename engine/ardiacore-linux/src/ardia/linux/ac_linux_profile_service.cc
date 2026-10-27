@@ -9,10 +9,16 @@
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/scoped_multi_source_observation.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_observer.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_change_registrar.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
 
 namespace ardiacore {
@@ -25,8 +31,10 @@ class ChromeProfiles : public Registry::Backend, public ProfileObserver {
  public:
   Registry& registry() { return registry_; }
 
-  void Watch(Profile* profile) {
-    if (profile && !observations_.IsObservingSource(profile)) observations_.AddObservation(profile);
+  bool Watch(Profile* profile) {
+    if (!profile || profile->ShutdownStarted()) return false;
+    if (!observations_.IsObservingSource(profile)) observations_.AddObservation(profile);
+    return true;
   }
 
   void Load(const std::string& directory, std::function<void(Profile*)> done) override {
@@ -45,11 +53,21 @@ class ChromeProfiles : public Registry::Backend, public ProfileObserver {
                   base::Unretained(this), std::move(done)));
   }
 
-  Profile* OffTheRecord(Profile* original) override {
+  Profile* ExistingOffTheRecord(Profile* original) override {
+    if (!Usable(original) || original->IsOffTheRecord() || !original->HasPrimaryOTRProfile()) return nullptr;
+    return original->GetPrimaryOTRProfile(false);
+  }
+
+  Profile* CreateOffTheRecord(Profile* original) override {
     if (!Usable(original) || original->IsOffTheRecord()) return nullptr;
     Profile* otr = original->GetPrimaryOTRProfile(true);
-    if (otr) Watch(otr);
-    return otr;
+    return Watch(otr) ? otr : nullptr;
+  }
+
+  void Later(std::function<void()> task) override {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce([](std::function<void()> task) { task(); }, std::move(task)),
+        base::Milliseconds(100));
   }
 
   bool Usable(Profile* profile) const override {
@@ -76,11 +94,50 @@ ChromeProfiles& Profiles() {
   return *profiles;
 }
 
+
+void PinStartupProfile(const std::string& app_directory) {
+  PrefService* local_state = g_browser_process ? g_browser_process->local_state() : nullptr;
+  if (!local_state) return;
+  linux_profiles::StartupProfiles current;
+  current.last_used = local_state->GetFilePath(prefs::kProfileLastUsed).AsUTF8Unsafe();
+  for (const base::Value& entry : local_state->GetList(prefs::kProfilesLastActive)) {
+    if (entry.is_string()) current.last_active.push_back(entry.GetString());
+  }
+  current.picker_on_startup = local_state->GetBoolean(prefs::kBrowserShowProfilePickerOnStartup);
+  const auto pinned = linux_profiles::PinnedStartupProfiles(current, app_directory);
+  if (pinned.last_used != current.last_used) {
+    local_state->SetFilePath(prefs::kProfileLastUsed, base::FilePath::FromUTF8Unsafe(pinned.last_used));
+  }
+  if (pinned.last_active != current.last_active) {
+    base::ListValue active;
+    for (const auto& entry : pinned.last_active) active.Append(entry);
+    local_state->SetList(prefs::kProfilesLastActive, std::move(active));
+  }
+  if (pinned.picker_on_startup != current.picker_on_startup &&
+      local_state->IsUserModifiablePreference(prefs::kBrowserShowProfilePickerOnStartup)) {
+    local_state->SetBoolean(prefs::kBrowserShowProfilePickerOnStartup, pinned.picker_on_startup);
+  }
+}
+
+void PinStartupProfileFor(Profile* app) {
+  PrefService* local_state = g_browser_process ? g_browser_process->local_state() : nullptr;
+  if (!local_state) return;
+  static base::NoDestructor<PrefChangeRegistrar> registrar;
+  const std::string app_directory = app->GetBaseName().AsUTF8Unsafe();
+  registrar->RemoveAll();
+  if (!registrar->prefs()) registrar->Init(local_state);
+  for (const char* pref : {prefs::kProfileLastUsed, prefs::kProfilesLastActive,
+                           prefs::kBrowserShowProfilePickerOnStartup}) {
+    registrar->Add(pref, base::BindRepeating(&PinStartupProfile, app_directory));
+  }
+  PinStartupProfile(app_directory);
+}
+
 }
 
 bool SetLinuxAppProfile(Profile* profile) {
-  if (!Profiles().registry().SetDefault(profile)) return false;
-  Profiles().Watch(profile);
+  if (!Profiles().Watch(profile) || !Profiles().registry().SetDefault(profile)) return false;
+  PinStartupProfileFor(profile);
   return true;
 }
 

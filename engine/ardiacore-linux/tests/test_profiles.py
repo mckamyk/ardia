@@ -54,10 +54,13 @@ struct FakeBackend : ProfileRegistry<FakeProfile>::Backend {
     loads.erase(loads.begin() + static_cast<long>(index));
     entry.second(Make(entry.first));
   }
-  FakeProfile* OffTheRecord(FakeProfile* original) override {
+  int creates = 0;
+  FakeProfile* ExistingOffTheRecord(FakeProfile* original) override { return original->child; }
+  FakeProfile* CreateOffTheRecord(FakeProfile* original) override {
+    ++creates;
     if (refuse_otr) return nullptr;
     if (otr_returns_original) return original;
-    if (!original->child || original->child->dying) {
+    if (!original->child) {
       otrs.push_back(std::make_unique<FakeProfile>(FakeProfile{original->directory + " OTR", true}));
       original->child = otrs.back().get();
     }
@@ -65,6 +68,13 @@ struct FakeBackend : ProfileRegistry<FakeProfile>::Backend {
   }
   bool Usable(FakeProfile* profile) const override { return profile && !profile->dying; }
   bool OffTheRecordProfile(FakeProfile* profile) const override { return profile && profile->otr; }
+  std::vector<std::function<void()>> later;
+  void Later(std::function<void()> task) override { later.push_back(std::move(task)); }
+  void RunLater() {
+    auto tasks = std::move(later);
+    later.clear();
+    for (auto& task : tasks) task();
+  }
 };
 
 struct Result {
@@ -206,11 +216,14 @@ void PrivateLifetime() {
   disposed->dying = true;
   assert(!registry.Lookup("incognito:w-b@"));
   registry.Forget(disposed);
+  app.child = nullptr;
   assert(registry.PrivateNames(disposed) == 0);
   Result fresh;
   registry.Resolve("incognito:w-d@", Into(fresh));
   assert(fresh.profile && fresh.profile != disposed && !fresh.profile->dying);
 
+  registry.Release("incognito:w-d@");
+  app.child = nullptr;
   backend.refuse_otr = true;
   Result refused;
   registry.Resolve("incognito:w-e@", Into(refused));
@@ -290,7 +303,146 @@ void ReentrancyAndDestruction() {
   std::puts("reentrancy=ok destruction=ok");
 }
 
+void ReopenWhileLastPrivateSessionEnds() {
+  FakeBackend backend;
+  backend.synchronous = true;
+  FakeProfile app{"Default"};
+  ProfileRegistry<FakeProfile> registry(backend);
+  registry.SetDefault(&app);
+  Result first;
+  registry.Resolve("incognito:w-1@", Into(first));
+  FakeProfile* ending = first.profile;
+  assert(ending && registry.Release("incognito:w-1@"));
+  ending->dying = true;
+  registry.Forget(ending);
+  Result reopened;
+  registry.Resolve("incognito:w-2@", Into(reopened));
+  assert(reopened.calls == 0 || reopened.profile != ending);
+  assert(reopened.calls == 0 && backend.later.size() == 1);
+  const int creates_while_ending = backend.creates;
+  backend.RunLater();
+  assert(reopened.calls == 0 && backend.later.size() == 1 && backend.creates == creates_while_ending);
+  app.child = nullptr;
+  backend.RunLater();
+  assert(reopened.calls == 1 && reopened.profile && reopened.profile != ending && !reopened.profile->dying);
+  assert(reopened.error == ProfileError::kNone);
+
+  FakeProfile* stuck = reopened.profile;
+  registry.Release("incognito:w-2@");
+  stuck->dying = true;
+  registry.Forget(stuck);
+  Result bounded;
+  registry.Resolve("incognito:w-3@", Into(bounded));
+  for (int i = 0; i < kPrivateEndingRetries && bounded.calls == 0; ++i) backend.RunLater();
+  assert(bounded.calls == 1 && !bounded.profile && bounded.error == ProfileError::kPrivateEnding);
+  assert(backend.later.empty());
+  assert(ProfileErrorCode(ProfileError::kPrivateEnding) == "ERR_PROFILE_ENDING");
+
+  Result released;
+  registry.Resolve("incognito:w-4@", Into(released));
+  assert(released.calls == 0);
+  registry.Release("incognito:w-4@");
+  assert(released.calls == 1 && released.error == ProfileError::kReleased);
+  app.child = nullptr;
+  backend.RunLater();
+  assert(released.calls == 1 && !registry.Lookup("incognito:w-4@"));
+
+  stuck->dying = true;
+  app.child = stuck;
+  auto dropped = std::make_unique<ProfileRegistry<FakeProfile>>(backend);
+  dropped->SetDefault(&app);
+  int late = 0;
+  dropped->Resolve("incognito:w-5@", [&](FakeProfile*, ProfileError) { ++late; });
+  dropped.reset();
+  app.child = nullptr;
+  backend.RunLater();
+  assert(late == 0);
+  std::puts("reopen_after_ending=ok ending_bounded=ok");
+}
+
+void StartupProfilePinning() {
+  StartupProfiles chrome_after_isolated_focus{"Profile p-work", {"Default", "Profile p-work"}, true};
+  const auto pinned = PinnedStartupProfiles(chrome_after_isolated_focus, "Default");
+  assert(pinned.last_used == "Default");
+  assert(pinned.last_active == std::vector<std::string>{"Default"});
+  assert(!pinned.picker_on_startup);
+  const auto only_isolated = PinnedStartupProfiles({"Profile p-work", {"Profile p-work"}, false}, "Default");
+  assert(only_isolated.last_used == "Default" && only_isolated.last_active == std::vector<std::string>{"Default"});
+  const auto closed_all = PinnedStartupProfiles({"Default", {}, true}, "Default");
+  assert(closed_all.last_active.empty() && !closed_all.picker_on_startup);
+  assert(PinnedStartupProfiles(pinned, "Default") == pinned);
+  const auto custom = PinnedStartupProfiles({"Profile p-x", {"Profile p-x"}, true}, "Work Dir");
+  assert(custom.last_used == "Work Dir" && custom.last_active == std::vector<std::string>{"Work Dir"});
+  std::puts("startup_pinned=ok");
+}
+
+void PrivateWindowAccess() {
+  const WindowAccess regular{"main", "", ""};
+  const WindowAccess isolated{"w-work", "p-work", "main"};
+  const WindowAccess first{"w-p1", "incognito:w-p1@", "main"};
+  const WindowAccess second{"w-p2", "incognito:w-p2@p-work", "w-p1"};
+  for (const char* requester : {"main", "w-work", "w-p1", "w-p2", "w-new"}) {
+    assert(WindowVisibleTo(regular, requester) && WindowClosableBy(regular, requester));
+    assert(WindowVisibleTo(isolated, requester) && WindowClosableBy(isolated, requester));
+  }
+  assert(WindowVisibleTo(first, "w-p1"));
+  assert(!WindowVisibleTo(first, "main"));
+  assert(!WindowVisibleTo(first, "w-p2"));
+  assert(!WindowVisibleTo(first, "w-new"));
+  assert(WindowClosableBy(first, "w-p1"));
+  assert(WindowClosableBy(first, "main"));
+  assert(!WindowClosableBy(first, "w-p2"));
+  assert(!WindowClosableBy(first, "w-new"));
+  assert(!WindowClosableBy(second, "main"));
+  assert(WindowClosableBy(second, "w-p1"));
+  const WindowAccess orphan{"w-p3", "incognito:w-p3@", ""};
+  assert(!WindowClosableBy(orphan, ""));
+  assert(!WindowVisibleTo(orphan, ""));
+  std::puts("private_window_access=ok");
+}
+
+struct Reply {
+  std::vector<std::string>* log;
+  std::string name;
+  Reply(std::vector<std::string>* l, std::string n) : log(l), name(std::move(n)) {}
+  Reply(Reply&&) = default;
+  Reply& operator=(Reply&&) = default;
+  Reply(const Reply&) = delete;
+  void Run(bool ok) { log->push_back(name + (ok ? "=ok" : "=failed")); }
+};
+
+void OpeningLedgerBounds() {
+  OpeningLedger<Reply> ledger;
+  std::vector<std::string> log;
+  Reply a(&log, "a");
+  const auto first = ledger.Begin("w-1", "p-work", a);
+  assert(first.admission == OpeningAdmission::kStarted && ledger.Current("w-1", first.generation));
+  Reply b(&log, "b");
+  const auto joined = ledger.Begin("w-1", "p-work", b);
+  assert(joined.admission == OpeningAdmission::kJoined && joined.generation == first.generation);
+  Reply c(&log, "c");
+  const auto mismatch = ledger.Begin("w-1", "", c);
+  assert(mismatch.admission == OpeningAdmission::kMismatch);
+  c.Run(false);
+  auto expired = ledger.Finish("w-1", first.generation);
+  assert(expired.size() == 2 && !ledger.Current("w-1", first.generation));
+  for (auto& reply : expired) reply.Run(false);
+  assert(ledger.Finish("w-1", first.generation).empty());
+  Reply d(&log, "d");
+  const auto retry = ledger.Begin("w-1", "p-work", d);
+  assert(retry.admission == OpeningAdmission::kStarted && retry.generation != first.generation);
+  assert(ledger.Finish("w-1", first.generation).empty() && ledger.Current("w-1", retry.generation));
+  for (auto& reply : ledger.Finish("w-1", retry.generation)) reply.Run(true);
+  assert((log == std::vector<std::string>{"c=failed", "a=failed", "b=failed", "d=ok"}));
+  assert(ledger.Pending() == 0);
+  std::puts("opening_ledger=ok");
+}
+
 int main() {
+  PrivateWindowAccess();
+  OpeningLedgerBounds();
+  StartupProfilePinning();
+  ReopenWhileLastPrivateSessionEnds();
   Parsing();
   LookupAndNoFallback();
   PrivateLifetime();
@@ -316,7 +468,7 @@ class ProfileRegistryTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-            for marker in ('parsing=ok', 'no_fallback=ok', 'private_lifetime=ok', 'release_during_resolution=ok',
+            for marker in ('private_window_access=ok', 'opening_ledger=ok', 'startup_pinned=ok', 'reopen_after_ending=ok', 'ending_bounded=ok', 'parsing=ok', 'no_fallback=ok', 'private_lifetime=ok', 'release_during_resolution=ok',
                            'delete_during_load=ok', 'reentrancy=ok', 'destruction=ok'):
                 self.assertIn(marker, run.stdout)
 
