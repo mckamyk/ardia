@@ -48,7 +48,12 @@ Left: text an IME commits asynchronously during the load, and replayed keys pass
 
 ## #114: site zoom for any named profile
 
-`sites.zoomLevels` and `sites.setZoom` validate their arguments, refuse a private name with `ERR_PROFILE_PRIVATE`, then resolve the named profile through the registry like every other `sites.*` call: `""`/`default` is the app profile, an isolated id its own profile, an off-the-record result is refused. The calling window's page profile no longer matters, so Settings lists and resets any regular profile's zoom levels, and private zoom levels are never listed or written. This matches macOS.
+`sites.zoomLevels` and `sites.setZoom` validate their arguments, then route by the named profile:
+
+- a private name follows #161: it is accepted only from the private window that hosts it (`RoutePrivateCall`), and its own zoom map is read or written through the original profile's engine call with the off-the-record flag;
+- every other name resolves through the profile registry like the other `sites.*` calls: `""`/`default` is the app profile, an isolated id its own profile, and an off-the-record result is refused with `ERR_PROFILE_PRIVATE`.
+
+The calling window's page profile no longer matters for regular profiles, so Settings lists and resets any regular profile's zoom levels; private zoom levels are never listed or written from another window. This matches macOS.
 
 ## Tests
 
