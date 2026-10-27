@@ -1,6 +1,6 @@
 # Lane E handoff: Downloads and file drag/drop (#18 F08, #30 F20)
 
-Branch `t3/linux-downloads-drag`, rebased onto `linux` at `52d72e78` (after #67). Source-level implementation with compiled fixtures and Linux host tests. It has not been built into Chromium 156 or run natively.
+Branch `t3/linux-downloads-drag`, rebased onto `linux` at `bb9c745e` (after #61 and #67). Source-level implementation with compiled fixtures and Linux host tests. It has not been built into Chromium 156 or run natively.
 
 ## What was done
 
@@ -34,9 +34,9 @@ The shared `ac_downloads_*` engine service already observes each profile's `Down
     - IDs removed while the list request was in flight are excluded, whether locally or by a `downloads.removed` event.
     - It doesn't call `upsertDownload`, so the downloads popover doesn't open.
     - New snapshot entries are first committed under a profile no window shows, then under the regular profile. The shared `watchNewDownloads` therefore records them as already seen and doesn't play the new-download animation.
-    - If history holds more than the visible 100, it calls `downloads.clear` with the visible IDs as `keep` and the request time as `before`. That prunes the hidden finished history, so a later removal can't surface older entries on the next start.
+    - Startup never deletes anything. If history holds more than the visible 100, the older entries stay in Chromium's history (and in `chrome://downloads`). After a single removal, the next start can show the 101st entry; it appears without the new-download animation.
   - **Remove:** removes the entry from Chromium's download history.
-  - **Clear:** calls `downloads.clear` with the still-listed IDs as `keep`, which removes every finished entry the engine knows, including ones never shown.
+  - **Clear:** calls `downloads.clear` with the still-listed IDs as `keep`, which removes every finished `Listed()` entry the engine knows, including ones never shown. Nothing older is left to come back on restart, so no "cleared before" cutoff is persisted.
   - **Other windows:** a `downloads.removed` event from another window removes the entry here through the original action, so it isn't echoed back to the engine.
 - `apps/linux/src/hostFiles.ts` (the `ArdiaSystem` adapter, resolved in `hostModules.ts`):
   - `fileExists`: synchronous, answered from a cache. Native `ArdiaSystem.fileStatus` lookups are batched (16 ms, at most 64 paths) and refreshed after 2 s. When an answer changes, the downloads list is re-rendered.
@@ -87,10 +87,10 @@ The shared `ac_downloads_*` engine service already observes each profile's `Down
 
 ## Tests run
 
-Round 2 (after review round 1):
+Round 3 (after review round 1 and the no-pruning decision):
 
 - `pnpm --filter @ardia/linux typecheck`: passes.
-- `pnpm --filter @ardia/linux test:host`: 224 passed, 0 failed.
+- `pnpm --filter @ardia/linux test:host`: 228 passed, 0 failed (includes the #61 window-lifecycle tests).
 - `pnpm --filter @ardia/linux build`: passes.
 - `python3 -m unittest test_downloads test_contract`: 6 passed. Each `test_downloads` test compiles and runs real code under ASan and UBSan:
   - the pure helpers, with a scenario fixture;
@@ -98,7 +98,7 @@ Round 2 (after review round 1):
   - `ac_linux_contract.h`;
   - a check that the GN source list matches the source directory;
   - a check that the native capability list matches the JS gates.
-- Full `python3 -m unittest discover -s engine/ardiacore-linux/tests`: 210 tests, all passing (the five close-fixture failures from before are fixed by #67).
+- Full `python3 -m unittest discover -s engine/ardiacore-linux/tests`: 224 tests, all passing (includes #61 and #67).
 - `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs`: 7 passed.
 - With the Chromium 156 toolchain flags, a syntax-only compile passes for `ac_linux_downloads.cc`, `ac_linux_file_drop.cc` and `ac_linux_download_service.cc` against the real `DownloadManager`, `DownloadItem`, timer and observation headers. `ac_linux_files.cc` and the host hunks still could not be syntax-checked: the 156 out directory lacks generated mojom headers such as `content/public/common/extra_mojo_js_features.mojom.h`. Their API use was checked by hand against the 156 headers.
 
@@ -108,7 +108,7 @@ I could not build or run Chromium here. These still need checking on a real buil
 
 - The host and `ac_linux_files.cc` compile and link, including `gn check` for the new deps (`//chrome/browser:{browser_process,icon_loader,icon_manager,primitives}`, `//chrome/browser/download`, `//extensions/browser`, `//components/download/public/common`, `//ui/display`, `//ui/base/clipboard:file_info`, `//ui/base/dragdrop/mojom`).
 - A known download shows progress and completion in Ctrl+J and in the popover, and pause, resume, cancel, keep and discard work.
-- After a restart, history entries appear exactly once, including when `downloads.list` runs before history has loaded. Cleared ones stay gone, history beyond 100 is pruned, and nothing reports as "live" when it isn't.
+- After a restart, history entries appear exactly once, including when `downloads.list` runs before history has loaded. Cleared ones stay gone, history beyond 100 is kept but not shown, and nothing reports as "live" when it isn't.
 - Open, Show in Folder (portal, FileManager1 and `xdg-open` paths) and Move to Trash act on the selected file. Show in Folder reports `ERR_REVEAL_UNAVAILABLE` with no desktop.
 - Changing the destination folder and "ask where to save" changes Chromium's behavior. The Settings folder picker relies on `ArdiaShell.pickFolder`, which is still optional and unimplemented on Linux (F05/F26).
 - `CanDragEnter` records files from Wayland and X11 file managers, and the DOM `files` names match the recorded basenames. Dropping files, URLs, text and several items at once onto the sidebar and top strip opens tabs. Internal reorder and drops onto web pages are unchanged.
@@ -116,7 +116,7 @@ I could not build or run Chromium here. These still need checking on a real buil
 
 ## Open risks
 
-- Startup pruning deletes finished Chromium download-history entries older than the newest 100. The shared store already caps Ardia's list at 100 and never shows the rest, but they also disappear from `chrome://downloads`. I chose this so removals can't bring hidden history back.
+- With more than 100 entries in history, removing one lets an older entry appear on the next start. That's accepted, and it isn't announced as a new download.
 - If history takes longer than 10 s to load, `downloads.list` returns whatever has loaded by then.
 
 - `fileExists` answers `false` until the first status reply (about 16 ms plus IPC), so a finished row can briefly render as missing.
