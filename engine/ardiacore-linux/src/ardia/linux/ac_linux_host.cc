@@ -29,6 +29,7 @@
 #include "ardia/linux/ac_linux_extension_views.h"
 #include "ardia/linux/ac_linux_extensions.h"
 #include "ardia/linux/ac_linux_files.h"
+#include "ardia/linux/ac_linux_fullscreen_restore.h"
 #include "ardia/linux/ac_linux_import_formats.h"
 #include "ardia/linux/ac_linux_import_service.h"
 #include "ardia/linux/ac_linux_launch_config.h"
@@ -305,6 +306,16 @@ bool MayActivateNativeWindows() {
 linux_window::FocusLedger& WindowFocus() {
   static base::NoDestructor<linux_window::FocusLedger> ledger(MayActivateNativeWindows());
   return *ledger;
+}
+
+linux_window::FullScreenRestore& FullScreenRestorer() {
+  static base::NoDestructor<linux_window::FullScreenRestore> restore;
+  return *restore;
+}
+
+base::OneShotTimer& FullScreenRestoreTimer() {
+  static base::NoDestructor<base::OneShotTimer> timer;
+  return *timer;
 }
 
 bool GlobalScreenCoordinates() {
@@ -994,6 +1005,7 @@ class ShellHostView : public views::View,
   base::WeakPtr<ShellHostView> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
   void RendererReady();
   void SeedWindowActivation();
+  void RestoreFullScreenNow();
   std::vector<base::DictValue> WindowState() const;
 
  private:
@@ -1665,6 +1677,7 @@ void ShellHostView::Initialize() {
                                                   ardiacore::BackgroundInstance());
   close_observation_.Observe(GetWidget());
   SeedWindowActivation();
+  RestoreFullScreenNow();
   ArmWindowClose();
   focus_manager_ = GetFocusManager();
   aura::Window* input_window = GetWidget()->GetNativeWindow()->GetRootWindow();
@@ -2562,8 +2575,49 @@ void ShellHostView::OnWidgetBoundsChanged(views::Widget*, const gfx::Rect&) {
                      base::BindOnce(&ShellHostView::ReportWindowGeometry, base::Unretained(this)));
 }
 
-void ShellHostView::OnWidgetShowStateChanged(views::Widget*) {
+void FinishFullScreenRestore() {
+  const auto focus = FullScreenRestorer().Finish();
+  if (FullScreenRestorer().active()) return;
+  FullScreenRestoreTimer().Stop();
+  if (!focus || WindowFocus().active() == 0) return;
+  for (const auto& [id, host] : Hosts()) {
+    if (!host->is_utility() && host->window_id() == *focus) {
+      ActivateNativeWindow(host->browser(), WindowFocus().Focus(host->id()));
+      return;
+    }
+  }
+}
+
+void ExpireFullScreenRestore() {
+  for (const std::string& id : FullScreenRestorer().Expire()) {
+    bool fullscreen = false;
+    for (const auto& [native, host] : Hosts()) {
+      if (host->window_id() == id && host->WindowFullScreen()) fullscreen = true;
+    }
+    if (!fullscreen) BroadcastWindowEvent(base::DictValue().Set("type", "fullScreen").Set("id", id).Set("on", false));
+  }
+  FinishFullScreenRestore();
+}
+
+void ShellHostView::RestoreFullScreenNow() {
+  views::Widget* widget = GetWidget();
+  if (is_utility() || window_id_.empty() || !browser_ || !widget || !widget->IsVisible() ||
+      widget->IsMinimized() || !FullScreenRestorer().Wants(window_id_)) return;
+  auto* manager = ExclusiveAccessManager::From(browser());
+  if (!manager) return;
+  FullscreenController* fullscreen = manager->fullscreen_controller();
+  if (FullScreenRestorer().Enter(window_id_, fullscreen->IsFullscreenForBrowser())) {
+    fullscreen->ToggleBrowserFullscreenMode(false);
+  }
+  FinishFullScreenRestore();
+}
+
+void ShellHostView::OnWidgetShowStateChanged(views::Widget* widget) {
   ReportWindowGeometry();
+  if (widget && WindowFullScreen() && !window_id_.empty()) {
+    FullScreenRestorer().Entered(window_id_);
+    FinishFullScreenRestore();
+  }
 }
 
 bool ShellHostView::WindowFullScreen() const {
@@ -2613,6 +2667,7 @@ void ShellHostView::SeedWindowActivation() {
 void ShellHostView::RendererReady() {
   ActivateNativeWindow(browser_, WindowFocus().Ready(id_));
   if (is_utility()) return;
+  RestoreFullScreenNow();
   const auto focus = [](const base::DictValue& event) { return *event.FindString("type") == "focus"; };
   const std::vector<base::DictValue> own = WindowState();
   for (const auto& event : own) {
@@ -4314,6 +4369,26 @@ void ShellHostView::Invoke(
     }
     return std::move(done).Run(true, base::Value(std::move(windows)));
   }
+  if (method == "ArdiaShell.restoreFullScreen") {
+    if (values.empty() || !values[0].is_list() || values.size() > 2 ||
+        (values.size() == 2 && !values[1].is_string() && !values[1].is_none()))
+      return std::move(done).Run(false, base::Value("Invalid fullscreen restore"));
+    if (is_utility() || !startup_) return std::move(done).Run(true, base::Value());
+    std::vector<std::string> ids;
+    for (const auto& id : values[0].GetList()) {
+      if (id.is_string()) ids.push_back(id.GetString());
+    }
+    const std::string focus = values.size() == 2 && values[1].is_string() ? values[1].GetString() : std::string();
+    if (FullScreenRestorer().Begin(ids, focus)) {
+      FullScreenRestoreTimer().Start(FROM_HERE, base::Seconds(10), base::BindOnce(&ExpireFullScreenRestore));
+      std::vector<base::WeakPtr<ShellHostView>> windows;
+      for (const auto& [id, host] : Hosts()) windows.push_back(host->GetWeakPtr());
+      for (const auto& host : windows) {
+        if (host) host->RestoreFullScreenNow();
+      }
+    }
+    return std::move(done).Run(true, base::Value());
+  }
   if (method == "ArdiaShell.windowIds") {
     base::ListValue ids;
     for (const auto& [id, host] : Hosts()) {
@@ -4909,6 +4984,7 @@ class HostRegistry : public BrowserCollectionObserver,
     RequestedWindows().erase(browser->GetSessionID().id());
     const auto found = Hosts().find(browser->GetSessionID().id());
     if (found == Hosts().end()) return;
+    if (FullScreenRestorer().Forget(found->second->window_id())) FinishFullScreenRestore();
     found->second->ReleaseExtensions();
     if (found->second->is_utility()) {
       found->second->DetachBrowser();

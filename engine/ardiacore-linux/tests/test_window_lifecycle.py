@@ -224,6 +224,7 @@ PRELUDE = r'''#include <algorithm>
 #include <vector>
 #include "base/values.h"
 #include "ardia/linux/ac_linux_profiles.h"
+#include "ardia/linux/ac_linux_fullscreen_restore.h"
 #include "ardia/linux/ac_linux_window_lifecycle.h"
 
 #define FROM_HERE 0
@@ -268,6 +269,7 @@ template <typename T> class AutoReset {
 template <typename... Args> int BindOnce(Args&&...) { return 0; }
 template <typename T> T* Unretained(T* value) { return value; }
 inline int Milliseconds(int value) { return value; }
+inline int Seconds(int value) { return value; }
 struct OneShotTimer {
   bool running = false;
   void Start(int, int, int) { running = true; }
@@ -282,6 +284,7 @@ template <typename T> class WeakPtr {
   WeakPtr() = default;
   explicit WeakPtr(T* value) : value_(value) {}
   T* get() const { return value_; }
+  T* operator->() const { return value_; }
   explicit operator bool() const { return value_ != nullptr; }
  private:
   T* value_ = nullptr;
@@ -354,8 +357,9 @@ struct Screen {
 
 namespace views {
 struct Widget {
-  bool fullscreen = false, minimized = false, active = false;
+  bool fullscreen = false, minimized = false, active = false, visible = true;
   gfx::Rect bounds;
+  bool IsVisible() const { return visible; }
   bool IsFullscreen() const { return fullscreen; }
   bool IsMinimized() const { return minimized; }
   bool IsActive() const { return active; }
@@ -451,8 +455,12 @@ struct Done {
 HOST_FAKE = r'''
 struct FullscreenController {
   bool tab = false, caused_by_tab = false;
+  bool browser_fullscreen = false;
+  int toggles = 0;
   bool IsWindowFullscreenForTabOrPending() const { return tab; }
   bool IsFullscreenCausedByTab() const { return caused_by_tab; }
+  bool IsFullscreenForBrowser() const { return browser_fullscreen; }
+  void ToggleBrowserFullscreenMode(bool) { ++toggles; browser_fullscreen = !browser_fullscreen; }
 };
 struct ExclusiveAccessManager {
   FullscreenController controller;
@@ -475,6 +483,7 @@ struct ShellHostView {
   base::DictValue utility_;
   bool utility_ready_ = false;
   bool utility_close_pending_ = false;
+  bool startup_ = false;
   linux_window::GeometryLedger geometry_{GlobalScreenCoordinates()};
   base::OneShotTimer frame_timer_;
   std::vector<base::DictValue> events;
@@ -513,6 +522,7 @@ struct ShellHostView {
   bool WindowFullScreen() const;
   void SeedWindowActivation();
   void RendererReady();
+  void RestoreFullScreenNow();
 };
 
 struct TabBinding {
@@ -772,12 +782,98 @@ static void Frames() {
   std::printf("}\n");
 }
 
+static int Toggles(BrowserWindowInterface& browser) {
+  return ExclusiveAccessManager::From(&browser)->fullscreen_controller()->toggles;
+}
+
+static base::ListValue RestoreArgs(std::vector<const char*> ids, const char* focus) {
+  base::ListValue list;
+  for (const char* id : ids) list.Append(id);
+  base::ListValue values;
+  values.Append(base::Value(std::move(list)));
+  if (focus) values.Append(focus);
+  return values;
+}
+
+static void FullScreenRestored() {
+  BrowserWindowInterface main_browser{1};
+  ShellHostView main(1, "main", &main_browser);
+  main.startup_ = true;
+  BrowserWindowInterface other_browser{2};
+  ShellHostView other(2, "w-other", &other_browser);
+  main.OnWidgetActivationChanged(&main.widget, true);
+  bool ok = false;
+  Call(other, "ArdiaShell.restoreFullScreen", RestoreArgs({"main", "w-other"}, "main"), &ok);
+  assert(ok && Toggles(main_browser) == 0 && Toggles(other_browser) == 0);
+  Call(main, "ArdiaShell.restoreFullScreen", base::ListValue().Append("main"), &ok);
+  assert(!ok);
+  Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"main", "w-late"}, "main"), &ok);
+  assert(ok && Toggles(main_browser) == 1 && Toggles(other_browser) == 0);
+  main.widget.fullscreen = true;
+  main.OnWidgetShowStateChanged(&main.widget);
+  assert(EventsOf(other, "fullScreen", "main") == 1);
+  assert(Count(main_browser.window.calls, "Activate") == 0);
+  BrowserWindowInterface late_browser{3};
+  ShellHostView late(3, "w-late", &late_browser);
+  late.widget.visible = false;
+  late.RendererReady();
+  assert(Toggles(late_browser) == 0);
+  late.widget.visible = true;
+  late.RendererReady();
+  assert(Toggles(late_browser) == 1);
+  late.RendererReady();
+  assert(Toggles(late_browser) == 1);
+  late.widget.fullscreen = true;
+  late.OnWidgetShowStateChanged(&late.widget);
+  assert(Count(main_browser.window.calls, "Activate") == 1);
+  Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"w-other"}, "w-other"), &ok);
+  assert(ok && Toggles(other_browser) == 0);
+}
+
+static void FullScreenGivenUp() {
+  BrowserWindowInterface main_browser{1};
+  ShellHostView main(1, "main", &main_browser);
+  main.startup_ = true;
+  main.widget.minimized = true;
+  BrowserWindowInterface full_browser{2};
+  ShellHostView full(2, "w-full", &full_browser);
+  full.widget.fullscreen = true;
+  ExclusiveAccessManager::From(&full_browser)->fullscreen_controller()->browser_fullscreen = true;
+  bool ok = false;
+  Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"main", "w-full", "w-missing"}, nullptr), &ok);
+  assert(ok && Toggles(main_browser) == 0 && Toggles(full_browser) == 0);
+  ExpireFullScreenRestore();
+  assert(EventsOf(full, "fullScreen", "main") == 1);
+  assert(EventsOf(full, "fullScreen", "w-missing") == 1);
+  assert(EventsOf(full, "fullScreen", "w-full") == 0);
+  assert(!main.events.back().FindBool("on").value());
+  main.widget.minimized = false;
+  main.RendererReady();
+  assert(Toggles(main_browser) == 0);
+  assert(Count(main_browser.window.calls, "Activate") == 0);
+}
+
+static void FullScreenInBackground() {
+  ardiacore::background = true;
+  BrowserWindowInterface main_browser{1};
+  ShellHostView main(1, "main", &main_browser);
+  main.startup_ = true;
+  main.OnWidgetActivationChanged(&main.widget, true);
+  Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"main"}, "main"));
+  assert(Toggles(main_browser) == 1);
+  main.widget.fullscreen = true;
+  main.OnWidgetShowStateChanged(&main.widget);
+  assert(Count(main_browser.window.calls, "Activate") == 0);
+}
+
 int main(int argc, char** argv) {
   const std::string mode = argc > 1 ? argv[1] : "";
   const std::map<std::string, void (*)()> scenarios = {
       {"created", Created}, {"reused", Reused}, {"ready", Ready}, {"clicked", Clicked},
       {"activation", Activation}, {"seeded", Seeded}, {"geometry", Geometry}, {"page-focus", PageFocus},
-      {"wayland", Wayland}, {"background", Background}, {"frames", Frames}};
+      {"wayland", Wayland}, {"background", Background}, {"frames", Frames},
+      {"fullscreen-restore", FullScreenRestored}, {"fullscreen-given-up", FullScreenGivenUp},
+      {"fullscreen-background", FullScreenInBackground}};
   const auto found = scenarios.find(mode);
   if (found == scenarios.end()) return 2;
   found->second();
@@ -841,6 +937,8 @@ def host_harness():
     free = between('namespace linux_window = ardia::linux_window;', 'class WindowPointerHandler', False)
     pointer = between('class WindowPointerHandler', '\n};\n')
     window_branch = extract(HOST, '  if (method == "ArdiaShell.windowFrame" || method == "ArdiaShell.closeWindow"')
+    restore_branch = extract(HOST, '  if (method == "ArdiaShell.restoreFullScreen")')
+    restore = '\n'.join(extract(HOST, signature) for signature in ['void FinishFullScreenRestore()', 'void ExpireFullScreenRestore()'])
     open_branch = extract(HOST, '  if (method == "ArdiaShell.openWindow")')
     broadcast = extract(HOST, 'void BroadcastWindowEvent(')
     members = '\n'.join(extract(HOST, signature) for signature in [
@@ -852,6 +950,7 @@ def host_harness():
         'bool ShellHostView::WindowFullScreen(',
         'void ShellHostView::SeedWindowActivation(',
         'void ShellHostView::RendererReady(',
+        'void ShellHostView::RestoreFullScreenNow(',
         'void TabBinding::FocusFromHost(',
         'void TabBinding::OnWebContentsFocused('])
     status = (LINUX / 'ac_linux_page_status.h').read_text()
@@ -860,8 +959,8 @@ def host_harness():
     fullscreen = 'namespace ardiacore {\n' + extract(status, 'inline bool LinuxWindowFullScreen(') + '\n}\n'
     hosts = 'struct ShellHostView;\nstd::map<int, ShellHostView*>& Hosts() { static std::map<int, ShellHostView*> hosts; return hosts; }\n'
     invoke = ('void ShellHostView::WindowInvoke(const std::string& method, const base::ListValue& values, Done done) {\n'
-              + window_branch + '\n' + open_branch + '\n  std::move(done).Run(false, base::Value("unsupported"));\n}\n')
-    return PRELUDE + hosts + free + pointer + fullscreen + HOST_FAKE + broadcast + '\n' + profile_openings() + invoke + members + SCENARIOS
+              + restore_branch + '\n' + window_branch + '\n' + open_branch + '\n  std::move(done).Run(false, base::Value("unsupported"));\n}\n')
+    return PRELUDE + hosts + free + pointer + fullscreen + HOST_FAKE + broadcast + '\n' + restore + '\n' + profile_openings() + invoke + members + SCENARIOS
 
 
 class WindowLifecycleHostTests(unittest.TestCase):
@@ -878,7 +977,7 @@ class WindowLifecycleHostTests(unittest.TestCase):
         cls.binary = root / 'host'
         result = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
                                  '-I', str(root), '-I', str(SOURCE), str(root / 'host.cc'),
-                                 str(LINUX / 'ac_linux_window_lifecycle.cc'), str(LINUX / 'ac_linux_profiles.cc'), '-o', str(cls.binary)],
+                                 str(LINUX / 'ac_linux_window_lifecycle.cc'), str(LINUX / 'ac_linux_fullscreen_restore.cc'), str(LINUX / 'ac_linux_profiles.cc'), '-o', str(cls.binary)],
                                 capture_output=True, text=True)
         if result.returncode != 0:
             cls.scratch.cleanup()
@@ -922,6 +1021,15 @@ class WindowLifecycleHostTests(unittest.TestCase):
 
     def test_background_instances_show_without_activating(self):
         self.run_mode('background')
+
+    def test_launch_renderer_restores_saved_fullscreen_windows_as_they_arrive(self):
+        self.run_mode('fullscreen-restore')
+
+    def test_unavailable_fullscreen_windows_are_given_up_as_windowed(self):
+        self.run_mode('fullscreen-given-up')
+
+    def test_fullscreen_restore_never_activates_a_background_instance(self):
+        self.run_mode('fullscreen-background')
 
     def test_shared_drop_code_targets_windows_from_native_frames(self):
         node = shutil.which('node')
