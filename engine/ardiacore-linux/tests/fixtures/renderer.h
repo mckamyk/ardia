@@ -94,6 +94,7 @@ struct HostMessageHandler {
   void OnJavascriptDisallowed();
 };
 struct FocusManager { void set_shortcut_handling_suspended(bool) {} };
+namespace base { template<class C, class V> bool Contains(const C& container, const V& value) { for (const auto& item : container) if (item == value) return true; return false; } }
 struct TabBinding {
   int page_command_resets = 0;
   void ResetPageCommands() { ++page_command_resets; }
@@ -104,7 +105,7 @@ struct TabBinding {
   uint64_t renderer_generation = 0;
   int retired_pages = 0;
   std::string claim_at_retirement = "unretired";
-  int replaced_id = 0;
+  std::vector<int> replaced_ids;
   void RetirePage() { ++retired_pages; claim_at_retirement = claim; }
   TabBinding* contents() { return live ? this : nullptr; }
 };

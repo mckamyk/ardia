@@ -35,6 +35,7 @@ class ContractTests(unittest.TestCase):
 #include <cassert>
 #include <map>
 #include <memory>
+#include <vector>
 #include <optional>
 #include <string>
 namespace base {
@@ -51,11 +52,12 @@ std::string String(const base::DictValue& args, const char* key) {
   auto it = args.strings.find(key);
   return it == args.strings.end() ? "" : it->second;
 }
+namespace base { template<class C, class V> bool Contains(const C& container, const V& value) { for (const auto& item : container) if (item == value) return true; return false; } }
 struct TabBinding {
   int* value;
   std::string claim;
   int renderer_generation = 1;
-  int replaced_id = 0;
+  std::vector<int> replaced_ids;
   int* contents() { return value; }
 };
 struct ShellHostView {
@@ -71,7 +73,7 @@ int main() {
   int contents = 7;
   ShellHostView owner;
   ShellHostView other;
-  owner.bindings_[7] = std::make_unique<TabBinding>(TabBinding{&contents, "current"});
+  owner.bindings_[7] = std::make_unique<TabBinding>(TabBinding{&contents, "current", 1, {}});
   TabBinding& binding = *owner.bindings_[7];
   base::DictValue request;
   request.ints["id"] = 7;
@@ -86,12 +88,12 @@ int main() {
   replaced.ints["id"] = 5;
   replaced.strings["claim"] = "replacement";
   assert(!owner.ClaimedBinding(replaced));
-  binding.replaced_id = 5;
+  binding.replaced_ids = {3, 5};
   assert(owner.ClaimedBinding(replaced) == &binding);
   replaced.strings["claim"] = "stale";
   assert(!owner.ClaimedBinding(replaced));
   replaced.ints["id"] = 0;
-  binding.replaced_id = 0;
+  binding.replaced_ids.clear();
   replaced.strings["claim"] = "replacement";
   assert(!owner.ClaimedBinding(replaced));
   binding.claim.clear();

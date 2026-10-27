@@ -38,6 +38,7 @@
 #include "base/base_paths.h"
 #include "base/base64.h"
 #include "base/check.h"
+#include "base/containers/contains.h"
 #include "base/command_line.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file.h"
@@ -682,7 +683,7 @@ class TabBinding : public content::WebContentsObserver {
   void AttachPage(std::unique_ptr<ardiacore::LinuxPageState> page);
   void RetirePage();
   std::unique_ptr<ardiacore::LinuxPageState> TakePage();
-  int replaced_id = 0;
+  std::vector<int> replaced_ids;
   void ReportPresentation(std::string name, base::DictValue data);
   base::WeakPtr<TabBinding> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
   void MoveTo(ShellHostView* owner);
@@ -2525,7 +2526,7 @@ TabBinding* ShellHostView::ClaimedBinding(const base::DictValue& args) {
   auto* binding = Binding(id);
   for (auto& [current, candidate] : bindings_) {
     if (binding || id <= 0) break;
-    if (candidate->replaced_id == id) binding = candidate.get();
+    if (base::Contains(candidate->replaced_ids, id)) binding = candidate.get();
   }
   return handler_ && binding && binding->contents() && binding->renderer_generation == renderer_generation_ && ardiacore::linux_contract::OwnsClaim(binding->claim, String(args, "claim")) ? binding : nullptr;
 }
@@ -2885,7 +2886,8 @@ void ShellHostView::ReplaceTabContents(content::WebContents* old_contents,
   if (id != old_id) {
     auto owned = std::move(bindings_[old_id]);
     bindings_.erase(old_id);
-    owned->replaced_id = old_id;
+    owned->replaced_ids.push_back(old_id);
+    if (owned->replaced_ids.size() > 4) owned->replaced_ids.erase(owned->replaced_ids.begin());
     bindings_[id] = std::move(owned);
   }
   if (!previous) return;
@@ -2893,6 +2895,8 @@ void ShellHostView::ReplaceTabContents(content::WebContents* old_contents,
   auto created = binding->page() ? binding->page()->CreationState() : std::nullopt;
   if (!created) {
     binding->RetirePage();
+    binding->claim.clear();
+    previous->EmitClosed();
     previous->Retire();
     return;
   }
@@ -3315,19 +3319,20 @@ void ShellHostView::SetPresentations(
   if (!tabs || tabs->size() > 1024) {
     return std::move(done).Run(false, base::Value("A tab presentation list is required"));
   }
+  std::vector<std::pair<TabBinding*, bool>> updates;
   for (const auto& tab : *tabs) {
     const auto* item = tab.GetIfDict();
     TabBinding* binding = item ? ClaimedBinding(*item) : nullptr;
-    if (!binding || !item->FindBool("visible")) {
+    const auto visible = item ? item->FindBool("visible") : std::nullopt;
+    if (!binding || !visible) {
       return std::move(done).Run(false, base::Value("A claimed tab and boolean visibility are required"));
     }
+    updates.emplace_back(binding, *visible);
   }
-  for (const auto& tab : *tabs) {
-    const auto& item = tab.GetDict();
-    auto* binding = Binding(*item.FindInt("id"));
-    if (*item.FindBool("visible") && !binding->presented) binding->RememberPendingAutoPictureInPicture();
+  for (const auto& [binding, visible] : updates) {
+    if (visible && !binding->presented) binding->RememberPendingAutoPictureInPicture();
     binding->presentation_attached = true;
-    binding->presented = *item.FindBool("visible");
+    binding->presented = visible;
   }
   std::vector<std::pair<base::WeakPtr<content::WebContents>, bool>> changes;
   for (const bool visible : {true, false}) {

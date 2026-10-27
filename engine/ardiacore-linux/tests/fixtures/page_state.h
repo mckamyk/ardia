@@ -44,6 +44,9 @@ class Value {
   DictValue& GetDict() const { return *std::get<std::shared_ptr<DictValue>>(data_); }
   ListValue& GetList() const { return *std::get<std::shared_ptr<ListValue>>(data_); }
   bool is_dict() const { return std::holds_alternative<std::shared_ptr<DictValue>>(data_); }
+  bool is_bool() const { return std::holds_alternative<bool>(data_); }
+  bool is_list() const { return std::holds_alternative<std::shared_ptr<ListValue>>(data_); }
+  const DictValue* GetIfDict() const { return is_dict() ? &GetDict() : nullptr; }
   Value Clone() const;
  private:
   std::variant<std::monostate, bool, int, double, std::string, std::shared_ptr<DictValue>, std::shared_ptr<ListValue>> data_;
@@ -60,6 +63,8 @@ class DictValue {
   const std::string* FindString(std::string_view key) const { auto* v=Find(key); if (!v) return nullptr; try { return &v->GetString(); } catch (...) { return nullptr; } }
   std::optional<double> FindDouble(std::string_view key) const { auto* v=Find(key); return v && (v->is_int() || v->is_double()) ? std::optional<double>(v->GetDouble()):std::nullopt; }
   std::optional<int> FindInt(std::string_view key) const { auto* v=Find(key); return v && v->is_int() ? std::optional<int>(static_cast<int>(v->GetDouble())):std::nullopt; }
+  std::optional<bool> FindBool(std::string_view key) const { auto* v=Find(key); return v && v->is_bool() ? std::optional<bool>(v->GetBool()):std::nullopt; }
+  const ListValue* FindList(std::string_view key) const;
   const DictValue* FindDict(std::string_view key) const { auto* v=Find(key); return v && v->is_dict() ? &v->GetDict():nullptr; }
   void Merge(DictValue v) { for (auto& [key,value] : v.data_) data_.insert_or_assign(key,std::move(value)); }
   DictValue Clone() const { DictValue v; for (const auto& [k,x]:data_) v.Set(k,x.Clone()); return v; }
@@ -90,10 +95,13 @@ class ListValue {
   const Value& operator[](size_t i) const { return data_[i]; }
   size_t size() const { return data_.size(); }
   ListValue Clone() const { ListValue v; for(const auto& x:data_) v.Append(x.Clone()); return v; }
+  auto begin() const { return data_.begin(); }
+  auto end() const { return data_.end(); }
  private: std::vector<Value> data_;
 };
 inline Value::Value(DictValue v):data_(std::make_shared<DictValue>(std::move(v))) {}
 inline Value::Value(ListValue v):data_(std::make_shared<ListValue>(std::move(v))) {}
+inline const ListValue* DictValue::FindList(std::string_view key) const { auto* v=Find(key); return v && v->is_list() ? &v->GetList():nullptr; }
 inline Value Value::Clone() const {
   return std::visit([](const auto& v)->Value { using T=std::decay_t<decltype(v)>; if constexpr(std::is_same_v<T,std::monostate>) return Value(); else if constexpr(std::is_same_v<T,std::shared_ptr<DictValue>> || std::is_same_v<T,std::shared_ptr<ListValue>>) return Value(v->Clone()); else return Value(v); },data_);
 }
