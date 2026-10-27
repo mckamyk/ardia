@@ -708,6 +708,8 @@ class TabBinding : public content::WebContentsObserver {
   void ResetPageCommands();
   void StartMedia();
   void Reveal();
+  std::string_view Discard(const ardiacore::LinuxDiscardRequest& request);
+  bool SetFrozen(bool value);
   std::vector<std::pair<std::string, base::Value>> SnapshotExtras();
   std::unique_ptr<ardiacore::LinuxPageMedia> media;
   bool frozen = false;
@@ -3335,7 +3337,10 @@ void ShellHostView::TabCommand(
   auto& controller = contents->GetController();
   if (ardiacore::LinuxPageMedia::Handles(command)) {
     if (!binding->media) return std::move(done).Run(false, base::Value("Media is unavailable for this tab"));
-    const bool activation = shell() && shell()->GetPrimaryMainFrame()->HasTransientUserActivation();
+    content::RenderFrameHost* shell_frame = shell() ? shell()->GetPrimaryMainFrame() : nullptr;
+    const bool press = command == "requestPictureInPicture" || command == "takeControlPress";
+    const bool activation = shell_frame && (press ? shell_frame->ConsumeTransientUserActivation()
+                                                  : shell_frame->HasTransientUserActivation());
     return binding->media->Dispatch(command, values, activation, std::move(done));
   }
   if (command == "captureViewport") {
@@ -3459,27 +3464,11 @@ void ShellHostView::TabCommand(
   } else if (command == "discard") {
     const auto request = ardiacore::ParseLinuxDiscardRequest(values);
     if (!request) return std::move(done).Run(false, base::Value("discard takes an optional {unload} object"));
-    const bool visible = binding->presented || binding->pane_visible;
-    const auto protection = binding->media ? binding->media->Protection(visible) : ardiacore::LinuxTabProtection();
-    const auto decision = ardiacore::DecideLinuxDiscard(true, contents->WasDiscarded(), *request, protection);
-    bool discarded = false;
-    if (decision == ardiacore::LinuxDiscardDecision::kDiscard) {
-      const auto weak = binding->GetWeakPtr();
-      auto* unit = resource_coordinator::TabLifecycleUnitExternal::FromWebContents(contents);
-      const bool accepted = unit && unit->DiscardTab(::mojom::LifecycleUnitDiscardReason::EXTERNAL);
-      discarded = accepted && weak && weak->contents() && weak->contents()->WasDiscarded();
-    }
-    return std::move(done).Run(true, base::Value(ardiacore::LinuxDiscardOutcome(decision, discarded)));
+    return std::move(done).Run(true, base::Value(binding->Discard(*request)));
   } else if (command == "setFrozen") {
     const auto frozen = ardiacore::ParseLinuxFrozen(values);
     if (!frozen) return std::move(done).Run(false, base::Value("setFrozen requires a boolean"));
-    if (*frozen && (!binding->media || !ardiacore::LinuxMayFreeze(
-                        binding->media->Protection(binding->presented || binding->pane_visible)))) {
-      return std::move(done).Run(true, base::Value(false));
-    }
-    binding->frozen = *frozen;
-    contents->SetPageFrozen(*frozen);
-    return std::move(done).Run(true, base::Value(true));
+    return std::move(done).Run(true, base::Value(binding->SetFrozen(*frozen)));
   } else if (command == "unsavedInput") {
     if (!values.empty()) return std::move(done).Run(false, base::Value("unsavedInput takes no arguments"));
     const auto unsaved = binding->media ? binding->media->UnsavedInput() : std::nullopt;
@@ -3487,7 +3476,7 @@ void ShellHostView::TabCommand(
   } else if (command == "downloadImage") {
     const GURL url(ArgumentString(values, 0));
     const int limit = values.size() == 2 && values[1].is_int() ? values[1].GetInt() : 0;
-    if (values.size() != 2 || limit < 1 || limit > 4096 || !url.is_valid() ||
+    if (values.size() != 2 || limit < 1 || limit > 512 || !url.is_valid() ||
         !(url.SchemeIsHTTPOrHTTPS() || url.SchemeIs("data"))) {
       return std::move(done).Run(false, base::Value("downloadImage requires an http(s) or data URL and a pixel limit"));
     }
@@ -4537,10 +4526,32 @@ void TabBinding::Reveal() {
   if (!contents_) return;
   if (frozen) {
     frozen = false;
-    contents_->SetPageFrozen(false);
+    if (contents_->GetVisibility() != content::Visibility::VISIBLE) contents_->SetPageFrozen(false);
   }
   if (contents_->WasDiscarded() || contents_->GetController().NeedsReload())
     contents_->GetController().LoadIfNecessary();
+}
+
+std::string_view TabBinding::Discard(const ardiacore::LinuxDiscardRequest& request) {
+  if (!contents_) return "refused";
+  const auto protection = media ? media->Protection(presented || pane_visible) : ardiacore::LinuxTabProtection();
+  const auto decision = ardiacore::DecideLinuxDiscard(true, contents_->WasDiscarded(), request, protection);
+  bool discarded = false;
+  if (decision == ardiacore::LinuxDiscardDecision::kDiscard) {
+    const auto weak = GetWeakPtr();
+    auto* unit = resource_coordinator::TabLifecycleUnitExternal::FromWebContents(contents_);
+    const bool accepted = unit && unit->DiscardTab(::mojom::LifecycleUnitDiscardReason::EXTERNAL);
+    discarded = accepted && weak && weak->contents() && weak->contents()->WasDiscarded();
+  }
+  return ardiacore::LinuxDiscardOutcome(decision, discarded);
+}
+
+bool TabBinding::SetFrozen(bool value) {
+  if (!contents_) return false;
+  if (value && (!media || !ardiacore::LinuxMayFreeze(media->Protection(presented || pane_visible)))) return false;
+  frozen = value;
+  if (value || contents_->GetVisibility() != content::Visibility::VISIBLE) contents_->SetPageFrozen(value);
+  return true;
 }
 
 std::string DiscardedUrl(content::WebContents* contents) {
@@ -4559,7 +4570,7 @@ std::vector<std::pair<std::string, base::Value>> TabBinding::SnapshotExtras() {
 }
 
 void TabBinding::WasDiscarded() {
-  if (!contents_ || discard_reported) return;
+  if (!contents_ || discard_reported || !contents_->WasDiscarded()) return;
   discard_reported = true;
   ReportPresentation("discarded", base::DictValue().Set("url", DiscardedUrl(contents_)));
 }

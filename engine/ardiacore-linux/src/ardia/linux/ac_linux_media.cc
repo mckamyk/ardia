@@ -25,6 +25,19 @@ bool Finite(const base::Value& value) {
   return (value.is_int() || value.is_double()) && std::isfinite(value.GetDouble());
 }
 
+bool SameNowPlaying(const std::optional<LinuxNowPlaying>& before, const std::optional<LinuxNowPlaying>& after) {
+  if (!before || !after) return !before && !after;
+  LinuxNowPlaying anchored = *after;
+  anchored.position = before->position;
+  anchored.timestamp = before->timestamp;
+  if (!(anchored == *before)) return false;
+  const double elapsed = before->playback_state == "playing"
+      ? (after->timestamp - before->timestamp) / 1000 * before->playback_rate : 0;
+  double expected = std::max(0.0, before->position + elapsed);
+  if (before->duration) expected = std::min(expected, *before->duration);
+  return std::abs(expected - after->position) < 0.5;
+}
+
 bool AllowedArtwork(const std::string& url) {
   if (url.empty() || url.size() > kArtworkLimit) return false;
   return url.starts_with("https://") || url.starts_with("http://") || url.starts_with("data:image/");
@@ -131,7 +144,7 @@ bool LinuxMediaReporter::SetAudio(bool audible, bool muted) {
 }
 
 bool LinuxMediaReporter::SetNowPlaying(std::optional<LinuxNowPlaying> state) {
-  if (state_.now_playing == state) return false;
+  if (SameNowPlaying(state_.now_playing, state)) return false;
   state_.now_playing = std::move(state);
   Send("nowPlaying", LinuxNowPlayingEventData(state_.now_playing));
   return true;

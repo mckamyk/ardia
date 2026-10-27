@@ -113,6 +113,11 @@ class NativeCallbackTests(unittest.TestCase):
           Weak GetWeakPtr() { return {this}; }
           void RememberPendingAutoPictureInPicture() {}
           void ResetPageCommands() { ++resets; }
+          std::unique_ptr<int> media;
+          int media_starts = 0;
+          bool frozen = false;
+          bool discard_reported = false;
+          void StartMedia() { media = std::make_unique<int>(++media_starts); }
           void RemoveViewports();
           TabBinding(ShellHostView* owner, content::WebContents* contents, views::WebView* viewport = nullptr, views::WebView* devtools = nullptr)
               : owner_(owner), contents_(contents), viewport_(viewport), devtools_viewport_(devtools) { Observe(contents); }

@@ -13,7 +13,9 @@
 #include "components/permissions/permission_request_manager.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/media_session.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/mojom/frame/sudden_termination_disabler_type.mojom.h"
 
 namespace ardiacore {
 namespace {
@@ -259,7 +261,11 @@ LinuxTabProtection LinuxPageMedia::Protection(bool visible) const {
 std::optional<bool> LinuxPageMedia::UnsavedInput() const {
   content::WebContents* contents = web_contents();
   if (!contents) return std::nullopt;
-  const bool before_unload = contents->NeedToFireBeforeUnloadOrUnloadEvents();
+  bool before_unload = false;
+  contents->GetPrimaryMainFrame()->ForEachRenderFrameHost([&before_unload](content::RenderFrameHost* frame) {
+    before_unload |= frame->GetSuddenTerminationDisablerState(
+        blink::mojom::SuddenTerminationDisablerType::kBeforeUnloadHandler);
+  });
   if (!performance_manager::PerformanceManager::IsAvailable()) return LinuxUnsavedInput(before_unload, std::nullopt, std::nullopt);
   const base::WeakPtr<performance_manager::PageNode> page =
       performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(contents);

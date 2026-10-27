@@ -258,6 +258,7 @@ source_set("linux") {
     "//services/network/public/mojom",
     "//skia",
     "//third_party/blink/public/common",
+    "//third_party/blink/public/mojom:mojom_core",
     "//third_party/boringssl",
     "//third_party/sqlite",
     "//ui/base",
