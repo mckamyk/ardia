@@ -1,6 +1,9 @@
 #include "ardia/linux/ac_linux_host.h"
 
+#include <sys/stat.h>
+
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <map>
@@ -22,9 +25,11 @@
 #include "ardia/linux/ac_linux_files.h"
 #include "ardia/linux/ac_linux_launch_config.h"
 #include "ardia/linux/ac_linux_page_commands.h"
+#include "ardia/linux/ac_linux_launch_steps.h"
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/linux/ac_linux_window_lifecycle.h"
+#include "ardia/linux/ac_linux_suggest.h"
 #include "ardia/linux/host_bootstrap.h"
 #include "base/auto_reset.h"
 #include "base/base_paths.h"
@@ -400,6 +405,22 @@ std::optional<std::string> ReadDocument(const base::FilePath& directory,
   return base::ReadFileToStringWithMaxSize(file, &contents, kDocumentLimit)
              ? std::make_optional(std::move(contents))
              : std::nullopt;
+}
+
+struct StoredDocument {
+  linux_policy::StoredRead outcome = linux_policy::StoredRead::kFailed;
+  std::string contents;
+};
+
+StoredDocument ReadStoredDocument(const base::FilePath& directory,
+                                  const std::string& name) {
+  struct stat info;
+  const int error =
+      lstat(directory.AppendASCII(name).value().c_str(), &info) == 0 ? 0 : errno;
+  std::optional<std::string> contents =
+      error ? std::nullopt : ReadDocument(directory, name);
+  return {linux_policy::ClassifyStoredRead(error, contents.has_value()),
+          contents.value_or(std::string())};
 }
 
 bool WriteDocument(const base::FilePath& directory,
@@ -1013,6 +1034,8 @@ class ShellHostView : public views::View,
   base::WeakPtr<content::WebContents> switcher_source_;
   int id_;
   bool startup_;
+  std::unique_ptr<ardia::linux_suggest::SuggestionClient> suggestions_ =
+      std::make_unique<ardia::linux_suggest::SuggestionClient>();
   std::string window_id_;
   std::string kind_;
   std::string title_;
@@ -1461,8 +1484,13 @@ base::DictValue ShellHostView::Bootstrap() const {
   base::PathService::Get(chrome::DIR_USER_DATA, &user_data_directory);
   base::ListValue capabilities = base::ListValue().Append("ArdiaWebView.call")
       .Append("ArdiaShell.windowIdentity").Append("ArdiaShell.beginDialog")
-      .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain");
+      .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain")
+      .Append("ArdiaSearch.suggest").Append("ArdiaSearch.cancelSuggest")
+      .Append("ArdiaShell.launchSteps")
+      .Append("ArdiaShell.completeLaunchStep");
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
+  for (const auto& route : ardiacore::linux_contract::kRoutes)
+    capabilities.Append(route.name);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
@@ -3180,6 +3208,26 @@ void ShellHostView::Invoke(
           .Set("code", "ERR_WINDOW_IDENTITY").Set("message", "Committed window identity unavailable")));
     return std::move(done).Run(true, base::Value(std::move(identity)));
   }
+  if (method == "ArdiaSearch.suggest") {
+    if (values.size() != 2 || !values[0].is_string() || !values[1].is_string() ||
+        !ardia::linux_suggest_policy::ValidRequestId(values[1].GetString()) ||
+        !ardia::linux_suggest::CanFetchSuggestions(profile(), values[0].GetString()))
+      return std::move(done).Run(false, base::Value(base::DictValue()
+          .Set("code", "ERR_SUGGEST_REFUSED").Set("message", "Search suggestion request refused")));
+    return suggestions_->Fetch(profile(), values[1].GetString(), values[0].GetString(), base::BindOnce(
+        [](base::OnceCallback<void(bool, base::Value)> done, std::optional<std::string> body) {
+          if (!body) return std::move(done).Run(false, base::Value(base::DictValue()
+              .Set("code", "ERR_SUGGEST").Set("message", "Search suggestions are unavailable")));
+          std::move(done).Run(true, base::Value(base::DictValue().Set("body", std::move(*body))));
+        },
+        std::move(done)));
+  }
+  if (method == "ArdiaSearch.cancelSuggest") {
+    if (values.size() != 1 || !values[0].is_string())
+      return std::move(done).Run(false, base::Value("A suggestion request id is required"));
+    suggestions_->Cancel(values[0].GetString());
+    return std::move(done).Run(true, base::Value());
+  }
   if (method == "ArdiaShell.beginDialog" || method == "ArdiaShell.cancelDialog") {
     const auto* supplied = args.Find("args");
     if (args.size() != 1 || !supplied || !supplied->is_list())
@@ -3359,6 +3407,9 @@ void ShellHostView::Invoke(
             }, std::move(done)));
     return;
   }
+  if (method == "session.write" && profile()) {
+    done = ardia::linux_suggest::NoteSuggestionsOnWrite(profile()->GetOriginalProfile()->GetPath(), std::move(done));
+  }
   if (method == "session.write") {
     const base::DictValue* base = args.FindDict("base");
     const base::DictValue* local = args.FindDict("session");
@@ -3410,11 +3461,17 @@ void ShellHostView::Invoke(
       return std::move(done).Run(false, base::Value("Invalid or reserved document name"));
     }
     FileRunner()->PostTaskAndReplyWithResult(
-        FROM_HERE, base::BindOnce(&ReadDocument, DocumentDirectory(profile()), name),
+        FROM_HERE, base::BindOnce(&ReadStoredDocument, DocumentDirectory(profile()), name),
         base::BindOnce(
             [](base::OnceCallback<void(bool, base::Value)> done,
-               std::optional<std::string> contents) {
-              std::move(done).Run(true, contents ? base::Value(*contents) : base::Value());
+               StoredDocument stored) {
+              if (stored.outcome == linux_policy::StoredRead::kFailed) {
+                return std::move(done).Run(false, base::Value(base::DictValue()
+                    .Set("code", "ERR_DOCUMENT_READ").Set("message", "The document could not be read")));
+              }
+              std::move(done).Run(true, stored.outcome == linux_policy::StoredRead::kFound
+                                            ? base::Value(std::move(stored.contents))
+                                            : base::Value());
             }, std::move(done)));
     return;
   }
@@ -3503,6 +3560,21 @@ void ShellHostView::Invoke(
           .Set("hasRoot", true).Set("translucent", false));
     }
     return std::move(done).Run(true, base::Value(std::move(windows)));
+  }
+  if (method == "ArdiaShell.launchSteps" || method == "ArdiaShell.completeLaunchStep") {
+    static base::NoDestructor<std::map<base::FilePath, ardia::linux_launch::LaunchSteps>> records;
+    if (!profile() || profile()->IsOffTheRecord())
+      return std::move(done).Run(false, base::Value("Launch steps need the regular profile"));
+    auto& steps = (*records)[profile()->GetPath()];
+    if (method == "ArdiaShell.launchSteps") {
+      base::ListValue list;
+      for (const auto& step : steps.List()) list.Append(step);
+      return std::move(done).Run(true, base::Value(std::move(list)));
+    }
+    if (values.size() != 1 || !values[0].is_string() ||
+        !ardia::linux_launch::ValidStep(values[0].GetString()))
+      return std::move(done).Run(false, base::Value("Unknown launch step"));
+    return std::move(done).Run(true, base::Value(steps.Complete(values[0].GetString())));
   }
   if (method == "ArdiaShell.windowIds") {
     base::ListValue ids;

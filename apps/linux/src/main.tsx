@@ -1,5 +1,6 @@
 import "./base.css";
 import "./styles.css";
+import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { unstable_batchedUpdates } from "react-native";
 import { emitCommand, menuShown, setWindowCloseDecider } from "@ardia/shell";
@@ -11,6 +12,9 @@ import { setStoreBatching, useBrowser, type HydrateData } from "../../browser/sr
 import { usePages } from "../../browser/src/state/tabs/pageState";
 import { adoptParkedPins } from "../../browser/src/state/pins/parkedPins";
 import { decideLastTabClose, decideWindowClose } from "../../browser/src/state/windows/windowClose";
+import { firstWindowCommitted } from "../../browser/src/lib/afterFirstWindow";
+import { recordFreshProfile, startAppCommands, startLinuxAppServices, UTILITY_APP_COMMANDS } from "./appServices";
+import { linuxCapabilities } from "./hostCapabilities";
 import { ardiaHost, invokeHost } from "./host";
 import { startHostPersistence } from "./hostSession";
 import { startHostData } from "./hostData";
@@ -26,6 +30,11 @@ import { startUtility } from "./utility";
 Object.assign(globalThis, { ardiaLinux: { store: useBrowser, emitCommand } });
 setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
 
+function FirstWindowCommitted() {
+  useEffect(() => firstWindowCommitted(), []);
+  return null;
+}
+
 async function start() {
   if (!ardiaHost) throw new Error("The Linux desktop UI requires an Ardia native host");
   setNewTabPrewarm(false);
@@ -39,6 +48,7 @@ async function start() {
     const persistence = startHostPersistence(ardiaHost, useBrowser, saved ?? {}, createUtilitySessionSnapshot(useBrowser.getState(), saved ?? {}));
     setSessionFlush(persistence.flush);
     startHostData();
+    startAppCommands(windowId, linuxCapabilities(ardiaHost), undefined, UTILITY_APP_COMMANDS);
     await startUtility(ardiaHost);
   } else {
     useBrowser.setState(adoptParkedPins(useBrowser.getState(), windowId, profileId));
@@ -55,10 +65,19 @@ async function start() {
     const persistence = startHostPersistence(ardiaHost, useBrowser, saved ?? {});
     setSessionFlush(persistence.flush);
     setSessionDeparture(persistence);
+    if (!saved) await recordFreshProfile();
     await persistence.flush();
     startTabPages();
     startNativeSync();
     startHostDownloads(ardiaHost, useBrowser);
+    startLinuxAppServices({
+      host: ardiaHost,
+      windowId,
+      savedSession: !!saved,
+      capabilities: linuxCapabilities(ardiaHost),
+      locks: navigator.locks,
+      marks: sessionStorage,
+    });
   }
   createRoot(document.getElementById("root")!, { onUncaughtError: (error) => console.error("[ardia linux] crashed", error) }).render(
     <div className={`ardia-desktop host ardia-linux${utility ? " utility" : ""}`} data-ardia-linux-window={windowId}>
@@ -67,6 +86,7 @@ async function start() {
         <TrafficLights windowId={windowId} />
       </div>
       <MenuHost />
+      <FirstWindowCommitted />
     </div>,
   );
 }

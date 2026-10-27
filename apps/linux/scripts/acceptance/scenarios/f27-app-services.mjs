@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { launchLockHolders } from "../lib/assertions.mjs";
+import { launchStepsComplete } from "../lib/assertions.mjs";
 import { restartBrowser, startBrowser } from "../lib/flows.mjs";
 import { documentDirectory, sessionSeed } from "../lib/seed.mjs";
 import { until } from "../lib/util.mjs";
@@ -26,9 +26,9 @@ async function regularShells(app, count) {
 }
 
 async function launchClaims(shells) {
-  const locks = await shells[0].eval("navigator.locks.query()");
+  const steps = await shells[0].eval("window.__ardiaHost.invoke('ArdiaShell.launchSteps', { args: [] })");
   const marks = await Promise.all(shells.map((s) => s.eval("sessionStorage.getItem('ardia.linux.app-launch')")));
-  return { holders: launchLockHolders(locks), marks };
+  return { steps, marks };
 }
 
 export default {
@@ -48,8 +48,8 @@ export default {
       fresh = await startBrowser(t, { scratch, label: "fresh" });
       await until(() => showsOnboarding(fresh.shell), { timeout: 20000, label: "onboarding overlay" });
       const doc = await until(() => onboardingDocument(scratch).then((d) => d?.startedAt ? d : false), { timeout: 10000, label: "onboarding.json startedAt" });
-      const claims = await launchClaims([fresh.shell]);
-      if (claims.holders.length !== 1) throw new Error(`launch lease holders ${JSON.stringify(claims)}`);
+      const claims = await until(() => launchClaims([fresh.shell]).then((c) => launchStepsComplete(c.steps) ? c : false), { timeout: 10000, label: "recorded launch steps" });
+      if (claims.marks[0] !== "ran") throw new Error(`the startup renderer did not run the launch steps ${JSON.stringify(claims)}`);
       return { doc, claims };
     }, { critical: true });
     await t.check("an unfinished onboarding resumes after restart without replaying the intro", async () => {
@@ -80,8 +80,7 @@ export default {
       const shown = [];
       for (const shell of shells) if (await showsOnboarding(shell)) shown.push(shell.windowId);
       if (shown.length) throw new Error(`onboarding shown in ${shown.join(", ")}`);
-      const claims = await launchClaims(shells);
-      if (claims.holders.length !== 1) throw new Error(`expected one launch lease holder, saw ${JSON.stringify(claims)}`);
+      const claims = await until(() => launchClaims(shells).then((c) => launchStepsComplete(c.steps) ? c : false), { timeout: 10000, label: "recorded launch steps" });
       if (claims.marks.filter(Boolean).length !== 1) throw new Error(`expected one renderer to run launch services, saw ${JSON.stringify(claims.marks)}`);
       const doc = await until(() => onboardingDocument(existing.scratch).then((d) => d?.completedAt ? d : false), { timeout: 10000, label: "existing profile marked complete" });
       const reloaded = shells[claims.marks.findIndex(Boolean)];

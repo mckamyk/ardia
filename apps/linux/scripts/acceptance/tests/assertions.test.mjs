@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { classifySitePanel, downloadById, duplicateIds, findVerdict, launchLockHolders, nextActive, percentText, privateLeaks, securityVerdict, visibleUnsupported, zoomAgreement } from "../lib/assertions.mjs";
+import { classifySitePanel, downloadById, duplicateIds, findVerdict, launchLockHolders, launchStepsComplete, nextActive, percentText, privateLeaks, securityVerdict, visibleUnsupported, zoomAgreement } from "../lib/assertions.mjs";
 import { parseArgs, UsageError } from "../lib/cli.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { sidebarDropPoint } from "../lib/ui.mjs";
@@ -107,5 +107,14 @@ describe("command line", () => {
     assert.throws(() => parseArgs(["/x", "/y", "/z"], { cwd: "/" }), /Unexpected argument/);
     assert.throws(() => parseArgs(["/x", "--only"], { cwd: "/" }), /--only needs/);
     assert.equal(parseArgs(["--list"], { cwd: "/" }).list, true);
+  });
+});
+
+describe("launch steps", () => {
+  it("count as complete only when all four are recorded", () => {
+    assert.equal(launchStepsComplete(["version", "versionUpdated", "onboarding", "releaseNotes", "defaultBrowserOffer"]), true);
+    assert.equal(launchStepsComplete(["version", "onboarding", "releaseNotes", "defaultBrowserOffer"]), true);
+    assert.equal(launchStepsComplete(["version", "onboarding", "releaseNotes"]), false);
+    assert.equal(launchStepsComplete(null), false);
   });
 });
