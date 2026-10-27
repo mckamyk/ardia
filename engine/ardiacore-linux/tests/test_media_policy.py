@@ -55,6 +55,9 @@ class MediaPolicyTests(unittest.TestCase):
     def test_system_state_from_upower_and_memory(self):
         self.run_case('power')
 
+    def test_power_tracker_merges_signals_and_memory_and_reports_changes_only(self):
+        self.run_case('power-tracker')
+
 
 if __name__ == '__main__':
     unittest.main()

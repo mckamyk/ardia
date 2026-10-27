@@ -1,89 +1,84 @@
 #include "ardia/linux/ac_linux_power.h"
 
-#include <memory>
 #include <string>
 #include <tuple>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/no_destructor.h"
 #include "base/system/sys_info.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "components/dbus/thread_linux/dbus_thread_linux.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "dbus/object_path.h"
 #include "dbus/object_proxy.h"
+#include "dbus/property.h"
 
 namespace ardiacore {
 namespace {
 
-constexpr base::TimeDelta kPollInterval = base::Seconds(30);
-constexpr int kCallTimeoutMs = 1000;
+constexpr base::TimeDelta kMemoryInterval = base::Seconds(30);
+constexpr base::TimeDelta kAnswerDeadline = base::Seconds(2);
 constexpr char kUPower[] = "org.freedesktop.UPower";
-constexpr char kProperties[] = "org.freedesktop.DBus.Properties";
+constexpr char kUPowerPath[] = "/org/freedesktop/UPower";
+constexpr char kDisplayPath[] = "/org/freedesktop/UPower/devices/DisplayDevice";
+constexpr char kDevice[] = "org.freedesktop.UPower.Device";
 
-std::unique_ptr<dbus::Response> Property(dbus::Bus* bus, const char* service, const char* path,
-                                         const char* interface, const char* name) {
-  dbus::ObjectProxy* proxy = bus->GetObjectProxy(service, dbus::ObjectPath(path));
-  if (!proxy) return nullptr;
-  dbus::MethodCall call(kProperties, "Get");
-  dbus::MessageWriter writer(&call);
-  writer.AppendString(interface);
-  writer.AppendString(name);
-  auto response = proxy->CallMethodAndBlock(&call, kCallTimeoutMs);
-  return response.has_value() ? std::move(response.value()) : nullptr;
+std::pair<uint64_t, uint64_t> ReadMemory() {
+  return {base::SysInfo::AmountOfTotalPhysicalMemory().InBytes(),
+          base::SysInfo::AmountOfAvailablePhysicalMemory().InBytes()};
 }
 
-template <class T, bool (dbus::MessageReader::*Pop)(T*)>
-std::optional<T> Read(dbus::Bus* bus, const char* service, const char* path,
-                      const char* interface, const char* name) {
-  auto response = Property(bus, service, path, interface, name);
-  if (!response) return std::nullopt;
-  dbus::MessageReader reader(response.get());
-  T value{};
-  if (!(reader.*Pop)(&value)) return std::nullopt;
-  return value;
 }
 
-dbus::Bus* SystemBus() {
-  static base::NoDestructor<scoped_refptr<dbus::Bus>> bus([] {
-    dbus::Bus::Options options;
-    options.bus_type = dbus::Bus::SYSTEM;
-    options.connection_type = dbus::Bus::PRIVATE;
-    return base::MakeRefCounted<dbus::Bus>(std::move(options));
-  }());
-  return bus->get();
-}
-
-LinuxPowerSample SamplePower() {
-  LinuxPowerSample sample;
-  sample.physical_memory = base::SysInfo::AmountOfTotalPhysicalMemory().InBytes();
-  sample.available_memory = base::SysInfo::AmountOfAvailablePhysicalMemory().InBytes();
-  dbus::Bus* bus = SystemBus();
-  if (!bus->Connect()) return sample;
-  sample.on_battery = Read<bool, &dbus::MessageReader::PopVariantOfBool>(
-      bus, kUPower, "/org/freedesktop/UPower", kUPower, "OnBattery");
-  sample.upower = sample.on_battery.has_value();
-  if (!sample.upower) return sample;
-  constexpr char kDisplay[] = "/org/freedesktop/UPower/devices/DisplayDevice";
-  constexpr char kDevice[] = "org.freedesktop.UPower.Device";
-  sample.device_type = Read<uint32_t, &dbus::MessageReader::PopVariantOfUint32>(bus, kUPower, kDisplay, kDevice, "Type");
-  sample.is_present = Read<bool, &dbus::MessageReader::PopVariantOfBool>(bus, kUPower, kDisplay, kDevice, "IsPresent");
-  sample.percentage = Read<double, &dbus::MessageReader::PopVariantOfDouble>(bus, kUPower, kDisplay, kDevice, "Percentage");
-  for (const auto& [service, path, interface] : {
-           std::tuple{"org.freedesktop.UPower.PowerProfiles", "/org/freedesktop/UPower/PowerProfiles",
-                      "org.freedesktop.UPower.PowerProfiles"},
-           std::tuple{"net.hadess.PowerProfiles", "/net/hadess/PowerProfiles", "net.hadess.PowerProfiles"}}) {
-    sample.power_profile = Read<std::string, &dbus::MessageReader::PopVariantOfString>(
-        bus, service, path, interface, "ActiveProfile");
-    if (sample.power_profile) break;
+class LinuxPowerMonitor::Properties : public dbus::PropertySet {
+ public:
+  Properties(dbus::ObjectProxy* proxy, const std::string& interface, base::RepeatingClosure changed,
+             base::OnceClosure answered)
+      : dbus::PropertySet(proxy, interface,
+                          base::BindRepeating(&Properties::PropertyChanged, base::Unretained(this))),
+        changed_(std::move(changed)),
+        answered_(std::move(answered)) {
+    RegisterProperty("OnBattery", &on_battery);
+    RegisterProperty("Type", &type);
+    RegisterProperty("IsPresent", &is_present);
+    RegisterProperty("Percentage", &percentage);
+    RegisterProperty("ActiveProfile", &active_profile);
+    proxy->SetNameOwnerChangedCallback(base::BindRepeating(&Properties::OwnerChanged, base::Unretained(this)));
+    ConnectSignals();
+    GetAll();
   }
-  return sample;
-}
 
-}
+  void OnGetAll(dbus::Response* response) override {
+    dbus::PropertySet::OnGetAll(response);
+    changed_.Run();
+    if (answered_) std::move(answered_).Run();
+  }
+
+  dbus::Property<bool> on_battery;
+  dbus::Property<uint32_t> type;
+  dbus::Property<bool> is_present;
+  dbus::Property<double> percentage;
+  dbus::Property<std::string> active_profile;
+
+ private:
+  void PropertyChanged(const std::string&) { changed_.Run(); }
+
+  void OwnerChanged(const std::string&, const std::string& owner) {
+    if (!owner.empty()) return GetAll();
+    on_battery.set_valid(false);
+    type.set_valid(false);
+    is_present.set_valid(false);
+    percentage.set_valid(false);
+    active_profile.set_valid(false);
+    changed_.Run();
+  }
+
+  base::RepeatingClosure changed_;
+  base::OnceClosure answered_;
+};
 
 LinuxPowerMonitor& LinuxPowerMonitor::Get() {
   static LinuxPowerMonitor* monitor = new LinuxPowerMonitor();
@@ -95,9 +90,11 @@ LinuxPowerMonitor::LinuxPowerMonitor()
           {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})) {}
 
+LinuxPowerMonitor::~LinuxPowerMonitor() = default;
+
 void LinuxPowerMonitor::Current(base::OnceCallback<void(base::DictValue)> done) {
   Start();
-  if (state_) return std::move(done).Run(state_->Clone());
+  if (tracker_.Ready() && tracker_.state()) return std::move(done).Run(tracker_.state()->Clone());
   waiting_.push_back(std::move(done));
 }
 
@@ -107,29 +104,83 @@ base::CallbackListSubscription LinuxPowerMonitor::Subscribe(Listener listener) {
 }
 
 void LinuxPowerMonitor::Start() {
-  if (timer_.IsRunning()) return;
-  timer_.Start(FROM_HERE, kPollInterval,
-               base::BindRepeating(&LinuxPowerMonitor::Poll, weak_factory_.GetWeakPtr()));
-  Poll();
+  if (std::exchange(started_, true)) return;
+  memory_timer_.Start(FROM_HERE, kMemoryInterval,
+                      base::BindRepeating(&LinuxPowerMonitor::SampleMemory, weak_factory_.GetWeakPtr()));
+  answer_deadline_.Start(FROM_HERE, kAnswerDeadline, base::BindOnce([](base::WeakPtr<LinuxPowerMonitor> monitor) {
+    if (!monitor) return;
+    monitor->tracker_.PowerAnswered();
+    monitor->Publish();
+  }, weak_factory_.GetWeakPtr()));
+  SampleMemory();
+  Watch();
 }
 
-void LinuxPowerMonitor::Poll() {
-  if (polling_) return;
-  polling_ = true;
+void LinuxPowerMonitor::Watch() {
+  bus_ = dbus_thread_linux::GetSharedSystemBus();
+  auto changed = base::BindRepeating(&LinuxPowerMonitor::PropertiesChanged, weak_factory_.GetWeakPtr());
+  auto answered = [this] { return base::BindOnce(&LinuxPowerMonitor::PropertiesAnswered, weak_factory_.GetWeakPtr()); };
+  auto watch = [&](const char* service, const char* path, const char* interface) {
+    ++unanswered_;
+    return std::make_unique<Properties>(bus_->GetObjectProxy(service, dbus::ObjectPath(path)), interface, changed, answered());
+  };
+  upower_ = watch(kUPower, kUPowerPath, kUPower);
+  display_ = watch(kUPower, kDisplayPath, kDevice);
+  for (const auto& [service, path, interface] : {
+           std::tuple{"org.freedesktop.UPower.PowerProfiles", "/org/freedesktop/UPower/PowerProfiles",
+                      "org.freedesktop.UPower.PowerProfiles"},
+           std::tuple{"net.hadess.PowerProfiles", "/net/hadess/PowerProfiles", "net.hadess.PowerProfiles"}}) {
+    profiles_.push_back(watch(service, path, interface));
+  }
+}
+
+void LinuxPowerMonitor::SampleMemory() {
+  if (std::exchange(sampling_, true)) return;
   runner_->PostTaskAndReplyWithResult(
-      FROM_HERE, base::BindOnce(&SamplePower),
-      base::BindOnce(&LinuxPowerMonitor::Sampled, weak_factory_.GetWeakPtr()));
+      FROM_HERE, base::BindOnce(&ReadMemory),
+      base::BindOnce(&LinuxPowerMonitor::MemorySampled, weak_factory_.GetWeakPtr()));
 }
 
-void LinuxPowerMonitor::Sampled(LinuxPowerSample sample) {
-  polling_ = false;
-  base::DictValue state = LinuxSystemState(sample);
-  const bool changed = !state_ || *state_ != state;
-  state_ = state.Clone();
+void LinuxPowerMonitor::MemorySampled(std::pair<uint64_t, uint64_t> memory) {
+  sampling_ = false;
+  tracker_.SetMemory(memory.first, memory.second);
+  Publish();
+}
+
+void LinuxPowerMonitor::PropertiesChanged() {
+  if (!upower_ || !display_) return;
+  LinuxPowerSample power;
+  if (upower_->on_battery.is_valid()) {
+    power.upower = true;
+    power.on_battery = upower_->on_battery.value();
+    if (display_->type.is_valid()) power.device_type = display_->type.value();
+    if (display_->is_present.is_valid()) power.is_present = display_->is_present.value();
+    if (display_->percentage.is_valid()) power.percentage = display_->percentage.value();
+  }
+  for (const auto& profile : profiles_) {
+    if (!profile->active_profile.is_valid()) continue;
+    power.power_profile = profile->active_profile.value();
+    break;
+  }
+  tracker_.SetPower(power);
+  Publish();
+}
+
+void LinuxPowerMonitor::PropertiesAnswered() {
+  if (unanswered_ && --unanswered_) return;
+  answer_deadline_.Stop();
+  tracker_.PowerAnswered();
+  Publish();
+}
+
+void LinuxPowerMonitor::Publish() {
+  if (!tracker_.Ready()) return;
+  auto changed = tracker_.Take();
+  if (!tracker_.state()) return;
   auto waiting = std::move(waiting_);
   waiting_.clear();
-  for (auto& done : waiting) std::move(done).Run(state_->Clone());
-  if (changed) listeners_.Notify(*state_);
+  for (auto& done : waiting) std::move(done).Run(tracker_.state()->Clone());
+  if (changed) listeners_.Notify(*changed);
 }
 
 }
