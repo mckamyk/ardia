@@ -15,7 +15,7 @@ class LinuxClose {
     std::string close;
     bool operator==(const Identity&) const = default;
   };
-  enum class Phase { kIdle, kRequested, kSealing, kSealed, kHandedOff,
+  enum class Phase { kIdle, kRequested, kDraining, kSealing, kSealed, kHandedOff,
                      kTeardown, kDestroying, kCancelling, kCancelled };
 
   std::optional<Identity> Request(uint64_t renderer) {
@@ -35,11 +35,16 @@ class LinuxClose {
   bool IsCurrent(const Identity& identity) const {
     return phase_ != Phase::kIdle && identity_ == identity;
   }
+  bool BeginDrain(const Identity& identity, uint64_t renderer) {
+    if (!Matches(identity, renderer)) return false;
+    if (phase_ == Phase::kRequested) phase_ = Phase::kDraining;
+    return phase_ == Phase::kDraining || phase_ == Phase::kSealing || CanClose();
+  }
   bool BeginSeal(const Identity& identity, uint64_t renderer, int watermark) {
     if (!Matches(identity, renderer) || watermark < 0) return false;
     if (phase_ == Phase::kSealing || CanClose())
       return watermark_ == watermark;
-    if (phase_ != Phase::kRequested) return false;
+    if (phase_ != Phase::kDraining) return false;
     phase_ = Phase::kSealing;
     watermark_ = watermark;
     return true;

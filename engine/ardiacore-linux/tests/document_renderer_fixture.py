@@ -118,6 +118,10 @@ struct TabBinding {
       return host_->CloseInvoke("ArdiaShell.windowIdentity", args,
           base::BindOnce(&HostMessageHandler::Reply, weak_factory_.GetWeakPtr(), id));
     }
+    if (arguments[1].GetString() == "drain") {
+      return host_->BeginWindowCloseDrain(args, base::BindOnce(&HostMessageHandler::Reply,
+          weak_factory_.GetWeakPtr(), id));
+    }
     if (arguments[1].GetString() == "ack") {
       return host_->AcknowledgeWindowClose(args, base::BindOnce(&HostMessageHandler::Reply,
           weak_factory_.GetWeakPtr(), id));
@@ -161,6 +165,10 @@ void QueryIdentity(HostMessageHandler& handler) {
   handler.Request(arguments);
 }
 void SendAck(HostMessageHandler& handler, const base::DictValue& identity, int watermark) {
+  base::ListValue drain;
+  drain.Append(base::Value("drain-id")); drain.Append(base::Value("drain"));
+  drain.Append(base::Value(identity.Clone()));
+  handler.Request(drain);
   base::ListValue arguments;
   arguments.Append(base::Value("ack-id")); arguments.Append(base::Value("ack"));
   arguments.Append(base::Value(Ack(identity, watermark)));

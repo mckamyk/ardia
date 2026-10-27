@@ -78,6 +78,7 @@ int main(int argc, char** argv) {
       auto& [module, channel, envelope] = host.events.front();
       assert(module == "ArdiaShell" && channel == "shell");
       assert(*envelope.GetDict().FindString("name") == "shell.closeRequested");
+      Drained(host, request.Clone());
       auto forged = Ack(request, 0); forged.Set("rendererGeneration", "4294967296");
       bool refused = false;
       host.AcknowledgeWindowClose(forged, [&](bool success, auto) { refused = !success; });
@@ -92,7 +93,7 @@ int main(int argc, char** argv) {
   if (mode == "races") {
     ShellHostView host; Watch(host); host.ArmWindowClose();
     host.DocumentCall("commit", CommitRequest(host.DocumentClient(), 1), [](auto result) { assert(result.ok()); });
-    auto request = host.RequestWindowClose();
+    auto request = Drained(host, host.RequestWindowClose());
     bool rejected = false;
     host.AcknowledgeWindowClose(Ack(request, 0), [&](bool success, auto value) {
       assert(*value.GetDict().FindString("code") == "ERR_DOCUMENT_WATERMARK"); rejected = !success;
@@ -106,7 +107,7 @@ int main(int argc, char** argv) {
     bool cancelled = false;
     host.CancelWindowClose(host.close_.identity(), [&](bool success, auto) { cancelled = success; });
     Drain(); assert(cancelled);
-    request = host.RequestWindowClose();
+    request = Drained(host, host.RequestWindowClose());
     auto stale = request.Clone(); stale.Set("closeGeneration", "1");
     host.AcknowledgeWindowClose(Ack(stale, 1), [](bool success, auto) { assert(!success); });
     host.native.widget.veto = true;
@@ -119,13 +120,15 @@ int main(int argc, char** argv) {
     host.DocumentCall("watch", WatchRequest(), [](auto result) { assert(result.code == "ERR_DOCUMENT_CLOSING"); });
     host.DocumentCall("commit", CommitRequest(host.DocumentClient(), 2), [](auto result) { assert(result.code == "ERR_DOCUMENT_CLOSING"); });
     auto* ui = base::SingleThreadTaskRunner::GetCurrentDefault();
-    ui->Expire();
+    ui->Expire(); Drain();
+    assert(host.close_.CanClose() && host.close_.BlocksWrites() && !failed);
+    host.CancelWindowClose(host.close_.identity(), Ignore);
     assert(host.close_.BlocksWrites());
     Drain(); assert(failed && host.close_.phase() == LinuxClose::Phase::kCancelled);
     host.CancelWindowClose(host.close_.identity(), [](bool success, auto) { assert(success); });
     host.DocumentCall("commit", CommitRequest(host.DocumentClient(), 2), [](auto result) { assert(result.ok()); });
     Drain();
-    request = host.RequestWindowClose();
+    request = Drained(host, host.RequestWindowClose());
     host.AcknowledgeWindowClose(Ack(request, 2), Ignore);
     host.CancelWindowClose(host.close_.identity(), [](bool success, auto) { assert(success); });
     Drain(); assert(!host.native.widget.IsClosed() && !host.close_.CanClose());
@@ -146,7 +149,7 @@ int main(int argc, char** argv) {
     assert(authority->disk->FindDict("clients")->FindDict(client.id));
     ShellHostView replacement;
     Watch(replacement); replacement.ArmWindowClose();
-    const auto request = replacement.RequestWindowClose();
+    const auto request = Drained(replacement, replacement.RequestWindowClose());
     replacement.AcknowledgeWindowClose(Ack(request, 0), Ignore);
     files.Drain(); replacement.Replace(); Drain();
     assert(!replacement.native.widget.IsClosed());
@@ -158,7 +161,7 @@ int main(int argc, char** argv) {
     ShellHostView host; Watch(host); host.ArmWindowClose();
     auto failed = AcceptedStorage(host, "linux-session.json");
     std::move(failed).Run(false, base::Value());
-    auto request = host.RequestWindowClose();
+    auto request = Drained(host, host.RequestWindowClose());
     bool refused = false;
     host.AcknowledgeWindowClose(Ack(request, 0), [&](bool ok, auto result) {
       refused = !ok; assert(*result.GetDict().FindString("code") == "ERR_DOCUMENT_STORAGE");
@@ -169,7 +172,7 @@ int main(int argc, char** argv) {
     std::move(unrelated).Run(true, base::Value());
     assert(!host.storage_failures_.empty());
     auto retry = AcceptedStorage(host, "linux-session.json");
-    request = host.RequestWindowClose();
+    request = Drained(host, host.RequestWindowClose());
     host.AcknowledgeWindowClose(Ack(request, 0), Ignore);
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(0,
         [retry = std::move(retry)]() mutable { std::move(retry).Run(true, base::Value()); });
@@ -213,6 +216,8 @@ int main(int argc, char** argv) {
     host = std::make_unique<ShellHostView>();
     auto request = host->RequestWindowClose();
     auto identity = host->close_.identity();
+    assert(!host->close_.BeginSeal(identity, host->renderer_generation_, 0));
+    assert(host->close_.BeginDrain(identity, host->renderer_generation_));
     assert(host->close_.BeginSeal(identity, host->renderer_generation_, 0));
     assert(host->close_.Sealed(identity, host->renderer_generation_));
     host->close_replies_.emplace_back([&](bool success, auto) { assert(success); host.reset(); });
@@ -227,7 +232,7 @@ int main(int argc, char** argv) {
     assert(host.storage_pending_ == 1);
     std::move(accepted).Run(false, base::Value());
     assert(host.storage_pending_ == 0 && host.storage_failures_.contains("linux-session.json"));
-    auto request = host.RequestWindowClose();
+    auto request = Drained(host, host.RequestWindowClose());
     bool refused = false;
     host.AcknowledgeWindowClose(Ack(request, 0), [&](bool ok, auto value) {
       refused = !ok; assert(*value.GetDict().FindString("code") == "ERR_DOCUMENT_STORAGE");
@@ -239,13 +244,13 @@ int main(int argc, char** argv) {
     assert(host.storage_failures_.contains("linux-session.json"));
     auto retry = AcceptedStorage(host, "linux-session.json");
     std::move(retry).Run(true, base::Value());
-    request = host.RequestWindowClose();
+    request = Drained(host, host.RequestWindowClose());
     host.AcknowledgeWindowClose(Ack(request, 0), Ignore);
     Drain(); assert(host.native.widget.IsClosed());
   }
   if (mode == "retired-posted") {
     ShellHostView host; Watch(host); host.ArmWindowClose();
-    auto request = host.RequestWindowClose();
+    auto request = Drained(host, host.RequestWindowClose());
     host.AcknowledgeWindowClose(Ack(request, 0), Ignore);
     files.Drain();
     auto* ui = base::SingleThreadTaskRunner::GetCurrentDefault();
@@ -262,7 +267,7 @@ int main(int argc, char** argv) {
     assert(host.DeferChromeClose({}, LinuxCloseStage::kPrepare, [&](bool ready) { assert(ready); ++prepared; }));
     assert(prepared == 0 && host.chrome_close_token_ && !host.chrome_close_token_->is_empty());
     const auto token = *host.chrome_close_token_;
-    const auto request = host.RequestWindowClose();
+    const auto request = Drained(host, host.RequestWindowClose());
     bool ack_failed = false;
     host.AcknowledgeWindowClose(Ack(request, 0), [&](bool ready, auto) { ack_failed = !ready; });
     Drain(); assert(prepared == 1 && !ack_failed && host.close_.CanClose());
@@ -293,7 +298,7 @@ int main(int argc, char** argv) {
     ShellHostView host; Watch(host); host.ArmWindowClose();
     assert(host.DeferChromeClose({}, LinuxCloseStage::kPrepare, [](bool ready) { assert(ready); }));
     const auto token = *host.chrome_close_token_;
-    auto request = host.RequestWindowClose();
+    auto request = Drained(host, host.RequestWindowClose());
     bool ack_failed = false;
     host.AcknowledgeWindowClose(Ack(request, 0), [&](bool ready, auto) { ack_failed = !ready; });
     Drain();
@@ -322,7 +327,7 @@ int main(int argc, char** argv) {
     ShellHostView host; Watch(host); host.ArmWindowClose();
     int answers = 0;
     assert(host.DeferChromeClose({}, LinuxCloseStage::kPrepare, [&](bool ready) { assert(!ready); ++answers; }));
-    auto request = host.RequestWindowClose();
+    auto request = Drained(host, host.RequestWindowClose());
     host.AcknowledgeWindowClose(Ack(request, 0), Ignore);
     files.Drain();
     base::SingleThreadTaskRunner::GetCurrentDefault()->One();
@@ -353,12 +358,12 @@ int main(int argc, char** argv) {
   }
   if (mode == "no-client") {
     ShellHostView host; host.ArmWindowClose();
-    auto request = host.RequestWindowClose();
+    auto request = Drained(host, host.RequestWindowClose());
     bool denied = false;
     host.AcknowledgeWindowClose(Ack(request, 1), [&](bool success, auto) { denied = !success; });
     Drain(); assert(denied && !host.native.widget.IsClosed());
     host.CancelWindowClose(host.close_.identity(), Ignore); Drain();
-    request = host.RequestWindowClose();
+    request = Drained(host, host.RequestWindowClose());
     host.AcknowledgeWindowClose(Ack(request, 0), Ignore);
     Drain(); assert(host.native.widget.IsClosed() && host.documents_->reads == 0);
   }
