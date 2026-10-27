@@ -12,6 +12,12 @@
 namespace ardia {
 namespace {
 
+uint64_t NextSuspension() {
+  static uint64_t last = 0;
+  if (last >= std::numeric_limits<uint64_t>::max() - 1) return 0;
+  return ++last;
+}
+
 bool Generation(const std::string& value) {
   return !value.empty() && value.size() <= 20 && value[0] != '0' &&
          value.find_first_not_of("0123456789") == std::string::npos;
@@ -119,6 +125,20 @@ bool LinuxDialogController::Authorized(const LinuxDialogClient& client) const {
          client.renderer_generation == generation_;
 }
 
+bool LinuxDialogController::Admits(const LinuxDialogClient& client) const {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return !suspension_ && Authorized(client);
+}
+
+bool LinuxDialogController::Identify(const LinuxDialogClient& client,
+                                     base::DictValue* identity) const {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!Admits(client)) return false;
+  identity->Set("windowId", window_id_);
+  identity->Set("rendererGeneration", generation_);
+  return true;
+}
+
 bool LinuxDialogController::ReplaceRenderer(const std::string& generation) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!parent_alive_ || canceling_ || renderer_history_exhausted_ || !Generation(generation)) return false;
@@ -143,6 +163,7 @@ bool LinuxDialogController::Begin(const LinuxDialogClient& client,
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   LinuxDialogSpec spec;
   if (!Authorized(client)) { *error = "Dialog requester is not current"; return false; }
+  if (suspension_) { *error = "Dialogs are suspended for this window"; return false; }
   if (!completion || !Parse(request, window_id_, &spec)) { *error = "Invalid dialog request"; return false; }
   if (entries_.contains(spec.dialog_id)) { *error = "Dialog is already pending"; return false; }
   if (entries_.size() >= kMaxPending || sequence_ == std::numeric_limits<uint64_t>::max()) {
@@ -180,6 +201,21 @@ void LinuxDialogController::ParentDestroyed() {
   CancelAll();
 }
 
+LinuxDialogSuspension LinuxDialogController::Suspend() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  const uint64_t token = NextSuspension();
+  suspension_ = token ? token : std::numeric_limits<uint64_t>::max();
+  CancelAll();
+  return LinuxDialogSuspension(token);
+}
+
+bool LinuxDialogController::Resume(const LinuxDialogSuspension& suspension) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!suspension || suspension.value_ != suspension_) return false;
+  suspension_ = 0;
+  return true;
+}
+
 void LinuxDialogController::CancelAll() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (canceling_) return;
@@ -194,10 +230,10 @@ void LinuxDialogController::CancelAll() {
 
 void LinuxDialogController::Pump() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (pumping_ || active_sequence_ || generation_.empty() || !parent_alive_) return;
+  if (pumping_ || active_sequence_ || suspension_ || generation_.empty() || !parent_alive_) return;
   pumping_ = true;
   auto weak = GetWeakPtr();
-  while (weak && !weak->entries_.empty() && !weak->active_sequence_ &&
+  while (weak && !weak->entries_.empty() && !weak->active_sequence_ && !weak->suspension_ &&
          !weak->generation_.empty() && weak->parent_alive_) {
     auto next = std::min_element(weak->entries_.begin(), weak->entries_.end(),
         [](const auto& a, const auto& b) { return a.second.sequence < b.second.sequence; });

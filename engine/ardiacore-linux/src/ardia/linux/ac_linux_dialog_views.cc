@@ -134,6 +134,16 @@ LinuxWindowDialogs::~LinuxWindowDialogs() {
   parent_observation_.Reset();
 }
 
+LinuxDialogSuspension LinuxWindowDialogs::Suspend() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return controller_->Suspend();
+}
+
+bool LinuxWindowDialogs::Resume(const LinuxDialogSuspension& suspension) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return controller_->Resume(suspension);
+}
+
 void LinuxWindowDialogs::ParentDestroyed() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   parent_observation_.Reset();

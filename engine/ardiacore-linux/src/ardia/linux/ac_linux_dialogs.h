@@ -52,6 +52,18 @@ using LinuxDialogPresenter = base::RepeatingCallback<std::unique_ptr<LinuxDialog
     const LinuxDialogSpec&, LinuxDialogResponder)>;
 using LinuxDialogCompletion = base::OnceCallback<void(base::DictValue)>;
 
+class LinuxDialogSuspension {
+ public:
+  LinuxDialogSuspension() = default;
+  explicit operator bool() const { return value_ != 0; }
+  bool operator==(const LinuxDialogSuspension&) const = default;
+
+ private:
+  friend class LinuxDialogController;
+  explicit LinuxDialogSuspension(uint64_t value) : value_(value) {}
+  uint64_t value_ = 0;
+};
+
 class LinuxDialogController {
  public:
   static constexpr size_t kMaxPending = 16;
@@ -65,6 +77,7 @@ class LinuxDialogController {
   LinuxDialogController& operator=(const LinuxDialogController&) = delete;
 
   bool ReplaceRenderer(const std::string& generation);
+  bool Identify(const LinuxDialogClient& client, base::DictValue* identity) const;
   bool Begin(const LinuxDialogClient& client,
              const base::DictValue& request,
              LinuxDialogCompletion completion,
@@ -72,6 +85,9 @@ class LinuxDialogController {
   bool Cancel(const LinuxDialogClient& client, const std::string& dialog_id);
   void RetireRenderer(const std::string& generation);
   void ParentDestroyed();
+  LinuxDialogSuspension Suspend();
+  bool Resume(const LinuxDialogSuspension& suspension);
+  bool suspended() const { return suspension_ != 0; }
   size_t pending() const { return entries_.size(); }
   base::WeakPtr<LinuxDialogController> GetWeakPtr();
 
@@ -84,6 +100,7 @@ class LinuxDialogController {
   };
 
   bool Authorized(const LinuxDialogClient& client) const;
+  bool Admits(const LinuxDialogClient& client) const;
   void Pump();
   void Complete(std::string id, uint64_t sequence, LinuxDialogResponse response);
   void CancelAll();
@@ -99,6 +116,7 @@ class LinuxDialogController {
   bool pumping_ = false;
   uint64_t sequence_ = 0;
   uint64_t active_sequence_ = 0;
+  uint64_t suspension_ = 0;
   std::map<std::string, Entry> entries_;
   std::unique_ptr<LinuxDialogSurface> surface_;
   base::WeakPtrFactory<LinuxDialogController> weak_factory_{this};

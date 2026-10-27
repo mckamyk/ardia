@@ -1,4 +1,5 @@
 #include <cassert>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -41,8 +42,9 @@ struct Fixture {
   std::vector<base::DictValue> results;
   LinuxDialogClient client{"a", "default", "9007199254740993", true, true};
   std::unique_ptr<LinuxDialogController> controller;
-  Fixture() {
-    controller = std::make_unique<LinuxDialogController>("a", "default",
+  explicit Fixture(std::string window = "a") {
+    client.window_id = window;
+    controller = std::make_unique<LinuxDialogController>(window, "default",
         [&](const auto& spec, LinuxDialogResponder done) -> std::unique_ptr<LinuxDialogSurface> {
           shown.push_back(spec);
           responders.push_back(std::move(done));
@@ -52,7 +54,7 @@ struct Fixture {
   }
   bool Begin(const std::string& id, bool prompt = false) {
     std::string error;
-    return controller->Begin(client, Request(id, prompt),
+    return controller->Begin(client, Request(id, prompt, client.window_id),
         [&](auto value) { results.push_back(std::move(value)); }, &error);
   }
   const base::Value& Result(size_t index) const {
@@ -296,6 +298,162 @@ void SynchronousPresenterAndFailure() {
   assert(!destroyed && closed == 1);
 }
 
+void TwoWindowsSuspendIndependently() {
+  Fixture a, b("b");
+  assert(a.Begin("dialog:window-a-0001"));
+  assert(a.Begin("dialog:window-a-0002", true));
+  assert(b.Begin("dialog:window-b-0001"));
+  auto stale = std::move(a.responders[0]);
+  const auto suspension = a.controller->Suspend();
+  assert(suspension && a.controller->suspended() && !b.controller->suspended());
+  assert(a.results.size() == 2 && a.controller->pending() == 0 && a.closed == 1 && a.shown.size() == 1);
+  assert(!a.Result(0).GetDict().Find("confirmed")->GetBool());
+  assert(!a.Result(0).GetDict().Find("suppressed")->GetBool());
+  assert(a.Result(1).is_none());
+  assert(b.controller->pending() == 1 && b.results.empty() && b.closed == 0);
+  base::DictValue identity;
+  assert(!a.controller->Identify(a.client, &identity) && !identity.Find("windowId"));
+  assert(b.controller->Identify(b.client, &identity));
+  assert(*identity.FindString("windowId") == "b");
+  assert(*identity.FindString("rendererGeneration") == b.client.renderer_generation);
+  std::string error;
+  assert(!a.controller->Begin(a.client, Request("dialog:window-a-0003"), [](auto) { assert(false); }, &error));
+  assert(error == "Dialogs are suspended for this window");
+  assert(a.controller->Cancel(a.client, "dialog:window-a-0001"));
+  std::move(stale).Run({true, true, "", false});
+  assert(a.results.size() == 2);
+  assert(!b.controller->Resume(suspension) && a.controller->suspended());
+  std::move(b.responders[0]).Run({true, true, "", false});
+  assert(b.results.size() == 1 && b.Result(0).GetDict().Find("confirmed")->GetBool());
+  assert(a.controller->Resume(suspension) && !a.controller->suspended());
+  assert(a.Begin("dialog:window-a-0003") && a.shown.size() == 2);
+}
+
+void QueuedWarningsCancelOncePerDialog() {
+  Fixture f;
+  std::map<std::string, int> completions;
+  std::string error;
+  for (const auto* id : {"dialog:close-warning-1", "dialog:close-warning-2", "dialog:close-warning-3"}) {
+    assert(f.controller->Begin(f.client, Request(id), [&](base::DictValue value) {
+      const auto* data = value.FindDict("data");
+      assert(!data->FindDict("result")->Find("confirmed")->GetBool());
+      assert(!data->FindDict("result")->Find("suppressed")->GetBool());
+      ++completions[*data->FindString("dialogId")];
+    }, &error));
+  }
+  assert(f.shown.size() == 1);
+  auto active = std::move(f.responders[0]);
+  const auto suspension = f.controller->Suspend();
+  assert(completions.size() == 3 && f.shown.size() == 1 && f.closed == 1);
+  for (const auto& [id, count] : completions) assert(count == 1);
+  std::move(active).Run({true, true, "", false});
+  const auto again = f.controller->Suspend();
+  assert(completions.size() == 3);
+  for (const auto& [id, count] : completions) assert(count == 1);
+  assert(!f.controller->Resume(suspension) && f.controller->Resume(again));
+}
+
+void StaleResumeCannotReleaseNewerSuspension() {
+  Fixture f, other;
+  const auto first = f.controller->Suspend();
+  const auto second = f.controller->Suspend();
+  assert(first && second && !(first == second));
+  assert(!f.controller->Resume(first));
+  assert(!f.controller->Resume(LinuxDialogSuspension()));
+  const auto foreign = other.controller->Suspend();
+  assert(!f.controller->Resume(foreign) && !other.controller->Resume(second));
+  assert(!f.Begin("dialog:still-suspended"));
+  assert(f.controller->Resume(second));
+  assert(!f.controller->Resume(second));
+  assert(f.Begin("dialog:resumed-identity") && f.shown.size() == 1);
+  assert(other.controller->Resume(foreign));
+}
+
+void ReplacementDuringSuspension() {
+  Fixture f;
+  assert(f.Begin("dialog:before-replacement"));
+  const auto suspension = f.controller->Suspend();
+  const auto old = f.client;
+  assert(f.controller->ReplaceRenderer("9007199254740994"));
+  f.client.renderer_generation = "9007199254740994";
+  assert(f.controller->suspended() && f.results.size() == 1);
+  assert(!f.Begin("dialog:during-replacement"));
+  base::DictValue identity;
+  assert(!f.controller->Identify(f.client, &identity));
+  assert(f.controller->Resume(suspension));
+  assert(!f.controller->Identify(old, &identity));
+  assert(f.controller->Identify(f.client, &identity));
+  assert(*identity.FindString("rendererGeneration") == "9007199254740994");
+  assert(f.Begin("dialog:after-replacement"));
+  assert(!f.controller->ReplaceRenderer(old.renderer_generation));
+  assert(f.results.size() == 1 && f.controller->pending() == 1);
+}
+
+void ParentDestructionAndTeardownWhileSuspended() {
+  Fixture f;
+  assert(f.Begin("dialog:parent-suspended"));
+  const auto suspension = f.controller->Suspend();
+  f.controller->ParentDestroyed();
+  assert(f.results.size() == 1);
+  assert(f.controller->Resume(suspension));
+  assert(!f.Begin("dialog:after-parent-suspended"));
+  base::DictValue identity;
+  assert(!f.controller->Identify(f.client, &identity));
+  Fixture torn;
+  assert(torn.Begin("dialog:teardown-suspended"));
+  auto stale = std::move(torn.responders[0]);
+  torn.controller->Suspend();
+  assert(torn.results.size() == 1);
+  torn.controller.reset();
+  assert(torn.results.size() == 1);
+  std::move(stale).Run({true, true, "", false});
+  assert(torn.results.size() == 1);
+}
+
+void ReentrantSuspension() {
+  Fixture f;
+  std::string error;
+  LinuxDialogSuspension nested;
+  int completions = 0;
+  assert(f.controller->Begin(f.client, Request("dialog:reentrant-suspend-1"), [&](auto) {
+    ++completions;
+    assert(!f.Begin("dialog:reentrant-admission"));
+    base::DictValue identity;
+    assert(!f.controller->Identify(f.client, &identity));
+    nested = f.controller->Suspend();
+  }, &error));
+  assert(f.controller->Begin(f.client, Request("dialog:reentrant-suspend-2"), [&](auto) { ++completions; }, &error));
+  const auto outer = f.controller->Suspend();
+  assert(completions == 2 && f.controller->pending() == 0 && f.shown.size() == 1);
+  assert(nested && !(nested == outer));
+  assert(!f.controller->Resume(outer) && f.controller->Resume(nested));
+  Fixture destroyed;
+  assert(destroyed.controller->Begin(destroyed.client, Request("dialog:destroy-in-suspend-1"),
+      [&](auto) { destroyed.controller.reset(); }, &error));
+  assert(destroyed.Begin("dialog:destroy-in-suspend-2"));
+  auto* raw = destroyed.controller.get();
+  const auto token = raw->Suspend();
+  assert(!destroyed.controller && token && destroyed.results.size() == 1);
+}
+
+void SuspensionKeepsRetirementHistory() {
+  Fixture f;
+  for (int i = 0; i < 3000; ++i) assert(f.controller->Resume(f.controller->Suspend()));
+  assert(f.Begin("dialog:after-suspend-cycles") && f.results.empty());
+  for (size_t i = 1; i <= LinuxDialogController::kMaxRetiredGenerations; ++i) {
+    const auto suspension = f.controller->Suspend();
+    assert(f.controller->ReplaceRenderer(std::to_string(i)));
+    assert(f.controller->Resume(suspension));
+  }
+  f.client.renderer_generation = std::to_string(LinuxDialogController::kMaxRetiredGenerations);
+  assert(f.Begin("dialog:before-history-exhaustion"));
+  assert(!f.controller->ReplaceRenderer(std::to_string(LinuxDialogController::kMaxRetiredGenerations + 1)));
+  assert(f.controller->pending() == 0);
+  assert(f.controller->Resume(f.controller->Suspend()));
+  assert(!f.Begin("dialog:after-history-exhaustion"));
+  assert(!f.controller->ReplaceRenderer(f.client.renderer_generation));
+}
+
 int main() {
   QueueAndResults();
   AuthorizationAndBounds();
@@ -306,4 +464,11 @@ int main() {
   ReentrantCompletionAndDestruction();
   SynchronousPresenterAndFailure();
   InvalidRequestsAndOptionalOwner();
+  TwoWindowsSuspendIndependently();
+  QueuedWarningsCancelOncePerDialog();
+  StaleResumeCannotReleaseNewerSuspension();
+  ReplacementDuringSuspension();
+  ParentDestructionAndTeardownWhileSuspended();
+  ReentrantSuspension();
+  SuspensionKeepsRetirementHistory();
 }
