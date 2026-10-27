@@ -55,6 +55,7 @@
 #include "base/values.h"
 #include "chrome/browser/ardia/public/ac_engine.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -816,6 +817,8 @@ class ShellHostView : public views::View,
                          base::OnceCallback<void(bool, base::Value)> done);
   void BeginWindowCloseDrain(const base::DictValue& request,
                              base::OnceCallback<void(bool, base::Value)> done);
+  bool AwaitingChromeHandoff() const;
+  bool ClosingEndsSession() const;
   void AcknowledgeWindowClose(const base::DictValue& request,
                               base::OnceCallback<void(bool, base::Value)> done);
   void OnWidgetClosing(views::Widget* widget) override;
@@ -1652,11 +1655,27 @@ void ShellHostView::BeginWindowCloseDrain(
         FROM_HERE, base::BindOnce(
             [](base::WeakPtr<ShellHostView> host, LinuxClose::Identity identity) {
               if (!host || !host->close_.Matches(identity, host->renderer_generation_) ||
-                  (host->close_.phase() != LinuxClose::Phase::kDraining &&
-                   host->close_.phase() != LinuxClose::Phase::kSealing)) return;
+                  !host->AwaitingChromeHandoff()) return;
               host->CancelWindowClose(identity, base::BindOnce([](bool, base::Value) {}));
             }, GetWeakPtr(), identity), base::Seconds(30));
-  std::move(done).Run(true, base::Value(base::DictValue().Set("accepted", base::Value(true))));
+  std::move(done).Run(true, base::Value(base::DictValue()
+      .Set("accepted", base::Value(true))
+      .Set("endsSession", base::Value(ClosingEndsSession()))));
+}
+
+bool ShellHostView::AwaitingChromeHandoff() const {
+  const auto phase = close_.phase();
+  return phase == LinuxClose::Phase::kDraining || phase == LinuxClose::Phase::kSealing ||
+         (phase == LinuxClose::Phase::kSealed && !chrome_close_token_);
+}
+
+bool ShellHostView::ClosingEndsSession() const {
+  if (browser_shutdown::IsTryingToQuit()) return true;
+  for (const auto& [id, host] : Hosts()) {
+    if (host == this || host->is_utility() || !host->GetWidget() || host->GetWidget()->IsClosed()) continue;
+    return false;
+  }
+  return true;
 }
 
 void ShellHostView::RequestUtilityClose() {

@@ -130,8 +130,6 @@ struct TabBinding {
     const auto& input = *args.FindDict("request");
 ''' + document_branch + '\n}\n'
     support = r'''
-std::map<int, ShellHostView*> hosts;
-auto& Hosts() { return hosts; }
 HostMessageHandler::HostMessageHandler(ShellHostView* host) : host_(host->GetWeakPtr()) {}
 void HostMessageHandler::CallJavascriptFunction(
     const char* function, const base::Value& first, const base::Value& second,
