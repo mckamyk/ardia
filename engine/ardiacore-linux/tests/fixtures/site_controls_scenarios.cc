@@ -106,14 +106,17 @@ void HandlesAndProfiles() {
     assert(!Handles(name));
   }
   assert(IsContentBlockerCall("contentBlocker.state") && !IsContentBlockerCall("sites.settings"));
-  assert(!ResolveProfile("sites.settings", "", WindowProfile::kRegular));
-  assert(!ResolveProfile("sites.settings", "default", WindowProfile::kRegular));
-  assert(ResolveProfile("sites.settings", "incognito:w@default", WindowProfile::kRegular)->code == "ERR_PROFILE_PRIVATE");
-  assert(ResolveProfile("sites.settings", "private@default", WindowProfile::kRegular)->code == "ERR_PROFILE_PRIVATE");
-  assert(ResolveProfile("profiles.clearBrowsingData", "", WindowProfile::kPrivate)->code == "ERR_PROFILE_PRIVATE");
-  assert(ResolveProfile("sites.origins", "work", WindowProfile::kRegular)->code == "ERR_PROFILE_UNAVAILABLE");
-  assert(!ResolveProfile("contentBlocker.setAllowed", "", WindowProfile::kPrivate));
-  assert(ResolveProfile("contentBlocker.state", "incognito:w@default", WindowProfile::kPrivate)->code == "ERR_PROFILE_PRIVATE");
+  const auto capabilities = Capabilities();
+  assert(capabilities.size() == 12);
+  for (const auto name : capabilities) assert(Handles(name) && name != "contentBlocker.devDelayNextLoad");
+  auto route = [](std::string_view name, std::string_view requested) { return RouteProfile(name, requested); };
+  assert(std::get<ProfileRoute>(route("sites.settings", "")) == ProfileRoute::kRegistry);
+  assert(std::get<ProfileRoute>(route("sites.settings", "default")) == ProfileRoute::kRegistry);
+  assert(std::get<ProfileRoute>(route("sites.origins", "work")) == ProfileRoute::kRegistry);
+  assert(std::get<Failure>(route("sites.settings", "incognito:w@default")).code == "ERR_PROFILE_PRIVATE");
+  assert(std::get<Failure>(route("profiles.clearBrowsingData", "incognito:w@work")).code == "ERR_PROFILE_PRIVATE");
+  assert(std::get<ProfileRoute>(route("contentBlocker.setAllowed", "incognito:w@default")) == ProfileRoute::kApp);
+  assert(std::get<ProfileRoute>(route("contentBlocker.state", "work")) == ProfileRoute::kApp);
 }
 
 void Origins() {

@@ -1,4 +1,5 @@
 #include "ardia/linux/ac_linux_site_controls_service.h"
+#include "ardia/linux/ac_linux_profile_service.h"
 
 #include <unistd.h>
 
@@ -12,6 +13,27 @@
 #include <vector>
 
 bool (*g_ardia_restricted_component_extension)(const extensions::ExtensionId& extension_id) = nullptr;
+
+std::map<std::string, Profile*>& Registry() {
+  static std::map<std::string, Profile*> registry;
+  return registry;
+}
+
+std::vector<std::string>& Resolved() {
+  static std::vector<std::string> resolved;
+  return resolved;
+}
+
+void ardiacore::ResolveLinuxProfile(std::string_view id, LinuxProfileDone done) {
+  Resolved().push_back(std::string(id));
+  const std::string key = id.empty() ? "default" : std::string(id);
+  if (key == "gone") return std::move(done).Run(nullptr, linux_profiles::ProfileError::kDeleted);
+  auto found = Registry().find(key);
+  Profile* profile = found == Registry().end() ? nullptr : found->second;
+  base::PostTask(base::OnceClosure([done = std::move(done), profile]() mutable {
+    std::move(done).Run(profile, profile ? linux_profiles::ProfileError::kNone : linux_profiles::ProfileError::kUnavailable);
+  }));
+}
 
 namespace {
 
@@ -177,11 +199,15 @@ void SitePermissionsThroughTheService(Profile& profile, Profile& incognito) {
 
   EngineCalls().clear();
   auto from_private = Settle(Call(&incognito, "sites.setSetting", "{" + origin + R"(,"type":"camera","value":"allow"})"));
-  assert(!from_private->ok && from_private->code == "ERR_PROFILE_PRIVATE");
+  assert(!from_private->ok && from_private->code == "ERR_PROFILE_UNAVAILABLE");
+  auto otr = Settle(Call(&profile, "sites.origins", "{}", "otr"));
+  assert(otr->code == "ERR_PROFILE_PRIVATE");
   auto private_id = Settle(Call(&profile, "sites.settings", "{" + origin + "}", "incognito:w1@default"));
   assert(private_id->code == "ERR_PROFILE_PRIVATE");
-  auto isolated = Settle(Call(&profile, "sites.origins", "{}", "work"));
-  assert(isolated->code == "ERR_PROFILE_UNAVAILABLE");
+  auto deleted = Settle(Call(&profile, "sites.origins", "{}", "gone"));
+  assert(deleted->code == "ERR_PROFILE_DELETED");
+  auto unknown = Settle(Call(&profile, "sites.origins", "{}", "nobody"));
+  assert(unknown->code == "ERR_PROFILE_UNAVAILABLE");
   auto bad = Settle(Call(&profile, "sites.setSetting", "{" + origin + R"(,"type":"camera","value":"forever"})"));
   assert(bad->code == "ERR_SITE_REQUEST");
   auto webkit = Settle(Call(&profile, "sites.settings", "{" + origin + R"(,"engine":"webkit"})"));
@@ -189,13 +215,21 @@ void SitePermissionsThroughTheService(Profile& profile, Profile& incognito) {
   auto not_json = Settle(Call(&profile, "sites.origins", "{"));
   assert(not_json->code == "ERR_ENGINE");
   auto none = std::make_shared<Result>();
-  ardia::LinuxSiteControlsCall(nullptr, "sites.origins", "", nullptr, ardia::SiteControlsDone([none](bool ok, base::Value value) {
+  base::Value no_args("{}");
+  ardia::LinuxSiteControlsCall(nullptr, "sites.origins", "", &no_args, ardia::SiteControlsDone([none](bool ok, base::Value value) {
     none->done = true;
     none->ok = ok;
     none->code = *value.GetDict().FindString("code");
   }));
   assert(none->done && none->code == "ERR_PROFILE_UNAVAILABLE");
   assert(EngineCalls().empty());
+  Resolved().clear();
+  auto isolated = Settle(Call(&profile, "sites.setSetting", "{" + origin + R"(,"type":"camera","value":"block"})", "work"));
+  assert(isolated->ok && EngineCalls().size() == 1 && EngineCalls()[0].profile == "/profiles/Work");
+  assert(Resolved().size() == 1 && Resolved()[0] == "work");
+  Settle(Call(&profile, "sites.setSetting", "{" + origin + R"(,"type":"camera","value":"default"})", "work"));
+  auto app_level = Settle(Call(&profile, "contentBlocker.devFailNextMessage", "{}", "work"));
+  assert(app_level->ok && Resolved().size() == 2);
 }
 
 void BrowsingDataThroughTheService(Profile& profile, Profile& incognito) {
@@ -214,7 +248,8 @@ void BrowsingDataThroughTheService(Profile& profile, Profile& incognito) {
   ClearFails() = false;
   EngineCalls().clear();
   assert(Settle(Call(&profile, "profiles.clearBrowsingData", R"({"types":["passwords"]})"))->code == "ERR_SITE_REQUEST");
-  assert(Settle(Call(&incognito, "profiles.clearBrowsingData", R"({"types":["cache"]})"))->code == "ERR_PROFILE_PRIVATE");
+  assert(Settle(Call(&profile, "profiles.clearBrowsingData", R"({"types":["cache"]})", "incognito:w1@default"))->code == "ERR_PROFILE_PRIVATE");
+  assert(Settle(Call(&incognito, "profiles.clearBrowsingData", R"({"types":["cache"]})"))->code == "ERR_PROFILE_UNAVAILABLE");
   assert(EngineCalls().empty());
 }
 
@@ -287,13 +322,13 @@ void WorkingBlocker(const std::filesystem::path& scratch) {
   Advance(200);
   assert(Events().size() == 1 && Events()[0].GetDict().Find("ready")->GetBool());
   assert(Settle(Call(profile.get(), "contentBlocker.isAllowed", R"({"host":"news.example.com"})"))->value.GetBool());
-  assert(!Settle(Call(&incognito, "contentBlocker.isAllowed", R"({"host":"other.test"})"))->value.GetBool());
+  assert(!Settle(Call(profile.get(), "contentBlocker.isAllowed", R"({"host":"other.test"})", "incognito:w2@default"))->value.GetBool());
   auto hosts = Settle(Call(profile.get(), "contentBlocker.state", "{}"));
   assert(Dict(hosts).Find("allowedHosts")->GetList().size() == 1);
   assert(Dict(hosts).Find("allowedHosts")->GetList()[0].GetString() == "example.com");
   auto bad_host = Settle(Call(profile.get(), "contentBlocker.setAllowed", R"({"host":"/^(?:ardia-blocking-off|)/","allowed":true})"));
   assert(bad_host->code == "ERR_CONTENT_BLOCKER_REQUEST");
-  auto off = Settle(Call(&incognito, "contentBlocker.setEnabled", R"({"enabled":false})"));
+  auto off = Settle(Call(profile.get(), "contentBlocker.setEnabled", R"({"enabled":false})", "incognito:w2@default"));
   assert(off->ok && !Bridge().auto_update);
   Advance(200);
   assert(Events().size() == 2 && !Events()[1].GetDict().Find("enabled")->GetBool());
@@ -390,6 +425,11 @@ int main() {
   ardia::StartLinuxSiteControls(ardia::ContentBlockerChanged([](Profile*, base::Value stats) { Events().push_back(std::move(stats)); }));
   Profile profile("/profiles/Default");
   Profile incognito("/profiles/Default", true, &profile);
+  Profile work("/profiles/Work");
+  Profile otr("/profiles/Default", true, &profile);
+  Registry()["default"] = &profile;
+  Registry()["work"] = &work;
+  Registry()["otr"] = &otr;
   SitePermissionsThroughTheService(profile, incognito);
   BrowsingDataThroughTheService(profile, incognito);
   MissingBlocker(scratch);

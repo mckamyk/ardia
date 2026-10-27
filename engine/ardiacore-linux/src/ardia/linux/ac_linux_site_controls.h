@@ -18,13 +18,13 @@ struct Failure {
   std::string message;
 };
 
-enum class WindowProfile { kRegular, kPrivate };
+enum class ProfileRoute { kApp, kRegistry };
 
 bool Handles(std::string_view name);
 bool IsContentBlockerCall(std::string_view name);
+std::vector<std::string_view> Capabilities();
 
-std::optional<Failure> ResolveProfile(std::string_view name, std::string_view requested,
-                                      WindowProfile window);
+std::variant<ProfileRoute, Failure> RouteProfile(std::string_view name, std::string_view requested);
 
 struct ServiceRequest {
   std::string service;

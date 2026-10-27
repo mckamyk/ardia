@@ -9,6 +9,8 @@
 #include <variant>
 #include <vector>
 
+#include "ardia/linux/ac_linux_profile_service.h"
+#include "ardia/linux/ac_linux_profiles.h"
 #include "ardia/linux/ac_linux_site_controls.h"
 #include "base/base_paths.h"
 #include "base/command_line.h"
@@ -80,17 +82,31 @@ ContentBlockerChanged& Changed() {
   return *changed;
 }
 
-Profile* SiteControlsProfile(Profile* window_profile, std::string_view name,
-                             std::string_view requested, std::optional<controls::Failure>* failure) {
-  if (!window_profile) {
-    *failure = controls::Failure{"ERR_PROFILE_UNAVAILABLE", "The window has no profile"};
-    return nullptr;
+using ProfileChosen = base::OnceCallback<void(Profile*, std::optional<controls::Failure>)>;
+
+void SiteControlsProfile(Profile* app_profile, std::string_view name, const std::string& requested,
+                         ProfileChosen chosen) {
+  if (!app_profile || app_profile->IsOffTheRecord()) {
+    return std::move(chosen).Run(nullptr, controls::Failure{"ERR_PROFILE_UNAVAILABLE", "The window has no regular profile"});
   }
-  *failure = controls::ResolveProfile(
-      name, requested,
-      window_profile->IsOffTheRecord() ? controls::WindowProfile::kPrivate : controls::WindowProfile::kRegular);
-  if (*failure) return nullptr;
-  return window_profile->GetOriginalProfile();
+  auto route = controls::RouteProfile(name, requested);
+  if (auto* failure = std::get_if<controls::Failure>(&route)) return std::move(chosen).Run(nullptr, *failure);
+  if (std::get<controls::ProfileRoute>(route) == controls::ProfileRoute::kApp) {
+    return std::move(chosen).Run(app_profile, std::nullopt);
+  }
+  ardiacore::ResolveLinuxProfile(requested, base::BindOnce(
+      [](ProfileChosen chosen, Profile* profile, ardiacore::linux_profiles::ProfileError error) {
+        using ardiacore::linux_profiles::ProfileError;
+        if (profile && profile->IsOffTheRecord()) error = ProfileError::kPrivateService;
+        if (!profile && error == ProfileError::kNone) error = ProfileError::kUnavailable;
+        if (error != ProfileError::kNone) {
+          return std::move(chosen).Run(nullptr, controls::Failure{
+              std::string(ardiacore::linux_profiles::ProfileErrorCode(error)),
+              std::string(ardiacore::linux_profiles::ProfileErrorMessage(error))});
+        }
+        std::move(chosen).Run(profile, std::nullopt);
+      },
+      std::move(chosen)));
 }
 
 struct ServiceReply {
@@ -448,29 +464,17 @@ std::optional<base::DictValue> ParseArgs(const base::Value* args, std::optional<
   return std::move(*parsed).TakeDict();
 }
 
-}
-
-bool LinuxSiteControlsHandles(std::string_view name) {
-  return controls::Handles(name);
-}
-
-void LinuxSiteControlsCall(Profile* window_profile, const std::string& name,
-                           const std::string& requested_profile, const base::Value* args,
-                           SiteControlsDone done) {
-  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-  std::optional<controls::Failure> failure;
-  Profile* profile = SiteControlsProfile(window_profile, name, requested_profile, &failure);
+void RunSiteControlsCall(const std::string& name, base::DictValue input, SiteControlsDone done,
+                         Profile* profile, std::optional<controls::Failure> failure) {
   if (!profile) return Fail(std::move(done), failure->code, failure->message);
-  std::optional<base::DictValue> input = ParseArgs(args, &failure);
-  if (!input) return Fail(std::move(done), failure->code, failure->message);
   if (controls::IsContentBlockerCall(name)) {
-    auto request = controls::PrepareBlockerCall(name, *input);
+    auto request = controls::PrepareBlockerCall(name, input);
     if (auto* invalid = std::get_if<controls::Failure>(&request))
       return Fail(std::move(done), invalid->code, invalid->message);
     return LinuxContentBlocker::For(profile)->Call(std::move(std::get<controls::BlockerRequest>(request)),
                                                    std::move(done));
   }
-  auto request = controls::PrepareServiceCall(name, *input);
+  auto request = controls::PrepareServiceCall(name, input);
   if (auto* invalid = std::get_if<controls::Failure>(&request))
     return Fail(std::move(done), invalid->code, invalid->message);
   auto& service = std::get<controls::ServiceRequest>(request);
@@ -479,6 +483,27 @@ void LinuxSiteControlsCall(Profile* window_profile, const std::string& name,
   const std::string path = profile->GetPath().value();
   ac_engine_call(service.service.c_str(), path.c_str(), json->c_str(), ServiceReplied,
                  new ServiceReply{name, std::move(done)});
+}
+
+}
+
+bool LinuxSiteControlsHandles(std::string_view name) {
+  return controls::Handles(name);
+}
+
+void AppendLinuxSiteControlsCapabilities(base::ListValue& capabilities) {
+  for (const std::string_view name : controls::Capabilities()) capabilities.Append(base::Value(name));
+}
+
+void LinuxSiteControlsCall(Profile* app_profile, const std::string& name,
+                           const std::string& requested_profile, const base::Value* args,
+                           SiteControlsDone done) {
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  std::optional<controls::Failure> failure;
+  std::optional<base::DictValue> input = ParseArgs(args, &failure);
+  if (!input) return Fail(std::move(done), failure->code, failure->message);
+  SiteControlsProfile(app_profile, name, requested_profile,
+                      base::BindOnce(&RunSiteControlsCall, name, std::move(*input), std::move(done)));
 }
 
 void StartLinuxSiteControls(ContentBlockerChanged changed) {

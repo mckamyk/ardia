@@ -49,7 +49,7 @@ class SiteControlsHelperTests(unittest.TestCase):
             (stubs / 'base/values.h').write_text(VALUES)
             output = compile_and_run(self, 'site-controls-service', [
                 LINUX / 'ac_linux_site_controls.cc', LINUX / 'ac_linux_site_controls_service.cc',
-                ROOT / 'tests/fixtures/site_controls_service_scenarios.cc',
+                LINUX / 'ac_linux_profiles.cc', ROOT / 'tests/fixtures/site_controls_service_scenarios.cc',
             ], extra_includes=[stubs, ROOT / 'tests/fixtures'])
         self.assertIn('site controls service scenarios passed', output)
 
@@ -61,11 +61,13 @@ class SiteControlsHelperTests(unittest.TestCase):
 
 
 class SiteControlsWiringTests(unittest.TestCase):
-    def test_site_calls_reach_the_helper_before_the_generic_profile_gate_and_route_table(self):
+    def test_site_calls_pass_the_profile_name_gate_then_reach_the_helper_before_the_route_table(self):
         request = body(HOST, '  void Request(const base::ListValue& arguments) {')
         intercept = request.index('if (LinuxSiteControlsHandles(name))')
-        self.assertLess(intercept, request.index('if (!DefaultProfileId(profile)'))
+        self.assertLess(request.index('ardiacore::linux_profiles::ParseProfileName(profile)'), intercept)
+        self.assertLess(request.index('if (name == "profiles.release")'), intercept)
         self.assertLess(intercept, request.index('ardiacore::linux_contract::FindRoute(name)'))
+        self.assertLess(intercept, request.index('ardiacore::ResolveLinuxProfile(profile'))
         self.assertIn('LinuxSiteControlsCall(host_->profile(), name, profile, args.Find("args")', request)
         contract = (LINUX / 'ac_linux_contract.h').read_text()
         for name in ['sites.settings', 'sites.setSetting', 'sites.origins', 'sites.reset', 'sites.clearData',
@@ -74,6 +76,7 @@ class SiteControlsWiringTests(unittest.TestCase):
 
     def test_blocker_starts_with_each_window_and_broadcasts_changes_to_its_profile(self):
         self.assertIn('StartLinuxContentBlocker(profile());', body(HOST, 'void ShellHostView::Initialize() {'))
+        self.assertIn('  AppendLinuxSiteControlsCapabilities(capabilities);\n  auto bootstrap = base::DictValue()', HOST)
         start = body(HOST, 'void StartLinuxHost() {')
         sink = start[start.index('StartLinuxSiteControls('):]
         self.assertIn('host->profile()->GetOriginalProfile() != profile', sink)
@@ -91,8 +94,10 @@ class SiteControlsWiringTests(unittest.TestCase):
         self.assertEqual(service.count('ISOLATED_WORLD_ID_CHROME_INTERNAL'), 2)
         self.assertNotIn('ExecuteJavaScript(', service.replace('ExecuteJavaScriptInIsolatedWorld(', ''))
         self.assertIn('if (!profile || profile->IsOffTheRecord()) return;', body(service, 'void StartLinuxContentBlocker(Profile* profile) {'))
-        resolve = body(service, 'Profile* SiteControlsProfile(')
-        self.assertIn('controls::ResolveProfile(', resolve)
+        resolve = body(service, 'void SiteControlsProfile(')
+        self.assertIn('controls::RouteProfile(', resolve)
+        self.assertIn('ardiacore::ResolveLinuxProfile(requested', resolve)
+        self.assertIn('IsOffTheRecord()) error = ProfileError::kPrivateService', resolve)
         self.assertEqual(service.count('SiteControlsProfile('), 2)
 
     def test_gn_lists_the_helper_and_its_extension_dependency(self):

@@ -148,15 +148,19 @@ bool Handles(std::string_view name) {
 
 bool IsContentBlockerCall(std::string_view name) { return Contains(kBlockerCalls, name); }
 
-std::optional<Failure> ResolveProfile(std::string_view name, std::string_view requested,
-                                      WindowProfile window) {
-  if (requested.starts_with("incognito:") || requested.find('@') != std::string_view::npos)
+std::vector<std::string_view> Capabilities() {
+  std::vector<std::string_view> names(std::begin(kServiceCalls), std::end(kServiceCalls));
+  for (const std::string_view name : kBlockerCalls) {
+    if (name != "contentBlocker.devDelayNextLoad") names.push_back(name);
+  }
+  return names;
+}
+
+std::variant<ProfileRoute, Failure> RouteProfile(std::string_view name, std::string_view requested) {
+  if (IsContentBlockerCall(name)) return ProfileRoute::kApp;
+  if (requested.starts_with("incognito:"))
     return Failure{"ERR_PROFILE_PRIVATE", "Private sessions keep no site settings or browsing data"};
-  if (!requested.empty() && requested != "default")
-    return Failure{"ERR_PROFILE_UNAVAILABLE", "Only the default profile is available on Linux"};
-  if (window == WindowProfile::kPrivate && !IsContentBlockerCall(name))
-    return Failure{"ERR_PROFILE_PRIVATE", "Private sessions keep no site settings or browsing data"};
-  return std::nullopt;
+  return ProfileRoute::kRegistry;
 }
 
 bool ValidOrigin(std::string_view origin) {
