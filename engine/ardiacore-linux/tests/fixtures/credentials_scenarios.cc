@@ -291,6 +291,8 @@ void StorageProtection() {
   assert(!DescribeStorage("auto", Protection::kNone).fallback);
   assert(DescribeStorage("auto", Protection::kUnknown).protection == "unknown");
   assert(!DescribeStorage("auto", Protection::kUnknown).fallback);
+  assert(DescribeStorage("auto", Protection::kUnknown).label == "an unknown key");
+  assert(DescribeStorage("gnome-libsecret", Protection::kUnknown).label.find("encrypt") == std::string::npos);
 
   Probe weak;
   weak.protection = Protection::kObfuscated;

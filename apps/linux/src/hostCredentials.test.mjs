@@ -226,6 +226,9 @@ test("status names the key provider and warns when a configured keyring silently
   assert.equal(credentialNoticeTitle({ ...keyring, addresses: { available: true }, cards: { available: false, message: "y" } }, "autofill"), "Some autofill data is unavailable");
   assert.match(credentialStorage({ ...keyring, protection: "none", storage: "no encryption key" }, "passwords"), /no encryption key is available/);
   assert.equal(credentialStorage({ ...keyring, protection: undefined, storage: undefined }, "passwords"), null);
+  const unknown = { ...keyring, protection: "unknown", storage: "an unknown key" };
+  assert.equal(credentialStorage(unknown, "passwords"), "Ardia couldn't check which key protects saved passwords, so whether they're encrypted is unknown.");
+  assert.equal(credentialStorage(unknown, "autofill"), "Ardia couldn't check which key protects card numbers, so whether they're encrypted is unknown.");
   for (const text of [credentialStorage(keyring, "passwords"), credentialStorage(keyring, "autofill"), credentialNotice(fallback, "passwords")]) {
     assert.doesNotMatch(text, /Mac|Keychain|Touch ID/);
   }

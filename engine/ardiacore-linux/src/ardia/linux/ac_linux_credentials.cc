@@ -508,7 +508,7 @@ Storage DescribeStorage(std::string_view backend, Protection protection) {
     case Protection::kUnknown:
       break;
   }
-  return {"unknown", false, "an unrecognised key provider"};
+  return {"unknown", false, "an unknown key"};
 }
 
 Availability Assess(Store store, const Probe& probe) {

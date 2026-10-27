@@ -184,6 +184,6 @@ export function credentialStorage(status: PasswordStatus | AutofillStatus | null
     case "none":
       return `${kind === "passwords" ? "Saved passwords" : "Card numbers"} can't be protected: no encryption key is available.`;
     default:
-      return `${lead} encrypted by Chromium with ${status.storage}. ${auth}`;
+      return `Ardia couldn't check which key protects ${kind === "passwords" ? "saved passwords" : "card numbers"}, so whether they're encrypted is unknown.`;
   }
 }
