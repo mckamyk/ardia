@@ -127,7 +127,7 @@ bool LinuxDialogController::Authorized(const LinuxDialogClient& client) const {
 
 bool LinuxDialogController::Admits(const LinuxDialogClient& client) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  return !suspension_ && Authorized(client);
+  return !suspended() && Authorized(client);
 }
 
 bool LinuxDialogController::Identify(const LinuxDialogClient& client,
@@ -163,7 +163,7 @@ bool LinuxDialogController::Begin(const LinuxDialogClient& client,
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   LinuxDialogSpec spec;
   if (!Authorized(client)) { *error = "Dialog requester is not current"; return false; }
-  if (suspension_) { *error = "Dialogs are suspended for this window"; return false; }
+  if (suspended()) { *error = "Dialogs are suspended for this window"; return false; }
   if (!completion || !Parse(request, window_id_, &spec)) { *error = "Invalid dialog request"; return false; }
   if (entries_.contains(spec.dialog_id)) { *error = "Dialog is already pending"; return false; }
   if (entries_.size() >= kMaxPending || sequence_ == std::numeric_limits<uint64_t>::max()) {
@@ -203,17 +203,20 @@ void LinuxDialogController::ParentDestroyed() {
 
 LinuxDialogSuspension LinuxDialogController::Suspend() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  const uint64_t token = NextSuspension();
-  suspension_ = token ? token : std::numeric_limits<uint64_t>::max();
+  uint64_t token = NextSuspension();
+  if (!token || suspensions_.size() >= kMaxSuspensions) {
+    suspensions_exhausted_ = true;
+    token = 0;
+  } else {
+    suspensions_.insert(token);
+  }
   CancelAll();
   return LinuxDialogSuspension(token);
 }
 
 bool LinuxDialogController::Resume(const LinuxDialogSuspension& suspension) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!suspension || suspension.value_ != suspension_) return false;
-  suspension_ = 0;
-  return true;
+  return suspension && suspensions_.erase(suspension.value_) == 1;
 }
 
 void LinuxDialogController::CancelAll() {
@@ -230,10 +233,10 @@ void LinuxDialogController::CancelAll() {
 
 void LinuxDialogController::Pump() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (pumping_ || active_sequence_ || suspension_ || generation_.empty() || !parent_alive_) return;
+  if (pumping_ || active_sequence_ || suspended() || generation_.empty() || !parent_alive_) return;
   pumping_ = true;
   auto weak = GetWeakPtr();
-  while (weak && !weak->entries_.empty() && !weak->active_sequence_ && !weak->suspension_ &&
+  while (weak && !weak->entries_.empty() && !weak->active_sequence_ && !weak->suspended() &&
          !weak->generation_.empty() && weak->parent_alive_) {
     auto next = std::min_element(weak->entries_.begin(), weak->entries_.end(),
         [](const auto& a, const auto& b) { return a.second.sequence < b.second.sequence; });
