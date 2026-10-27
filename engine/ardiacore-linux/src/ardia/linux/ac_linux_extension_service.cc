@@ -52,6 +52,7 @@
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
+#include "ui/shell_dialogs/select_file_policy.h"
 #include "ui/shell_dialogs/selected_file_info.h"
 
 namespace ardiacore {
@@ -323,6 +324,8 @@ class FolderChooser : public ui::SelectFileDialog::Listener {
   void FileSelectionCanceled() override { Finish(base::Value()); }
 
  private:
+  friend class base::DeleteHelper<FolderChooser>;
+
   explicit FolderChooser(Done done) : done_(std::move(done)) {}
   ~FolderChooser() override = default;
 
@@ -367,7 +370,7 @@ void ActionStates(const LinuxExtensionWindow& window, Profile* profile, const ba
   content::BrowserContext* context = contents->GetBrowserContext();
   const int tab_id = extensions::ExtensionTabUtil::GetTabId(contents);
   base::DictValue states;
-  for (const auto& id : input.FindList("ids")->GetList()) {
+  for (const auto& id : *input.FindList("ids")) {
     const extensions::Extension* extension = Enabled(context, id.GetString());
     extensions::ExtensionAction* action =
         extension ? extensions::ExtensionActionManager::Get(context)->GetExtensionAction(*extension) : nullptr;

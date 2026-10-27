@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 
 namespace ardiacore {
 namespace {

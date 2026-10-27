@@ -34,8 +34,8 @@ LinuxPageOptions& Options() {
 }
 
 LinuxLinkGestureGate& Gate() {
-  static base::NoDestructor<LinuxLinkGestureGate> gate;
-  return *gate;
+  static LinuxLinkGestureGate gate;
+  return gate;
 }
 
 std::set<LinuxPageChannel*>& Channels() {

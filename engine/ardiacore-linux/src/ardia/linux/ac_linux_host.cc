@@ -58,7 +58,6 @@
 #include "base/base_paths.h"
 #include "base/base64.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/command_line.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file.h"
@@ -1444,7 +1443,8 @@ class HostMessageHandler : public content::WebUIMessageHandler,
           const auto* command = input.FindDict("command");
           const auto command_id = input.FindInt("id");
           if (!command || !command_id) return Fail(id, "ERR_ENGINE", "A strip command and id are required");
-          values.Append(*command_id).Append(command->Clone());
+          values.Append(*command_id);
+          values.Append(command->Clone());
         }
         if (name == "webView.setAutoPictureInPicture") {
           const auto enabled = input.FindBool("enabled");
@@ -1827,7 +1827,7 @@ void ShellHostView::LayoutOverlay() {
   if (!browser_view_) return;
   SetBoundsRect(browser_view_->GetLocalBounds());
   shell_->SetBoundsRect(GetLocalBounds());
-  browser_view_->contents_web_view()->SetVisible(false);
+  browser_view_->GetActiveContentsWebView()->SetVisible(false);
 }
 
 void ShellHostView::OnViewIsDeleting(views::View*) {
@@ -2818,7 +2818,7 @@ TabBinding* ShellHostView::ClaimedBinding(const base::DictValue& args) {
   auto* binding = Binding(id);
   for (auto& [current, candidate] : bindings_) {
     if (binding || id <= 0) break;
-    if (base::Contains(candidate->replaced_ids, id)) binding = candidate.get();
+    if (std::ranges::find(candidate->replaced_ids, id) != candidate->replaced_ids.end()) binding = candidate.get();
   }
   return handler_ && binding && binding->contents() && binding->renderer_generation == renderer_generation_ && ardiacore::linux_contract::OwnsClaim(binding->claim, String(args, "claim")) ? binding : nullptr;
 }
@@ -3075,7 +3075,7 @@ void ShellHostView::LayoutPane(TabBinding* binding) {
                                              clip(binding->pane_input_shape, page_bounds));
   page->SetVisible(visible);
   if (visible) {
-    browser_view_->contents_web_view()->SetWebContents(nullptr);
+    browser_view_->GetActiveContentsWebView()->SetWebContents(nullptr);
     page->SetWebContents(contents);
     page->holder()->SetNativeViewCornerRadii(gfx::RoundedCornersF(12.0f));
   } else {
@@ -3225,8 +3225,8 @@ void ShellHostView::EngineEvent(std::string_view topic,
 
 void ShellHostView::ReattachViewports() {
   if (!browser_view_) return;
-  browser_view_->contents_web_view()->SetWebContents(nullptr);
-  browser_view_->contents_web_view()->SetVisible(false);
+  browser_view_->GetActiveContentsWebView()->SetWebContents(nullptr);
+  browser_view_->GetActiveContentsWebView()->SetVisible(false);
   for (auto& [id, binding] : bindings_) {
     if (binding->viewport() && binding->viewport()->GetVisible() &&
         binding->contents()) {
