@@ -40,6 +40,8 @@ source_set("linux") {
     "ac_linux_policy.h",
     "ac_linux_session.cc",
     "ac_linux_session.h",
+    "ac_linux_window_lifecycle.cc",
+    "ac_linux_window_lifecycle.h",
   ]
   sources += get_target_outputs(":bootstrap")
   deps = [
@@ -78,11 +80,13 @@ source_set("linux") {
     "//ui/aura",
     "//ui/color",
     "//ui/compositor",
+    "//ui/display",
     "//ui/base/clipboard",
     "//ui/gfx",
     "//ui/gfx/codec",
     "//ui/views",
     "//ui/native_theme",
+    "//ui/ozone",
     "//ui/views/controls/webview",
     "//ui/wm",
     "//url",
