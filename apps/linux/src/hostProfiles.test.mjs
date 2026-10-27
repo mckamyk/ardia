@@ -182,3 +182,59 @@ test("an isolated profile opens in its own native window while shared-data profi
     setSharedDataIds({});
   }
 });
+
+test("moving a tab to an isolated profile keeps the tab when that profile's window cannot open", quiet(async () => {
+  const { work } = regularSession();
+  installProfileWindows(useBrowser, () => {});
+  const tab = S().windows.main.tabIds[0];
+  useBrowser.setState((s) => ({ tabs: { ...s.tabs, [tab]: { ...s.tabs[tab], url: "https://keep.test/" } } }));
+  const host = fakeHost({ reject: "Chrome could not open this profile" });
+  const events = [];
+  const open = createHostWindowOpener(host, () => S(), (event) => {
+    events.push(event);
+    if (event.type === "close") S().closeWindow(event.id);
+  });
+  const before = new Set(S().windowOrder);
+  S().moveTabToProfile(tab, work);
+  const created = S().windowOrder.find((id) => !before.has(id));
+  assert.ok(created, "a window for the isolated profile is requested");
+  await open(created, { profile: work });
+  await tick();
+  assert.deepEqual(events, [{ type: "close", id: created }]);
+  assert.equal(S().windows[created], undefined);
+  assert.ok(S().tabs[tab], "the source tab survives a failed move");
+  assert.equal(S().tabs[tab].profileId, "default");
+  assert.equal(S().tabs[tab].url, "https://keep.test/");
+}));
+
+test("moving a tab to an isolated profile closes the source only after its window opens", quiet(async () => {
+  const { work } = regularSession();
+  installProfileWindows(useBrowser, () => {});
+  const tab = S().windows.main.tabIds[0];
+  useBrowser.setState((s) => ({ tabs: { ...s.tabs, [tab]: { ...s.tabs[tab], url: "https://move.test/" } } }));
+  const open = createHostWindowOpener(fakeHost(), () => S(), () => {});
+  const before = new Set(S().windowOrder);
+  S().moveTabToProfile(tab, work);
+  const created = S().windowOrder.find((id) => !before.has(id));
+  assert.ok(S().tabs[tab], "the source waits for the target window");
+  await open(created, { profile: work });
+  await tick();
+  assert.equal(S().tabs[tab], undefined);
+  assert.ok(Object.values(S().tabs).some((t) => t.windowId === created && t.profileId === work && t.url === "https://move.test/"));
+}));
+
+test("moving a tab to an isolated profile reuses that profile's open window", () => {
+  const { work } = regularSession();
+  const focused = [];
+  installProfileWindows(useBrowser, (id) => focused.push(id));
+  const workWindow = S().createWindow({ profileId: work, background: true });
+  const tab = S().windows.main.tabIds[0];
+  useBrowser.setState((s) => ({ tabs: { ...s.tabs, [tab]: { ...s.tabs[tab], url: "https://reuse.test/" } } }));
+  const windows = S().windowOrder.length;
+  S().moveTabToProfile(tab, work);
+  assert.equal(S().windowOrder.length, windows, "no new window");
+  assert.equal(S().tabs[tab], undefined);
+  const moved = S().windows[workWindow].tabIds.map((id) => S().tabs[id]).find((t) => t.url === "https://reuse.test/");
+  assert.ok(moved && moved.profileId === work);
+  assert.deepEqual(focused, [workWindow]);
+});

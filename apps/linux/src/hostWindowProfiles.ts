@@ -9,11 +9,37 @@ import { engineProfile, isIncognitoProfile } from "../../browser/src/state/brows
 export type PrivateWindowSeed = { window: BrowserWindow; tabs: Record<string, Tab> };
 type OpenOptions = Record<string, unknown> & { incognito?: boolean; profile?: string };
 type ProfileStore = {
-  getState(): Pick<BrowserState, "windows" | "tabs" | "profiles" | "windowOrder" | "ui" | "switchProfile" | "moveTabToProfile" | "createWindow" | "closeTabs">;
+  getState(): Pick<BrowserState, "windows" | "tabs" | "profiles" | "windowOrder" | "ui" | "switchProfile" | "moveTabToProfile" | "createWindow" | "closeTabs" | "newTab">;
   setState(patch: Partial<Pick<BrowserState, "switchProfile" | "moveTabToProfile">>): void;
 };
 
 const PRIVATE_SEED_LIMIT = 1024 * 1024;
+type Opening = { promise: Promise<boolean>; resolve: (opened: boolean) => void; settled: boolean };
+const openings = new Map<string, Opening>();
+
+function openingOf(id: string) {
+  let entry = openings.get(id);
+  if (!entry) {
+    let resolve: (opened: boolean) => void = () => {};
+    const promise = new Promise<boolean>((done) => { resolve = done; });
+    entry = { promise, resolve, settled: false };
+    openings.set(id, entry);
+  }
+  return entry;
+}
+
+function settleOpening(id: string, opened: boolean) {
+  if (openings.get(id)?.settled) openings.delete(id);
+  const entry = openingOf(id);
+  entry.settled = true;
+  entry.resolve(opened);
+}
+
+export function windowOpened(id: string): Promise<boolean> {
+  const entry = openingOf(id);
+  if (entry.settled) openings.delete(id);
+  return entry.promise;
+}
 
 export function privateWindowSeed(state: Pick<BrowserState, "windows" | "tabs">, id: string): PrivateWindowSeed | undefined {
   const w = state.windows[id];
@@ -34,8 +60,10 @@ export function createHostWindowOpener(host: ArdiaHost, state: () => Pick<Browse
     try {
       if (options.incognito && !seed) throw Object.assign(new Error("The private window has no state to open"), { code: "ERR_PROFILE_INVALID" });
       await invokeHost("ArdiaShell.openWindow", { args: [id, seed ? { ...options, privateWindow: seed } : options] }, host);
+      settleOpening(id, true);
     } catch (error) {
       reportHostError(error);
+      settleOpening(id, false);
       if (state().windows[id]) emit({ type: "close", id });
     }
   };
@@ -68,7 +96,7 @@ export function profileWindowFor(s: Pick<BrowserState, "windows" | "windowOrder"
   return [...s.ui.focusOrder, ...s.windowOrder].find((id) => hostsOtherWindows(s.windows[id]) && engineProfile(s.windows[id]!.profileId) === engine);
 }
 
-export function installProfileWindows(store: ProfileStore, focus: (windowId: string) => void) {
+export function installProfileWindows(store: ProfileStore, focus: (windowId: string) => void, opened: (windowId: string) => Promise<boolean> = windowOpened) {
   const { switchProfile, moveTabToProfile } = store.getState();
   const crossesEngine = (windowProfile: string, profileId: string) => engineProfile(windowProfile) !== engineProfile(profileId);
   store.setState({
@@ -89,8 +117,18 @@ export function installProfileWindows(store: ProfileStore, focus: (windowId: str
       const tab = s.tabs[tabId];
       const w = tab && s.windows[tab.windowId];
       if (!tab || !hostsOtherWindows(w) || !s.profiles[profileId] || !crossesEngine(w!.profileId, profileId)) return moveTabToProfile(tabId, profileId);
-      s.createWindow({ profileId, ...(tab.url ? { url: tab.url } : {}) });
-      store.getState().closeTabs([tabId]);
+      const url = tab.url ? { url: tab.url } : {};
+      const target = profileWindowFor(s, profileId);
+      if (target) {
+        s.newTab(target, { profileId, ...url });
+        store.getState().closeTabs([tabId]);
+        focus(target);
+        return;
+      }
+      const created = s.createWindow({ profileId, ...url });
+      void opened(created).then((ok) => {
+        if (ok && store.getState().tabs[tabId]) store.getState().closeTabs([tabId]);
+      });
     },
   });
 }
