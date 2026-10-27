@@ -119,6 +119,48 @@ void Snapshots() {
   assert(*(*filtered)[1].GetDict().FindString("id") == c);
   assert(!FilterSnapshot(base::Value("x")));
   assert(!FilterSnapshot(base::Value(Dict({{"downloads", base::Value(7)}}))));
+  base::ListValue mixed;
+  mixed.Append(Entry(a, std::nullopt));
+  mixed.Append(Entry(b, true));
+  mixed.Append(Entry(c, false));
+  base::DictValue mixed_reply;
+  mixed_reply.Set("downloads", base::Value(std::move(mixed)));
+  const base::Value both(std::move(mixed_reply));
+  const auto regular = FilterSnapshot(both, false);
+  assert(regular && regular->size() == 2);
+  const auto off_the_record = FilterSnapshot(both, true);
+  assert(off_the_record && off_the_record->size() == 1 && *(*off_the_record)[0].GetDict().FindString("id") == b);
+}
+
+void Routes() {
+  using ardiacore::linux_profiles::ProfileError;
+  using ardiacore::linux_profiles::ProfileKind;
+  auto route = [](ProfileKind kind, bool page_private, bool ending, bool hosts) {
+    return RouteDownloads(kind, page_private, ending, hosts);
+  };
+  auto regular = route(ProfileKind::kDefault, false, false, false);
+  assert(regular.error == ProfileError::kNone && !regular.off_the_record);
+  auto isolated = route(ProfileKind::kIsolated, false, false, true);
+  assert(isolated.error == ProfileError::kNone && !isolated.off_the_record);
+  assert(route(ProfileKind::kIsolated, false, false, false).error == ProfileError::kWindowMismatch);
+  assert(route(ProfileKind::kIsolated, true, false, false).error == ProfileError::kWindowMismatch);
+  auto own_private = route(ProfileKind::kPrivate, true, false, true);
+  assert(own_private.error == ProfileError::kNone && own_private.off_the_record);
+  auto this_private_window = route(ProfileKind::kDefault, true, false, false);
+  assert(this_private_window.error == ProfileError::kNone && this_private_window.off_the_record);
+  assert(route(ProfileKind::kPrivate, false, false, false).error == ProfileError::kWindowMismatch);
+  assert(route(ProfileKind::kPrivate, false, false, true).error == ProfileError::kWindowMismatch);
+  assert(route(ProfileKind::kPrivate, true, false, false).error == ProfileError::kWindowMismatch);
+  assert(route(ProfileKind::kPrivate, true, true, true).error == ProfileError::kPrivateEnding);
+  assert(route(ProfileKind::kDefault, true, true, false).error == ProfileError::kPrivateEnding);
+  assert(IsDownloadControl("downloads.cancel") && IsDownloadControl("downloads.pause") &&
+         IsDownloadControl("downloads.resume") && IsDownloadControl("downloads.keep"));
+  assert(!IsDownloadControl("downloads.list") && !IsDownloadControl("downloads.settings") && !IsDownloadControl("downloads.remove"));
+  assert(DownloadControlService("downloads.cancel") == "ac_downloads_cancel");
+  assert(DownloadControlService("downloads.pause") == "ac_downloads_pause");
+  assert(DownloadControlService("downloads.resume") == "ac_downloads_resume");
+  assert(DownloadControlService("downloads.keep") == "ac_downloads_keep");
+  assert(DownloadControlService("downloads.remove").empty() && DownloadControlService("history.query").empty());
 }
 
 void Clears() {
@@ -286,6 +328,7 @@ int main(int argc, char** argv) {
   Requests();
   Reveal();
   Snapshots();
+  Routes();
   Clears();
   FileGates();
   Trash(argv[1]);

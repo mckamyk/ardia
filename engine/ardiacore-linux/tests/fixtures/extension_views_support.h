@@ -10,6 +10,7 @@
 #include <optional>
 #include <ostream>
 #include <sstream>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -359,8 +360,19 @@ class WebContentsObserver {
 class Profile : public content::BrowserContext {
  public:
   bool IsOffTheRecord() const { return off_the_record; }
+  bool ShutdownStarted() const { return shutdown_started; }
+  Profile* GetOriginalProfile() { return original ? original : this; }
+  Profile* original = nullptr;
   bool off_the_record = false;
+  bool shutdown_started = false;
+  std::set<std::string> incognito_enabled;
 };
+
+namespace extensions::util {
+inline bool IsIncognitoEnabled(const std::string& id, const Profile* profile) {
+  return profile->incognito_enabled.contains(id);
+}
+}
 
 class BrowserWindowInterface {};
 

@@ -21,6 +21,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "extensions/browser/extension_host_registry.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/common/extension.h"
 #include "ui/gfx/geometry/rect.h"
@@ -235,12 +236,15 @@ void LinuxExtensionSurfaces::Create(const base::DictValue& args, Profile* profil
   Profile* owner = browser_ ? LinuxExtensionViewProfile(profile, *args.FindString("profile"), &code) : nullptr;
   if (!owner) {
     return Fail(std::move(done), code.empty() ? "ERR_WINDOW_CLOSED" : code,
-                code == "ERR_PROFILE_PRIVATE" ? "Extension views are unavailable in private windows"
-                                              : "Extension views need this window's own profile");
+                code == "ERR_PROFILE_ENDING" ? "This private session is closing"
+                                             : "Extension views need this window's own profile");
   }
   const extensions::Extension* extension =
       extensions::ExtensionRegistry::Get(owner)->enabled_extensions().GetByID(request.extension_id);
   if (!extension) return Fail(std::move(done), "ERR_EXTENSION_UNAVAILABLE", "The extension is not enabled");
+  if (owner->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(extension->id(), owner)) {
+    return Fail(std::move(done), "ERR_EXTENSION_PRIVATE", "This extension is not allowed in private windows");
+  }
   const GURL url(request.url);
   if (!url.is_valid()) return Fail(std::move(done), "ERR_EXTENSION_VIEW_REQUEST", "Invalid extension view URL");
   const auto id = book_.Open(request.kind, request.extension_id, generation);

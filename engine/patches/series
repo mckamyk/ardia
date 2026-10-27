@@ -74,6 +74,7 @@ chromium chromium-auto-pip-global-switch.patch
 chromium chromium-linux-auto-pip.patch linux
 chromium chromium-linux-pip-placement.patch linux
 chromium chromium-linux-page-status.patch linux
+chromium chromium-linux-private-links.patch linux
 chromium chromium-media-session-main-frame-handler.patch
 chromium chromium-battery-saver-full-rate-on-input.patch
 chromium chromium-angle-metal-shader-cache.patch mac

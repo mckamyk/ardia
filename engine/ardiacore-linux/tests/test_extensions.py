@@ -78,13 +78,14 @@ class ExtensionSurfaceTests(unittest.TestCase):
                 'content/public/browser/render_widget_host_view.h', 'content/public/browser/web_contents.h',
                 'content/public/browser/web_contents_observer.h', 'extensions/browser/extension_host_registry.h',
                 'extensions/browser/extension_registry.h', 'extensions/browser/extension_registry_observer.h',
+                'extensions/browser/extension_util.h',
                 'extensions/common/extension.h', 'ui/gfx/geometry/rect.h', 'ui/gfx/geometry/rect_conversions.h',
                 'ui/gfx/geometry/rect_f.h', 'ui/gfx/geometry/size.h', 'ui/gfx/native_ui_types.h',
                 'ui/views/controls/webview/webview.h', 'ui/views/view.h', 'url/gurl.h',
             ], 'extension_views_support.h')
             resolver = root / 'profile.cc'
             resolver.write_text('#include "extension_views_support.h"\n#include "ardia/linux/ac_linux_extension_service.h"\n'
-                                'namespace ardiacore {\nbool LinuxProfileHosts(std::string_view id, const Profile*) { return id.empty() || id == "default"; }\n}\n'
+                                'namespace ardiacore {\nbool LinuxProfileHosts(std::string_view id, const Profile* profile) { return profile->IsOffTheRecord() ? id == "incognito:w1@" : id.empty() || id == "default"; }\n}\n'
                                 'namespace ardia {\n' + profile + '\n}\n')
             output = compile_and_run(self, 'extension-views', [
                 LINUX / 'ac_linux_extension_views.cc', LINUX / 'ac_linux_extensions.cc', resolver,
@@ -181,18 +182,27 @@ namespace base {
 template <class F> F BindRepeating(F fn) { return fn; }
 }
 int main() {
-  Profile regular, isolated;
-  FakeHost a, b, c;
+  Profile regular, isolated, regular_private, isolated_private;
+  regular_private.off_the_record = true;
+  regular_private.original = &regular;
+  isolated_private.off_the_record = true;
+  isolated_private.original = &isolated;
+  FakeHost a, b, c, d, e, closed;
   a.page = &regular;
   b.page = &isolated;
   c.page = &regular;
-  Hosts() = {{1, &a}, {2, &b}, {3, &c}};
+  d.page = &regular_private;
+  e.page = &isolated_private;
+  Hosts() = {{1, &a}, {2, &b}, {3, &c}, {4, &d}, {5, &e}, {6, &closed}};
   struct { base::RepeatingCallback<void(Profile*, std::string_view, base::DictValue)> broadcast; } extensions;
 ARDIA_LAMBDA
   extensions.broadcast.Run(&isolated, "extensions.changed", base::DictValue().Set("id", "x"));
-  assert(a.seen.empty() && c.seen.empty() && b.seen.size() == 1 && b.seen[0] == "extensions.changed:x");
+  assert(a.seen.empty() && c.seen.empty() && d.seen.empty() && b.seen.size() == 1 && b.seen[0] == "extensions.changed:x");
+  assert(e.seen.size() == 1 && e.seen[0] == "extensions.changed:x");
   extensions.broadcast.Run(&regular, "extensions.changed", base::DictValue().Set("id", "y"));
-  assert(a.seen.size() == 1 && c.seen.size() == 1 && b.seen.size() == 1);
+  assert(a.seen.size() == 1 && c.seen.size() == 1 && b.seen.size() == 1 && d.seen.size() == 1 && e.seen.size() == 1);
+  extensions.broadcast.Run(&regular_private, "extensions.changed", base::DictValue().Set("id", "z"));
+  assert(a.seen.size() == 1 && d.seen.size() == 1 && closed.seen.empty());
   std::printf("broadcast scenarios passed\n");
 }
 '''

@@ -187,12 +187,14 @@ class Profile {
     Path BaseName() const { return *this; }
     const std::string& value() const { return name; }
   };
-  bool IsRegularProfile() const { return regular; }
+  bool IsRegularProfile() const { return regular && !otr; }
   bool IsOffTheRecord() const { return otr; }
+  bool IsIncognitoProfile() const { return otr && primary_otr; }
   Path GetPath() const { return path; }
   PrefService* GetPrefs() { return prefs_available ? &prefs : nullptr; }
   bool regular = true;
   bool otr = false;
+  bool primary_otr = true;
   bool prefs_available = true;
   Path path;
   PrefService prefs;

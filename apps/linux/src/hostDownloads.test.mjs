@@ -217,3 +217,37 @@ test("a failed snapshot is reported and leaves live entries alone; stop restores
     console.error = original;
   }
 });
+
+test("a private window lists only its own off-the-record downloads, labelled with their original profile", async () => {
+  const f = fixture([download(3, { offTheRecord: true }), download(2, { offTheRecord: false }), download(1, { offTheRecord: true })]);
+  f.host.bootstrap = { ...f.host.bootstrap, windowId: "p1", pageProfile: "incognito:p1@" };
+  const running = startHostDownloads(f.host, f.store);
+  await running.ready;
+  assert.deepEqual(f.calls, [{ name: "downloads.list", profile: "default", args: {} }]);
+  assert.deepEqual(f.state.downloads.map((d) => [d.id, d.profile, d.offTheRecord]), [[ID(3), "", true], [ID(1), "", true]]);
+  running.stop();
+});
+
+test("a private window of an isolated profile labels its downloads with that profile's private session", async () => {
+  const f = fixture([download(4, { offTheRecord: true })]);
+  f.host.bootstrap = { ...f.host.bootstrap, windowId: "p2", pageProfile: "incognito:p2@work" };
+  const running = startHostDownloads(f.host, f.store);
+  await running.ready;
+  assert.deepEqual(f.state.downloads.map((d) => [d.id, d.profile, d.offTheRecord]), [[ID(4), "work", true]]);
+  running.stop();
+});
+
+test("a regular window never lists off-the-record downloads", async () => {
+  const f = fixture([download(3, { offTheRecord: true }), download(2, { offTheRecord: false })]);
+  const running = startHostDownloads(f.host, f.store);
+  await running.ready;
+  assert.deepEqual(f.state.downloads.map((d) => d.id), [ID(2)]);
+  running.stop();
+});
+
+test("off-the-record snapshot entries are accepted only when asked for", () => {
+  assert.equal(snapshotDownload({ ...download(1), offTheRecord: true }), null);
+  assert.deepEqual(snapshotDownload({ ...download(1), offTheRecord: true }, true), { ...download(1), offTheRecord: true, profile: "" });
+  assert.equal(snapshotDownload(download(1), true), null);
+  assert.equal(snapshotDownload({ ...download(1), offTheRecord: false }, true), null);
+});

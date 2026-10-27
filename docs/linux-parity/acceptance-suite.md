@@ -1,6 +1,6 @@
 # Linux native acceptance suite (#81)
 
-One command runs the runtime acceptance scenarios for #11, #12, #13, #16, #17, #18, #19, #20, #22, #25, #27, #28, #30, #32, #33, #34, #36, #37, #78, #102, #104, #105, #106, #107 and #108 against a packaged Linux Ardia build. It runs headless, uses throwaway profiles, and prints the result for each issue as JSON. An issue can be closed with evidence once its result is `pass`. A `manual` result means every automated check passed and the steps that need a person are listed.
+One command runs the runtime acceptance scenarios for #11, #12, #13, #16, #17, #18, #19, #20, #22, #25, #27, #28, #30, #32, #33, #34, #36, #37, #78, #102, #104, #105, #106, #107, #108 and the private-window follow-ups #71, #72, #73, #88, #89, #99 and #101 against a packaged Linux Ardia build. It runs headless, uses throwaway profiles, and prints the result for each issue as JSON. An issue can be closed with evidence once its result is `pass`. A `manual` result means every automated check passed and the steps that need a person are listed.
 
 ## Running it
 
@@ -116,6 +116,13 @@ Local fixtures:
 | S108 | #108 | An isolated profile's window blocks the fixture ad; a site exception set from the default window lets it through there while other sites stay blocked; a call from the isolated window removes the exception from the default profile's settings and blocking returns | The site panel in an isolated window |
 
 S106, S107 and S108 need `ARDIA_ACCEPTANCE_CONTENT_BLOCKER` (or a package built with `--content-blocker`). S105's installer check needs the suite to run against an extracted package, where `install.sh` sits beside `bin/` and `lib/`.
+| F02-88 | #88 | A private window's `sites.setSetting` and `sites.setZoom` show in its own `sites.settings`/`sites.zoomLevels` and never in the regular profile's (nor in `sites.origins`); `history.query` and `profiles.clearBrowsingData` from it are `ERR_PROFILE_PRIVATE`; a regular window naming the private session gets `ERR_PROFILE_WINDOW`; a new private session after the last window closed has none of it | — (a call during OTR shutdown is covered by the fixtures) |
+| F02-72 | #72 | A private download reaches only the private renderer, flagged `offTheRecord`, and its `downloads.list`; regular renderers never receive it and cannot remove or pause it; a slow private download pauses, resumes and cancels from its window; after the window closes and after a restart nothing lists it | The private window's Downloads popover |
+| F02-71 | #71 | (the browser starts) | Open Link in Incognito Window from a regular and an isolated window opens an Ardia private window, never a plain Chrome window |
+| F02-89 | #89 | A second regular window's `ArdiaShell.privateWindows` lists the private window as a bare id while `windowIds` keeps hiding it; `focusWindow` from that window succeeds; close, frame, title and minimise from it are refused and the window stays; the entry goes once it closes | The Window menu entry (Linux has no Window menu yet) |
+| F02-101 | #101 | Find counts matches in an isolated profile's window and in a private window (background instance); DevTools opens a frontend for a private window's page (native instance) | Print preview and Save Page in isolated and private windows |
+| F02-73 | #73 | Turning automatic PiP off writes `BLOCK` (2) into the default profile's and a later-loaded isolated profile's `Preferences`; turning it on writes `ALLOW` (1) into both | — |
+| F02-99 | #99 | With a split-mode fixture: without incognito access the private window gets no action state and `extensionView.create` is `ERR_EXTENSION_PRIVATE`; after `extensions.configure` grants it, the private renderer learns it, gets action state and opens the popup; `extensions.setEnabled` from the private window is `ERR_PROFILE_PRIVATE` | Toolbar, popup and side panel by hand; spanning-mode extensions stay hidden (shared toolbar rule) |
 
 ## Manual steps
 
@@ -230,6 +237,14 @@ The JSON lists each manual item with these steps. They are kept here so they can
 - **Battery.** On a laptop with UPower, set Battery Saver to When unplugged. Unplugging reports `onBattery` and shows the Battery Saver toast; plugging in turns it off.
 - **Power profile.** Switching power-profiles-daemon to power-saver turns `lowPowerMode` on within 30 s and Battery Saver activates.
 - **Memory pressure.** With MemAvailable under 10% of RAM, `memoryPressure` reports `warning` (under 5%, `critical`) and idle background tabs sleep on the next sweep.
+
+**#71, #72, #89, #99 and #101 (private-window follow-ups)**
+
+- **#71 Open link in incognito.** In a regular window, right-click a link and choose Open Link in Incognito Window. An Ardia private window opens on that URL and no plain Chrome window appears. From an isolated profile's window, the private window belongs to that profile.
+- **#72 Downloads popover.** Download a file in a private window: Ctrl+J there lists it, Ctrl+J in a regular window doesn't, and closing every private window leaves the regular list without it.
+- **#89 Window menu.** Linux has no Window menu yet. Once it has one, the second window lists the private window as "Private Window" and choosing it brings that window forward.
+- **#99 Extensions.** Allow a split-mode extension in incognito: its button shows in a private window and its popup and side panel open there. A spanning-mode extension stays hidden until the shared toolbar shows spanning extensions.
+- **#101 Print and Save Page.** In an isolated profile's window and in a private window, Ctrl+P opens the print preview for that page and Ctrl+S opens the save dialog and writes the page.
 
 ## Notes for the first real run
 

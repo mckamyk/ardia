@@ -38,6 +38,7 @@ bool ValidExtensionId(std::string_view id);
 bool ValidFolderPath(std::string_view path);
 bool LinuxHandles(std::string_view name);
 bool UsesWindowProfile(std::string_view name);
+bool ServesPrivateWindow(std::string_view name);
 std::string ValidateRequest(std::string_view name, const base::DictValue& input);
 std::optional<base::DictValue> Configuration(const base::DictValue& input);
 

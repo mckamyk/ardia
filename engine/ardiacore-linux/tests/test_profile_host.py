@@ -119,7 +119,7 @@ int main() {
         request = method(self.source, '  if (method == "ArdiaShell.requestWindowClose") {')
         self.assertIn('!Reaches(target)) continue;', request)
         operations = method(self.source, '  if (method == "ArdiaShell.windowFrame" || method == "ArdiaShell.closeWindow"')
-        self.assertIn('if (host->window_id() == ArgumentString(values, 0) && Reaches(host)) target = host;', operations)
+        self.assertIn('(method == "ArdiaShell.focusWindow" ? FocusReaches(host) : Reaches(host))) target = host;', operations)
         open_window = method(self.source, '  if (method == "ArdiaShell.openWindow") {')
         self.assertIn('if (!Reaches(host)) return std::move(done).Run(false, base::Value("No such native window"));', open_window)
         self.assertIn('request.opener_host != id_ || request.opener_generation != renderer_generation_', open_window)
@@ -130,24 +130,20 @@ int main() {
         opening = method(self.source, 'void OpenNativeWindow(')
         self.assertIn('FinishWindowOpening(id, generation, true, base::Value(base::DictValue().Set("pending", true)));', opening)
 
-    def test_downloads_and_files_use_the_window_page_profile_and_refuse_private_windows(self):
+    def test_downloads_and_files_use_the_window_page_profile(self):
         request = method(self.source, '  void Request(const base::ListValue& arguments) {')
-        downloads = request[request.index('if (LinuxDownloadsHandles(name)) {'):]
+        downloads = request[request.index('if (LinuxDownloadsHandles(name) || linux_downloads::IsDownloadControl(name)) {'):]
         downloads = downloads[:downloads.index('return LinuxDownloadsCall(')]
         self.assertIn('Profile* page = host_->page_profile();', downloads)
-        self.assertIn('page->IsOffTheRecord()', downloads)
-        self.assertIn('ProfileError::kPrivateService', downloads)
-        self.assertIn('!host_->HostsProfile(profile)', downloads)
+        self.assertIn('host_->HostsProfile(profile)', downloads)
         self.assertIn('return LinuxDownloadsCall(page, name, input,', request)
         self.assertNotIn('LinuxDownloadsCall(host_->profile()', request)
         invoke = method(self.source, 'void ShellHostView::Invoke(')
         files = invoke[invoke.index('if (LinuxFilesHandles(method)) {'):]
         files = files[:files.index('\n  }\n') + 4]
-        self.assertIn('page_profile()->IsOffTheRecord()', files)
-        self.assertIn('ProfileError::kPrivateService', files)
         self.assertIn('LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done))', files)
 
-    def test_site_zoom_uses_the_window_page_profile_and_refuses_private_windows(self):
+    def test_site_zoom_uses_the_window_page_profile_and_routes_private_sessions_off_the_record(self):
         request = method(self.source, '  void Request(const base::ListValue& arguments) {')
         zoom = request[request.index('if (ardiacore::IsLinuxZoomDomainRoute(name)) {'):]
         zoom = zoom[:zoom.index('\n      }\n') + 8]
@@ -156,7 +152,7 @@ int main() {
         self.assertIn('ProfileError::kPrivateService', zoom)
         self.assertIn('!host_->HostsProfile(profile)', zoom)
         self.assertIn('ProfileError::kWindowMismatch', zoom)
-        self.assertIn('const std::string path = page->GetPath().value();', zoom)
+        self.assertIn('const std::string path = (private_session ? page->GetOriginalProfile() : page)->GetPath().value();', zoom)
         self.assertNotIn('host_->profile()', zoom)
 
     def test_window_openings_are_profile_bound_and_bounded(self):
