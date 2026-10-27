@@ -64,7 +64,7 @@ export function credentialWording(): Plugin {
     transform(code, id) {
       const reworded = rewordCredentials(id, code);
       if (reworded === null) return null;
-      applied.add(id.slice(id.indexOf(marker) + marker.length).split("?")[0]);
+      applied.add(id.slice(id.indexOf(marker) + marker.length).split("?")[0] ?? "");
       return { code: reworded, map: null };
     },
     buildEnd(error) {
