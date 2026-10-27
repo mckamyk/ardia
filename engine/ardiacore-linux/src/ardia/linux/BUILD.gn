@@ -228,6 +228,7 @@ source_set("linux") {
     "//components/autofill/core/common",
     "//components/blocked_content",
     "//components/content_settings/core/browser",
+    "//components/dbus",
     "//components/download/public/common",
     "//components/find_in_page",
     "//components/image_fetcher/core",

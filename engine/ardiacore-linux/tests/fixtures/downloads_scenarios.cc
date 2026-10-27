@@ -2,6 +2,7 @@
 #include <unistd.h>
 
 #include <cassert>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -217,10 +218,13 @@ void FileGates() {
 }
 
 void Reveal() {
-  assert(ChooseRevealBackend(true, true) == RevealBackend::kDesktop);
-  assert(ChooseRevealBackend(true, false) == RevealBackend::kDesktop);
-  assert(ChooseRevealBackend(false, true) == RevealBackend::kDesktop);
-  assert(ChooseRevealBackend(false, false) == RevealBackend::kUnavailable);
+  assert(ChooseRevealBackend({.portal = true, .file_manager = true, .xdg_open = true}) == RevealBackend::kPortal);
+  assert(ChooseRevealBackend({.portal = true}) == RevealBackend::kPortal);
+  assert(ChooseRevealBackend({.file_manager = true}) == RevealBackend::kFileManager);
+  assert(ChooseRevealBackend({.xdg_open = true, .folder_handler = true}) == RevealBackend::kOpenFolder);
+  assert(ChooseRevealBackend({.xdg_open = true, .folder_handler = false}) == RevealBackend::kUnavailable);
+  assert(ChooseRevealBackend({.folder_handler = true}) == RevealBackend::kUnavailable);
+  assert(ChooseRevealBackend({}) == RevealBackend::kUnavailable);
 }
 
 void Trash(const std::string& scratch) {
@@ -274,6 +278,127 @@ void Trash(const std::string& scratch) {
   Touch(blocked);
   assert(MoveToTrash(downloads + "/elsewhere", blocked + "/Trash", when).code == "ERR_TRASH_UNAVAILABLE");
   assert(Exists(downloads + "/elsewhere"));
+}
+
+void VolumeTrash(const std::string& scratch) {
+  const std::time_t when = 1700000000;
+  const uid_t uid = getuid();
+  const std::string user = std::to_string(uid);
+
+  const std::string shared = scratch + "/shared";
+  mkdir(shared.c_str(), 0755);
+  mkdir((shared + "/.Trash").c_str(), 0777);
+  chmod((shared + "/.Trash").c_str(), 01777);
+  mkdir((shared + "/media").c_str(), 0700);
+  Touch(shared + "/media/clip.mp4", "clip");
+  auto sticky = MoveToTopdirTrash(shared + "/media/clip.mp4", shared, uid, when);
+  assert(sticky.ok);
+  assert(sticky.trashed == shared + "/.Trash/" + user + "/files/clip.mp4");
+  assert(Read(shared + "/.Trash/" + user + "/info/clip.mp4.trashinfo") ==
+         "[Trash Info]\nPath=media/clip.mp4\nDeletionDate=2023-11-14T22:13:20\n");
+  struct stat own;
+  assert(lstat((shared + "/.Trash/" + user).c_str(), &own) == 0 && (own.st_mode & 0777) == 0700);
+
+  const std::string loose = scratch + "/loose";
+  mkdir(loose.c_str(), 0755);
+  mkdir((loose + "/.Trash").c_str(), 0777);
+  chmod((loose + "/.Trash").c_str(), 0777);
+  Touch(loose + "/notes.txt", "notes");
+  auto fallback = MoveToTopdirTrash(loose + "/notes.txt", loose, uid, when);
+  assert(fallback.ok);
+  assert(fallback.trashed == loose + "/.Trash-" + user + "/files/notes.txt");
+  assert(!Exists(loose + "/.Trash/" + user));
+  assert(Read(loose + "/.Trash-" + user + "/info/notes.txt.trashinfo").find("Path=notes.txt\n") != std::string::npos);
+
+  const std::string linked = scratch + "/linked";
+  const std::string elsewhere = scratch + "/elsewhere-trash";
+  mkdir(linked.c_str(), 0755);
+  mkdir(elsewhere.c_str(), 0777);
+  chmod(elsewhere.c_str(), 01777);
+  assert(symlink(elsewhere.c_str(), (linked + "/.Trash").c_str()) == 0);
+  assert(symlink(elsewhere.c_str(), (linked + "/.Trash-" + user).c_str()) == 0);
+  Touch(linked + "/a.bin", "a");
+  auto refused = MoveToTopdirTrash(linked + "/a.bin", linked, uid, when);
+  assert(!refused.ok && refused.code == "ERR_TRASH_UNAVAILABLE");
+  assert(Exists(linked + "/a.bin"));
+  assert(!Exists(elsewhere + "/" + user));
+  assert(!Exists(elsewhere + "/files"));
+
+  const std::string planted = scratch + "/planted";
+  mkdir(planted.c_str(), 0755);
+  mkdir((planted + "/.Trash-" + user).c_str(), 0700);
+  assert(symlink(elsewhere.c_str(), (planted + "/.Trash-" + user + "/files").c_str()) == 0);
+  Touch(planted + "/b.bin", "b");
+  auto redirected = MoveToTopdirTrash(planted + "/b.bin", planted, uid, when);
+  assert(!redirected.ok && redirected.code == "ERR_TRASH_UNAVAILABLE");
+  assert(Exists(planted + "/b.bin"));
+
+  const std::string alias = scratch + "/alias";
+  assert(symlink(shared.c_str(), alias.c_str()) == 0);
+  char real_shared[PATH_MAX];
+  assert(realpath(shared.c_str(), real_shared));
+  assert(ResolvedFile(alias + "/media/x.bin") == std::string(real_shared) + "/media/x.bin");
+  assert(ResolvedFile("relative/x").empty());
+  assert(ResolvedFile(scratch + "/missing-dir/x").empty());
+  Touch(shared + "/media/aliased.mp4", "aliased");
+  auto via_alias = MoveToTopdirTrash(ResolvedFile(alias + "/media/aliased.mp4"), real_shared, uid, when);
+  assert(via_alias.ok);
+  assert(Read(std::string(real_shared) + "/.Trash/" + user + "/info/aliased.mp4.trashinfo").find("Path=media/aliased.mp4\n") != std::string::npos);
+
+  Touch(scratch + "/root-file", "r");
+  assert(MoveToTopdirTrash(scratch + "/root-file", scratch + "/shared", uid, when).code == "ERR_FILE_PATH");
+  assert(MountTop(shared + "/media") == MountTop(scratch));
+  assert(MountTop("/").empty() || MountTop("/") == "/");
+
+  const std::string other = "/dev/shm";
+  struct stat here, there;
+  if (stat(other.c_str(), &there) == 0 && stat(scratch.c_str(), &here) == 0 && here.st_dev != there.st_dev &&
+      access(other.c_str(), W_OK) == 0) {
+    char name[] = "/dev/shm/ardia-volume-XXXXXX";
+    assert(mkdtemp(name));
+    const std::string volume = name;
+    const std::string file = volume + "/far.txt";
+    Touch(file, "far");
+    const std::string top = MountTop(file);
+    const std::string own = (top == "/" ? "" : top) + "/.Trash-" + user;
+    const bool existed = Exists(own);
+    auto far = MoveToTrash(file, scratch + "/data/Trash", when);
+    assert(far.ok);
+    assert(far.trashed.rfind(top == "/" ? "/.Trash" : top + "/.Trash", 0) == 0);
+    assert(Read(far.trashed) == "far");
+    std::remove(far.trashed.c_str());
+    const std::string used = far.trashed.substr(0, far.trashed.rfind("/files/"));
+    std::remove((used + "/info/far.txt.trashinfo").c_str());
+    if (!existed && used == own) {
+      rmdir((own + "/files").c_str());
+      rmdir((own + "/info").c_str());
+      rmdir(own.c_str());
+    }
+    rmdir(volume.c_str());
+    std::puts("volume trash crossed a mount");
+  }
+}
+
+void Folders(const std::string& scratch) {
+  const std::string folder = scratch + "/picked folder";
+  mkdir(folder.c_str(), 0700);
+  assert(CheckDownloadFolder(folder).ok);
+  assert(CheckDownloadFolder(folder).code.empty());
+  assert(CheckDownloadFolder(folder + "/").code == "ERR_FILE_PATH");
+  assert(CheckDownloadFolder("relative/folder").code == "ERR_FILE_PATH");
+  assert(CheckDownloadFolder(folder + "/../picked folder").code == "ERR_FILE_PATH");
+  assert(CheckDownloadFolder(std::string("/tmp/a\0b", 8)).code == "ERR_FILE_PATH");
+  assert(CheckDownloadFolder(folder + "/missing").code == "ERR_FOLDER_MISSING");
+  Touch(folder + "/file.txt");
+  assert(CheckDownloadFolder(folder + "/file.txt").code == "ERR_FOLDER_TYPE");
+  const std::string linked = scratch + "/linked folder";
+  assert(symlink(folder.c_str(), linked.c_str()) == 0);
+  assert(CheckDownloadFolder(linked).ok);
+  const std::string locked = scratch + "/locked";
+  mkdir(locked.c_str(), 0500);
+  if (geteuid() != 0) assert(CheckDownloadFolder(locked).code == "ERR_FOLDER_NOT_WRITABLE");
+  chmod(locked.c_str(), 0700);
+  assert(!CheckDownloadFolder(folder + "/missing").message.empty());
 }
 
 void Ledger() {
@@ -332,6 +457,8 @@ int main(int argc, char** argv) {
   Clears();
   FileGates();
   Trash(argv[1]);
+  VolumeTrash(argv[1]);
+  Folders(argv[1]);
   Ledger();
   std::puts("downloads scenarios passed");
   return 0;

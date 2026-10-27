@@ -156,6 +156,11 @@ class PromptLedger {
     return ids;
   }
 
+  void SetPayload(std::string_view id, base::DictValue payload) {
+    auto found = entries_.find(std::string(id));
+    if (found != entries_.end()) found->second.payload = std::move(payload);
+  }
+
   bool Move(std::string_view id, int window) {
     auto found = entries_.find(std::string(id));
     if (found == entries_.end()) return false;
