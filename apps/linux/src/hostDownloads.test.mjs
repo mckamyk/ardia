@@ -107,30 +107,45 @@ test("Clear removes every finished download the engine knows, including history 
   running.stop();
 });
 
-test("history beyond the visible list is pruned at startup so later removals never surface older entries", async () => {
-  const history = Array.from({ length: 150 }, (_, n) => download(150 - n));
-  const f = fixture(history);
-  const started = Date.now();
-  const running = startHostDownloads(f.host, f.store);
+function focusedStore(host) {
+  useBrowser.getState().hydrate(initialHostSession(host, null));
+  useBrowser.setState((s) => ({ downloads: [], ui: { ...s.ui, focusedWindowId: "main", focusOrder: ["main"] } }));
+  return useBrowser;
+}
+
+test("startup never deletes history, and an older entry surfacing after a single removal is not announced", async () => {
+  let history = Array.from({ length: 150 }, (_, n) => download(150 - n));
+  const first = fixture(history);
+  const store = focusedStore(first.host);
+  const fresh = [];
+  let stopWatch = watchNewDownloads("main", (d) => fresh.push(d.id));
+  let running = startHostDownloads(first.host, store);
   await running.ready;
   await settle();
-  assert.equal(f.state.downloads.length, 100);
-  assert.equal(f.state.downloads[0].id, ID(150));
-  const clears = f.calls.filter((c) => c.name === "downloads.clear");
-  assert.equal(clears.length, 1);
-  assert.deepEqual(clears[0].args.keep, f.state.downloads.map((d) => d.id));
-  assert.ok(clears[0].args.before >= started && clears[0].args.before <= Date.now());
-  f.state.removeDownload(ID(150));
+  assert.equal(store.getState().downloads.length, 100);
+  assert.equal(store.getState().downloads[0].id, ID(150));
+  assert.deepEqual(first.calls.map((c) => c.name), ["downloads.list"]);
+  store.getState().removeDownload(ID(150));
   await settle();
-  assert.equal(f.state.downloads.length, 99);
-  assert.ok(!f.state.downloads.some((d) => d.id === ID(50)));
+  assert.deepEqual(first.calls.slice(1), [{ name: "downloads.remove", profile: "default", args: { id: ID(150) } }]);
+  assert.equal(store.getState().downloads.length, 99);
+  stopWatch();
   running.stop();
-  const small = fixture([download(2), download(1)]);
-  const quiet = startHostDownloads(small.host, small.store);
-  await quiet.ready;
+
+  history = history.filter((d) => d.id !== ID(150));
+  const restarted = fixture(history);
+  focusedStore(restarted.host);
+  stopWatch = watchNewDownloads("main", (d) => fresh.push(d.id));
+  running = startHostDownloads(restarted.host, store);
+  await running.ready;
   await settle();
-  assert.equal(small.calls.filter((c) => c.name === "downloads.clear").length, 0);
-  quiet.stop();
+  const shown = store.getState().downloads.map((d) => d.id);
+  assert.equal(shown.length, 100);
+  assert.equal(shown.at(-1), ID(50));
+  assert.deepEqual(restarted.calls.map((c) => c.name), ["downloads.list"]);
+  assert.deepEqual(fresh, []);
+  stopWatch();
+  running.stop();
 });
 
 test("removals seen while the startup list is in flight are not undone by its reply", async () => {
@@ -154,8 +169,7 @@ test("removals seen while the startup list is in flight are not undone by its re
 
 test("the startup snapshot never announces itself as a new download in the focused window", async () => {
   const f = fixture([download(2), download(1)]);
-  useBrowser.getState().hydrate(initialHostSession(f.host, null));
-  useBrowser.setState((s) => ({ ui: { ...s.ui, focusedWindowId: "main", focusOrder: ["main"] } }));
+  focusedStore(f.host);
   const fresh = [];
   const stopWatch = watchNewDownloads("main", (d) => fresh.push(d.id));
   const running = startHostDownloads(f.host, useBrowser);
