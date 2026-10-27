@@ -12,8 +12,40 @@ int LinuxLinkKeyFlags(std::string_view key) {
   return 0;
 }
 
+bool LinuxInputActivity::Note(double now) {
+  if (last_ >= 0 && now >= last_ && now - last_ < kInterval) return false;
+  last_ = now;
+  return true;
+}
+
 void LinuxLinkGestureGate::NotePress(uintptr_t surface) {
-  if (surface) pressed_since_up_ = true;
+  if (!surface) return;
+  pressed_since_up_ = true;
+  pressed_since_drop_ = true;
+  press_surface_ = surface;
+  press_open_ = true;
+}
+
+void LinuxLinkGestureGate::NoteDragEnded(uintptr_t surface, bool over, double now) {
+  if (!surface || !press_open_ || surface != press_surface_) return;
+  press_open_ = false;
+  drop_surface_ = surface;
+  drop_over_ = over;
+  drop_at_ = now;
+  drop_used_ = false;
+  pressed_since_drop_ = false;
+}
+
+std::string LinuxLinkGestureGate::AcceptLinkDrop(uintptr_t surface, bool visible, double now) {
+  if (!surface || !drop_surface_ || drop_at_ < 0) return "no drag from this page ended";
+  if (drop_surface_ != surface) return "the drag ended on another page";
+  if (drop_used_) return "that drag already opened a link";
+  if (pressed_since_drop_) return "the mouse was pressed again since the drag ended";
+  if (now < drop_at_ || now - drop_at_ > kDropLifetime) return "the drag ended too long ago";
+  if (!drop_over_) return "the drag ended outside the page";
+  if (!visible) return "page not shown";
+  drop_used_ = true;
+  return std::string();
 }
 
 void LinuxLinkGestureGate::NoteRelease(uintptr_t surface, int flags, double now,
@@ -24,11 +56,21 @@ void LinuxLinkGestureGate::NoteRelease(uintptr_t surface, int flags, double now,
   up_at_ = now;
   up_point_ = point;
   pressed_since_up_ = false;
+  press_open_ = false;
   ++up_sequence_;
 }
 
 void LinuxLinkGestureGate::Forget(uintptr_t surface) {
-  if (!surface || surface != up_surface_) return;
+  if (!surface) return;
+  if (surface == press_surface_) {
+    press_surface_ = 0;
+    press_open_ = false;
+  }
+  if (surface == drop_surface_) {
+    drop_surface_ = 0;
+    drop_at_ = -1;
+  }
+  if (surface != up_surface_) return;
   up_surface_ = 0;
   up_point_.reset();
 }

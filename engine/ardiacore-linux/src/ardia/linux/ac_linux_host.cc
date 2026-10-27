@@ -203,6 +203,7 @@ extern bool (*g_ardia_linux_renderer_unresponsive)(content::WebContents*,
 extern bool (*g_ardia_linux_renderer_responsive)(content::WebContents*,
                                                  content::RenderWidgetHost*);
 extern bool (*g_ardia_linux_off_the_record_navigation)(content::WebContents*, const GURL&);
+extern void (*g_ardia_linux_drag_ended)(BrowserWindowInterface*);
 extern void (*g_ardia_devtools_dock_changed)(BrowserWindowInterface* browser,
                                              content::WebContents* inspected,
                                              content::WebContents* devtools);
@@ -954,6 +955,7 @@ class ShellHostView : public views::View,
     LinuxExtensionsWindowClosing(id_);
   }
   void WatchSystemState();
+  void NoteInputActivity();
   void OfferTab(content::WebContents* contents) {
     if (contents && contents->GetBrowserContext() == page_profile()) offered_[TabId(contents)] = contents->GetWeakPtr();
   }
@@ -2882,6 +2884,12 @@ void ShellHostView::ReportPictureInPicture(content::WebContents* contents,
     if (binding->media) binding->media->NotePictureInPicture(active, kind ? *kind : "video");
     else binding->ReportPresentation("pictureInPicture", state.Clone());
   }
+}
+
+void ShellHostView::NoteInputActivity() {
+  if (is_utility() || !handler_) return;
+  Event("ArdiaEngine", "engine", base::Value(base::DictValue()
+      .Set("name", "engine.inputActivity").Set("data", base::DictValue())));
 }
 
 void ShellHostView::WatchSystemState() {
@@ -5189,6 +5197,16 @@ void StartLinuxHost() {
     }
     return false;
   };
+  g_ardia_linux_drag_ended = [](BrowserWindowInterface* browser) {
+    if (!browser) return;
+    const auto found = Hosts().find(browser->GetSessionID().id());
+    if (found == Hosts().end() || found->second->browser() != browser) return;
+    ShellHostView* host = found->second;
+    ardiacore::NoteLinuxDragEnded([host](content::WebContents* contents) { return host->HoldsTab(contents); });
+  };
+  ardiacore::SetLinuxInputActivityListener(base::BindRepeating([] {
+    for (const auto& [id, host] : Hosts()) host->NoteInputActivity();
+  }));
   g_ardia_devtools_dock_changed = [](BrowserWindowInterface* browser, content::WebContents* inspected,
                                      content::WebContents*) {
     if (!browser || !inspected) return;
