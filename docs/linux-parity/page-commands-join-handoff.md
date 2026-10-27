@@ -1,6 +1,6 @@
 # Lane B handoff: page-commands host join (#11 F01)
 
-Branch `t3/linux-page-commands-join`, rebased onto `linux` at `52d72e78` (after #67). It carries the five unpublished F01 helper commits from `t3/linux-page-commands` (cherry-picked unchanged, in order) and joins them to the Linux host. The helper contract is in [f01-page-commands-handoff.md](f01-page-commands-handoff.md); this file covers only what the join adds. The page-command parts of that document's "parent integration changes" are now done.
+Branch `t3/linux-page-commands-join`, rebased onto `linux` at `ccf9dc04` (after #61 window lifecycle and #64 downloads/files). It carries the five unpublished F01 helper commits from `t3/linux-page-commands` (cherry-picked unchanged, in order) and joins them to the Linux host. The helper contract is in [f01-page-commands-handoff.md](f01-page-commands-handoff.md); this file covers only what the join adds. The page-command parts of that document's "parent integration changes" are now done.
 
 ## What the join does
 
@@ -66,7 +66,7 @@ The hook and the `Presentation` callback both post `PresentDevTools`, which re-r
 - Moves focus into the frontend only on the first attach of a *new* frontend. Each binding keeps a `DevToolsFrontendWatch` (a `WebContentsObserver` on the frontend). A move or a renderer replacement keeps the same frontend, and does not count as new.
 - When a pane is hidden (tab switch), it remembers whether the frontend had focus. Re-showing the same frontend restores that focus, and otherwise leaves focus where the tab's restoration put it.
 - When the watched frontend is destroyed, the watch posts a re-layout through `Hosts()`. This finds the binding even after a move, and also covers a quarantined frontend whose destruction never fires the dock hook. `TabBinding::WebContentsDestroyed` hides the DevTools view and re-lays out the pane too.
-- On close (no docked frontend), hides the DevTools view, restores the full page rectangle, and moves focus back to the page if the frontend had it.
+- On close (no docked frontend), hides the DevTools view, restores the full page rectangle, and moves focus back to the page if the frontend had it. That focus goes through #61's `TabBinding::FocusFromHost`. Its `host_focusing_` guard keeps the host's own focus change from being reported as `pageFocus`, which would otherwise switch split panes when DevTools close. The other two focus moves (first attach, restore on re-show) focus the DevTools frontend. The frontend is a separate WebContents that the inspected tab's `OnWebContentsFocused` does not observe, so neither can report `pageFocus` for the page.
 
 An undocked frontend keeps Chrome's own window and lifecycle, apart from the quarantine and re-adoption described above.
 
@@ -95,14 +95,14 @@ No adapter change was needed. `HostWebView` already forwards the five methods th
 The pinned excerpts were copied read-only from `~/ardia-linux-build-156/chromium_git/chromium/src` into `/tmp/ardia-f01-156`; their hashes match the pins. Heavy runs used `nice -n 10`. `node_modules` were installed with the repo's pinned pnpm 11.1.3 from the local store under `flock /tmp/ac-pod.lockf`. `scripts/agent/locked` needs macOS `lockf`, which is missing on Linux. The lockfile is unchanged.
 
 - `test_page_commands.py`: 22 pass. That is the original 12; 6 compiled joined-dispatch cases that splice the real `ac_linux_host.cc` methods into the fixture under ASan/UBSan (two panes, stale claim/generation/document/handler/strip/utility, background refusal, unknown/unsupported `runPageCommand`, re-adoption only of quarantined frontends of a current claim, terminal and reentrant reset); and 4 source and manifest checks (reset ordering, dispatch/adoption/strip relayout registration, GN targets, series selection). Two hand mutations were each killed: dropping the captured-claim check, and ignoring background mode.
-- `test_pane_layout.py` (new): 6 pass. It compiles and runs the real `ShellHostView::LayoutPane`, `TabBinding::WebContentsDestroyed` and `DevToolsFrontendWatch` against mock views, aura and DevTools. Cases: split and z-order, focus policy, destroyed frontend, destroyed frontend after a move, destroyed inspected contents, hidden native frontend. Five hand mutations, each reverting one round-1 fix, were all killed.
+- `test_pane_layout.py` (new): 7 pass. It compiles and runs the real `ShellHostView::LayoutPane`, `TabBinding::WebContentsDestroyed` and `DevToolsFrontendWatch` against mock views, aura and DevTools. Cases: split and z-order, focus policy, close-focus going through `FocusFromHost` without a `pageFocus` report (failed before the #61 rebase fix: `test_devtools_close_returns_focus_to_the_page_without_reporting_page_focus`), destroyed frontend, destroyed frontend after a move, destroyed inspected contents, hidden native frontend. The fixture also compiles #61's real `FocusFromHost` and `OnWebContentsFocused`. Five hand mutations, each reverting one round-1 fix, were all killed.
 - `test_devtools_authority.py` with `ARDIA_F01_PINNED_SOURCE=/tmp/ardia-f01-156`: 35 pass, including the BUILD.gn hunk and zero-fuzz/zero-offset application of every changed hunk.
-- Full native suite (`python3 -m unittest discover -s engine/ardiacore-linux/tests`): 269 pass. Since #67, the close-fixture suites pass too.
+- Full native suite (`python3 -m unittest discover -s engine/ardiacore-linux/tests`): 288 pass on `ccf9dc04`. That includes #61's `test_window_lifecycle.py`, #64's `test_downloads.py`, and the close-fixture suites fixed by #67.
 - `engine/patches/build/tests`: 19 pass. Before the series entry, the existing manifest check failed with `patches missing from series`.
 - `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs`: 7 pass.
-- `pnpm --filter @ardia/linux test:host`: 206 pass, including the 4 page-command cases.
+- `pnpm --filter @ardia/linux test:host`: 232 pass, including the 4 page-command cases and the window-lifecycle, downloads, files and file-drop host tests.
 - `pnpm --filter @ardia/linux typecheck`: passes.
-- `pnpm --filter @ardia/linux build`: passes, 1199 modules.
+- `pnpm --filter @ardia/linux build`: passes, 1205 modules.
 
 pnpm ran as `npm exec --yes --package=pnpm@11.1.3 -- pnpm`, and the lockfile is unchanged.
 

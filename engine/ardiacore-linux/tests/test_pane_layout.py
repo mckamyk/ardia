@@ -28,6 +28,7 @@ struct Pane {
   ShellHostView host;
   TabBinding* binding = host.Bind(&page, 7);
   Pane() {
+    page.focused = [this] { binding->OnWebContentsFocused(nullptr); };
     DevToolsWindow::docked.clear();
     DevToolsWindow::strategies.clear();
     views::focus_manager.focused = nullptr;
@@ -83,6 +84,19 @@ int main(int argc, char** argv) {
     p.binding->viewport()->RequestFocus();
     p.host.LayoutPane(p.binding);
     assert(views::focus_manager.focused == p.tools() && replacement.focuses == 1);
+    return 0;
+  }
+  if (mode == "close-focus") {
+    Pane p;
+    p.Dock();
+    p.host.Show(p.binding, true);
+    assert(views::focus_manager.focused == p.tools());
+    DevToolsWindow::docked.clear();
+    p.host.LayoutPane(p.binding);
+    assert(views::focus_manager.focused == p.binding->viewport() && p.page.focuses == 1);
+    assert(p.host.events.empty());
+    p.page.Focus();
+    assert(p.host.events.size() == 1 && p.host.events.front() == std::make_pair(7, std::string("pageFocus")));
     return 0;
   }
   if (mode == "frontend-destroyed") {
@@ -151,7 +165,10 @@ class PaneLayoutTests(unittest.TestCase):
             raise unittest.SkipTest('C++ compiler unavailable')
         host = HOST.read_text()
         watch = method(host, 'class DevToolsFrontendWatch') + ';' if 'class DevToolsFrontendWatch' in host else 'struct DevToolsFrontendWatch {};'
-        methods = method(host, 'void ShellHostView::LayoutPane(') + '\n' + method(host, 'void TabBinding::WebContentsDestroyed(')
+        methods = '\n'.join(method(host, signature) for signature in [
+            'void ShellHostView::LayoutPane(', 'void TabBinding::WebContentsDestroyed(',
+            'void TabBinding::FocusFromHost(', 'void TabBinding::OnWebContentsFocused('])
+        methods = methods.replace('content::RenderWidgetHost*', 'void*')
         code = FIXTURE.read_text().replace('#pragma once\n', '').replace('ARDIA_FRONTEND_WATCH', watch).replace('ARDIA_HOST_METHODS', methods)
         cls.temp = tempfile.TemporaryDirectory(prefix='ardia-pane-layout-')
         cls.addClassCleanup(cls.temp.cleanup)
@@ -174,6 +191,9 @@ class PaneLayoutTests(unittest.TestCase):
 
     def test_reshow_restores_the_tabs_previous_focus_and_only_new_frontends_take_focus(self):
         self.run_case('focus')
+
+    def test_devtools_close_returns_focus_to_the_page_without_reporting_page_focus(self):
+        self.run_case('close-focus')
 
     def test_destroyed_frontend_hides_its_panel_and_restores_the_page(self):
         self.run_case('frontend-destroyed')

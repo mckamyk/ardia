@@ -44,7 +44,16 @@ template <typename F, typename... Bound> OnceClosure BindOnce(F fn, Bound... bou
   return OnceClosure([fn, bound...]() mutable { fn(std::move(bound)...); });
 }
 struct DictValue {
-  DictValue& Set(const char*, const char*) { return *this; }
+  DictValue& Set(const char*, const char* value) { type = value; return *this; }
+  std::string type;
+};
+template <typename T> class AutoReset {
+ public:
+  AutoReset(T* target, T value) : target_(target), previous_(*target) { *target_ = std::move(value); }
+  ~AutoReset() { *target_ = std::move(previous_); }
+ private:
+  T* target_;
+  T previous_;
 };
 }
 
@@ -114,7 +123,12 @@ class WebContents {
   }
   base::WeakPtr<WebContents> GetWeakPtr() { return {this, alive}; }
   aura::Window* GetNativeView() { return &native; }
-  void Focus() { focuses++; }
+  void Focus() {
+    focuses++;
+    auto hook = focused;
+    if (hook) hook();
+  }
+  std::function<void()> focused;
   aura::Window native;
   int focuses = 0;
   bool destroyed = false;
@@ -235,6 +249,10 @@ class TabBinding {
   void SetDevToolsViewport(views::WebView* view) { devtools_viewport_ = view; }
   void ResetPageCommands() { resets++; }
   void WebContentsDestroyed();
+  void FocusFromHost();
+  void OnWebContentsFocused(void*);
+  bool presented = true;
+  bool host_focusing_ = false;
   std::unique_ptr<DevToolsFrontendWatch> devtools_watch;
   bool devtools_had_focus = false;
   gfx::Rect pane_bounds;
@@ -265,7 +283,10 @@ class ShellHostView : public views::View {
           }
         }, GetWeakPtr(), inspected->GetWeakPtr()));
   }
-  void ReportTab(int id, base::DictValue) { closes.push_back(id); }
+  void ReportTab(int id, base::DictValue event) {
+    if (event.type == "windowClose") closes.push_back(id);
+    else events.emplace_back(id, event.type);
+  }
   views::FocusManager* GetFocusManager() { return &views::focus_manager; }
   template <typename T> T* AddChildView(std::unique_ptr<T> view) {
     T* raw = view.get();
@@ -304,6 +325,7 @@ class ShellHostView : public views::View {
   std::vector<std::unique_ptr<views::View>> children;
   std::vector<std::unique_ptr<TabBinding>> bindings;
   std::vector<int> closes;
+  std::vector<std::pair<int, std::string>> events;
   BrowserView browser_view_storage;
   BrowserView* browser_view_ = &browser_view_storage;
   int handler_storage = 0;

@@ -2543,10 +2543,7 @@ void ShellHostView::LayoutPane(TabBinding* binding) {
     if (tools->GetVisible()) binding->devtools_had_focus = focused && !visible;
     tools->SetVisible(false);
     tools->SetWebContents(nullptr);
-    if (focused && visible) {
-      page->RequestFocus();
-      contents->Focus();
-    }
+    if (focused && visible) binding->FocusFromHost();
     return;
   }
   if (auto* container = browser_view_->GetContentsContainerViewFor(contents)) {
