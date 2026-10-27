@@ -1,6 +1,6 @@
 # Lane J handoff: passwords and autofill management (#17 F07)
 
-Branch `t3/linux-passwords-autofill`, rebased onto `linux` at `72a49259`, which includes #62 (profile registry) and #68. This lane is the source implementation for #17, tracked by #96. Runtime acceptance stays with #17 and the #81 suite.
+Branch `t3/linux-passwords-autofill`, rebased onto `linux` at `4fd0946e`, which includes #62 (profile registry), #63 (page state) and #68. This lane is the source implementation for #17, tracked by #96. Runtime acceptance stays with #17 and the #81 suite.
 
 The path every secret takes, for the reviewer, is in [f07-security-notes.md](f07-security-notes.md).
 
@@ -114,7 +114,7 @@ Each isolated profile keeps its own Chromium password and autofill stores. As on
 
 All on this machine (Arch, clang 22, Node 26). The native ones compile real sources against stubs.
 
-- **`python3 -m unittest discover -s engine/ardiacore-linux/tests`:** TOTAL_NATIVE. It includes the new `test_credentials.py`, whose 3 tests cover:
+- **`python3 -m unittest discover -s engine/ardiacore-linux/tests`:** 338/338 on the final base. It includes the new `test_credentials.py`, whose 3 tests cover:
   - plans and exact payloads (hex-only secrets, whitelisted fields, stray secrets dropped);
   - the `ERR_SECRET_ROUTE` refusals;
   - the availability matrix;
@@ -143,7 +143,7 @@ All on this machine (Arch, clang 22, Node 26). The native ones compile real sour
 
   The old `test_real_linux_reauth_never_grants` is replaced by this file. `test_linux_port.py` was already failing on `linux` before this lane, on a stale check that forbids `ardia/core/` includes and `//chrome/browser/device_reauth` outside `is_mac` (`ac_downloads.cc` hits it); it still has that one failure.
 - **`pnpm --filter @ardia/linux typecheck`:** clean.
-- **`pnpm --filter @ardia/linux test:host`:** 299/299 after the rebase, including the new `hostCredentials.test.mjs` (9 tests). Those tests run the real `bootstrap.js` in a VM and drive the shared `packages/ardiacore` `passwords.ts`/`autofill.ts` end to end. They cover:
+- **`pnpm --filter @ardia/linux test:host`:** 325/325 on the final base, including the new `hostCredentials.test.mjs` (9 tests). Those tests run the real `bootstrap.js` in a VM and drive the shared `packages/ardiacore` `passwords.ts`/`autofill.ts` end to end. They cover:
   - generic versus typed wire traffic, with no secret in any `engine.call` payload;
   - local refusals that send nothing;
   - denied, cancelled and expired outcomes that never reveal, change or export;
@@ -151,8 +151,8 @@ All on this machine (Arch, clang 22, Node 26). The native ones compile real sour
   - the notice text;
   - console capture with no secret.
 - **`pnpm --filter @ardia/linux build`:** OK. The bundle contains the pane adapters.
-- **`pnpm --filter @ardia/linux test:graph`:** 1/1.
-- **`pnpm --filter @ardia/linux acceptance:self-test`:** 47/47 after the rebase, with the catalogue now including #17.
+- **`pnpm --filter @ardia/linux test:graph`:** 3/3.
+- **`pnpm --filter @ardia/linux acceptance:self-test`:** 47/47 on the final base, with the catalogue now including #17.
 - **`engine/patches/build/tests/test_platform_tooling.py`:** 17/17, including the policy in the package.
 - **Syntax check against Chromium 156.** `clang++ -fsyntax-only -Werror` ran with the real 156 headers and the `ardia/linux` and `chrome/browser/ardia` target flags read from the existing out-dir `.ninja` files (nothing built or written there). It passes for:
   - `ac_linux_credentials.cc`;
