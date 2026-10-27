@@ -103,7 +103,7 @@ Worktree-local dependencies were installed frozen with pnpm 11.1.3 and ignored l
 Focused commands:
 
 ```bash
-node --experimental-strip-types --import ./apps/linux/scripts/dialog-test-loader.mjs --test apps/linux/src/hostDialogs.test.mjs apps/linux/src/hostDialogConsumers.test.mjs apps/linux/src/hostDialogModule.test.mjs
+node --experimental-strip-types --import ./apps/linux/scripts/host-test-loader.mjs --test apps/linux/src/hostDialogs.test.mjs apps/linux/src/hostDialogConsumers.test.mjs apps/linux/src/hostDialogModule.test.mjs
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s engine/ardiacore-linux/tests -p test_dialogs.py -v
 npm exec --yes --package=pnpm@11.1.3 -- pnpm --config.verify-deps-before-run=false --filter @ardia/linux typecheck
 npm exec --yes --package=pnpm@11.1.3 -- pnpm --config.verify-deps-before-run=false --filter @ardia/linux build
