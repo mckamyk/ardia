@@ -2563,7 +2563,7 @@ ardiacore::LinuxPageCommands* ShellHostView::EnsurePageCommands(TabBinding* bind
                                  binding->claim, binding->renderer_generation};
   if (PageCommandBinding(authority) != binding) return nullptr;
   binding->page_commands = std::make_unique<ardiacore::LinuxPageCommands>(
-      binding->contents(), profile(),
+      binding->contents(), page_profile(),
       base::BindRepeating([](const PageCommandAuthority& authority) -> BrowserWindowInterface* {
         return PageCommandBinding(authority) ? authority.host->browser() : nullptr;
       }, authority),
@@ -2657,7 +2657,7 @@ void ShellHostView::LayoutPane(TabBinding* binding) {
     }
   }
   if (!tools) {
-    tools = AddChildView(std::make_unique<ViewportView>(profile()));
+    tools = AddChildView(std::make_unique<ViewportView>(page_profile()));
     binding->SetDevToolsViewport(tools);
   }
   const bool fresh = !binding->devtools_watch || binding->devtools_watch->web_contents() != devtools;
@@ -3442,10 +3442,10 @@ void ShellHostView::Invoke(
   if (method == "ArdiaSearch.suggest") {
     if (values.size() != 2 || !values[0].is_string() || !values[1].is_string() ||
         !ardia::linux_suggest_policy::ValidRequestId(values[1].GetString()) ||
-        !ardia::linux_suggest::CanFetchSuggestions(profile(), values[0].GetString()))
+        !ardia::linux_suggest::CanFetchSuggestions(profile(), page_profile(), values[0].GetString()))
       return std::move(done).Run(false, base::Value(base::DictValue()
           .Set("code", "ERR_SUGGEST_REFUSED").Set("message", "Search suggestion request refused")));
-    return suggestions_->Fetch(profile(), values[1].GetString(), values[0].GetString(), base::BindOnce(
+    return suggestions_->Fetch(profile(), page_profile(), values[1].GetString(), values[0].GetString(), base::BindOnce(
         [](base::OnceCallback<void(bool, base::Value)> done, std::optional<std::string> body) {
           if (!body) return std::move(done).Run(false, base::Value(base::DictValue()
               .Set("code", "ERR_SUGGEST").Set("message", "Search suggestions are unavailable")));

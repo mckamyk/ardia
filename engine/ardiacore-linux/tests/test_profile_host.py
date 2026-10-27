@@ -162,6 +162,35 @@ int main() {
         self.assertNotIn('std::set<std::string>& OpeningWindows()', self.source)
 
 
+class ProfileSuggestionTests(unittest.TestCase):
+    def setUp(self):
+        self.host = HOST.read_text()
+        self.suggest = (ROOT / 'src/ardia/linux/ac_linux_suggest.cc').read_text()
+
+    def test_suggestions_are_gated_by_the_app_setting_and_fetched_on_the_window_page_profile(self):
+        suggest = method(self.host, '  if (method == "ArdiaSearch.suggest") {')
+        self.assertIn('CanFetchSuggestions(profile(), page_profile(), values[0].GetString())', suggest)
+        self.assertIn('suggestions_->Fetch(profile(), page_profile(), values[1].GetString(), values[0].GetString(),', suggest)
+        gate = method(self.suggest, 'bool CanFetchSuggestions(')
+        self.assertIn('Settings().find(setting_profile->GetOriginalProfile()->GetPath())', gate)
+        self.assertIn('!network_profile', gate)
+        fetch = method(self.suggest, 'void SuggestionClient::Fetch(')
+        self.assertIn('std::make_unique<SuggestionFetch>(this, id, network_profile, std::move(reply))', fetch)
+        self.assertIn('started->Load(network_profile, GURL(url));', fetch)
+        load = method(self.suggest, '  void Load(Profile* profile, const GURL& url) {')
+        self.assertIn('profile->GetDefaultStoragePartition()', load)
+
+
+class ProfilePageCommandTests(unittest.TestCase):
+    def test_page_commands_and_devtools_use_the_window_page_profile(self):
+        host = HOST.read_text()
+        page = method(host, 'ardiacore::LinuxPageCommands* ShellHostView::EnsurePageCommands(')
+        self.assertIn('binding->contents(), page_profile(),', page)
+        self.assertNotIn('binding->contents(), profile(),', page)
+        self.assertIn('tools = AddChildView(std::make_unique<ViewportView>(page_profile()));', host)
+        self.assertNotIn('ViewportView>(profile())', host)
+
+
 class ProfileServiceTests(unittest.TestCase):
     def setUp(self):
         self.source = Path(os.environ.get('ARDIA_PROFILE_SERVICE_SOURCE', ROOT / 'src/ardia/linux/ac_linux_profile_service.cc')).read_text()

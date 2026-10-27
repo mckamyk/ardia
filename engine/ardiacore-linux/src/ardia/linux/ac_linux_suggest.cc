@@ -141,11 +141,11 @@ base::OnceCallback<void(bool, base::Value)> NoteSuggestionsOnWrite(
       std::move(profile_path), std::move(done));
 }
 
-bool CanFetchSuggestions(Profile* profile, const std::string& url) {
-  if (!profile || !policy::RequestAllowed(url)) {
+bool CanFetchSuggestions(Profile* setting_profile, Profile* network_profile, const std::string& url) {
+  if (!setting_profile || !network_profile || network_profile->ShutdownStarted() || !policy::RequestAllowed(url)) {
     return false;
   }
-  const auto setting = Settings().find(profile->GetOriginalProfile()->GetPath());
+  const auto setting = Settings().find(setting_profile->GetOriginalProfile()->GetPath());
   if (setting == Settings().end() || !policy::Allowed(setting->second)) {
     return false;
   }
@@ -158,19 +158,19 @@ SuggestionClient::SuggestionClient() = default;
 
 SuggestionClient::~SuggestionClient() = default;
 
-void SuggestionClient::Fetch(Profile* profile, const std::string& id,
+void SuggestionClient::Fetch(Profile* setting_profile, Profile* network_profile, const std::string& id,
                              const std::string& url, SuggestionReply reply) {
-  if (!policy::ValidRequestId(id) || !CanFetchSuggestions(profile, url)) {
+  if (!policy::ValidRequestId(id) || !CanFetchSuggestions(setting_profile, network_profile, url)) {
     return PostReply(std::move(reply), std::nullopt);
   }
   for (const auto& evicted : slots_.Admit(id)) {
     auto node = fetches_.extract(evicted);
     if (!node.empty()) PostReply(node.mapped()->TakeReply(), std::nullopt);
   }
-  auto fetch = std::make_unique<SuggestionFetch>(this, id, profile, std::move(reply));
+  auto fetch = std::make_unique<SuggestionFetch>(this, id, network_profile, std::move(reply));
   SuggestionFetch* started = fetch.get();
   fetches_[id] = std::move(fetch);
-  started->Load(profile, GURL(url));
+  started->Load(network_profile, GURL(url));
 }
 
 void SuggestionClient::Cancel(const std::string& id) {
