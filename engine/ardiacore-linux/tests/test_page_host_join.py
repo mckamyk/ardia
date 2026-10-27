@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'src'
 HOST = SOURCE / 'ardia/linux/ac_linux_host.cc'
-FILES = [SOURCE / 'ardia/linux' / f'ac_linux_{name}.cc' for name in ['page_lease', 'security', 'history_zoom', 'theme', 'page_state']]
+FILES = [SOURCE / 'ardia/linux' / f'ac_linux_{name}.cc' for name in ['page_lease', 'security', 'history_zoom', 'theme', 'page_status', 'page_state']]
 FIXTURE = ROOT / 'tests/fixtures/page_state.h'
 
 
@@ -304,6 +304,45 @@ void FailedRemount() {
   assert(!w.host.ClaimedBinding(base::DictValue().Set("id", 9).Set("claim", "claim")));
 }
 
+void StatusMigration() {
+  World w;
+  blocked_content::PopupBlockerTabHelper first_popups, second_popups;
+  w.first->popups = &first_popups;
+  w.second->popups = &second_popups;
+  w.Claim();
+  auto* old_status = w.binding->page()->status();
+  assert(old_status && old_status->TargetURL(GURL("https://example.test/hover")));
+  assert(Text(Event(w.host.sent.back()), "name") == "status");
+  first_popups.Block(3, GURL("https://pop.test/3"));
+  assert(Text(Event(w.host.sent.back()), "name") == "popupBlocked" && first_popups.manager()->observers.size() == 1);
+  w.host.sent.clear();
+  w.Swap();
+  assert(w.host.sent.size() == 1 && Text(w.host.sent[0].payload, "action") == "rebind");
+  assert(first_popups.manager()->observers.empty() && second_popups.manager()->observers.size() == 1);
+  const auto& snapshot = *w.host.sent[0].payload.FindDict("creation")->FindDict("snapshot");
+  size_t popups = 0;
+  for (const auto& item : snapshot.Find("events")->GetList()) {
+    const auto& event = item.GetDict();
+    if (Text(event, "name") == "popupBlocked") ++popups;
+    if (Text(event, "name") == "status") assert(Text(event.Find("data")->GetDict(), "text").empty());
+  }
+  assert(popups == 0);
+  w.host.sent.clear();
+  w.first->Notify([](auto* o) { o->DidToggleFullscreenModeForTab(true, true); });
+  first_popups.Block(4, GURL("https://pop.test/4"));
+  assert(w.host.sent.empty());
+  auto* status = w.binding->page()->status();
+  assert(status && status->TargetURL(GURL("https://discarded.test/link")));
+  assert(w.host.sent.size() == 1 && w.host.sent[0].id == "9" && Text(Event(w.host.sent[0]), "name") == "status");
+  w.binding->RetirePage();
+  assert(!w.binding->page() && second_popups.manager()->observers.empty());
+  w.host.sent.clear();
+  w.second->Notify([](auto* o) { o->DidToggleFullscreenModeForTab(false, true); });
+  second_popups.Block(5, GURL("https://pop.test/5"));
+  assert(w.host.sent.empty());
+  w.browser.strip.tabs.clear();
+}
+
 int main(int argc, char** argv) {
   assert(argc == 2);
   std::string mode = argv[1];
@@ -314,6 +353,7 @@ int main(int argc, char** argv) {
   else if (mode == "presentations") Presentations();
   else if (mode == "two-discards") TwoDiscards();
   else if (mode == "failed-remount") FailedRemount();
+  else if (mode == "status-migration") StatusMigration();
   else return 2;
 }
 '''
@@ -372,6 +412,9 @@ class PageHostJoinTests(unittest.TestCase):
 
     def test_failed_remount_releases_the_claim_and_closes_through_the_old_lease(self):
         self.run_case('failed-remount')
+
+    def test_page_status_producers_stop_at_discard_migration_and_transfer(self):
+        self.run_case('status-migration')
 
 
 if __name__ == '__main__':

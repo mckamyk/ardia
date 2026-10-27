@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { after, before, describe, it } from "node:test";
-import { startFixtures, SUGGEST_HOST, suggestionsFor } from "../lib/fixtures.mjs";
+import { PIXEL_PNG, startFixtures, SUGGEST_HOST, suggestionsFor } from "../lib/fixtures.mjs";
 import { generateTls } from "../lib/tls.mjs";
 
 const run = promisify(execFile);
@@ -89,6 +89,20 @@ describe("fixture servers and certificates", () => {
     const file = await get(fixtures.url.download("a.bin", 100));
     assert.equal(file.headers["content-disposition"], 'attachment; filename="a.bin"');
     assert.equal(file.body.length, 100);
+  });
+
+  it("serves the page-status and favicon fixtures", async () => {
+    assert.match((await get(fixtures.url.fullscreen("r"))).body.toString(), /Fullscreen fixture/);
+    assert.match((await get(fixtures.url.hover("r"))).body.toString(), /id="link" href="\/page\/5\?hover=r"/);
+    const popup = (await get(fixtures.url.popup("a</script>"))).body.toString();
+    assert.ok(popup.includes(`window.open(${JSON.stringify(fixtures.url.popupTarget("a</script>"))})`));
+    assert.doesNotMatch(popup, /a<\/script>/);
+    assert.match((await get(fixtures.url.busy("r"))).body.toString(), /for \(;;\) \{\}/);
+    assert.match((await get(fixtures.url.favicon("abc"))).body.toString(), /<link rel="icon" href="\/icon\/abc\.png">/);
+    const icon = await get(fixtures.url.icon("abc"));
+    assert.equal(icon.headers["content-type"], "image/png");
+    assert.deepEqual(icon.body, PIXEL_PNG);
+    assert.equal((await get(fixtures.url.icon("bad1"))).body.toString(), "not an image");
   });
 
   it("holds a slow download until it is released", async () => {

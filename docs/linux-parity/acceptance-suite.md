@@ -1,6 +1,6 @@
 # Linux native acceptance suite (#81)
 
-One command runs the runtime acceptance scenarios for #11, #12, #13, #16, #17, #18, #19, #20, #22, #30, #32, #33, #36 and #37 against a packaged Linux Ardia build. It runs headless, uses throwaway profiles, and prints the result for each issue as JSON. An issue can be closed with evidence once its result is `pass`. A `manual` result means every automated check passed and the steps that need a person are listed.
+One command runs the runtime acceptance scenarios for #11, #12, #13, #16, #17, #18, #19, #20, #22, #27, #30, #32, #33, #34, #36, #37 and #78 against a packaged Linux Ardia build. It runs headless, uses throwaway profiles, and prints the result for each issue as JSON. An issue can be closed with evidence once its result is `pass`. A `manual` result means every automated check passed and the steps that need a person are listed.
 
 ## Running it
 
@@ -80,6 +80,7 @@ Local fixtures:
   - The stock-Chromium self-test confirms Chromium reports `contained-mixed-form` for that page.
 - **Downloads.** Attachment endpoints, plus slow bodies. A slow body holds its last chunk until the scenario releases it, so pause, resume and cancel always act on a live transfer.
 - **Content blocker.** F06 uses the uBlock Origin build packaged at `lib/ardia/extensions/ublock` (`scripts/linux/fetch-ubo.sh`, then `package.py --content-blocker`). Set `ARDIA_ACCEPTANCE_CONTENT_BLOCKER` to a prepared extension directory to pass `--ardia-content-blocker-dir` instead. The blocked request is `/ads/banners/<run>.png`, which only EasyList's bundled copy matches (`/ads/banners/*$image`); list updates cannot reach the network, so uBlock uses the lists in its package.
+- **Page status.** `/fullscreen`, `/hover` (one large link), `/popup` (calls `window.open` while loading, without a gesture, so Chromium blocks it), `/busy` (spins forever 200 ms after load) and `/favicon/<label>` (links `/icon/<label>.png`). An icon whose name starts with `bad` answers `image/png` with a body that is not an image.
 - **Print.** `--kiosk-printing` with the Save as PDF destination seeded in `Preferences` writes the PDF into the seeded download folder without a dialog. This was verified on stock Chromium 155.
 
 `openssl` must be installed. Node 22 or newer is needed for the built-in WebSocket client; the suite was written on Node 26.
@@ -101,6 +102,9 @@ Local fixtures:
 | F12 | #22 | Generated scratch Chrome and Firefox profiles under the launch `HOME` are listed with their importable kinds; a Chrome import returns 4 bookmarks in nested folders, 3 history entries, a 3-password token and a keyring note, with no plaintext password in the renderer reply; `writePasswords` finishes by event with `added: 3, existing: 0` and Ardia's own `Login Data` holds exactly those 3 passwords (decrypted with the basic key and compared); importing them again reports `added: 0, existing: 3`; a reused or unknown token is `expired` without resolving a profile; writing to the isolated `work` profile stores the 3 passwords in `Profile work/Login Data` and leaves the default profile's 3; private and invalid targets get `ERR_PROFILE_PRIVATE`/`ERR_PROFILE_INVALID` and lose the token; a corrupt History fails only history; cancelling a 40,000-row history import reports `cancelled` and leaves no `ardia-import-*` copy in `TMPDIR`; Firefox imports bookmarks and history and reports passwords as unsupported; HTML and CSV files are refused until the chooser picks them, and a headless chooser cancels or reports a disabled policy; every source file hashes the same afterwards | Import window click-through; portal/GTK chooser; Settings CSV import; Chromium's SQLite build on real profiles; keyring-protected (v11/v12) Chrome passwords |
 | F22 | #32 | With sway or weston installed: the first window is active, Ctrl+N moves `document.hasFocus()` to the new window, a background window takes no focus, Settings comes to the front | Without a compositor, all of it; with one, immediate typing, restore-behind and links from other apps |
 | F26 | #36 | Settings opens; no Engines pane; no Default browser, Open Ardia at login, Scroll bars or `ardia` command rows in General, Appearance or Advanced; no `ArdiaSystem`/`ArdiaApp`/unhandled rejections in the shells' console (replayed on attach) or the browser log | Default-browser and autostart across restart; streaming identity; header dragging; scroll bar style |
+| F17 | #27 | Page fullscreen from a gesture sets the page's `fullscreen` and leaves the window's `fullScreen` unset, and exiting clears it; hovering the fixture link (CDP mouse events into the page) sets `status` to its URL, moving away and then navigating clears it; the load-time `window.open` is listed in `popups`, the prompt's Only Once opens it as a tab; `Page.crash` shows "This tab needs to reload" and Reload clears `crashed`; a spinning page with an unacknowledged key event shows "Page Unresponsive" within 55 s, Wait closes it, the hang is reported again and Exit Page ends the renderer (`crashed`) | Video fullscreen from a real player; physical hover; split and transfer |
+| W78 | #78 | Page fullscreen leaves the window's `fullScreen` unset; leaving it keeps the window normal; inside a fullscreen window (CDP `Browser.setWindowBounds`) entering and leaving page fullscreen keeps the window fullscreen | Compositor fullscreen key |
+| F24 | #34 | A fresh profile requests `/icon/<label>.png` and the shell shows a PNG data URL; `favicons.fetch` returns a PNG of at most 64 px through the page profile and the request carries no cookie; a malformed image, an unreachable host and a `file:` URL return null; the icon is still shown after restart | Essentials and top-strip icons |
 | F27 | #37 | Fresh profile: onboarding appears once, `onboarding.json` gets `startedAt`, the native launch record (`ArdiaShell.launchSteps`) lists all four steps and the startup renderer carries the `ardia.linux.app-launch` session mark; an unfinished onboarding resumes after restart without the intro; a completed one never returns; an existing two-window profile never onboards, the launch record is complete and exactly one renderer carries the mark, the profile is marked complete, and a reload of the owner does not onboard; Release Notes answers in its own window | Finishing onboarding through its steps; setup choices across windows; onboarding from a utility window |
 
 ## Manual steps
@@ -184,6 +188,20 @@ The JSON lists each manual item with these steps. They are kept here so they can
 - **Header dragging.** Dragging the sidebar header moves the window on Hyprland and on X11, and double-clicking it maximizes.
 - **Scroll bars.** Once supported, the System/Thin choice applies to a real page after restart.
 
+**#27 F17**
+
+- **Video fullscreen.** Play a video on a real site and use its fullscreen button. Ardia's sidebar and toolbar hide; Escape restores them in the same window state.
+- **Hover.** Move the mouse over a link and off it. The status text shows the link and clears.
+- **Split and transfer.** Open a split, hover a link and trigger a pop-up in each pane. Move one pane's tab to another window; its status and pop-up list go with it and the old window shows none.
+
+**#34 F24**
+
+- **Pinned layouts.** Pin the fixture page as an essential and switch to the top tab strip. The fetched icon shows in the tile and the strip, not the generic globe.
+
+**#78**
+
+- **Compositor fullscreen.** Make an Ardia window fullscreen with the window manager's key, then enter and leave fullscreen on a page. The window stays fullscreen with Ardia's chrome shown again.
+
 **#37 F27**
 
 - **Onboarding.** Finish onboarding through every step. It doesn't return after a restart, and Help › Show Onboarding replays it.
@@ -194,7 +212,7 @@ The JSON lists each manual item with these steps. They are kept here so they can
 
 The scenarios drive the shared UI through the same seams the existing keyboard test uses:
 
-- `ardiaLinux.store`, `ardiaLinux.emitCommand`;
+- `ardiaLinux.store`, `ardiaLinux.pages` (the page store: fullscreen, status, crash, hang and pop-ups), `ardiaLinux.emitCommand`;
 - `__ardiaHost.invoke` and `__ardiaHost.call`;
 - `[data-ardia-linux-window]`.
 

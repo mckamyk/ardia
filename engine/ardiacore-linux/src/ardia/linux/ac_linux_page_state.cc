@@ -39,6 +39,7 @@ LinuxPageState::LinuxPageState(BrowserWindowInterface* browser,
       base::BindRepeating([](base::WeakPtr<LinuxPageState> state) {
         return state && state->navigation_ ? state->navigation_.Run() : base::DictValue();
       }, weak));
+  status_ = std::make_unique<LinuxPageStatus>(lease_->GetWeakPtr());
 }
 
 LinuxPageState::~LinuxPageState() { Retire(); }
@@ -49,6 +50,7 @@ void LinuxPageState::Retire() {
   weak_factory_.InvalidateWeakPtrs();
   lease_->Reset();
   authority_->Invalidate();
+  status_->Reset();
   theme_->Reset();
   history_zoom_->Reset();
   security_->Reset();
@@ -86,6 +88,7 @@ std::optional<base::ListValue> LinuxPageState::SnapshotEvents() {
     events.Append(PageEvent("favicon", base::Value(base::DictValue()
         .Set("url", candidates.front()->icon_url.spec()).Set("urls", std::move(urls)))));
   }
+  status_->AppendSnapshot(events);
   if (message_snapshot_) {
     auto callback = message_snapshot_;
     auto messages = callback.Run();

@@ -4,6 +4,7 @@
 #include "ardia/linux/ac_linux_history_zoom.h"
 #include "ardia/linux/ac_linux_theme.h"
 #include "ardia/linux/ac_linux_page_state.h"
+#include "ardia/linux/ac_linux_page_status.h"
 #include <climits>
 #include <limits>
 
@@ -281,12 +282,13 @@ struct Mount {
   BrowserWindowInterface browser{&profile};
   content::WebContents shell{&profile}, page{&profile};
   zoom::ZoomController controller;
+  blocked_content::PopupBlockerTabHelper popup_helper;
   std::vector<base::DictValue> deliveries;
   int navigations=0;
   std::function<void()> on_delivery;
   std::unique_ptr<LinuxPageState> state;
   explicit Mount(uint64_t binding=3) {
-    browser.strip.tabs.push_back(&page);page.zoom=&controller;
+    browser.strip.tabs.push_back(&page);page.zoom=&controller;page.popups=&popup_helper;
     state=std::make_unique<LinuxPageState>(&browser,window.GetWeakPtr(),&page,&shell,LinuxPageIdentity{7,"tab","claim",2,binding,1,9},
       [this](std::string module,std::string id,base::DictValue payload) { assert(module=="ArdiaWebView" && id=="7");deliveries.push_back(std::move(payload));if(on_delivery) on_delivery(); },
       [this] { ++navigations;return base::DictValue().Set("url",page.entry.url.spec()).Set("title","T").Set("canGoBack",true).Set("canGoForward",false).Set("isLoading",false); });
@@ -308,12 +310,12 @@ void Creation() {
   Mount m;m.page.theme=0xff102030;m.page.security.connection_info_initialized=true;m.page.security.certificate=std::make_shared<net::X509Certificate>();m.controller.level=1;
   auto created=m.state->CreationState();assert(created && m.deliveries.empty());
   const auto& lease=*created->FindDict("lease");assert(Text(lease,"claim")=="claim" && Text(lease,"rendererGeneration")=="2" && Text(lease,"bindingGeneration")=="3" && Text(lease,"documentEpoch")=="1");
-  const auto& snapshot=*created->FindDict("snapshot");assert(Number(snapshot,"watermark")==Number(lease,"sequence") && snapshot.Find("events")->GetList().size()==3);
+  const auto& snapshot=*created->FindDict("snapshot");assert(Number(snapshot,"watermark")==Number(lease,"sequence") && snapshot.Find("events")->GetList().size()==6);
   const auto& navigation=EventAt(snapshot,0,"navigation");assert(Text(navigation,"url")=="https://example.test/" && Text(navigation,"themeColor")=="#102030" && Text(navigation,"themeColorSource")=="meta");
   assert(Text(EventAt(snapshot,1,"security"),"level")=="secure");
   assert(std::abs(Number(EventAt(snapshot,2,"zoom"),"zoom")-1.2)<1e-12 && !EventAt(snapshot,2,"zoom").Find("isDefault")->GetBool());
   for (auto* observer:std::vector<zoom::ZoomObserver*>(m.controller.observers)) observer->OnZoomControllerDestroyed(&m.controller);
-  auto without_zoom=m.state->CreationState();assert(without_zoom->FindDict("snapshot")->Find("events")->GetList().size()==2 && m.controller.observers.empty());
+  auto without_zoom=m.state->CreationState();assert(without_zoom->FindDict("snapshot")->Find("events")->GetList().size()==5 && m.controller.observers.empty());
   Mount provisional;content::NavigationHandle start;provisional.Start(start);auto cleared=provisional.state->CreationState();assert(cleared);
   const auto& cleared_navigation=EventAt(*cleared->FindDict("snapshot"),0,"navigation");assert(cleared_navigation.Find("themeColor")->is_none());
   assert(Text(EventAt(*cleared->FindDict("snapshot"),1,"security"),"level")=="none");
@@ -344,7 +346,7 @@ void Boundaries() {
   assert(m.deliveries.size()==2);
   assert(Text(m.deliveries[0],"type")=="pageLifecycle" && Text(m.deliveries[0],"action")=="reset" && Text(m.deliveries[0],"reason")=="document" && Text(m.deliveries[0],"documentEpoch")=="2");
   assert(Text(m.deliveries[1],"action")=="snapshot" && Text(m.deliveries[1],"documentEpoch")=="2" && Number(m.deliveries[1],"sequence")>Number(m.deliveries[0],"sequence"));
-  assert(Text(m.deliveries[1],"reason")=="document" && m.deliveries[1].Find("events")->GetList().size()==3);
+  assert(Text(m.deliveries[1],"reason")=="document" && m.deliveries[1].Find("events")->GetList().size()==6);
   assert(Text(EventAt(m.deliveries[1],1,"security"),"level")=="insecure" && Text(EventAt(m.deliveries[1],0,"navigation"),"url")=="http://plain.test/");
   assert(!old->Valid() && !EmitLinuxPageEvent(*old,"find",base::Value()) && m.deliveries.size()==2);
   auto current=m.state->Capture();assert(EmitLinuxPageEvent(*current,"find",base::Value(base::DictValue().Set("count",1))) && m.LastName()=="find" && Text(m.Last(),"documentEpoch")=="2");
@@ -372,7 +374,7 @@ void Favicons() {
   m.Finish(pending);
   bool resent=false;for(const auto& delivery:m.deliveries) if(Text(delivery,"type")=="pageLifecycle" && delivery.FindString("reason") && Text(delivery,"reason")=="restore") { EventAt(delivery,3,"favicon");resent=true; }
   assert(resent);
-  Mount empty;assert(empty.state->CreationState()->FindDict("snapshot")->Find("events")->GetList().size()==3);
+  Mount empty;assert(empty.state->CreationState()->FindDict("snapshot")->Find("events")->GetList().size()==6);
 }
 
 void StripLookups() {
@@ -434,7 +436,133 @@ void Rebinding() {
   destroy=true;assert(!navigation_reentrant.state->EmitNavigation() && !navigation_reentrant.state);
 }
 
+
+const base::DictValue* Named(const base::DictValue& holder,const char* name,size_t skip=0) {
+  for (const auto& item:holder.Find("events")->GetList()) {
+    const auto& event=item.GetDict();if (Text(event,"name")!=name) continue;
+    if (skip--) continue;
+    return &event.Find("data")->GetDict();
+  }
+  return nullptr;
+}
+size_t Count(const base::DictValue& holder,const char* name) {
+  size_t n=0;for (const auto& item:holder.Find("events")->GetList()) n+=Text(item.GetDict(),"name")==name;return n;
+}
+const base::DictValue& LastSnapshot(Mount& m) {
+  for (auto it=m.deliveries.rbegin();it!=m.deliveries.rend();++it) if (Text(*it,"type")=="pageLifecycle" && it->FindString("action") && Text(*it,"action")=="snapshot") return *it;
+  assert(false);return m.deliveries.front();
+}
+const base::DictValue& Created(Mount& m,std::optional<base::DictValue>& holder) { holder=m.state->CreationState();assert(holder);return *holder->FindDict("snapshot"); }
+
+void PageStatus() {
+  Mount m;std::optional<base::DictValue> created;
+  const auto& initial=Created(m,created);
+  assert(Named(initial,"fullscreen")->Find("fullscreen")->GetBool()==false && Text(*Named(initial,"status"),"text").empty());
+  assert(Named(initial,"responsive") && !Named(initial,"unresponsive") && !Named(initial,"crashed") && !Named(initial,"popupBlocked"));
+  auto* status=m.state->status();assert(status);
+  m.page.fullscreen=true;m.page.Notify([](auto* o) { o->DidToggleFullscreenModeForTab(true,true); });
+  assert(m.LastName()=="fullscreen" && m.LastData().Find("fullscreen")->GetBool());
+  assert(Named(Created(m,created),"fullscreen")->Find("fullscreen")->GetBool());
+  m.page.fullscreen=false;m.page.Notify([](auto* o) { o->DidToggleFullscreenModeForTab(false,true); });
+  assert(m.LastName()=="fullscreen" && !m.LastData().Find("fullscreen")->GetBool());
+  assert(status->TargetURL(GURL("https://example.test/link")) && m.LastName()=="status" && Text(m.LastData(),"text")=="https://example.test/link");
+  const auto before=m.deliveries.size();assert(status->TargetURL(GURL("https://example.test/link")) && m.deliveries.size()==before);
+  assert(Text(*Named(Created(m,created),"status"),"text")=="https://example.test/link");
+  assert(status->TargetURL(GURL()) && Text(m.LastData(),"text").empty());
+  content::NavigationHandle pending;m.Start(pending);
+  assert(status->TargetURL(GURL("https://example.test/during")) && m.LastName()=="status" && Text(m.LastData(),"text")=="https://example.test/during");
+  m.Finish(pending);
+  const auto& restored=LastSnapshot(m);assert(Text(restored,"action")=="snapshot" && Text(restored,"reason")=="restore");
+  assert(Text(*Named(restored,"status"),"text")=="https://example.test/during" && Named(restored,"fullscreen") && Named(restored,"responsive"));
+  m.page.frame.NewDocument();m.Boundary();
+  const auto& document=LastSnapshot(m);assert(Text(document,"reason")=="document" && Text(*Named(document,"status"),"text").empty());
+  m.page.crashed=base::TERMINATION_STATUS_PROCESS_CRASHED;m.page.crash_code=139;
+  assert(status->TargetURL(GURL("https://example.test/before-crash")));
+  m.page.Notify([](auto* o) { o->PrimaryMainFrameRenderProcessGone(base::TERMINATION_STATUS_PROCESS_CRASHED); });
+  assert(m.LastName()=="crashed" && Number(m.LastData(),"status")==139 && Number(m.LastData(),"code")==139 && Text(m.LastData(),"reason")=="crashed");
+  const auto& crashed=Created(m,created);assert(Text(*Named(crashed,"crashed"),"reason")=="crashed" && Text(*Named(crashed,"status"),"text").empty());
+  const auto quiet=m.deliveries.size();m.page.crashed.reset();
+  m.page.Notify([](auto* o) { o->PrimaryMainFrameRenderProcessGone(base::TERMINATION_STATUS_NORMAL_TERMINATION); });
+  m.page.Notify([](auto* o) { o->PrimaryMainFrameRenderProcessGone(base::TERMINATION_STATUS_STILL_RUNNING); });
+  assert(m.deliveries.size()==quiet && !Named(Created(m,created),"crashed"));
+  assert(LinuxCrashReason(base::TERMINATION_STATUS_PROCESS_WAS_KILLED)=="killed" && LinuxCrashReason(base::TERMINATION_STATUS_OOM)=="oom");
+  assert(LinuxCrashReason(base::TERMINATION_STATUS_LAUNCH_FAILED)=="launchFailed" && LinuxCrashReason(base::TERMINATION_STATUS_ABNORMAL_TERMINATION)=="abnormal");
+  assert(LinuxCrashReason(base::TERMINATION_STATUS_EVICTED_FOR_MEMORY)=="unknown");
+  assert(!LinuxWindowFullScreen(false,false,false) && LinuxWindowFullScreen(true,false,false) && LinuxWindowFullScreen(true,false,true));
+  assert(!LinuxWindowFullScreen(true,true,true) && LinuxWindowFullScreen(true,true,false) && !LinuxWindowFullScreen(false,true,false));
+  m.browser.strip.tabs.clear();const auto moved=m.deliveries.size();
+  assert(!status->TargetURL(GURL("https://example.test/moved")) && m.deliveries.size()==moved);
+  m.page.Notify([](auto* o) { o->DidToggleFullscreenModeForTab(true,false); });assert(m.deliveries.size()==moved);
+  m.browser.strip.tabs.push_back(&m.page);m.state->Retire();assert(!m.state->status() && m.deliveries.size()==moved);
+}
+
+void Hung() {
+  Mount m;std::optional<base::DictValue> created;m.state->CreationState();auto* status=m.state->status();
+  content::RenderProcessHost process;process.id=5;content::RenderWidgetHost widget(&process,3),other(&process,4);
+  int restarts=0;base::RepeatingClosure restart([&] { ++restarts; });
+  widget.unresponsive=true;assert(status->Unresponsive(&widget,restart) && m.LastName()=="unresponsive");
+  assert(Named(Created(m,created),"unresponsive") && !Named(Created(m,created),"responsive"));
+  assert(!status->Responsive(&other));
+  widget.unresponsive=false;assert(!Named(Created(m,created),"unresponsive"));widget.unresponsive=true;
+  assert(status->Responsive(&widget) && m.LastName()=="responsive" && restarts==0);
+  assert(Named(Created(m,created),"responsive"));
+  assert(status->Unresponsive(&widget,restart));
+  assert(!status->ResolveUnresponsive(base::ListValue()) && !status->ResolveUnresponsive(Arg(1)));
+  assert(status->ResolveUnresponsive(base::ListValue().Append(false)) && restarts==1 && process.alive);
+  assert(Named(Created(m,created),"responsive") && status->ResolveUnresponsive(base::ListValue().Append(false)) && restarts==1);
+  assert(status->Unresponsive(&widget,restart));
+  assert(status->ResolveUnresponsive(base::ListValue().Append(true)) && restarts==1 && process.shutdown==content::RESULT_CODE_HUNG && !process.alive);
+  content::RenderProcessHost second;second.id=6;content::RenderWidgetHost hung(&second,1);hung.unresponsive=true;
+  assert(status->Unresponsive(&hung,restart));
+  content::NavigationHandle pending;m.Start(pending);assert(status->Responsive(&hung) && m.LastName()=="responsive");
+  assert(status->Unresponsive(&hung,restart) && m.LastName()=="unresponsive");m.Finish(pending);
+  m.state->Retire();assert(restarts==2 && !m.state->status());
+  Mount detached;auto* detached_status=detached.state->status();detached.browser.strip.tabs.clear();
+  assert(!detached_status->Unresponsive(&hung,restart) && detached.deliveries.empty() && restarts==2);
+  detached.browser.strip.tabs.push_back(&detached.page);assert(!Named(*detached.state->CreationState()->FindDict("snapshot"),"unresponsive"));
+  Mount gone;auto* gone_status=gone.state->status();assert(gone_status->Unresponsive(&hung,restart));
+  gone.page.Notify([](auto* o) { o->WebContentsDestroyed(); });assert(restarts==2);
+  {
+    Mount dying;dying.state->CreationState();assert(dying.state->status()->Unresponsive(&hung,restart));
+    dying.page.destroying=true;dying.state->Retire();assert(restarts==2);dying.page.destroying=false;
+  }
+  Mount reentrant;reentrant.state->CreationState();reentrant.on_delivery=[&] { reentrant.state.reset(); };
+  assert(reentrant.state->status()->Unresponsive(&hung,restart) && !reentrant.state && restarts==3);
+}
+
+void Popups() {
+  Mount m;std::optional<base::DictValue> created;m.state->CreationState();auto* status=m.state->status();
+  assert(m.popup_helper.manager()->observers.size()==1);
+  m.popup_helper.Block(4,GURL("https://pop.test/one"));
+  assert(m.LastName()=="popupBlocked" && Text(m.LastData(),"id")=="4" && Text(m.LastData(),"url")=="https://pop.test/one" && Text(m.LastData(),"origin")=="https://example.test");
+  assert(Count(Created(m,created),"popupBlocked")==1);
+  content::NavigationHandle pending;m.Start(pending);const auto during=m.deliveries.size();
+  m.popup_helper.Block(5,GURL("https://pop.test/two"));assert(m.deliveries.size()==during);
+  m.Finish(pending);
+  const auto& restored=LastSnapshot(m);assert(Text(restored,"reason")=="restore" && Count(restored,"popupBlocked")==2);
+  assert(Text(*Named(restored,"popupBlocked",1),"id")=="5");
+  assert(!status->OpenBlockedPopup(base::ListValue()) && !status->OpenBlockedPopup(Arg(4)) && !status->OpenBlockedPopup(base::ListValue().Append("x")));
+  assert(!status->OpenBlockedPopup(base::ListValue().Append("4").Append(1)) && !status->OpenBlockedPopup(base::ListValue().Append("99")));
+  auto* settings=HostContentSettingsMapFactory::GetForProfile(&m.profile);settings->set.clear();
+  assert(status->OpenBlockedPopup(base::ListValue().Append("4").Append(true)));
+  assert(m.popup_helper.shown.size()==1 && m.popup_helper.shown[0].first==4 && m.popup_helper.shown[0].second==WindowOpenDisposition::NEW_FOREGROUND_TAB);
+  assert(settings->set.size()==1 && settings->set[0].first=="https://example.test/" && settings->set[0].second==CONTENT_SETTING_ALLOW);
+  assert(!status->OpenBlockedPopup(base::ListValue().Append("4")));
+  assert(Count(Created(m,created),"popupBlocked")==1);
+  m.page.frame.NewDocument();m.Boundary();
+  assert(Text(LastSnapshot(m),"reason")=="document" && Count(LastSnapshot(m),"popupBlocked")==0 && m.popup_helper.blocked.contains(5));
+  assert(!status->OpenBlockedPopup(base::ListValue().Append("5")) && m.popup_helper.shown.size()==1);
+  m.popup_helper.blocked.clear();
+  for (int i=0;i<150;++i) m.popup_helper.Block(1000+i,GURL("https://pop.test/many"));
+  assert(Count(Created(m,created),"popupBlocked")==100);
+  Mount reentrant;reentrant.state->CreationState();reentrant.popup_helper.Block(7,GURL("https://pop.test/r"));
+  reentrant.popup_helper.on_show=[&] { reentrant.state.reset(); };
+  assert(reentrant.state->status()->OpenBlockedPopup(base::ListValue().Append("7")) && !reentrant.state && reentrant.popup_helper.manager()->observers.empty());
+  m.state->Retire();assert(m.popup_helper.manager()->observers.empty());
+  Mount destroyed;destroyed.page.Notify([](auto* o) { o->WebContentsDestroyed(); });assert(destroyed.popup_helper.manager()->observers.empty());
+}
+
 int main(int argc,char** argv) {
   assert(argc==2);std::string mode=argv[1];
-  if(mode=="authority") Authority();else if(mode=="split-profiles") SplitProfiles();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="sampled-theme") SampledTheme();else if(mode=="page-messages") PageMessages();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
+  if(mode=="authority") Authority();else if(mode=="split-profiles") SplitProfiles();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="sampled-theme") SampledTheme();else if(mode=="page-messages") PageMessages();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else if(mode=="page-status") PageStatus();else if(mode=="hung") Hung();else if(mode=="popups") Popups();else return 2;
 }

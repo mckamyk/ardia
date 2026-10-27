@@ -7,6 +7,7 @@
 
 #include "ardia/linux/ac_linux_history_zoom.h"
 #include "ardia/linux/ac_linux_page_lease.h"
+#include "ardia/linux/ac_linux_page_status.h"
 #include "ardia/linux/ac_linux_security.h"
 #include "ardia/linux/ac_linux_theme.h"
 
@@ -38,6 +39,7 @@ class LinuxPageState {
   bool ZoomStep(const base::ListValue& args);
   void SetMessageSnapshot(MessageSnapshot snapshot);
   bool SetSampledTheme(std::optional<LinuxTheme::Sample> sample, content::WeakDocumentPtr document);
+  LinuxPageStatus* status() const { return retired_ ? nullptr : status_.get(); }
   void Retire();
 
  private:
@@ -51,6 +53,7 @@ class LinuxPageState {
   std::unique_ptr<LinuxSecurity> security_;
   std::unique_ptr<LinuxHistoryZoom> history_zoom_;
   std::unique_ptr<LinuxTheme> theme_;
+  std::unique_ptr<LinuxPageStatus> status_;
   bool retired_ = false;
   base::WeakPtrFactory<LinuxPageState> weak_factory_{this};
 };
