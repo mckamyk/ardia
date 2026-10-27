@@ -78,6 +78,14 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
       const run = String(url.searchParams.get("run") ?? "").replace(/[^A-Za-z0-9_-]/g, "");
       return html("Blocker fixture", `<h1>Blocker fixture</h1><img id="ad" src="/ads/banners/${run}.png" width="1" height="1"><img id="control" src="/pixel.png?blocker=${run}" width="1" height="1">`);
     }
+    if (url.pathname === "/fullscreen") return html("Fullscreen fixture", `<h1>Fullscreen fixture</h1><video id="video" width="160" height="90"></video>`);
+    if (url.pathname === "/hover") return html("Hover fixture", `<a id="link" href="/page/5?hover=${escapeHtml(url.searchParams.get("run") ?? "")}" style="position:absolute;left:20px;top:20px;width:300px;height:120px;display:block;font-size:48px">Hover link</a>`);
+    if (url.pathname === "/popup") return html("Popup fixture", `<h1>Popup fixture</h1><script>window.open(${JSON.stringify(`http://plain.ardia.test:${ports.http}/page/8?popup=${encodeURIComponent(url.searchParams.get("run") ?? "")}`)})</script>`);
+    if (url.pathname === "/busy") return html("Busy fixture", `<h1>Busy fixture</h1><script>addEventListener("load", () => setTimeout(() => { for (;;) {} }, 200))</script>`);
+    const favicon = /^\/favicon\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
+    if (favicon) return html(`Favicon ${favicon[1]}`, `<h1>Favicon ${escapeHtml(favicon[1])}</h1>`, `<link rel="icon" href="/icon/${favicon[1]}.png">`);
+    const icon = /^\/icon\/([A-Za-z0-9_-]+)\.png$/.exec(url.pathname);
+    if (icon) return icon[1].startsWith("bad") ? send(200, "image/png", "not an image") : send(200, "image/png", PIXEL_PNG);
     const download = /^\/download\/([A-Za-z0-9._-]+)$/.exec(url.pathname);
     if (download) {
       const size = Math.max(1, Math.min(8 << 20, Number(url.searchParams.get("size") ?? 4096) | 0));
@@ -146,6 +154,13 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     permissions: () => `https://secure.ardia.test:${ports.https}/permissions`,
     permissionsOrigin: () => `https://secure.ardia.test:${ports.https}`,
     blocker: (host, run) => `http://${host}:${ports.http}/blocker?run=${encodeURIComponent(run)}`,
+    fullscreen: (run = "") => `http://plain.ardia.test:${ports.http}/fullscreen?run=${encodeURIComponent(run)}`,
+    hover: (run = "") => `http://plain.ardia.test:${ports.http}/hover?run=${encodeURIComponent(run)}`,
+    popup: (run = "") => `http://plain.ardia.test:${ports.http}/popup?run=${encodeURIComponent(run)}`,
+    popupTarget: (run = "") => `http://plain.ardia.test:${ports.http}/page/8?popup=${encodeURIComponent(run)}`,
+    busy: (run = "") => `http://plain.ardia.test:${ports.http}/busy?run=${encodeURIComponent(run)}`,
+    favicon: (label, host = "icons.ardia.test") => `http://${host}:${ports.http}/favicon/${label}`,
+    icon: (name, host = "icons.ardia.test") => `http://${host}:${ports.http}/icon/${name}.png`,
   };
   const chromiumArgs = [
     `--host-resolver-rules=MAP *.ardia.test 127.0.0.1, MAP ${SUGGEST_HOST} 127.0.0.1:${ports.https}, MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1`,

@@ -5,6 +5,7 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
@@ -95,6 +96,7 @@ class ListValue {
   template<class T> ListValue&& Append(T v) && { Append(std::move(v)); return std::move(*this); }
   const Value& operator[](size_t i) const { return data_[i]; }
   size_t size() const { return data_.size(); }
+  bool empty() const { return data_.empty(); }
   ListValue Clone() const { ListValue v; for(const auto& x:data_) v.Append(x.Clone()); return v; }
   auto begin() const { return data_.begin(); }
   auto end() const { return data_.end(); }
@@ -134,6 +136,10 @@ template<class R,class... A> class RepeatingCallback<R(A...)> {
   void Reset() { fn_={}; }
  private: std::function<R(A...)> fn_;
 };
+using RepeatingClosure=RepeatingCallback<void()>;
+enum TerminationStatus : int { TERMINATION_STATUS_NORMAL_TERMINATION=0,TERMINATION_STATUS_ABNORMAL_TERMINATION=1,TERMINATION_STATUS_PROCESS_WAS_KILLED=2,TERMINATION_STATUS_PROCESS_CRASHED=3,TERMINATION_STATUS_STILL_RUNNING=4,TERMINATION_STATUS_LAUNCH_FAILED=7,TERMINATION_STATUS_OOM=8,TERMINATION_STATUS_EVICTED_FOR_MEMORY=9 };
+inline bool StringToInt(std::string_view text,int* out) { if (text.empty()||text.size()>10) return false; long long v=0; size_t i=0; bool negative=text[0]=='-'; if (negative) i=1; if (i==text.size()) return false; for (;i<text.size();++i) { if (text[i]<'0'||text[i]>'9') return false; v=v*10+(text[i]-'0'); } v=negative?-v:v; if (v<INT32_MIN||v>INT32_MAX) return false; *out=static_cast<int>(v); return true; }
+inline std::string NumberToString(int value) { return std::to_string(value); }
 template<class F,class... B> auto BindRepeating(F f,B... bound) { return [f,bound...](auto&&... args) { return f(bound...,std::forward<decltype(args)>(args)...); }; }
 class CheckedObserver {};
 template<class... Args> std::string StringPrintf(const char* format, Args... args) { char out[128]; std::snprintf(out,sizeof(out),format,args...); return out; }
@@ -199,6 +205,24 @@ struct VisibleSecurityState {
 namespace content {
 class WebContents;
 class RenderFrameHost;
+struct RenderProcessHost {
+  int id=1; bool alive=true; int shutdown=-1;
+  int GetDeprecatedID() const { return id; }
+  bool IsInitializedAndNotDead() { return alive; }
+  bool Shutdown(int code) { shutdown=code; alive=false; return true; }
+};
+struct RenderWidgetHost;
+inline std::map<std::pair<int,int>,RenderWidgetHost*>& RenderWidgetHosts() { static std::map<std::pair<int,int>,RenderWidgetHost*> hosts; return hosts; }
+struct RenderWidgetHost {
+  RenderProcessHost* process; int routing; bool unresponsive=false;
+  RenderWidgetHost(RenderProcessHost* p,int r):process(p),routing(r) { RenderWidgetHosts()[{p->id,r}]=this; }
+  ~RenderWidgetHost() { RenderWidgetHosts().erase({process->id,routing}); }
+  RenderProcessHost* GetProcess() const { return process; }
+  int GetRoutingID() { return routing; }
+  bool IsCurrentlyUnresponsive() { return unresponsive; }
+  static RenderWidgetHost* FromID(int process,int routing) { auto it=RenderWidgetHosts().find({process,routing}); return it==RenderWidgetHosts().end()?nullptr:it->second; }
+};
+enum { RESULT_CODE_HUNG=4 };
 struct WeakDocumentPtr {
   base::WeakPtr<RenderFrameHost> value;
   RenderFrameHost* AsRenderFrameHostIfValid() const { return value.get(); }
@@ -246,12 +270,14 @@ class WebContentsObserver {
   virtual void DidChangeVisibleSecurityState() {}
   virtual void DidChangeThemeColor() {}
   virtual void OnPageScaleFactorChanged(float) {}
+  virtual void DidToggleFullscreenModeForTab(bool,bool) {}
+  virtual void PrimaryMainFrameRenderProcessGone(base::TerminationStatus) {}
  private: WebContents* contents_=nullptr;
 };
 class WebContents {
  public:
   explicit WebContents(Profile* p):profile(p) {}
-  ~WebContents() { auto copy=observers; for(auto* o:copy) if (std::find(observers.begin(),observers.end(),o)!=observers.end()) o->WebContentsDestroyed(); copy=observers; for(auto* o:copy) o->ResetWebContents(); }
+  ~WebContents() { destroying=true; auto copy=observers; for(auto* o:copy) if (std::find(observers.begin(),observers.end(),o)!=observers.end()) o->WebContentsDestroyed(); copy=observers; for(auto* o:copy) o->ResetWebContents(); }
   base::WeakPtr<WebContents> GetWeakPtr() { return weak.GetWeakPtr(); }
   RenderFrameHost* GetPrimaryMainFrame() const { return primary; }
   Profile* GetBrowserContext() const { return profile; }
@@ -270,6 +296,16 @@ class WebContents {
   std::optional<uint32_t> theme;
   security_state::VisibleSecurityState security;
   void* zoom=nullptr;
+  void* popups=nullptr;
+  bool fullscreen=false;
+  bool destroying=false;
+  bool IsBeingDestroyed() { return destroying; }
+  std::optional<base::TerminationStatus> crashed;
+  int crash_code=0;
+  bool IsFullscreen() { return fullscreen; }
+  bool IsCrashed() { return crashed.has_value(); }
+  base::TerminationStatus GetCrashedStatus() { return crashed.value_or(base::TERMINATION_STATUS_STILL_RUNNING); }
+  int GetCrashedErrorCode() { return crash_code; }
   std::vector<WebContentsObserver*> observers;
  private: base::WeakPtrFactory<WebContents> weak{this};
 };
@@ -322,6 +358,39 @@ class ZoomObserver : public base::CheckedObserver {
 inline ZoomController::~ZoomController() { auto copy=observers; for(auto* o:copy) o->OnZoomControllerDestroyed(this); assert(observers.empty()); }
 struct PageZoom { static void Zoom(content::WebContents* contents,content::PageZoom step) { auto* c=ZoomController::FromWebContents(contents); c->level=step==content::PAGE_ZOOM_RESET?c->fallback:c->level+static_cast<int>(step); auto copy=c->observers;for(auto* o:copy) if(std::find(c->observers.begin(),c->observers.end(),o)!=c->observers.end()) o->OnZoomChanged({}); } };
 }
+enum class WindowOpenDisposition { CURRENT_TAB, NEW_FOREGROUND_TAB, NEW_BACKGROUND_TAB, NEW_POPUP };
+namespace blocked_content {
+class UrlListManager {
+ public:
+  class Observer { public: virtual ~Observer()=default; virtual void BlockedUrlAdded(int32_t id,const GURL& url)=0; };
+  void AddObserver(Observer* o) { observers.push_back(o); }
+  void RemoveObserver(Observer* o) { std::erase(observers,o); }
+  void NotifyObservers(int32_t id,const GURL& url) { auto copy=observers; for(auto* o:copy) if(std::find(observers.begin(),observers.end(),o)!=observers.end()) o->BlockedUrlAdded(id,url); }
+  std::vector<Observer*> observers;
+};
+class PopupBlockerTabHelper {
+ public:
+  typedef std::map<int32_t,GURL> PopupIdMap;
+  static PopupBlockerTabHelper* FromWebContents(content::WebContents* contents) { return static_cast<PopupBlockerTabHelper*>(contents->popups); }
+  UrlListManager* manager() { return &manager_; }
+  PopupIdMap GetBlockedPopupRequests() { return blocked; }
+  void ShowBlockedPopup(int32_t id,WindowOpenDisposition disposition) { if(!blocked.erase(id)) return; shown.push_back({id,disposition}); if(on_show) on_show(); }
+  void Block(int32_t id,GURL url) { blocked[id]=url; manager_.NotifyObservers(id,url); }
+  PopupIdMap blocked;
+  std::vector<std::pair<int32_t,WindowOpenDisposition>> shown;
+  std::function<void()> on_show;
+ private: UrlListManager manager_;
+};
+}
+enum class ContentSettingsType { POPUPS };
+enum ContentSetting { CONTENT_SETTING_ALLOW=1 };
+struct HostContentSettingsMap {
+  std::vector<std::pair<std::string,ContentSetting>> set;
+  void SetContentSettingDefaultScope(const GURL& primary,const GURL&,ContentSettingsType,ContentSetting setting) { set.push_back({primary.spec(),setting}); }
+};
+struct HostContentSettingsMapFactory {
+  static HostContentSettingsMap* GetForProfile(Profile*) { static HostContentSettingsMap map; return &map; }
+};
 inline unsigned SkColorGetR(uint32_t c) { return (c>>16)&255; }
 inline unsigned SkColorGetG(uint32_t c) { return (c>>8)&255; }
 inline unsigned SkColorGetB(uint32_t c) { return c&255; }
