@@ -1,6 +1,7 @@
 #include "ardia/linux/ac_linux_extension_keybindings.h"
 
 #include "chrome/browser/extensions/commands/command_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
