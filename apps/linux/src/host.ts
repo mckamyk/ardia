@@ -1,5 +1,6 @@
 import type { LaunchConfig } from "../../../packages/shell/src/app";
 import type { HydrateData } from "../../browser/src/state/browser/store";
+import type { BrowserWindow, Tab } from "../../browser/src/state/browser/types";
 
 export type HostListener = (module: string, event: string, payload: unknown) => void;
 export type ArdiaHost = {
@@ -13,6 +14,8 @@ export type ArdiaHost = {
     nativeModules?: Record<string, Record<string, unknown>>;
     capabilities?: string[];
     launchConfig?: LaunchConfig;
+    pageProfile?: string;
+    privateWindow?: { window: BrowserWindow; tabs: Record<string, Tab> };
   };
   call(name: string, profile: string, args: string | null): Promise<string>;
   invoke(method: string, args: Record<string, unknown>): Promise<unknown>;

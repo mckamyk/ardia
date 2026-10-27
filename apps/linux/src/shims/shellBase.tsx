@@ -5,6 +5,8 @@ import { NATIVE_CHANGE } from "./react-native";
 import { ardiaHost, hostModuleMethod, reportHostError } from "../host";
 import { hostLaunchConfig } from "../hostLaunchConfig";
 import { createHostDocuments } from "../hostDocuments";
+import { createHostWindowOpener } from "../hostWindowProfiles";
+import { useBrowser } from "../../../browser/src/state/browser/store";
 
 export * from "@ardia-real/shell";
 export { Symbol } from "./web/Symbol";
@@ -82,7 +84,8 @@ const claimHostFocus = async (generation: number, tag: number) => {
   if (node instanceof HTMLElement) node.focus();
   else await hostModuleMethod("ArdiaShell", "claimFocus")(generation, tag);
 };
-const hostShellLocals: Record<string, unknown> = { readDocument, writeDocument, saveDocument, removeDocument, claimFocus: claimHostFocus };
+const openHostWindow = ardiaHost ? createHostWindowOpener(ardiaHost, () => useBrowser.getState(), (event) => emitWindowEvent(event)) : undefined;
+const hostShellLocals: Record<string, unknown> = { readDocument, writeDocument, saveDocument, removeDocument, claimFocus: claimHostFocus, openWindow: openHostWindow };
 const hostAppLocals: Record<string, unknown> = { systemInfo, launchConfig };
 provideNativeModuleProvider((module, method) => ardiaHost ? (module === "ArdiaShell" ? hostShellLocals[method] : module === "ArdiaApp" ? hostAppLocals[method] : undefined) : undefined);
 
