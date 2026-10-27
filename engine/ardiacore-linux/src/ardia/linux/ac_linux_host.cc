@@ -17,6 +17,7 @@
 
 #include "ardia/linux/ac_linux_policy.h"
 #include "ardia/linux/ac_linux_contract.h"
+#include "ardia/linux/ac_linux_auto_pip_service.h"
 #include "ardia/linux/ac_linux_close.h"
 #include "ardia/linux/ac_linux_close_hooks.h"
 #include "ardia/linux/ac_linux_credential_service.h"
@@ -4025,9 +4026,7 @@ void ShellHostView::Invoke(
       }
     }
     g_ardia_auto_picture_in_picture_off = !enabled;
-    HostContentSettingsMapFactory::GetForProfile(profile())->SetDefaultContentSetting(
-        ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
-        enabled ? CONTENT_SETTING_ALLOW : CONTENT_SETTING_BLOCK);
+    ardiacore::SetLinuxAutoPictureInPicture(enabled);
     if (!enabled) {
       std::vector<base::WeakPtr<content::WebContents>> contents;
       for (const auto& [window, host] : Hosts()) {
