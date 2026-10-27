@@ -121,6 +121,22 @@ describe("fixture servers and certificates", () => {
     assert.equal((await get(fixtures.url.icon("bad1"))).body.toString(), "not an image");
   });
 
+  it("serves the page-messaging, selection and tint fixtures", async () => {
+    const gestures = (await get(fixtures.url.gestures("r"))).body.toString();
+    assert.ok(gestures.includes(`id="link" href="${fixtures.url.page(6, "r")}"`));
+    assert.ok(gestures.includes(`<iframe id="frame" src="${fixtures.url.gestureFrame("r")}"`));
+    assert.match(gestures, /id="words">Ardia selects quoted words/);
+    assert.match(gestures, /<textarea id="field">alpha beta alpha<\/textarea>/);
+    assert.match(gestures, /id="tall" style="height:4000px"/);
+    const frame = (await get(fixtures.url.gestureFrame("r"))).body.toString();
+    assert.ok(frame.includes(`id="link" href="${fixtures.url.page(7, "r")}"`));
+    assert.match((await get(fixtures.url.tint("meta"))).body.toString(), /<meta name="theme-color" content="#336699">/);
+    assert.match((await get(fixtures.url.tint("header"))).body.toString(), /<header style="position:sticky;top:0;height:120px;background:#aa2244"/);
+    assert.match((await get(fixtures.url.tint("background"))).body.toString(), /<body style="background:#22aa66">/);
+    const plain = (await get(fixtures.url.tint("plain"))).body.toString();
+    assert.doesNotMatch(plain, /theme-color|<header|background:/);
+  });
+
   it("holds a slow download until it is released", async () => {
     const name = `held-${Date.now()}.bin`;
     let done = false;
