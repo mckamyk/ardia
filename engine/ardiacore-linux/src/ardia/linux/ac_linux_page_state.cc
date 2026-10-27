@@ -53,6 +53,7 @@ void LinuxPageState::Retire() {
   history_zoom_->Reset();
   security_->Reset();
   navigation_.Reset();
+  message_snapshot_.Reset();
 }
 
 std::optional<LinuxPageRequest> LinuxPageState::Capture() {
@@ -84,6 +85,16 @@ std::optional<base::ListValue> LinuxPageState::SnapshotEvents() {
     for (const auto& candidate : candidates) urls.Append(candidate->icon_url.spec());
     events.Append(PageEvent("favicon", base::Value(base::DictValue()
         .Set("url", candidates.front()->icon_url.spec()).Set("urls", std::move(urls)))));
+  }
+  if (message_snapshot_) {
+    auto callback = message_snapshot_;
+    auto messages = callback.Run();
+    if (!weak || retired_) return std::nullopt;
+    size_t appended = 0;
+    for (const auto& message : messages) {
+      if (appended++ == kMessageSnapshotMax) break;
+      events.Append(message.Clone());
+    }
   }
   return events;
 }
@@ -149,6 +160,14 @@ bool LinuxPageState::GoToOffset(const base::ListValue& args) {
 
 bool LinuxPageState::ZoomStep(const base::ListValue& args) {
   return !retired_ && history_zoom_->ZoomStep(args);
+}
+
+void LinuxPageState::SetMessageSnapshot(MessageSnapshot snapshot) {
+  if (!retired_) message_snapshot_ = std::move(snapshot);
+}
+
+bool LinuxPageState::SetSampledTheme(std::optional<LinuxTheme::Sample> sample, content::WeakDocumentPtr document) {
+  return !retired_ && theme_->SetSampled(std::move(sample), std::move(document));
 }
 
 }

@@ -238,6 +238,25 @@ void Theme() {
   h.page.theme=0xffff0000;content::NavigationHandle a;h.Start(a);assert(!theme.Emit() && theme.Snapshot().Find("themeColor")->is_none());h.Finish(a);assert(theme.Emit());theme.Reset();assert(!theme.Emit());
 }
 
+void SampledTheme() {
+  Harness h;LinuxTheme theme(h.lease->GetWeakPtr(),[] { return base::DictValue().Set("url","https://example.test/"); });
+  auto document=h.page.frame.GetWeakDocumentPtr();
+  assert(theme.SetSampled(std::make_pair(std::string("#a1b2c3"),std::string("header")),document));
+  assert(Text(theme.Snapshot(),"themeColor")=="#a1b2c3" && Text(theme.Snapshot(),"themeColorSource")=="header");
+  assert(Text(h.deliveries.back().FindDict("event")->Find("data")->GetDict(),"themeColorSource")=="header");
+  h.page.theme=0xff12abef;assert(Text(theme.Snapshot(),"themeColorSource")=="meta");h.page.theme.reset();
+  assert(theme.SetSampled(std::nullopt,document) && theme.Snapshot().Find("themeColor")->is_none());
+  assert(theme.SetSampled(std::make_pair(std::string("#010203"),std::string("background")),document));
+  h.page.frame.NewDocument();h.Boundary();assert(theme.Snapshot().Find("themeColor")->is_none());
+  content::RenderFrameHost other;const auto deliveries=h.deliveries.size();
+  assert(!theme.SetSampled(std::make_pair(std::string("#000000"),std::string("background")),other.GetWeakDocumentPtr()));
+  assert(h.deliveries.size()==deliveries && theme.Snapshot().Find("themeColor")->is_none());
+  assert(!theme.SetSampled(std::make_pair(std::string("#000000"),std::string("background")),content::WeakDocumentPtr()));
+  auto fresh=h.page.frame.GetWeakDocumentPtr();assert(theme.SetSampled(std::make_pair(std::string("#0a0b0c"),std::string("background")),fresh));
+  h.page.primary=&other;assert(theme.Snapshot().Find("themeColor")->is_none());h.page.primary=&h.page.frame;
+  theme.Reset();assert(theme.Snapshot().Find("themeColor")->is_none());
+}
+
 void Reentrant() {
   Harness h;
   std::unique_ptr<LinuxSecurity> security;
@@ -300,6 +319,23 @@ void Creation() {
   assert(Text(EventAt(*cleared->FindDict("snapshot"),1,"security"),"level")=="none");
   Mount gone;gone.browser.strip.tabs.clear();assert(!gone.state->CreationState());
   Mount retired;retired.state->Retire();assert(!retired.state->CreationState() && !retired.state->EmitNavigation());
+}
+
+void PageMessages() {
+  Mount m;int calls=0;
+  m.state->SetMessageSnapshot([&] { ++calls;base::ListValue events;events.Append(base::DictValue().Set("name","pageMessage").Set("data",base::DictValue().Set("kind","scroll").Set("data",base::DictValue().Set("state","down"))));return events; });
+  auto created=m.state->CreationState();const auto& snapshot=*created->FindDict("snapshot");
+  const auto& list=snapshot.Find("events")->GetList();assert(calls==1 && Text(list[list.size()-1].GetDict(),"name")=="pageMessage");
+  assert(m.state->SetSampledTheme(std::make_pair(std::string("#334455"),std::string("header")),m.page.frame.GetWeakDocumentPtr()));
+  assert(m.LastName()=="navigation" && Text(m.LastData(),"themeColor")=="#334455" && Text(m.LastData(),"themeColorSource")=="header");
+  m.page.frame.NewDocument();m.Boundary();
+  const auto& events=m.Last().Find("events")->GetList();assert(Text(m.Last(),"action")=="snapshot");
+  assert(EventAt(m.Last(),0,"navigation").Find("themeColor")->is_none() && Text(events[events.size()-1].GetDict(),"name")=="pageMessage");
+  m.state->SetMessageSnapshot([] { base::ListValue events;for (int i=0;i<20;++i) events.Append(base::DictValue().Set("name","pageMessage").Set("data",base::DictValue()));return events; });
+  auto capped=m.state->CreationState();assert(capped->FindDict("snapshot")->Find("events")->GetList().size()<=3+8);
+  std::unique_ptr<LinuxPageState>* holder=&m.state;
+  m.state->SetMessageSnapshot([holder] { holder->reset();return base::ListValue(); });auto destroyed=m.state->CreationState();assert(!destroyed && !m.state);
+  Mount retired;retired.state->Retire();assert(!retired.state->SetSampledTheme(std::make_pair(std::string("#000000"),std::string("header")),retired.page.frame.GetWeakDocumentPtr()));
 }
 
 void Boundaries() {
@@ -400,5 +436,5 @@ void Rebinding() {
 
 int main(int argc,char** argv) {
   assert(argc==2);std::string mode=argv[1];
-  if(mode=="authority") Authority();else if(mode=="split-profiles") SplitProfiles();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
+  if(mode=="authority") Authority();else if(mode=="split-profiles") SplitProfiles();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="sampled-theme") SampledTheme();else if(mode=="page-messages") PageMessages();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
 }

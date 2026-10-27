@@ -29,6 +29,7 @@
 #include "ardia/linux/ac_linux_extensions.h"
 #include "ardia/linux/ac_linux_files.h"
 #include "ardia/linux/ac_linux_launch_config.h"
+#include "ardia/linux/ac_linux_page_channel.h"
 #include "ardia/linux/ac_linux_page_commands.h"
 #include "ardia/linux/ac_linux_launch_steps.h"
 #include "ardia/linux/ac_linux_page_state.h"
@@ -173,6 +174,7 @@ extern bool (*g_ardia_keeps_window_without_tabs)(
 extern bool g_ardia_auto_picture_in_picture_off;
 extern int (*g_ardia_linux_tab_shown)(content::WebContents*);
 extern void (*g_ardia_linux_auto_pip_requested)(content::WebContents*);
+extern void (*g_ardia_linux_page_host_binder)(content::RenderFrameHost&, blink::AssociatedInterfaceRegistry&);
 extern void (*g_ardia_devtools_dock_changed)(BrowserWindowInterface* browser,
                                              content::WebContents* inspected,
                                              content::WebContents* devtools);
@@ -668,6 +670,8 @@ class TabBinding : public content::WebContentsObserver {
   ardiacore::LinuxPageState* page() const { return page_.get(); }
   uint64_t contents_generation() const { return contents_generation_; }
   void AttachPage(std::unique_ptr<ardiacore::LinuxPageState> page);
+  void AttachPageChannel();
+  std::optional<gfx::PointF> ShellPoint(gfx::PointF page_point) const;
   void RetirePage();
   std::unique_ptr<ardiacore::LinuxPageState> TakePage();
   std::vector<int> replaced_ids;
@@ -782,6 +786,7 @@ class ShellHostView : public views::View,
   }
   BrowserWindowInterface* browser() const { return browser_; }
   content::WebContents* shell() const { return shell_->GetWebContents(); }
+  std::optional<gfx::PointF> ShellPoint(const TabBinding& binding, gfx::PointF page_point);
   Profile* profile() const { return browser_ ? app_profile_.get() : nullptr; }
   Profile* page_profile() const { return browser_ ? browser_->GetProfile() : nullptr; }
   const std::string& page_profile_id() const { return page_profile_; }
@@ -1330,6 +1335,12 @@ class HostMessageHandler : public content::WebUIMessageHandler,
             base::Value(name == "tabs.devBrowserId" ? TabId(binding->contents()) : host_->id());
         return Resolve(id, std::move(value));
       }
+      if (std::find(std::begin(ardiacore::kLinuxPageMessageRoutes), std::end(ardiacore::kLinuxPageMessageRoutes), name) !=
+          std::end(ardiacore::kLinuxPageMessageRoutes)) {
+        std::string error;
+        if (!ardiacore::SetLinuxPageOption(name, input, &error)) return Fail(id, "ERR_ENGINE", error);
+        return Resolve(id, base::Value());
+      }
       if (name == "engine.info" || name == "tabs.strips" || name == "tabs.stripCommand" ||
           name == "windows.list" || name == "search.setEngineName" || name == "webView.setAutoPictureInPicture") {
         base::ListValue values;
@@ -1565,6 +1576,7 @@ void ShellHostView::Initialize() {
     browser_->GetWindow()->GetNativeWindow()->SetTitle(base::UTF8ToUTF16(title_));
   }
   shell_->LoadInitialURL(GURL("chrome://ardia/"));
+  ardiacore::WatchLinuxShellInput(shell());
 }
 
 void ShellHostView::DetachViewports() {
@@ -1634,6 +1646,8 @@ base::DictValue ShellHostView::Bootstrap() const {
     capabilities.Append(route);
   for (const char* capability : linux_credentials::kCapabilities) capabilities.Append(capability);
   for (const char* capability : linux_extensions::kSurfaceCapabilities) capabilities.Append(capability);
+  for (const char* route : ardiacore::kLinuxPageMessageRoutes)
+    capabilities.Append(route);
   AppendLinuxSiteControlsCapabilities(capabilities);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
@@ -3276,6 +3290,20 @@ void ShellHostView::TabCommand(
     if (!binding->page() || !binding->page()->GoToOffset(values)) {
       return std::move(done).Run(false, base::Value("goToOffset requires one integer offset on a live page"));
     }
+  } else if (command == "evaluate") {
+    if (values.size() != 1 || !values[0].is_string())
+      return std::move(done).Run(false, base::Value("evaluate requires one script"));
+    auto request = binding->page() ? binding->page()->Capture() : std::nullopt;
+    if (!request) return std::move(done).Run(true, base::Value());
+    return ardiacore::RunLinuxPageEvaluation(contents->GetPrimaryMainFrame(), values[0].GetString(),
+        base::BindOnce([](ardiacore::LinuxPageRequest request, base::OnceCallback<void(bool, base::Value)> done,
+                          bool refused, std::optional<std::string> result) {
+          if (refused) {
+            return std::move(done).Run(false, base::Value(base::DictValue()
+                .Set("code", "ERR_PAGE_EVALUATION_REFUSED").Set("message", "Ardia runs only its own page operations")));
+          }
+          std::move(done).Run(true, result && request.Valid() ? base::Value(std::move(*result)) : base::Value());
+        }, std::move(*request), std::move(done)));
   } else if (command == "getSecurityInfo") {
     if (!values.empty()) return std::move(done).Run(false, base::Value("getSecurityInfo takes no arguments"));
     return std::move(done).Run(true, binding->page() ? binding->page()->SecurityInfo() : base::Value());
@@ -4233,6 +4261,45 @@ void TabBinding::ResetPageCommands() {
 void TabBinding::AttachPage(std::unique_ptr<ardiacore::LinuxPageState> page) {
   RetirePage();
   page_ = std::move(page);
+  AttachPageChannel();
+}
+
+void TabBinding::AttachPageChannel() {
+  if (!page_ || !contents_) return;
+  const auto weak = GetWeakPtr();
+  ardiacore::LinuxPageChannel::GetOrCreate(contents_)->Attach({
+      base::BindRepeating([](base::WeakPtr<TabBinding> binding) {
+        return binding && binding->presented && binding->pane_visible;
+      }, weak),
+      base::BindRepeating([](base::WeakPtr<TabBinding> binding, std::string name, base::Value data) {
+        return binding && binding->page() && binding->page()->EmitDocument(std::move(name), std::move(data));
+      }, weak),
+      base::BindRepeating([](base::WeakPtr<TabBinding> binding, std::optional<ardiacore::LinuxTheme::Sample> sample,
+                             content::WeakDocumentPtr document) {
+        return binding && binding->page() && binding->page()->SetSampledTheme(std::move(sample), std::move(document));
+      }, weak),
+      base::BindRepeating([](base::WeakPtr<TabBinding> binding, gfx::PointF point) -> std::optional<gfx::PointF> {
+        return binding ? binding->ShellPoint(point) : std::nullopt;
+      }, weak),
+  });
+  page_->SetMessageSnapshot(base::BindRepeating([](base::WeakPtr<content::WebContents> contents) {
+    auto* channel = contents ? ardiacore::LinuxPageChannel::FromWebContents(contents.get()) : nullptr;
+    return channel ? channel->SnapshotEvents() : base::ListValue();
+  }, contents_->GetWeakPtr()));
+}
+
+std::optional<gfx::PointF> TabBinding::ShellPoint(gfx::PointF page_point) const {
+  return owner_ ? owner_->ShellPoint(*this, page_point) : std::nullopt;
+}
+
+std::optional<gfx::PointF> ShellHostView::ShellPoint(const TabBinding& binding, gfx::PointF page_point) {
+  if (!binding.pane_visible || binding.pane_bounds.IsEmpty() || !shell()) return std::nullopt;
+  const double scale = blink::ZoomLevelToZoomFactor(zoom::ZoomController::GetZoomLevelForWebContents(shell()));
+  if (!std::isfinite(scale) || scale <= 0) return std::nullopt;
+  const gfx::Rect& pane = binding.pane_bounds;
+  const double x = std::clamp<double>(page_point.x(), 0, pane.width());
+  const double y = std::clamp<double>(page_point.y(), 0, pane.height());
+  return gfx::PointF((pane.x() + x) / scale, (pane.y() + y) / scale);
 }
 
 std::unique_ptr<ardiacore::LinuxPageState> TabBinding::TakePage() {
@@ -4241,6 +4308,7 @@ std::unique_ptr<ardiacore::LinuxPageState> TabBinding::TakePage() {
 
 void TabBinding::RetirePage() {
   if (!page_) return;
+  if (auto* channel = contents_ ? ardiacore::LinuxPageChannel::FromWebContents(contents_) : nullptr) channel->Detach();
   auto page = std::move(page_);
   page->Retire();
 }
@@ -4250,6 +4318,7 @@ void TabBinding::ReportPresentation(std::string name, base::DictValue data) {
 }
 
 void TabBinding::Rebind(content::WebContents* contents) {
+  if (auto* channel = contents_ ? ardiacore::LinuxPageChannel::FromWebContents(contents_) : nullptr) channel->Detach();
   RetirePage();
   ++contents_generation_;
   ResetPageCommands();
@@ -4559,6 +4628,7 @@ void StartLinuxHost() {
     }
     return -1;
   };
+  g_ardia_linux_page_host_binder = &ardiacore::RegisterLinuxPageHostBinder;
   g_ardia_linux_auto_pip_requested = [](content::WebContents* contents) {
     for (const auto& [id, host] : Hosts()) host->NoteAutoPictureInPictureRequested(contents);
   };
