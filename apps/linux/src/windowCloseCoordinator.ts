@@ -5,6 +5,7 @@ export type CloseReason = "window" | "lastTab";
 export type CloseAnswer = { confirmed: boolean; suppressed: boolean };
 export type CloseDecision = { decision: "allow" | "cancel"; suppressWarning: boolean };
 export type AbortableAsk = (options: ConfirmOptions, signal: AbortSignal) => Promise<CloseAnswer>;
+export type DialogSuspension = { readonly settled: Promise<void> };
 export type DrainReply = { accepted?: boolean; endsSession?: boolean } | null | undefined;
 export type DecideClose = (windowId: string, reason: CloseReason, ask?: (options: ConfirmOptions) => Promise<CloseAnswer>) => Promise<CloseDecision>;
 
@@ -22,8 +23,8 @@ export type WindowCloseCoordinatorHooks = {
   cancelled(request: WindowCloseRequest): boolean;
   depart?(request: WindowCloseRequest): void;
   stay?(request: WindowCloseRequest): void;
-  suspendDialogs?(request: WindowCloseRequest): { settled: Promise<void> };
-  resumeDialogs?(request: WindowCloseRequest): boolean;
+  suspendDialogs?(request: WindowCloseRequest): DialogSuspension;
+  resumeDialogs?(suspension: DialogSuspension): boolean;
   report?(error: unknown): void;
 };
 
@@ -37,7 +38,7 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     reason: CloseReason;
     controller: AbortController;
     cancelled: boolean;
-    suspended: boolean;
+    suspension?: DialogSuspension;
     dialogsResumed: boolean;
     departed: boolean;
     promise?: Promise<void>;
@@ -47,9 +48,9 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
   let nextReason: CloseReason | undefined;
 
   const resumeDialogs = (attempt: Attempt) => {
-    if (!attempt.suspended || attempt.dialogsResumed) return;
+    if (!attempt.suspension || attempt.dialogsResumed) return;
     attempt.dialogsResumed = true;
-    hooks.resumeDialogs?.(attempt.request);
+    hooks.resumeDialogs?.(attempt.suspension);
   };
   const confirmCancelled = (attempt: Attempt) => {
     if (!attempt.cancelled) {
@@ -111,9 +112,8 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
       }
     }
     if (!current(attempt, key)) throw attempt.cancelled ? cancelledClose() : staleClose();
-    const suspension = hooks.suspendDialogs?.(attempt.request);
-    attempt.suspended = !!suspension;
-    if (suspension) await suspension.settled;
+    attempt.suspension = hooks.suspendDialogs?.(attempt.request);
+    if (attempt.suspension) await attempt.suspension.settled;
     if (attempt.cancelled) {
       confirmCancelled(attempt);
       throw cancelledClose();
@@ -140,7 +140,6 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
       reason: nextReason ?? "window",
       controller: new AbortController(),
       cancelled: false,
-      suspended: false,
       dialogsResumed: false,
       departed: false,
     };

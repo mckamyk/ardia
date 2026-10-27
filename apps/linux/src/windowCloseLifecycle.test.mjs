@@ -205,10 +205,11 @@ test("Cancel rejects exactly that attempt without quiescing, and a rejection tim
   assert.deepEqual(steps(timeout.log), ["decide", "ask", "reject"]);
   assert.deepEqual(timeout.log.at(-1), ["reject", "1"]);
   const resumed = [];
+  const failingToken = Object.freeze({ settled: Promise.resolve() });
   const failing = harness({
     drain: async () => { throw new Error("save failed"); },
     barrierReject: async () => { throw new Error("rejection timed out"); },
-    suspend: () => ({ settled: Promise.resolve() }),
+    suspend: () => failingToken,
     resume: (value) => resumed.push(value),
   });
   const draining = failing.coordinator.accept(main);
@@ -219,9 +220,10 @@ test("Cancel rejects exactly that attempt without quiescing, and a rejection tim
   assert.deepEqual(resumed, []);
   failing.coordinator.cancelled(main);
   assert.deepEqual(steps(failing.log).filter((step) => step === "resume"), ["resume"]);
-  assert.deepEqual(resumed, [main]);
+  assert.equal(resumed.length, 1);
+  assert.equal(resumed[0], failingToken);
   failing.coordinator.cancelled(main);
-  assert.deepEqual(resumed, [main]);
+  assert.equal(resumed.length, 1);
 });
 
 test("a refused drain start rejects the pending native attempt and never quiesces", async () => {
@@ -243,7 +245,8 @@ test("dialog suspension waits after allow and before quiescence and resumes once
   const settled = deferred();
   const resumed = [];
   const order = [];
-  const suspended = harness({ suspend: (value) => { order.push(["suspend", value.closeGeneration]); return { settled: settled.promise }; }, resume: (value) => resumed.push(value), acknowledge: () => new Promise(() => {}) });
+  const outerToken = Object.freeze({ settled: settled.promise });
+  const suspended = harness({ suspend: (value) => { order.push(["suspend", value.closeGeneration]); return outerToken; }, resume: (value) => resumed.push(value), acknowledge: () => new Promise(() => {}) });
   const closing = suspended.coordinator.accept(main);
   await tick();
   suspended.asks[0].answer.resolve({ confirmed: true, suppressed: false });
@@ -255,11 +258,13 @@ test("dialog suspension waits after allow and before quiescence and resumes once
   assert.deepEqual(steps(suspended.log), ["decide", "ask", "begin", "quiesce", "drain"]);
   suspended.coordinator.cancelled(main);
   suspended.coordinator.cancelled(main);
-  assert.deepEqual(resumed, [main]);
+  assert.equal(resumed.length, 1);
+  assert.equal(resumed[0], outerToken);
   assert.deepEqual(steps(suspended.log).filter((step) => step === "resume"), ["resume"]);
   void closing.catch(() => {});
   const early = deferred();
-  const beforeQuiesce = harness({ suspend: () => ({ settled: early.promise }), resume: (value) => resumed.push(value) });
+  const earlyToken = Object.freeze({ settled: early.promise });
+  const beforeQuiesce = harness({ suspend: () => earlyToken, resume: (value) => resumed.push(value) });
   const earlyClose = beforeQuiesce.coordinator.accept(main);
   await tick();
   beforeQuiesce.asks[0].answer.resolve({ confirmed: true, suppressed: false });
@@ -268,7 +273,8 @@ test("dialog suspension waits after allow and before quiescence and resumes once
   early.resolve();
   await assert.rejects(earlyClose, { code: "ERR_WINDOW_CLOSE_CANCELLED" });
   assert.equal(steps(beforeQuiesce.log).includes("quiesce"), false);
-  assert.deepEqual(resumed, [main, main]);
+  assert.equal(resumed.length, 2);
+  assert.equal(resumed[1], earlyToken);
   const done = harness({ suspend: () => ({ settled: Promise.resolve() }), resume: () => assert.fail("a completed close never resumes dialogs") });
   const completed = done.coordinator.accept(main);
   await tick();
@@ -335,4 +341,89 @@ test("a departed window stays recorded until cancellation is confirmed, then is 
   failing.asks[0].answer.resolve({ confirmed: true, suppressed: false });
   await assert.rejects(failed, /Save rejected/);
   assert.deepEqual(steps(failing.log), ["decide", "ask", "begin", "depart", "reject", "stay"]);
+});
+
+const { createHostDialogs } = await import("./hostDialogs.ts");
+
+function adapterHarness() {
+  const listeners = new Set();
+  const requests = [];
+  let sequence = 0;
+  const host = {
+    bootstrap: { windowId: "main", profileId: "default" },
+    onEvent(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    onBeforeClose() { return () => {}; },
+    async invoke(method, data) {
+      requests.push({ method, ...data });
+      return method === "ArdiaShell.windowIdentity" ? { windowId: "main", rendererGeneration: "9007199254740993" } : { accepted: true };
+    },
+  };
+  const dialogs = createHostDialogs(host, () => `dialog:close-warning-${++sequence}`);
+  const resolve = (result) => {
+    const begun = requests.findLast((r) => r.method === "ArdiaShell.beginDialog");
+    for (const listener of listeners) listener("ArdiaShell", "shell", { name: "shell.dialogResolved", data: { dialogId: begun.args[0].dialogId, windowId: "main", rendererGeneration: "9007199254740993", result } });
+  };
+  const log = [];
+  const barrier = createWindowCloseBarrier({
+    quiesce: () => log.push("quiesce"),
+    drain: async () => { log.push("drain"); return 0; },
+    acknowledge: () => new Promise(() => {}),
+    reject: async () => {},
+    resume: (value) => { log.push("resume"); coordinator.producersResumed(value); },
+  });
+  const coordinator = createWindowCloseCoordinator({
+    windowId: "main",
+    utility: false,
+    decide: (windowId, _reason, ask) => ask({ title: "Close 2 tabs?", suppression: "Don’t ask me again", windowId })
+      .then(({ confirmed, suppressed }) => ({ decision: confirmed ? "allow" : "cancel", suppressWarning: suppressed })),
+    ask: (options, signal) => dialogs.abortableConfirm(options, signal),
+    suppress: () => log.push("suppress"),
+    flush: async () => {},
+    request: async () => main,
+    beginDrain: async () => { log.push("begin"); return { accepted: true, endsSession: true }; },
+    reject: async () => { log.push("reject"); },
+    barrier,
+    cancelled: barrier.cancelled,
+    suspendDialogs: () => dialogs.suspend(),
+    resumeDialogs: (suspension) => dialogs.resume(suspension),
+  });
+  return { dialogs, requests, resolve, log, coordinator };
+}
+
+test("with the real dialog adapter, native cancellation cancels the open warning natively and ignores its late answer", async () => {
+  const f = adapterHarness();
+  const closing = f.coordinator.accept(main);
+  await tick(); await tick();
+  const begun = f.requests.findLast((r) => r.method === "ArdiaShell.beginDialog");
+  assert.ok(begun);
+  f.coordinator.cancelled(main);
+  await assert.rejects(closing, { code: "ERR_WINDOW_CLOSE_CANCELLED" });
+  assert.deepEqual(f.requests.findLast((r) => r.method === "ArdiaShell.cancelDialog")?.args, [begun.args[0].dialogId]);
+  f.resolve({ confirmed: true, suppressed: true });
+  await tick();
+  assert.deepEqual(f.log, []);
+  f.dialogs.retire();
+});
+
+test("with the real dialog adapter, allow suspends dialogs for the drain and confirmed cancellation releases only this attempt's token", async () => {
+  const f = adapterHarness();
+  const outer = f.dialogs.suspend();
+  assert.equal(f.dialogs.resume(outer), true);
+  const closing = f.coordinator.accept(main);
+  await tick(); await tick();
+  f.resolve({ confirmed: true, suppressed: false });
+  await tick(); await tick(); await tick();
+  assert.deepEqual(f.log, ["begin", "quiesce", "drain"]);
+  await assert.rejects(f.dialogs.confirm({ title: "During drain" }), /suspended/);
+  const unrelated = f.dialogs.suspend();
+  f.coordinator.cancelled(main);
+  void closing.catch(() => {});
+  assert.deepEqual(f.log, ["begin", "quiesce", "drain", "resume"]);
+  await assert.rejects(f.dialogs.confirm({ title: "Still held by another suspension" }), /suspended/);
+  assert.equal(f.dialogs.resume(unrelated), true);
+  const after = f.dialogs.confirm({ title: "After cancellation" });
+  await tick(); await tick();
+  f.resolve({ confirmed: true, suppressed: false });
+  assert.deepEqual(await after, { confirmed: true, suppressed: false });
+  f.dialogs.retire();
 });
