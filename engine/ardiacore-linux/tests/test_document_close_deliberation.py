@@ -284,6 +284,26 @@ int main(int argc, char** argv) {
     base::DictValue identity;
     assert(!host.dialogs_->controller().Identify(*host.DialogClient(), &identity));
   }
+  if (mode == "two-window-ends-session") {
+    for (const bool a_first : {true, false}) {
+      ShellHostView a; Watch(a); a.ArmWindowClose();
+      ShellHostView b; b.window_id_ = "window-2"; Watch(b); b.ArmWindowClose();
+      hosts.clear(); hosts[1] = &a; hosts[2] = &b;
+      const auto ra = a.RequestWindowClose();
+      const auto rb = b.RequestWindowClose();
+      assert(!ra.empty() && !rb.empty());
+      auto drain = [](ShellHostView& host, const base::DictValue& request) {
+        auto reply = Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()));
+        assert(reply->ok);
+        return reply->value.GetDict().Find("endsSession")->GetBool();
+      };
+      const bool first = a_first ? drain(a, ra) : drain(b, rb);
+      const bool second = a_first ? drain(b, rb) : drain(a, ra);
+      assert(!first && second);
+      hosts.clear();
+      Drain();
+    }
+  }
   if (mode == "decision-cancel") {
     ShellHostView host; Watch(host); host.ArmWindowClose();
     hosts[1] = &host;
@@ -367,6 +387,9 @@ class CloseDeliberationTests(unittest.TestCase):
 
     def test_close_suspensions_are_bounded_and_fail_closed(self):
         self.run_mode('drain', 'suspension-bound')
+
+    def test_simultaneous_last_two_window_closes_keep_one_for_restore(self):
+        self.run_mode('drain', 'two-window-ends-session')
 
     def test_cancel_decision_rejects_the_pending_attempt_through_chrome(self):
         self.run_mode('drain', 'decision-cancel')

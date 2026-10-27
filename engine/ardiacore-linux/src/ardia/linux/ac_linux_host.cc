@@ -1710,6 +1710,9 @@ bool ShellHostView::ClosingEndsSession() const {
   if (browser_shutdown::IsTryingToQuit()) return true;
   for (const auto& [id, host] : Hosts()) {
     if (host == this || host->is_utility() || !host->GetWidget() || host->GetWidget()->IsClosed()) continue;
+    const auto phase = host->close_.phase();
+    if (phase != LinuxClose::Phase::kIdle && phase != LinuxClose::Phase::kRequested &&
+        phase != LinuxClose::Phase::kCancelling && phase != LinuxClose::Phase::kCancelled) continue;
     return false;
   }
   return true;
