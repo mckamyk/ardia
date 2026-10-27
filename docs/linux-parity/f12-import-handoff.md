@@ -121,6 +121,8 @@ None of this has run inside Ardia, because I can't build Chromium in this lane. 
 - [#110](https://github.com/mckamyk/ardia/issues/110): Firefox passwords (NSS `key4.db`)
 - [#111](https://github.com/mckamyk/ardia/issues/111): tabs, cookies, addresses and cards
 
+All three are implemented at source level in [U-import-handoff.md](U-import-handoff.md) (#158).
+
 Safari and Apple automation are not applicable on Linux.
 
 ## Risks

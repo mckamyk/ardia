@@ -136,6 +136,9 @@ S106, S107 and S108 need `ARDIA_ACCEPTANCE_CONTENT_BLOCKER` (or a package built 
 | W137 | #137 | The extension service answers in the window | Closing the Web Store tab dismisses its install prompt; a CRX prompt stays until answered |
 | F16 | #26 | The page's main world sees no `post`, `__ardiaHost` or `webkit`; a synthetic shift-click and forged `peek`/`linkDrop` `postMessage`s open nothing; a CDP shift-click on a link opens a peek on it and Alt+Shift opens a split pane; a shift-click on a link in a cross-site iframe opens a peek; a double-click selection reaches `ardiaLinux.selection` and Escape in the page clears it; jump to selection scrolls back to it; Copy Quote Link shows its toast; replace in a focused textarea rewrites both matches | Physical modifier clicks and changed modifiers; the popover's position and Escape; dragging a link out of a page |
 | F25 | #35 | A sticky colored header, a body background and a theme-color meta each set `themeColorSource` and the tab's `themeColor` to their color, and a plain page resets it to white; wheel scrolling a long page down sets the toolbar's `scrolledDown` and scrolling back to the top clears it | The toolbar slide and the setting that turns it off; the rendered tint and Extend Website Color |
+| I109 | #109 | A private `dbus-daemon` runs the generated fake Secret Service (`engine/ardiacore-linux/tests/fixtures/fake_keyring.py`) holding a locked "Chrome Safe Storage" item. Discovery marks Chrome `needsKeychain` without unlocking; without consent the `v11` passwords stay locked; a dismissed prompt reports `denied` and imports nothing; an allowed prompt unlocks the key, both passwords import into Ardia's `Login Data`, and `forgetUnlockedKeys` drops the key | GNOME Keyring and KWallet with their real prompts |
+| I110 | #110 | NSS (`certutil` + `PK11SDR_Encrypt`) generates `key4.db`/`logins.json` with and without a primary password. The plain profile imports and saves 2 passwords; the primary-password profile reports `locked`, stays locked with a wrong password, and imports 2 with the right one; no password reaches the renderer | A real Firefox profile |
+| I111 | #111 | A generated Chrome profile (SNSS session, v24 `Cookies` with host-hashed v10 values, `Web Data` address and card) and a Firefox profile (mozLz4 session store, `cookies.sqlite` with a container cookie). Discovery advertises the kinds; the Chrome import returns 2 tabs and a vault token with no cookie value or card number in the reply; `writeImported` stores 2 cookies, 1 address and 1 card in Ardia's profile (decrypted and compared), and the token is single use; a private target loses it; Firefox imports 1 tab and 1 cookie and skips the container; sources hash the same and no scratch copy is left | Import window click-through with a real profile |
 
 ## Manual steps
 
@@ -277,6 +280,12 @@ The JSON lists each manual item with these steps. They are kept here so they can
 
 - **Toolbar.** With Hide Toolbar While Scrolling on, scroll a long page down: the toolbar slides away; scroll up: it returns. With the setting off it stays.
 - **Tint.** A site with a colored header and no theme-color, then one with a theme-color: the sidebar and toolbar take each color and reset on a plain page. Extend Website Color off keeps Ardia's colors.
+
+**#109, #110, #111 import follow-ups**
+
+- **Keyring.** Import passwords from a Chrome profile that uses gnome-libsecret, then from one that uses KWallet. The import window asks to unlock, and the system prompt appears. Allow imports the passwords; Cancel imports none and shows the locked note.
+- **Firefox.** Import passwords from a real Firefox profile. The count matches about:logins. A profile with a primary password reports locked (#178 adds the prompt).
+- **Tabs, cookies and autofill.** Import them from a real Chrome profile. The tabs open in an Imported group, a site is still signed in, and Settings › Autofill lists the address and card.
 
 ## Notes for the first real run
 
