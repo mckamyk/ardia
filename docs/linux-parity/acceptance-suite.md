@@ -1,6 +1,6 @@
 # Linux native acceptance suite (#81)
 
-One command runs the runtime acceptance scenarios for #11, #12, #13, #17, #18, #19, #20, #30, #32, #33, #36 and #37 against a packaged Linux Ardia build. It runs headless, uses throwaway profiles, and prints the result for each issue as JSON. An issue can be closed with evidence once its result is `pass`. A `manual` result means every automated check passed and the steps that need a person are listed.
+One command runs the runtime acceptance scenarios for #11, #12, #13, #16, #17, #18, #19, #20, #30, #32, #33, #36 and #37 against a packaged Linux Ardia build. It runs headless, uses throwaway profiles, and prints the result for each issue as JSON. An issue can be closed with evidence once its result is `pass`. A `manual` result means every automated check passed and the steps that need a person are listed.
 
 ## Running it
 
@@ -45,7 +45,8 @@ The harness itself is tested by `pnpm --filter @ardia/linux acceptance:self-test
   - gated downloads;
   - synthesized drops;
   - kiosk print to PDF;
-  - process-group cleanup.
+  - process-group cleanup;
+  - the content blocker's bridge page answering the native send and poll scripts from an isolated world, with an MV3 stand-in for uBlock Origin (stock Chromium no longer loads MV2).
 
 ## Environment of every launch
 
@@ -78,6 +79,7 @@ Local fixtures:
   - Chromium autoupgrades mixed images, and loopback addresses are never mixed content. The mixed page therefore carries an insecure form action, which Ardia's security helper classifies as `mixed` (`contained_mixed_form`), and an `http://` image.
   - The stock-Chromium self-test confirms Chromium reports `contained-mixed-form` for that page.
 - **Downloads.** Attachment endpoints, plus slow bodies. A slow body holds its last chunk until the scenario releases it, so pause, resume and cancel always act on a live transfer.
+- **Content blocker.** F06 uses the uBlock Origin build packaged at `lib/ardia/extensions/ublock` (`scripts/linux/fetch-ubo.sh`, then `package.py --content-blocker`). Set `ARDIA_ACCEPTANCE_CONTENT_BLOCKER` to a prepared extension directory to pass `--ardia-content-blocker-dir` instead. The blocked request is `/ads/banners/<run>.png`, which only EasyList's bundled copy matches (`/ads/banners/*$image`); list updates cannot reach the network, so uBlock uses the lists in its package.
 - **Print.** `--kiosk-printing` with the Save as PDF destination seeded in `Preferences` writes the PDF into the seeded download folder without a dialog. This was verified on stock Chromium 155.
 
 `openssl` must be installed. Node 22 or newer is needed for the built-in WebSocket client; the suite was written on Node 26.
@@ -89,6 +91,7 @@ Local fixtures:
 | F01 | #11 | Two split panes with 3 and 5 matches; counts, next/previous wrap and Escape dismissal per pane; DevTools, Inspect and Console each attach only to the active pane (CDP `attached`) and Toggle closes it; Print writes a PDF; Ctrl+F from page focus opens that pane's bar; Save Page is accepted without a crash; a background instance refuses DevTools but still finds | System print dialog; Save Page output (always asks for a path); docked layout, splitter, overlays and focus return; page-focus DevTools shortcuts |
 | F02 | #12 | Isolated profile window has its own browser context, cookies, localStorage and history; host refuses a default-profile tab in an isolated window (`ERR_PROFILE_*`); shared-data profile shares cookies/storage and context; private window is a separate context, reads and leaks nothing, never reaches `linux-session.json`, and its data is gone after the last private window closes; a blocked profile directory leaves no phantom window; restart restores no private window and keeps regular data | Extension isolation; Settings panes per profile |
 | F03 | #13 | Site panel text for HTTPS, HTTP, mixed, invalid certificate, HTTPS again, HTTP after HTTPS (no stale certificate) and `chrome://version`; web pages are never "Local Page" | Certificate viewer details |
+| F06 | #16 | Notifications/location/camera set through `sites.setSetting` are what the page's `navigator.permissions` reports after reload and after restart; revoking one and resetting the site return them to `prompt` and drop the origin from `sites.origins`; private-profile and malformed requests are refused without changing the regular profile; `sites.clearData` removes one site's cookie and localStorage and keeps another's; a `profiles.clearBrowsingData` scoped by `since` removes the newer cookie and keeps the older one; Cancel in Clear Browsing Data keeps everything and Clear Data removes the last hour's history, cookies and storage; the content blocker reports ready with EasyList on; an EasyList-matched image never reaches the fixture server while a control image does; a site exception lets it through, covers subdomains, is announced by `contentBlocker.changed` and survives restart; Block Again, blocking off/on and EasyList off/on each change what reaches the server; the off directive and path-like list ids are refused | Site panel and Privacy settings showing the same state; native permission prompts with real devices |
 | F23 | #33 | Four-page history; history menu jumps −2, +2, −3; zoom in matches `devicePixelRatio` and shows the `Zoom: 110%` indicator; the popover shows the percentage and its Reset returns to 100% and hides the indicator; zoom out and the reset command; per-site zoom listed by `sites.zoomLevels`, restored after restart with matching page scale, removed on reset | Pinch zoom |
 | F07 | #17 | Status reports the store available, `backend: basic` and no reauthentication in a background instance; an empty vault lists `[]`; a credential saves through `ArdiaPasswords.save` and lists without its password; remove and never-save list work; a private profile name is refused with `ERR_PROFILE_PRIVATE` on generic and typed calls, and a credential saved in an isolated profile stays out of the default profile and the other way round; generic `passwords.reveal`/`passwords.save`/`autofill.cardNumber` are refused with `ERR_SECRET_ROUTE`; reveal, unlock, update and export are refused with `ERR_REAUTH_UNAVAILABLE`; addresses add, update and remove; a card saves through `ArdiaAutofill.saveCard`, lists only its last four digits and its number stays gated; password and autofill toggles change; the Passwords pane shows the basic-store notice; everything survives a restart; `Login Data`, `Web Data` and the browser log hold no fixture secret in plain text | polkit prompts (grant, deny, dismiss, timeout) for unlock, reveal, edit, export and card numbers; the five-minute grant window; a locked Secret Service; a private window's own renderer |
 | F08 | #18 | Known file completes on disk and `fileStatus` sees it; Ctrl+J lists it; slow download progresses, pause stalls it, resume finishes it; cancel removes the partial file; remove forgets it in Chromium's history; the folder setting changes the destination; clear empties finished rows; restart shows the kept download once, nothing live, nothing cleared, no popover | Open, Show in Folder and Trash; ask-where-to-save dialog |
@@ -122,6 +125,11 @@ The JSON lists each manual item with these steps. They are kept here so they can
 **#13 F03**
 
 - **Certificate viewer.** Its issuer, validity and fingerprint match the served certificate.
+
+**#16 F06**
+
+- **Site panel and Settings.** Open a site's Site Controls panel: Camera, Location and Notifications show the values set in Settings › Privacy › Site settings. Change one in the panel: Settings shows it after reopening, and the page's `navigator.permissions` agrees after reload. The panel's content blocker toggle turns blocking off for that site, and Settings › Privacy lists it under Sites without blocking.
+- **Native prompts.** With a real camera and microphone, allow a page's request with Remember: the choice appears in Site settings and survives restart; Block likewise.
 
 **#17 F07**
 

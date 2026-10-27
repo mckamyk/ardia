@@ -83,6 +83,12 @@ The adapter rearms when a reused widget is mapped again, invalidating old callba
 
 Verification used the production PGO, ThinLTO, CFI and sandbox build configuration. The Linux UI build and all nine workspace typechecks passed, along with the native Linux fixtures, engine and placement tests, and patch tooling. Compiled lifecycle fixtures cover cancellation on hide, destruction, input, dragging, resizing and timeout, plus changing initial geometry. Lua and socket fixtures cover ownership, stale geometry, work areas, rotation, scale, invalid identities and bounded IPC. Real headless video playback still passes the automatic entry, return, dismissal, split-pane and delayed-entry checks. A separate private Hyprland instance verified that the native Lua move changes only the specified owned window. Its nested GPU backend reports a zero-size output, preventing a full graphical placement check; the earlier browser build also fails there, before this correction runs. Evidence is in `/home/mac/ardia-linux-build/logs/pip-placement`. The original desktop configuration remains byte-for-byte unchanged.
 
+## Site controls and the content blocker
+
+Site permissions, per-site data and browsing-data clearing go through `ac_linux_site_controls_service.cc` before the generic route table. They validate their arguments, resolve the window's regular profile in one place (`SiteControlsProfile`) and call the shared `ac_site_settings_*`, `ac_site_data_clear` and `ac_browsing_data_clear` services. Private profiles get `ERR_PROFILE_PRIVATE`; other profile ids get `ERR_PROFILE_UNAVAILABLE` until the profile registry lands.
+
+The content blocker is the same uBlock Origin component macOS loads. Each regular profile loads it from `lib/ardia/extensions/ublock` (or `--ardia-content-blocker-dir`) once its extension system is ready. The restricted-component hook stops it from scripting `chrome://` pages, including the shell. Calls run in a hidden extension page, `ardia-linux-bridge.html`, which exposes five fixed operations. Chromium refuses main-world script on extension pages, so the browser passes requests through a DOM attribute from an isolated world and polls for the reply. Contract, tests and open items are in `docs/linux-parity/i-site-controls-handoff.md`.
+
 ## Architecture and boundaries
 
 `ChromeBrowserMainParts::PostBrowserStart()` starts `ardia::StartLinuxHost()`. The Linux host serves the bundled UI at `chrome://ardia/`. Assets are loaded from `ardia-ui` beside the Chromium executable, or an explicit `--ardia-ui-dir` for development.
@@ -153,8 +159,11 @@ pnpm --filter @ardia/linux build
 python3 scripts/linux/package.py \
   --out "$CB/chromium_git/chromium/src/out/$GN_OUT_CONFIGS" \
   --ui apps/linux/dist \
+  --content-blocker "$(scripts/linux/fetch-ubo.sh)" \
   --destination "$CB/artifacts/ardia-linux-$AC_TARGET_CPU.tar.xz"
 ```
+
+`scripts/linux/fetch-ubo.sh` prepares the pinned uBlock Origin build that macOS embeds, using the shared `packages/ardiacore/scripts/ubo.sh` with Linux stand-ins for `lockf` and `shasum`. Without `--content-blocker` the package has no content blocker, and Settings reports it as not installed.
 
 The archive contains `bin/ardia`, `lib/ardia/chrome`, Chromium runtime resources, the `ardia-ui` bundle and desktop integration files. Launch the extracted `bin/ardia`; the raw build-tree `chrome` needs `--ardia-ui-dir` pointing to `apps/linux/dist` because that output directory does not contain the application UI. A real package was extracted and launched in the verification below. Run tests with a throwaway `--user-data-dir`, never an existing browser profile. Keep Chromium's sandbox enabled.
 

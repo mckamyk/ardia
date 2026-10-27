@@ -309,6 +309,41 @@ class PackagingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 packaging.package(output, ui, archive)
 
+    def test_content_blocker_ships_beside_the_binary_with_its_bridge_page(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            output, ui, ubo = root / 'out', root / 'ui', root / 'ubo'
+            output.mkdir()
+            ui.mkdir()
+            (ubo / 'js').mkdir(parents=True)
+            (ubo / '_metadata').mkdir()
+            (ubo / '_metadata/verified_contents.json').write_text('{}')
+            for name in packaging.REQUIRED:
+                if name == 'locales':
+                    (output / name).mkdir()
+                else:
+                    (output / name).write_bytes(b'runtime')
+            (output / 'chrome').chmod(0o755)
+            (ui / 'index.html').write_text('<html></html>')
+            for name in packaging.BRIDGE_SCRIPTS:
+                (ubo / name).write_text('')
+            (ubo / 'manifest.json').write_text('{"manifest_version": 2, "key": "k", "version": "1.75.0.22"}')
+            archive = packaging.package(output, ui, root / 'ardia.tar.xz', ubo)
+            with tarfile.open(archive) as packed:
+                names = packed.getnames()
+                for name in ['manifest.json', 'js/vapi-client.js', 'ardia-linux-bridge.html', 'ardia-linux-bridge.js']:
+                    self.assertIn(f'ardia/lib/ardia/extensions/ublock/{name}', names)
+                self.assertFalse(any('_metadata' in name for name in names))
+                bridge = packed.extractfile('ardia/lib/ardia/extensions/ublock/ardia-linux-bridge.js').read()
+                self.assertEqual(bridge, (packaging.BRIDGE / 'ardia-linux-bridge.js').read_bytes())
+            (ubo / 'js/vapi-client.js').unlink()
+            with self.assertRaisesRegex(ValueError, 'vapi-client'):
+                packaging.package(output, ui, root / 'missing.tar.xz', ubo)
+            (ubo / 'js/vapi-client.js').write_text('')
+            (ubo / 'manifest.json').write_text('{"manifest_version": 3}')
+            with self.assertRaisesRegex(ValueError, 'keyed uBlock Origin'):
+                packaging.package(output, ui, root / 'unkeyed.tar.xz', ubo)
+
 
 if __name__ == '__main__':
     unittest.main()

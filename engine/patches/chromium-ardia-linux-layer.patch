@@ -37,3 +37,36 @@
    for (auto& chrome_extra_part : chrome_extra_parts_) {
      chrome_extra_part->PostBrowserStart();
    }
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -41,6 +41,10 @@
+ #include "base/time/time.h"
+ #include "base/timer/timer.h"
+ #include "build/build_config.h"
++
++#if BUILDFLAG(IS_LINUX)
++#include "ardia/core/ac_content_hooks.h"  // nogncheck
++#endif
+ #include "chrome/common/buildflags.h"
+ #include "chrome/common/channel_info.h"
+ #include "chrome/common/chrome_constants.h"
+@@ -1175,8 +1179,19 @@
+           std::move(tracing_factory), unwinder_type);
+ }
+ 
++#if BUILDFLAG(IS_LINUX)
++namespace {
++
++bool IsArdiaLinuxContentBlocker(const extensions::ExtensionId& extension_id) {
++  return extension_id == "fajbdaomknpkicfjcpipdmcpoamdmilh";
++}
++
++}
++#endif
++
+ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
+ #if BUILDFLAG(IS_LINUX)
++  g_ardia_restricted_component_extension = &IsArdiaLinuxContentBlocker;
+   auto* ardia_command = base::CommandLine::ForCurrentProcess();
+   std::string ardia_features =
+       ardia_command->GetSwitchValueASCII(switches::kEnableFeatures);

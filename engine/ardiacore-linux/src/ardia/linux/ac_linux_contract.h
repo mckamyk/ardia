@@ -74,11 +74,6 @@ inline constexpr Route kRoutes[] = {
     {"extensions.watchActions", "ac_extensions_watch_actions", ""},
     {"extensions.syncState", "ac_extensions_sync_state", ""},
     {"extensions.syncApply", "ac_extensions_sync_apply", ""},
-    {"sites.settings", "ac_site_settings_get", "settings"},
-    {"sites.setSetting", "ac_site_settings_set", "null"},
-    {"sites.origins", "ac_site_settings_origins", "origins"},
-    {"sites.reset", "ac_site_settings_reset", "null"},
-    {"sites.clearData", "ac_site_data_clear", ""},
     {"search.engines", "ac_search_engines_list", ""},
 };
 
