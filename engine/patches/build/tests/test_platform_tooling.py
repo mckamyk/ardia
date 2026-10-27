@@ -3,6 +3,7 @@ import argparse
 import importlib.util
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -77,6 +78,33 @@ class TargetTests(unittest.TestCase):
         self.assertIn(('ardia/linux', True), paths)
         self.assertIn(('ardia/core/ac_hooks.h', False), paths)
         self.assertIn(('ardia/core/ac_content_hooks.h', False), paths)
+        self.assertIn(('ardia/core/ac_launch_switches.h', False), paths)
+        self.assertIn(('ardia/core/ac_launch_switches_linux.cc', False), paths)
+        self.assertIn(('ardia/core/BUILD.gn', False), paths)
+
+    def test_linux_layer_materializes_launch_target_and_detects_drift(self):
+        layer = REPO / 'engine/ardiacore-linux'
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            env = dict(os.environ, CHROMIUM_SRC=str(root))
+            def apply(*args):
+                return subprocess.run([str(layer / 'apply.sh'), *args], env=env, text=True, capture_output=True)
+            result = apply()
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for path, directory in series.layer_paths(str(layer)):
+                self.assertTrue((root / path).is_dir() if directory else (root / path).is_file(), path)
+            self.assertEqual(apply('--check').returncode, 0)
+            for path in ('ardia/core/BUILD.gn', 'ardia/core/ac_launch_switches.h', 'ardia/core/ac_launch_switches_linux.cc', 'ardia/linux/ac_linux_launch_config.h'):
+                original = (root / path).read_bytes()
+                (root / path).write_text('drift\n')
+                self.assertNotEqual(apply('--check').returncode, 0, path)
+                self.assertEqual(apply().returncode, 0)
+                self.assertEqual((root / path).read_bytes(), original)
+            self.assertEqual((root / 'ardia/core/ac_launch_switches.h').read_bytes(), (REPO / 'engine/ardiacore/src/ardia/core/ac_launch_switches.h').read_bytes())
+            build = (root / 'ardia/core/BUILD.gn').read_text()
+            self.assertIn('assert(is_linux)', build)
+            self.assertNotIn('frameworks', build)
+            self.assertNotIn('//ardia/linux"', build)
 
 
 
@@ -197,7 +225,36 @@ class HeliumTests(unittest.TestCase):
     def test_linux_submodule_pin_matches_shared_pin(self):
         pins = helium.pins()
         self.assertEqual(pins['helium-linux']['helium_chromium_commit'], pins['helium-chromium']['commit'])
-        self.assertEqual(pins['chromium']['version'], '155.0.8059.84')
+        env = dict(re.findall(r'^export (\w+)=(\S+)$', (BUILD / 'env.sh').read_text(), re.M))
+        self.assertEqual(pins['chromium']['version'], env['CHROMIUM_VERSION'])
+        for section, variable in (('helium-chromium', 'HELIUM_TAG'), ('helium-macos', 'HELIUM_MACOS_TAG'), ('helium-linux', 'HELIUM_LINUX_TAG')):
+            self.assertEqual(pins[section]['tag'], env[variable])
+
+    def test_pin_stage_requires_current_tree_and_actual_matching_submodule(self):
+        pins = helium.pins()
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            (root / 'chrome').mkdir()
+            (root / 'chromium_version.txt').write_text(pins['chromium']['version'])
+            (root / 'deps.ini').write_text('')
+            version = root / 'chrome/VERSION'
+            def write_version(text):
+                version.write_text(''.join(f'{key}={value}\n' for key, value in zip(('MAJOR', 'MINOR', 'BUILD', 'PATCH'), text.split('.'))))
+            ctx = argparse.Namespace(hc=root, hm=root / 'linux', tree=root, platform='linux', platform_repo='helium-linux')
+            def git(repo, *args):
+                section = 'helium-chromium' if repo == ctx.hc else 'helium-linux'
+                out = pins[section]['commit'] if args == ('rev-parse', 'HEAD') else '160000 commit ' + pins['helium-chromium']['commit'] + '\thelium-chromium' if args[0] == 'ls-tree' else ''
+                return argparse.Namespace(stdout=out, returncode=0)
+            with mock.patch.object(helium, 'git', side_effect=git), mock.patch.dict(os.environ, CHROMIUM_VERSION=pins['chromium']['version']):
+                write_version(pins['chromium']['version'])
+                helium.stage_pins(ctx)
+                write_version('155.0.8059.84')
+                with self.assertRaisesRegex(helium.StageError, 'the tree is Chromium 155'):
+                    helium.stage_pins(ctx)
+                write_version(pins['chromium']['version'])
+                with mock.patch.object(helium, 'git', side_effect=lambda repo, *args: argparse.Namespace(stdout='160000 commit mismatched\thelium-chromium', returncode=0) if args[0] == 'ls-tree' else git(repo, *args)):
+                    with self.assertRaisesRegex(helium.StageError, 'submodule does not match'):
+                        helium.stage_pins(ctx)
 
 
 class UpstreamTests(unittest.TestCase):
