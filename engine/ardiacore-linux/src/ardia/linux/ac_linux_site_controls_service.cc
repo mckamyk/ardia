@@ -656,6 +656,10 @@ void LinuxSiteControlsCall(Profile* app_profile, Profile* page_profile, const st
   std::optional<controls::Failure> failure;
   std::optional<base::DictValue> input = ParseArgs(args, &failure);
   if (!input) return Fail(std::move(done), failure->code, failure->message);
+  const bool private_window = (page_profile && page_profile->IsOffTheRecord()) ||
+                              requested_profile.starts_with(ardiacore::linux_profiles::kPrivatePrefix);
+  if (auto refusal = controls::PrivateBlockerRefusal(name, *input, private_window))
+    return Fail(std::move(done), refusal->code, refusal->message);
   Profile* page_original = page_profile ? page_profile->GetOriginalProfile() : nullptr;
   const bool page_filtered = page_original && app_profile &&
                              (page_original == app_profile || LinuxContentBlocker::Find(page_original));

@@ -442,7 +442,22 @@ void WorkingBlocker(const std::filesystem::path& scratch) {
   assert(Dict(hosts).Find("allowedHosts")->GetList()[0].GetString() == "example.com");
   auto bad_host = Settle(Call(profile.get(), "contentBlocker.setAllowed", R"({"host":"/^(?:ardia-blocking-off|)/","allowed":true})"));
   assert(bad_host->code == "ERR_CONTENT_BLOCKER_REQUEST");
-  auto off = Settle(Call(profile.get(), "contentBlocker.setEnabled", R"({"enabled":false})", "incognito:w2@default"));
+  const auto allowed_before = Bridge().whitelist;
+  for (const char* change : {R"({"host":"private.test","allowed":true})", R"({"host":"example.com","allowed":false})"}) {
+    auto from_private_window = Settle(Call(profile.get(), "contentBlocker.setAllowed", change, "", &incognito));
+    assert(from_private_window->code == "ERR_PROFILE_PRIVATE");
+    auto named_private = Settle(Call(profile.get(), "contentBlocker.setAllowed", change, "incognito:w2@default"));
+    assert(named_private->code == "ERR_PROFILE_PRIVATE");
+  }
+  assert(Settle(Call(profile.get(), "contentBlocker.setEnabled", R"({"enabled":false})", "", &incognito))->code == "ERR_PROFILE_PRIVATE");
+  assert(Settle(Call(profile.get(), "contentBlocker.setListEnabled", R"({"id":"fanboy-cookiemonster","enabled":true})", "", &incognito))->code == "ERR_PROFILE_PRIVATE");
+  assert(Settle(Call(profile.get(), "contentBlocker.setEnabled", R"({"enabled":false})", "incognito:w2@default"))->code == "ERR_PROFILE_PRIVATE");
+  assert(Bridge().whitelist == allowed_before && !Bridge().lists["fanboy-cookiemonster"]);
+  assert(Settle(Call(profile.get(), "contentBlocker.isAllowed", R"({"host":"news.example.com"})", "", &incognito))->value.GetBool());
+  assert(Settle(Call(profile.get(), "contentBlocker.state", "{}", "", &incognito))->ok);
+  Advance(200);
+  assert(Events().size() == 1);
+  auto off = Settle(Call(profile.get(), "contentBlocker.setEnabled", R"({"enabled":false})"));
   assert(off->ok && !Bridge().auto_update);
   Advance(200);
   assert(Events().size() == 2 && !Events()[1].GetDict().Find("enabled")->GetBool());

@@ -120,6 +120,13 @@ void HandlesAndProfiles() {
   assert(std::get<Failure>(route("profiles.clearBrowsingData", "incognito:w@work")).code == "ERR_PROFILE_PRIVATE");
   assert(std::get<ProfileRoute>(route("contentBlocker.setAllowed", "incognito:w@default")) == ProfileRoute::kApp);
   assert(std::get<ProfileRoute>(route("contentBlocker.state", "work")) == ProfileRoute::kApp);
+  const auto allow = base::DictValue().Set("host", "a.test").Set("allowed", base::Value(true));
+  assert(PrivateBlockerRefusal("contentBlocker.setAllowed", allow, true)->code == "ERR_PROFILE_PRIVATE");
+  assert(PrivateBlockerRefusal("contentBlocker.setEnabled", base::DictValue().Set("enabled", base::Value(false)), true));
+  assert(!PrivateBlockerRefusal("contentBlocker.setAllowed", allow, false));
+  assert(!PrivateBlockerRefusal("contentBlocker.isAllowed", base::DictValue().Set("host", "a.test"), true));
+  assert(!PrivateBlockerRefusal("contentBlocker.state", base::DictValue(), true));
+  assert(!PrivateBlockerRefusal("sites.setSetting", allow, true));
 }
 
 void Origins() {

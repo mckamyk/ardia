@@ -75,6 +75,8 @@ std::variant<BlockerRequest, Failure> PrepareBlockerCall(std::string_view name,
                                                          const base::DictValue& args);
 
 bool Mutates(BlockerOp op);
+std::optional<Failure> PrivateBlockerRefusal(std::string_view name, const base::DictValue& args,
+                                             bool private_window);
 std::string_view BridgeOpName(BlockerOp op);
 
 std::string Category(std::string_view list_id, std::string_view group);

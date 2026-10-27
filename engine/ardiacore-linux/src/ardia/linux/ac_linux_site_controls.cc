@@ -446,6 +446,15 @@ bool Mutates(BlockerOp op) {
   return op == BlockerOp::kSetEnabled || op == BlockerOp::kSetList || op == BlockerOp::kSetAllowed;
 }
 
+std::optional<Failure> PrivateBlockerRefusal(std::string_view name, const base::DictValue& args,
+                                             bool private_window) {
+  if (!private_window || !IsContentBlockerCall(name)) return std::nullopt;
+  const auto request = PrepareBlockerCall(name, args);
+  const auto* prepared = std::get_if<BlockerRequest>(&request);
+  if (!prepared || !Mutates(prepared->op)) return std::nullopt;
+  return Failure{"ERR_PROFILE_PRIVATE", "Private windows can't change the content blocker"};
+}
+
 std::string_view BridgeOpName(BlockerOp op) {
   switch (op) {
     case BlockerOp::kState: return "state";
