@@ -62,6 +62,34 @@ class HostMessageHandler {
   base::WeakPtrFactory<HostMessageHandler> weak{this};
 };
 
+namespace ardiacore {
+struct FakePage;
+struct LinuxPageRequest {
+  std::weak_ptr<FakePage> page;
+  uint64_t epoch = 0;
+};
+struct FakePage : std::enable_shared_from_this<FakePage> {
+  FakePage(HostMessageHandler* owner, int tab, std::string lease) : handler(owner), id(tab), claim(std::move(lease)) {}
+  HostMessageHandler* handler;
+  int id;
+  std::string claim;
+  uint64_t epoch = 1;
+  bool provisional = false;
+  std::optional<LinuxPageRequest> Capture() {
+    if (provisional) return std::nullopt;
+    return LinuxPageRequest{weak_from_this(), epoch};
+  }
+};
+inline bool EmitLinuxPageEvent(const LinuxPageRequest& request, std::string name, base::Value data) {
+  auto page = request.page.lock();
+  if (!page || !page->handler || page->provisional || page->epoch != request.epoch) return false;
+  page->handler->SendEvent("ArdiaWebView", std::to_string(page->id), base::Value(base::DictValue()
+      .Set("type", "pageEvent").Set("claim", page->claim)
+      .Set("event", base::DictValue().Set("name", std::move(name)).Set("data", std::move(data)))));
+  return true;
+}
+}
+
 inline std::map<content::WebContents*, int> tab_ids;
 inline int TabId(content::WebContents* contents) { return tab_ids.contains(contents) ? tab_ids.at(contents) : 0; }
 
@@ -83,6 +111,9 @@ class TabBinding {
   explicit TabBinding(content::WebContents* contents) : contents_(contents) {}
   content::WebContents* contents() const { return contents_; }
   void ResetPageCommands();
+  ardiacore::FakePage* page() const { return page_.get(); }
+  std::shared_ptr<ardiacore::FakePage> page_;
+  std::optional<ardiacore::LinuxPageRequest> page_command_request;
   std::unique_ptr<ardiacore::LinuxPageCommands> page_commands;
   std::string claim;
   uint64_t renderer_generation = 0;
@@ -120,7 +151,10 @@ ARDIA_AUTHORITY
   }
   base::WeakPtr<ShellHostView> GetWeakPtr() { return weak.GetWeakPtr(); }
   void CommitRenderer(HostMessageHandler* handler) {
-    for (auto& [id, binding] : bindings_) binding->ResetPageCommands();
+    for (auto& [id, binding] : bindings_) {
+      binding->page_.reset();
+      binding->ResetPageCommands();
+    }
     handler_ = handler;
     ++renderer_generation_;
     document_alive_ = std::make_shared<bool>(true);
@@ -131,9 +165,11 @@ ARDIA_AUTHORITY
     tab_ids[contents] = id;
     auto& binding = bindings_[id];
     if (!binding) binding = std::make_unique<TabBinding>(contents);
+    binding->page_.reset();
     binding->ResetPageCommands();
     binding->claim = std::move(claim);
     binding->renderer_generation = renderer_generation_;
+    binding->page_ = std::make_shared<ardiacore::FakePage>(handler_, id, binding->claim);
     return binding.get();
   }
   Profile* profile_;

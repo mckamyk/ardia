@@ -3,24 +3,23 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
 import { HostTab } from "./hostTab.ts";
+import { HostPageEvents } from "./hostPageEvents.ts";
 
 const bootstrap = readFileSync(new URL("../../../engine/ardiacore-linux/src/ardia/linux/bootstrap.js", import.meta.url), "utf8");
 const webView = readFileSync(new URL("./shims/web/HostWebView.tsx", import.meta.url), "utf8");
+const lease = (mount) => ({ claim: mount.claim, rendererGeneration: "1", bindingGeneration: String(mount.binding), documentEpoch: "1" });
 
-function hostWebViewReceiver(props) {
-  const table = webView.slice(webView.indexOf("const EVENT_CALLBACKS"), webView.indexOf("export const HostWebView"));
-  const start = webView.indexOf("  const receive = (event: HostTabEvent) => {");
-  const body = webView.slice(start, webView.indexOf("\n  };\n", start) + 5);
-  const code = `${stripTypeScriptTypes(`${table}\n${body}`)}\nreturn receive;`;
-  return new Function("latest", "ready", "navigation", "toAppUrl", code)({ current: props }, { current: false }, { current: null }, (url) => url);
+function pageReceiver(props) {
+  return (claim, nativeId, rebound) => new HostPageEvents(claim, nativeId, () => props, () => {}, () => {}, rebound);
 }
 
 function fixture() {
   const requests = [];
   const mounts = new Map();
   let nextTab = 6;
+  let bindings = 0;
+  const byId = new Map();
   let refusal;
   const context = {
     location: { protocol: "chrome:", hostname: "ardia" },
@@ -35,8 +34,11 @@ function fixture() {
       if (method === "tab.create") {
         const previous = mounts.get(args.key);
         const id = previous?.id ?? ++nextTab;
-        mounts.set(args.key, { id, claim: args.claim });
-        context.__ardiaReply(requestId, true, { browserId: id, chromeTabId: id });
+        const mount = { id, claim: args.claim, binding: ++bindings, sequence: 1 };
+        mounts.set(args.key, mount);
+        byId.set(id, mount);
+        context.__ardiaReply(requestId, true, { browserId: id, chromeTabId: id,
+          lease: { ...lease(mount), type: "pageLease", sequence: 1 }, snapshot: { watermark: 1, events: [] } });
       } else if (refusal) context.__ardiaReply(requestId, false, refusal);
       else context.__ardiaReply(requestId, true, null);
     } },
@@ -48,6 +50,10 @@ function fixture() {
     host: context.__ardiaHost, requests,
     refuse(error) { refusal = error; },
     emit(id, value) { context.__ardiaEvent("ArdiaWebView", String(id), { type: "findResult", value }); },
+    find(id, value, mount = byId.get(id)) {
+      context.__ardiaEvent("ArdiaWebView", String(id), { ...lease(mount), type: "pageEvent", sequence: ++mount.sequence, event: { name: "find", data: value } });
+    },
+    mount(id) { return byId.get(id); },
   };
 }
 
@@ -122,20 +128,24 @@ test("structured refusals reject with stable codes without changing target or re
 });
 
 test("native Find results reach the shared FindBar callback of only the exact pane", async () => {
+  assert.match(webView, /new HostPageEvents\(/);
+  assert.doesNotMatch(webView, /EVENT_CALLBACKS|findResult/);
   const f = fixture();
   const left = [], right = [];
-  const a = new HostTab(f.host, { key: "left" }, hostWebViewReceiver({ onFindResult: (value) => left.push(value) }));
-  const b = new HostTab(f.host, { key: "right" }, hostWebViewReceiver({ onFindResult: (value) => right.push(value) }));
+  const a = new HostTab(f.host, { key: "left" }, () => {}, pageReceiver({ onFindResult: (value) => left.push(value) }));
+  const b = new HostTab(f.host, { key: "right" }, () => {}, pageReceiver({ onFindResult: (value) => right.push(value) }));
   await Promise.all([a.ready, b.ready]);
   assert.equal(await b.command("find", ["needle", true, false]), null);
-  f.emit(b.identity.browserId, { count: 7, active: 3, final: false });
-  f.emit(b.identity.browserId, { count: 7, active: 4, final: true });
+  f.find(b.identity.browserId, { count: 7, active: 3, final: false });
+  f.find(b.identity.browserId, { count: 7, active: 4, final: true });
   assert.deepEqual(right, [{ count: 7, active: 3, final: false }, { count: 7, active: 4, final: true }]);
   assert.deepEqual(left, []);
-  f.emit(a.identity.browserId, { count: 0, active: 0, final: true });
+  f.find(a.identity.browserId, { count: 0, active: 0, final: true });
   assert.deepEqual(left, [{ count: 0, active: 0, final: true }]);
+  f.emit(b.identity.browserId, { count: 9, active: 9, final: true });
+  f.find(b.identity.browserId, { count: 9, active: 9, final: true }, { ...f.mount(b.identity.browserId), claim: "intruder" });
   assert.equal(right.length, 2);
   a.dispose(); b.dispose(); await settle();
-  f.emit(b.identity.browserId, { count: 1, active: 1, final: true });
+  f.find(b.identity.browserId, { count: 1, active: 1, final: true });
   assert.equal(right.length, 2);
 });

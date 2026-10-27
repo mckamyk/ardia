@@ -693,6 +693,7 @@ class TabBinding : public content::WebContentsObserver {
   void RemoveViewports();
   void ResetPageCommands();
   std::unique_ptr<ardiacore::LinuxPageCommands> page_commands;
+  std::optional<ardiacore::LinuxPageRequest> page_command_request;
   std::unique_ptr<DevToolsFrontendWatch> devtools_watch;
   bool devtools_had_focus = false;
   gfx::Rect pane_bounds;
@@ -2618,9 +2619,12 @@ TabBinding* ShellHostView::PageCommandBinding(const PageCommandAuthority& author
 
 void ShellHostView::EmitPageCommandEvent(const PageCommandAuthority& authority,
                                          base::DictValue event) {
-  if (!PageCommandBinding(authority)) return;
-  authority.handler->SendEvent("ArdiaWebView", base::NumberToString(authority.id),
-                               base::Value(std::move(event)));
+  TabBinding* binding = PageCommandBinding(authority);
+  const std::string* type = event.FindString("type");
+  base::DictValue* value = event.FindDict("value");
+  if (!binding || !binding->page_command_request || !type || *type != "findResult" || !value) return;
+  const ardiacore::LinuxPageRequest request = *binding->page_command_request;
+  ardiacore::EmitLinuxPageEvent(request, "find", base::Value(std::move(*value)));
 }
 
 ardiacore::LinuxPageCommands* ShellHostView::EnsurePageCommands(TabBinding* binding) {
@@ -2650,6 +2654,14 @@ void ShellHostView::PageCommand(TabBinding* binding, const std::string& command,
   if (!commands) {
     return std::move(done).Run(false, base::Value(base::DictValue()
         .Set("code", "ERR_PAGE_STALE_TARGET").Set("message", "Page claim is no longer current")));
+  }
+  if (command == "find") {
+    auto request = binding->page() ? binding->page()->Capture() : std::nullopt;
+    if (!request) {
+      return std::move(done).Run(false, base::Value(base::DictValue()
+          .Set("code", "ERR_PAGE_STALE_TARGET").Set("message", "The page has no current document")));
+    }
+    binding->page_command_request = std::move(request);
   }
   auto error = commands->Dispatch(command, values);
   if (error) return std::move(done).Run(false, base::Value(std::move(*error)));
@@ -4125,6 +4137,7 @@ void TabBinding::RemoveViewports() {
 }
 
 void TabBinding::ResetPageCommands() {
+  page_command_request.reset();
   auto commands = std::move(page_commands);
   if (!commands) return;
   commands->Reset();
