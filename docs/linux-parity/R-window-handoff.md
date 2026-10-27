@@ -10,6 +10,8 @@ Every Linux window has its own renderer, and each one runs the shared `windowSyn
 
 **Contract.** On Linux a window's own renderer and its close path own its lifetime. The Linux `windowIds` adapter (`apps/linux/src/windowSweep.ts`) reports only the native windows this renderer's store knows, so the sweep retitles those and closes nothing it can't rule on. Native `ArdiaShell.windowIds` is unchanged. The shared `windowSync` is unchanged.
 
+As a consequence, orphan-window cleanup on Linux now relies on each window's own close path (its renderer, the native close interception and `OnBrowserClosed`); no renderer's startup sweep removes a native window another renderer still shows.
+
 ## #77: fullscreen restore at launch
 
 `ArdiaShell.restoreFullScreen(ids, focus)` is implemented natively with a `FullScreenRestore` ledger (`ac_linux_fullscreen_restore.{h,cc}`, standard library only).
@@ -19,20 +21,21 @@ Every Linux window has its own renderer, and each one runs the shared `windowSyn
 - A listed window enters browser fullscreen (`FullscreenController::ToggleBrowserFullscreenMode`) once it is attached, visible and not minimized: at the call, at `Initialize` and at `RendererReady`. A window already in browser fullscreen isn't toggled.
 - Entering is observed through `OnWidgetShowStateChanged` with `WindowFullScreen()` (window fullscreen, not page fullscreen, from #130).
 - After 10 s anything that hasn't arrived or entered is given up and a `fullScreen` off event is broadcast, so stores drop the stamp (as macOS does). A window closed meanwhile is dropped at once.
-- When everything settled and something was toggled, the saved focused window is activated through the focus ledger, only if an Ardia window is active, and never in background instances.
+- When everything settled and something was toggled, the saved focused window is activated through the focus ledger, only if an Ardia window is active, only if no pointer press or activation change happened since the restore began (the ledger's epoch), and never in background instances. The saved `focusedWindowId` is always the launch window on Linux (`hostSession.ts` sets it at bootstrap), so in practice this returns focus to the launch window.
+- A window is also tried when it becomes visible (`OnWidgetVisibilityChanged`), not only at attach and readiness.
 - `restoreFullScreen` is an optional shell method; the Linux module resolver exposes optional methods only when the host advertises them, and the real shell module called `undefined` before. The bootstrap now advertises it, and `shellCapabilities.test.mjs` fails for any optional method with a native branch that isn't advertised.
 
 Windows open with their saved frame first, so on X11 they go fullscreen on the display that frame is on. Wayland gives no positions, so the compositor picks the output there.
 
 ## #79: keys typed before a new window's UI is ready
 
-From `Initialize` until its UI reports ready, a regular window's root key handler holds every key press and release it owns (`OwnsKeyboardEvent`: not other widgets, not under a modal dialog) in a bounded `Typeahead` buffer (`ac_linux_typeahead.h`, 512 events) and stops them before shortcut handling. Stopping the post-IME dispatch also keeps Chrome's input method from inserting the character.
+From `Initialize` until its UI reports ready, a regular window's root key handler holds every key press and release it owns (`OwnsKeyboardEvent`: not other widgets, not under a modal dialog) in a bounded `Typeahead` buffer (`ac_linux_typeahead.h`, 512 events) and stops them before shortcut handling. Stopping the post-IME dispatch also keeps Chrome's input method from inserting the character. Past 512 events the whole buffer is discarded and further keys are consumed until the UI is ready, so nothing is replayed truncated or out of order.
 
-`ArdiaShell.typeaheadReady` (advertised capability; utility windows get an error) posts a replay: held events go, in order, through the window's input method (`InputMethod::DispatchKeyEvent`), so they land where focus is then: the new tab's field, or a native page. Replay stops if the window goes away mid-way. A 10 s deadline replays whatever is held if the UI never reports ready.
+`ArdiaShell.typeaheadReady(field: boolean)` (advertised capability; utility windows get an error) posts a replay. Held events are replayed, in order, through the window's input method (`InputMethod::DispatchKeyEvent`) only when `field` is true and the shell WebView itself has focus with a text input client (`ShellHoldsTextField`, rechecked before each event; the replay stops when focus leaves). Otherwise, and when the 10 s deadline passes first, the held keys are discarded: they never reach a page that focused a field of its own.
 
-The Linux UI (`typeahead.ts`) announces readiness after the first window commit, as soon as a text field holds focus, or after 500 ms without one.
+The Linux UI (`typeahead.ts`) announces readiness after the first window commit: `true` as soon as one of its text fields holds focus, `false` after 500 ms without one.
 
-Left: text an IME commits asynchronously during the load ([#154](https://github.com/mckamyk/ardia/issues/154)).
+Left: text an IME commits asynchronously during the load, and replayed keys passing through the input method a second time ([#154](https://github.com/mckamyk/ardia/issues/154)).
 
 ## #70: isolated profiles and paging
 
