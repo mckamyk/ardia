@@ -211,3 +211,13 @@ test("rebind notices for another claim or an older binding are rejected", async 
   tab.dispose();
   await settle();
 });
+
+test("Chrome's open-link-in-private request reaches the shell as an incognito window request without an adopted tab", async () => {
+  const native = nativeHost();
+  const { tab, calls } = mount(native);
+  await tab.ready;
+  native.page("openWindow", { url: "https://private.example.test/", disposition: "incognito", profile: "work" });
+  assert.deepEqual(calls.at(-1), ["openWindow", { url: "https://private.example.test/", disposition: "incognito", profile: "work" }]);
+  tab.dispose();
+  await settle();
+});

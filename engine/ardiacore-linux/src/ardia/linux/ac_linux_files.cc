@@ -77,16 +77,18 @@ bool ListedDownload(download::DownloadItem* item) {
   return !context || !download_crx_util::IsTrustedExtensionDownload(Profile::FromBrowserContext(context), *item);
 }
 
-content::DownloadManager* RegularDownloads(Profile* profile) {
-  return profile && !profile->IsOffTheRecord() ? profile->GetDownloadManager() : nullptr;
+content::DownloadManager* PageDownloads(Profile* profile) {
+  return profile && !profile->ShutdownStarted() ? profile->GetDownloadManager() : nullptr;
 }
 
 std::vector<std::string> DownloadTargets(Profile* profile, bool complete_only) {
-  return downloads::DownloadTargets(RegularDownloads(profile), &ListedDownload, complete_only);
+  return downloads::DownloadTargets(PageDownloads(profile), &ListedDownload, complete_only);
 }
 
 struct ListReply {
   Done done;
+  bool off_the_record = false;
+  base::WeakPtr<Profile> profile;
 };
 
 void ListReplied(void* context, const char* json) {
@@ -96,20 +98,30 @@ void ListReplied(void* context, const char* json) {
     if (const std::string* error = value->GetDict().FindString("error"))
       return Fail(std::move(reply->done), "ERR_ENGINE", *error);
   }
-  auto list = value ? downloads::FilterSnapshot(*value) : std::nullopt;
+  auto list = value ? downloads::FilterSnapshot(*value, reply->off_the_record) : std::nullopt;
   if (!list) return Fail(std::move(reply->done), "ERR_BAD_REPLY", "The download list is not valid");
+  if (reply->off_the_record) {
+    Profile* profile = reply->profile.get();
+    if (!profile || profile->ShutdownStarted())
+      return Fail(std::move(reply->done), "ERR_PROFILE_ENDING", "This private session is closing");
+    list->EraseIf([profile](const base::Value& entry) {
+      const std::string* id = entry.GetDict().FindString("id");
+      return !id || !LinuxDownloadOwned(profile, *id);
+    });
+  }
   std::move(reply->done).Run(true, base::Value(std::move(*list)));
 }
 
 void ListWhenReady(Profile* profile, Done done, bool ready) {
   if (!ready) return Fail(std::move(done), "ERR_DOWNLOADS_UNAVAILABLE", "Download history is unavailable");
-  const std::string path = profile->GetPath().value();
-  ac_engine_call("ac_downloads_list", path.c_str(), "{}", &ListReplied, new ListReply{std::move(done)});
+  const std::string path = profile->GetOriginalProfile()->GetPath().value();
+  ac_engine_call("ac_downloads_list", path.c_str(), "{}", &ListReplied,
+                 new ListReply{std::move(done), profile->IsOffTheRecord(), profile->GetWeakPtr()});
 }
 
 void ClearWhenReady(Profile* profile, std::vector<std::string> keep, double before, Done done, bool ready) {
   if (!ready) return Fail(std::move(done), "ERR_DOWNLOADS_UNAVAILABLE", "Download history is unavailable");
-  const size_t removed = downloads::ClearDownloads(RegularDownloads(profile), &ListedDownload, keep, before);
+  const size_t removed = downloads::ClearDownloads(PageDownloads(profile), &ListedDownload, keep, before);
   std::move(done).Run(true, base::Value(static_cast<int>(removed)));
 }
 
@@ -246,10 +258,16 @@ bool LinuxDownloadsHandles(std::string_view name) {
   return name == "downloads.list" || name == "downloads.remove" || name == "downloads.clear";
 }
 
+bool LinuxDownloadOwned(Profile* profile, const std::string& id) {
+  content::DownloadManager* manager = PageDownloads(profile);
+  download::DownloadItem* item = manager ? manager->GetDownloadByGuid(id) : nullptr;
+  return item && ListedDownload(item);
+}
+
 void LinuxDownloadsCall(Profile* profile, const std::string& name, const base::DictValue& input, Done done) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  content::DownloadManager* manager = RegularDownloads(profile);
-  if (!manager) return Fail(std::move(done), "ERR_PROFILE", "Only the default regular profile is supported");
+  content::DownloadManager* manager = PageDownloads(profile);
+  if (!manager) return Fail(std::move(done), "ERR_PROFILE_UNAVAILABLE", "This window's downloads are unavailable");
   if (name == "downloads.remove") {
     const std::string* id = input.FindString("id");
     const std::string error = id ? downloads::RemoveDownload(manager, &ListedDownload, *id) : "no such download";
@@ -276,8 +294,8 @@ bool LinuxFilesHandles(std::string_view method) {
 void LinuxFilesInvoke(Profile* profile, LinuxShellWebView* shell, const std::string& method,
                       const base::ListValue& values, Done done) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!profile || profile->IsOffTheRecord() || !shell)
-    return Fail(std::move(done), "ERR_PROFILE", "Only the default regular profile is supported");
+  if (!profile || profile->ShutdownStarted() || !shell)
+    return Fail(std::move(done), "ERR_PROFILE_UNAVAILABLE", "This window's files are unavailable");
   auto weak = shell->GetLinuxWeakPtr();
   if (method == "ArdiaSystem.fileStatus") {
     if (values.size() != 1 || !values[0].is_list() || values[0].GetList().size() > downloads::kMaxStatusPaths)

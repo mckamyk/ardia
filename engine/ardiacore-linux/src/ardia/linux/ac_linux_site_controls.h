@@ -18,7 +18,7 @@ struct Failure {
   std::string message;
 };
 
-enum class ProfileRoute { kApp, kRegistry };
+enum class ProfileRoute { kApp, kRegistry, kPrivate };
 
 bool Handles(std::string_view name);
 bool IsContentBlockerCall(std::string_view name);
@@ -75,6 +75,8 @@ std::variant<BlockerRequest, Failure> PrepareBlockerCall(std::string_view name,
                                                          const base::DictValue& args);
 
 bool Mutates(BlockerOp op);
+std::optional<Failure> PrivateBlockerRefusal(std::string_view name, const base::DictValue& args,
+                                             bool private_window);
 std::string_view BridgeOpName(BlockerOp op);
 
 std::string Category(std::string_view list_id, std::string_view group);

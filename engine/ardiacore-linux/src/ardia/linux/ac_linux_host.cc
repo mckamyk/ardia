@@ -17,6 +17,7 @@
 
 #include "ardia/linux/ac_linux_policy.h"
 #include "ardia/linux/ac_linux_contract.h"
+#include "ardia/linux/ac_linux_auto_pip_service.h"
 #include "ardia/linux/ac_linux_close.h"
 #include "ardia/linux/ac_linux_close_hooks.h"
 #include "ardia/linux/ac_linux_credential_service.h"
@@ -38,6 +39,7 @@
 #include "ardia/linux/ac_linux_tab_policy.h"
 #include "ardia/linux/ac_linux_launch_steps.h"
 #include "ardia/linux/ac_linux_page_state.h"
+#include "ardia/linux/ac_linux_private_services.h"
 #include "ardia/linux/ac_linux_profile_service.h"
 #include "ardia/linux/ac_linux_profiles.h"
 #include "ardia/core/ac_launch_switches.h"
@@ -196,6 +198,7 @@ extern bool (*g_ardia_linux_renderer_unresponsive)(content::WebContents*,
                                                    const base::RepeatingClosure&);
 extern bool (*g_ardia_linux_renderer_responsive)(content::WebContents*,
                                                  content::RenderWidgetHost*);
+extern bool (*g_ardia_linux_off_the_record_navigation)(content::WebContents*, const GURL&);
 extern void (*g_ardia_devtools_dock_changed)(BrowserWindowInterface* browser,
                                              content::WebContents* inspected,
                                              content::WebContents* devtools);
@@ -829,6 +832,13 @@ class ShellHostView : public views::View,
   bool Reaches(const ShellHostView* target) const {
     return target && ardiacore::linux_profiles::WindowReachableBy(target->access(), requester());
   }
+  bool FocusReaches(const ShellHostView* target) const {
+    return target && ardiacore::linux_profiles::WindowFocusableBy(target->access(), requester());
+  }
+  bool private_window() const {
+    const auto name = ardiacore::linux_profiles::ParseProfileName(page_profile_);
+    return name && name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate;
+  }
   int opener_host() const { return opener_host_; }
   void ForgetOpener(int host) {
     if (opener_host_ != host) return;
@@ -911,6 +921,7 @@ class ShellHostView : public views::View,
   void LayoutPane(TabBinding* binding);
   void QueueTransaction(std::optional<int> command);
   void EngineEvent(std::string_view topic, const base::DictValue& payload);
+  bool ReceivesPrivateDownload(const base::DictValue& download);
   void Invoke(std::string method, const base::DictValue& args,
               base::OnceCallback<void(bool, base::Value)> done);
   void ReportPictureInPicture(content::WebContents* contents, base::DictValue state);
@@ -951,6 +962,18 @@ class ShellHostView : public views::View,
       if (binding->contents() == contents) {
         return base::TimeTicks::Now() < binding->cancelled_auto_pip_until;
       }
+    }
+    return false;
+  }
+  bool OpenPrivateLink(content::WebContents* contents, const GURL& url) {
+    for (const auto& [id, binding] : bindings_) {
+      if (binding->contents() != contents || !binding->page()) continue;
+      Profile* page = page_profile();
+      const auto original = page ? ardiacore::LinuxProfileName(page->GetOriginalProfile()) : std::nullopt;
+      if (!original) return false;
+      binding->ReportPresentation("openWindow", base::DictValue()
+          .Set("url", url.spec()).Set("disposition", "incognito").Set("profile", *original));
+      return true;
     }
     return false;
   }
@@ -1250,7 +1273,8 @@ class HostMessageHandler : public content::WebUIMessageHandler,
     if (!value) return reply->handler->Fail(reply->id, "ERR_BAD_REPLY", "The engine reply is not JSON");
     if (value->is_dict() && value->GetDict().Find("error")) {
       const auto& error = *value->GetDict().Find("error");
-      return reply->handler->Fail(reply->id, "ERR_ENGINE", error.is_string() ? error.GetString() : "Engine service failed");
+      const auto failure = ardiacore::linux_private_services::EngineFailure(error.is_string() ? error.GetString() : "");
+      return reply->handler->Fail(reply->id, failure.code, failure.message);
     }
     if (ardiacore::IsLinuxZoomDomainRoute(reply->name)) {
       auto completed = value->is_dict()
@@ -1411,11 +1435,22 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       }
       if (const auto invalid = linux_downloads::ValidateRequest(name, input); !invalid.empty())
         return Fail(id, "ERR_DOWNLOAD_REQUEST", invalid);
-      if (LinuxDownloadsHandles(name)) {
+      if (LinuxDownloadsHandles(name) || linux_downloads::IsDownloadControl(name)) {
         Profile* page = host_->page_profile();
-        if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
-        if (profile_name->kind != ardiacore::linux_profiles::ProfileKind::kDefault && !host_->HostsProfile(profile)) {
-          return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kWindowMismatch);
+        if (!page) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kUnavailable);
+        const bool page_private = page->IsOffTheRecord();
+        const auto access = linux_downloads::RouteDownloads(profile_name->kind, page_private,
+            page_private && page->ShutdownStarted(), host_->HostsProfile(profile));
+        if (access.error != ardiacore::linux_profiles::ProfileError::kNone) return ProfileFail(id, access.error);
+        if (linux_downloads::IsDownloadControl(name)) {
+          const std::string* download = input.FindString("id");
+          if (!download) return Fail(id, "ERR_DOWNLOAD_REQUEST", "A valid download id is required");
+          if (!LinuxDownloadOwned(page, *download)) return Fail(id, "ERR_ENGINE", "no such download");
+          const std::string service(linux_downloads::DownloadControlService(name));
+          const std::string path = page->GetOriginalProfile()->GetPath().value();
+          ac_engine_call(service.c_str(), path.c_str(), json.c_str(), Replied,
+                         new EngineReply{name, weak_factory_.GetWeakPtr(), id});
+          return;
         }
         return LinuxDownloadsCall(page, name, input,
             base::BindOnce([](base::WeakPtr<HostMessageHandler> handler, std::string id, bool ok, base::Value result) {
@@ -1448,15 +1483,23 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       }
       if (ardiacore::IsLinuxZoomDomainRoute(name)) {
         Profile* page = host_->page_profile();
-        if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
-        if (profile_name->kind != ardiacore::linux_profiles::ProfileKind::kDefault && !host_->HostsProfile(profile)) {
-          return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kWindowMismatch);
+        const bool private_session = profile_name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate;
+        if (private_session) {
+          const auto error = ardiacore::linux_private_services::RoutePrivateCall(name,
+              {page && page->IsOffTheRecord(), page && page->ShutdownStarted(), page && host_->HostsProfile(profile)});
+          if (error != ardiacore::linux_profiles::ProfileError::kNone) return ProfileFail(id, error);
+        } else {
+          if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
+          if (profile_name->kind != ardiacore::linux_profiles::ProfileKind::kDefault && !host_->HostsProfile(profile)) {
+            return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kWindowMismatch);
+          }
         }
         auto prepared = ardiacore::PrepareLinuxZoomDomain(name, input);
         if (!prepared) return Fail(id, "ERR_ENGINE", "Invalid site zoom request");
+        if (private_session) prepared->args.Set(ardiacore::linux_private_services::kOffTheRecordKey, true);
         const auto serialized = base::WriteJson(prepared->args);
         if (!serialized) return Fail(id, "ERR_BAD_REPLY", "Site zoom arguments are not JSON");
-        const std::string path = page->GetPath().value();
+        const std::string path = (private_session ? page->GetOriginalProfile() : page)->GetPath().value();
         ac_engine_call(prepared->service.c_str(), path.c_str(), serialized->c_str(), Replied,
                        new EngineReply{name, weak_factory_.GetWeakPtr(), id});
         return;
@@ -3002,6 +3045,12 @@ void ShellHostView::QueueTransaction(std::optional<int> command) {
           GetWeakPtr(), std::move(transaction)));
 }
 
+bool ShellHostView::ReceivesPrivateDownload(const base::DictValue& download) {
+  Profile* page = page_profile();
+  const std::string* id = download.FindString("id");
+  return page && page->IsOffTheRecord() && !page->ShutdownStarted() && id && LinuxDownloadOwned(page, *id);
+}
+
 void ShellHostView::EngineEvent(std::string_view topic,
                                 const base::DictValue& payload) {
   if (!profile()) return;
@@ -3013,7 +3062,8 @@ void ShellHostView::EngineEvent(std::string_view topic,
   translated.Set("profile", *engine_profile);
   if (topic == "downloads.changed") {
     const auto* download = translated.FindDict("download");
-    if (!download || download->FindBool("offTheRecord").value_or(false)) return;
+    if (!download) return;
+    if (download->FindBool("offTheRecord").value_or(false) && !ReceivesPrivateDownload(*download)) return;
     translated = download->Clone();
     translated.Set("profile", *engine_profile);
   }
@@ -3703,6 +3753,12 @@ bool PrivateProfileId(std::string_view profile) {
   return !name || name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate;
 }
 
+void PrivateWindowsChanged() {
+  for (const auto& [id, host] : Hosts()) {
+    host->Event("ArdiaShell", "privateWindows", base::Value(base::DictValue()));
+  }
+}
+
 void NotifyOpener(int opener_host, const base::DictValue& event) {
   const auto found = Hosts().find(opener_host);
   if (found != Hosts().end()) found->second->Event("ArdiaShell", "onWindowEvent", base::Value(event.Clone()));
@@ -3848,8 +3904,8 @@ void ShellHostView::Invoke(
   if (!browser_) return std::move(done).Run(false, base::Value("The native browser window has closed"));
   const base::ListValue& values = Arguments(args);
   if (LinuxFilesHandles(method)) {
-    if (!page_profile() || page_profile()->IsOffTheRecord()) {
-      return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kPrivateService));
+    if (!page_profile() || page_profile()->ShutdownStarted()) {
+      return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kUnavailable));
     }
     return LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done));
   }
@@ -4015,9 +4071,7 @@ void ShellHostView::Invoke(
       }
     }
     g_ardia_auto_picture_in_picture_off = !enabled;
-    HostContentSettingsMapFactory::GetForProfile(profile())->SetDefaultContentSetting(
-        ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
-        enabled ? CONTENT_SETTING_ALLOW : CONTENT_SETTING_BLOCK);
+    ardiacore::SetLinuxAutoPictureInPicture(enabled);
     if (!enabled) {
       std::vector<base::WeakPtr<content::WebContents>> contents;
       for (const auto& [window, host] : Hosts()) {
@@ -4250,6 +4304,16 @@ void ShellHostView::Invoke(
       return std::move(done).Run(false, base::Value("Unknown launch step"));
     return std::move(done).Run(true, base::Value(steps.Complete(values[0].GetString())));
   }
+  if (method == "ArdiaShell.privateWindows") {
+    base::ListValue windows;
+    for (const auto& [id, host] : Hosts()) {
+      if (!host->is_utility() && host->browser() &&
+          ardiacore::linux_profiles::WindowListedAsPrivate(host->access(), requester())) {
+        windows.Append(base::DictValue().Set("id", host->window_id()));
+      }
+    }
+    return std::move(done).Run(true, base::Value(std::move(windows)));
+  }
   if (method == "ArdiaShell.windowIds") {
     base::ListValue ids;
     for (const auto& [id, host] : Hosts()) {
@@ -4264,7 +4328,8 @@ void ShellHostView::Invoke(
       method == "ArdiaShell.setWindowTitle") {
     ShellHostView* target = nullptr;
     for (const auto& [id, host] : Hosts()) {
-      if (host->window_id() == ArgumentString(values, 0) && Reaches(host)) target = host;
+      if (host->window_id() == ArgumentString(values, 0) &&
+          (method == "ArdiaShell.focusWindow" ? FocusReaches(host) : Reaches(host))) target = host;
     }
     if (!target) return std::move(done).Run(false, base::Value("No such native window"));
     if (method == "ArdiaShell.utilityReady") {
@@ -4832,6 +4897,7 @@ class HostRegistry : public BrowserCollectionObserver,
     view->AddChildView(std::move(overlay));
     shell->Initialize();
     if (opener) NotifyOpener(*opener, base::DictValue().Set("type", "attached").Set("id", shell->window_id()));
+    if (shell->private_window()) PrivateWindowsChanged();
   }
   void OnBrowserCreated(BrowserWindowInterface* browser) override {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -4859,6 +4925,7 @@ class HostRegistry : public BrowserCollectionObserver,
     if (private_window) {
       ardiacore::ReleaseLinuxProfile(closed_profile->id);
       NotifyOpener(opener, base::DictValue().Set("type", "close").Set("id", closed_window));
+      PrivateWindowsChanged();
     }
     base::DictValue tx = base::DictValue()
         .Set("rev", ++Revision()).Set("cmd", base::Value())
@@ -4928,6 +4995,13 @@ void StartLinuxHost() {
     }
     return false;
   };
+  g_ardia_linux_off_the_record_navigation = [](content::WebContents* contents, const GURL& url) {
+    if (!contents || !url.is_valid()) return false;
+    for (const auto& [id, host] : Hosts()) {
+      if (host->OpenPrivateLink(contents, url)) return true;
+    }
+    return false;
+  };
   g_ardia_devtools_dock_changed = [](BrowserWindowInterface* browser, content::WebContents* inspected,
                                      content::WebContents*) {
     if (!browser || !inspected) return;
@@ -4984,7 +5058,10 @@ void StartLinuxHost() {
   });
   extensions.broadcast = base::BindRepeating([](Profile* profile, std::string_view name, base::DictValue data) {
     for (const auto& [id, host] : Hosts()) {
-      if (host->page_profile() == profile) host->ExtensionEvent(name, data.Clone());
+      Profile* page = host->page_profile();
+      if (page && !page->ShutdownStarted() && page->GetOriginalProfile() == profile) {
+        host->ExtensionEvent(name, data.Clone());
+      }
     }
   });
   StartLinuxExtensions(std::move(extensions));

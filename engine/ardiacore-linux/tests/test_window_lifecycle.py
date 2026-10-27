@@ -492,6 +492,9 @@ struct ShellHostView {
   bool Reaches(const ShellHostView* target) const {
     return target && ardiacore::linux_profiles::WindowReachableBy(target->access(), {id_, renderer_generation_});
   }
+  bool FocusReaches(const ShellHostView* target) const {
+    return target && ardiacore::linux_profiles::WindowFocusableBy(target->access(), {id_, renderer_generation_});
+  }
   views::Widget* GetWidget() { return &widget; }
   const views::Widget* GetWidget() const { return &widget; }
   void Event(std::string_view module, std::string_view event, base::Value payload) {

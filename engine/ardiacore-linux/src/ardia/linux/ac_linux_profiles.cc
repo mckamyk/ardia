@@ -106,6 +106,17 @@ bool WindowReachableBy(const WindowAccess& window, const WindowRequester& reques
          requester.generation == window.opener_generation;
 }
 
+bool WindowFocusableBy(const WindowAccess& window, const WindowRequester& requester) {
+  if (requester.host == 0) return false;
+  const auto name = ParseProfileName(window.page_profile);
+  return name && (name->kind == ProfileKind::kPrivate || WindowReachableBy(window, requester));
+}
+
+bool WindowListedAsPrivate(const WindowAccess& window, const WindowRequester& requester) {
+  const auto name = ParseProfileName(window.page_profile);
+  return requester.host != 0 && requester.host != window.host && name && name->kind == ProfileKind::kPrivate;
+}
+
 bool ProfileOpensWindow(const ProfileName& name, bool incognito, bool utility) {
   if (utility) return name.kind == ProfileKind::kDefault && !incognito;
   return incognito == (name.kind == ProfileKind::kPrivate);

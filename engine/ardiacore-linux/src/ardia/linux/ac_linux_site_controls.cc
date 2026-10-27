@@ -1,5 +1,7 @@
 #include "ardia/linux/ac_linux_site_controls.h"
 
+#include "ardia/linux/ac_linux_private_services.h"
+
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
@@ -158,8 +160,10 @@ std::vector<std::string_view> Capabilities() {
 
 std::variant<ProfileRoute, Failure> RouteProfile(std::string_view name, std::string_view requested) {
   if (IsContentBlockerCall(name)) return ProfileRoute::kApp;
-  if (requested.starts_with("incognito:"))
+  if (requested.starts_with("incognito:")) {
+    if (ardiacore::linux_private_services::ServesPrivateSession(name)) return ProfileRoute::kPrivate;
     return Failure{"ERR_PROFILE_PRIVATE", "Private sessions keep no site settings or browsing data"};
+  }
   return ProfileRoute::kRegistry;
 }
 
@@ -277,7 +281,8 @@ std::variant<base::Value, Failure> CompleteServiceCall(std::string_view name,
   if (!reply.is_dict()) return BadReply("The engine reply is not an object");
   const base::DictValue& dict = reply.GetDict();
   if (const base::Value* error = dict.Find("error")) {
-    return Failure{"ERR_ENGINE", error->is_string() ? error->GetString() : "Engine service failed"};
+    auto failure = ardiacore::linux_private_services::EngineFailure(error->is_string() ? error->GetString() : "");
+    return Failure{std::move(failure.code), std::move(failure.message)};
   }
   if (name == "sites.settings") {
     const base::DictValue* settings = dict.FindDict("settings");
@@ -439,6 +444,15 @@ int64_t InheritRetryDelayMs(int attempt) {
 
 bool Mutates(BlockerOp op) {
   return op == BlockerOp::kSetEnabled || op == BlockerOp::kSetList || op == BlockerOp::kSetAllowed;
+}
+
+std::optional<Failure> PrivateBlockerRefusal(std::string_view name, const base::DictValue& args,
+                                             bool private_window) {
+  if (!private_window || !IsContentBlockerCall(name)) return std::nullopt;
+  const auto request = PrepareBlockerCall(name, args);
+  const auto* prepared = std::get_if<BlockerRequest>(&request);
+  if (!prepared || !Mutates(prepared->op)) return std::nullopt;
+  return Failure{"ERR_PROFILE_PRIVATE", "Private windows can't change the content blocker"};
 }
 
 std::string_view BridgeOpName(BlockerOp op) {

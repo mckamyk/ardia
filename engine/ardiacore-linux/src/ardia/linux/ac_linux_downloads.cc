@@ -151,7 +151,7 @@ std::string BaseName(std::string_view path) {
   return std::string(slash == std::string_view::npos ? path : path.substr(slash + 1));
 }
 
-std::optional<base::ListValue> FilterSnapshot(const base::Value& reply) {
+std::optional<base::ListValue> FilterSnapshot(const base::Value& reply, bool off_the_record) {
   if (!reply.is_dict()) return std::nullopt;
   const base::Value* downloads = reply.GetDict().Find("downloads");
   if (!downloads || !downloads->is_list()) return std::nullopt;
@@ -159,12 +159,45 @@ std::optional<base::ListValue> FilterSnapshot(const base::Value& reply) {
   for (const auto& entry : downloads->GetList()) {
     if (!entry.is_dict()) continue;
     const std::string* id = entry.GetDict().FindString("id");
-    const base::Value* off_the_record = entry.GetDict().Find("offTheRecord");
+    const base::Value* flag = entry.GetDict().Find("offTheRecord");
     if (!id || !ValidDownloadId(*id)) continue;
-    if (off_the_record && (!off_the_record->is_bool() || off_the_record->GetBool())) continue;
+    if (flag && !flag->is_bool()) continue;
+    if ((flag && flag->GetBool()) != off_the_record) continue;
     kept.Append(entry.Clone());
   }
   return kept;
+}
+
+DownloadRoute RouteDownloads(ardiacore::linux_profiles::ProfileKind requested, bool page_private,
+                             bool page_ending, bool hosts_requested) {
+  using ardiacore::linux_profiles::ProfileError;
+  using ardiacore::linux_profiles::ProfileKind;
+  if (requested == ProfileKind::kPrivate) {
+    if (!page_private) return {ProfileError::kWindowMismatch, false};
+    if (page_ending) return {ProfileError::kPrivateEnding, false};
+    if (!hosts_requested) return {ProfileError::kWindowMismatch, false};
+    return {ProfileError::kNone, true};
+  }
+  if (requested == ProfileKind::kIsolated && (page_private || !hosts_requested)) {
+    return {ProfileError::kWindowMismatch, false};
+  }
+  if (page_private) {
+    if (page_ending) return {ProfileError::kPrivateEnding, false};
+    return {ProfileError::kNone, true};
+  }
+  return {ProfileError::kNone, false};
+}
+
+std::string_view DownloadControlService(std::string_view name) {
+  if (name == "downloads.cancel") return "ac_downloads_cancel";
+  if (name == "downloads.pause") return "ac_downloads_pause";
+  if (name == "downloads.resume") return "ac_downloads_resume";
+  if (name == "downloads.keep") return "ac_downloads_keep";
+  return {};
+}
+
+bool IsDownloadControl(std::string_view name) {
+  return !DownloadControlService(name).empty();
 }
 
 std::vector<std::string> KeptIds(const base::DictValue& input) {

@@ -112,6 +112,10 @@ bool UsesWindowProfile(std::string_view name) {
          name == "extensions.resolveInstallPrompt";
 }
 
+bool ServesPrivateWindow(std::string_view name) {
+  return name == "extensions.actionStates" || name == "extensions.sidePanelUrl";
+}
+
 std::optional<base::DictValue> Configuration(const base::DictValue& input) {
   const auto* id = input.FindString("id");
   const auto* options = input.FindDict("options");

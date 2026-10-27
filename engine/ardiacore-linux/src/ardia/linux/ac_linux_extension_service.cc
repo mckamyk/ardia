@@ -40,6 +40,7 @@
 #include "extensions/browser/extension_action_manager.h"
 #include "extensions/browser/extension_install_prompt_client.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/browser/install_prompt_data.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/file_util.h"
@@ -124,7 +125,9 @@ std::string ProfileId(const Profile* profile) {
 }
 
 const extensions::Extension* Enabled(content::BrowserContext* context, const std::string& id) {
-  return extensions::ExtensionRegistry::Get(context)->enabled_extensions().GetByID(id);
+  const extensions::Extension* extension = extensions::ExtensionRegistry::Get(context)->enabled_extensions().GetByID(id);
+  if (extension && context->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(id, context)) return nullptr;
+  return extension;
 }
 
 std::string PngDataUrl(const gfx::Image& image) {
@@ -489,8 +492,8 @@ Profile* LinuxExtensionViewProfile(Profile* page_profile, std::string_view reque
     *code = "ERR_WINDOW_CLOSED";
     return nullptr;
   }
-  if (page_profile->IsOffTheRecord()) {
-    *code = "ERR_PROFILE_PRIVATE";
+  if (page_profile->IsOffTheRecord() && page_profile->ShutdownStarted()) {
+    *code = "ERR_PROFILE_ENDING";
     return nullptr;
   }
   if (!ardiacore::LinuxProfileHosts(requested, page_profile)) {
@@ -510,7 +513,10 @@ void CallProfile(const LinuxExtensionWindow& window, const std::string& name, st
                  base::OnceCallback<void(Profile*, std::string)> done) {
   if (!ext::UsesWindowProfile(name)) return LinuxExtensionsProfile(requested, std::move(done));
   if (!window.profile) return std::move(done).Run(nullptr, "ERR_WINDOW_CLOSED");
-  if (window.profile->IsOffTheRecord()) return std::move(done).Run(nullptr, "ERR_PROFILE_PRIVATE");
+  if (window.profile->IsOffTheRecord()) {
+    if (!ext::ServesPrivateWindow(name)) return std::move(done).Run(nullptr, "ERR_PROFILE_PRIVATE");
+    if (window.profile->ShutdownStarted()) return std::move(done).Run(nullptr, "ERR_PROFILE_ENDING");
+  }
   std::move(done).Run(window.profile, std::string());
 }
 

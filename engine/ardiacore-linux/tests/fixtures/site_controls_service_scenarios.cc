@@ -27,6 +27,11 @@ std::vector<std::string>& Resolved() {
   return resolved;
 }
 
+bool ardiacore::LinuxProfileHosts(std::string_view id, const Profile* window_profile) {
+  auto found = Registry().find(std::string(id));
+  return found != Registry().end() && found->second == window_profile && !found->second->ShutdownStarted();
+}
+
 void ardiacore::ResolveLinuxProfile(std::string_view id, LinuxProfileDone done) {
   Resolved().push_back(std::string(id));
   const std::string key = id.empty() ? "default" : std::string(id);
@@ -45,6 +50,11 @@ struct EngineCall {
   std::string profile;
   std::string args;
 };
+
+std::string& EngineError() {
+  static std::string error;
+  return error;
+}
 
 std::vector<EngineCall>& EngineCalls() {
   static std::vector<EngineCall> calls;
@@ -71,9 +81,13 @@ void ac_engine_call(const char* name, const char* profile_dir, const char* args_
   assert(args && args->is_dict());
   const base::DictValue& input = args->GetDict();
   const std::string service = name;
-  const std::string origin = input.FindString("origin") ? *input.FindString("origin") : "";
+  const base::Value* otr_flag = input.Find("offTheRecord");
+  const bool off_the_record = otr_flag && otr_flag->is_bool() && otr_flag->GetBool();
+  const std::string origin = (off_the_record ? "otr|" : "") + (input.FindString("origin") ? *input.FindString("origin") : "");
   std::string json;
-  if (service == "ac_site_settings_get") {
+  if (!EngineError().empty()) {
+    json = Reply(base::DictValue().Set("error", std::exchange(EngineError(), "")));
+  } else if (service == "ac_site_settings_get") {
     base::DictValue settings;
     for (const char* type : {"camera", "microphone", "location", "notifications"}) {
       auto found = Exceptions().find({origin, type});
@@ -92,7 +106,9 @@ void ac_engine_call(const char* name, const char* profile_dir, const char* args_
     json = Reply(base::DictValue());
   } else if (service == "ac_site_settings_origins") {
     std::set<std::string> origins;
-    for (const auto& [key, value] : Exceptions()) origins.insert(key.first);
+    for (const auto& [key, value] : Exceptions()) {
+      if (key.first.starts_with("otr|") == off_the_record) origins.insert(off_the_record ? key.first.substr(4) : key.first);
+    }
     base::ListValue list;
     for (const auto& o : origins) list.Append(base::Value(o));
     json = Reply(base::DictValue().Set("origins", base::Value(std::move(list))));
@@ -206,7 +222,7 @@ void SitePermissionsThroughTheService(Profile& profile, Profile& incognito) {
   auto otr = Settle(Call(&profile, "sites.origins", "{}", "otr"));
   assert(otr->code == "ERR_PROFILE_PRIVATE");
   auto private_id = Settle(Call(&profile, "sites.settings", "{" + origin + "}", "incognito:w1@default"));
-  assert(private_id->code == "ERR_PROFILE_PRIVATE");
+  assert(private_id->code == "ERR_PROFILE_WINDOW");
   auto deleted = Settle(Call(&profile, "sites.origins", "{}", "gone"));
   assert(deleted->code == "ERR_PROFILE_DELETED");
   auto unknown = Settle(Call(&profile, "sites.origins", "{}", "nobody"));
@@ -233,6 +249,57 @@ void SitePermissionsThroughTheService(Profile& profile, Profile& incognito) {
   Settle(Call(&profile, "sites.setSetting", "{" + origin + R"(,"type":"camera","value":"default"})", "work"));
   auto app_level = Settle(Call(&profile, "contentBlocker.devFailNextMessage", "{}", "work"));
   assert(app_level->ok && Resolved().size() == 2);
+}
+
+bool OffTheRecordArg(const EngineCall& call) {
+  const auto parsed = base::JSONReader::Read(call.args, 0);
+  const base::Value* flag = parsed->GetDict().Find("offTheRecord");
+  return flag && flag->is_bool() && flag->GetBool();
+}
+
+void PrivateSessionThroughTheService(Profile& profile, Profile& incognito) {
+  const std::string origin = R"("origin":"https://private.ardia.test")";
+  const std::string session = "incognito:w1@default";
+  Registry()[session] = &incognito;
+  EngineCalls().clear();
+  Resolved().clear();
+  auto grant = Settle(Call(&profile, "sites.setSetting", "{" + origin + R"(,"type":"camera","value":"allow"})", session, &incognito));
+  assert(grant->ok && EngineCalls().size() == 1 && EngineCalls()[0].service == "ac_site_settings_set");
+  assert(EngineCalls()[0].profile == "/profiles/Default");
+  assert(OffTheRecordArg(EngineCalls()[0]));
+  assert(Resolved().empty());
+  auto in_private = Settle(Call(&profile, "sites.settings", "{" + origin + "}", session, &incognito));
+  assert(ValueOf(in_private, "camera") == "allow");
+  auto in_regular = Settle(Call(&profile, "sites.settings", "{" + origin + "}"));
+  assert(ValueOf(in_regular, "camera") == "ask" && IsDefault(in_regular, "camera"));
+  assert(Settle(Call(&profile, "sites.origins", "{}"))->value.GetList().size() == 0);
+  auto private_origins = Settle(Call(&profile, "sites.origins", "{}", session, &incognito));
+  assert(private_origins->ok && private_origins->value.GetList().size() == 1);
+  assert(EngineCalls().size() == 5);
+  for (size_t index : {0, 1, 4}) assert(OffTheRecordArg(EngineCalls()[index]));
+  for (size_t index : {2, 3}) assert(EngineCalls()[index].args.find("offTheRecord") == std::string::npos);
+  assert(Settle(Call(&profile, "sites.reset", "{" + origin + "}", session, &incognito))->ok);
+  assert(Settle(Call(&profile, "sites.clearData", "{" + origin + "}", session, &incognito))->ok);
+  EngineCalls().clear();
+  EngineError() = "no private session";
+  auto ended = Settle(Call(&profile, "sites.settings", "{" + origin + "}", session, &incognito));
+  assert(ended->code == "ERR_PROFILE_ENDING");
+  EngineCalls().clear();
+  auto clear_all = Settle(Call(&profile, "profiles.clearBrowsingData", R"({"types":["cache"]})", session, &incognito));
+  assert(clear_all->code == "ERR_PROFILE_PRIVATE");
+  Profile stranger("/profiles/Default", true, &profile);
+  auto foreign = Settle(Call(&profile, "sites.settings", "{" + origin + "}", session, &stranger));
+  assert(foreign->code == "ERR_PROFILE_WINDOW");
+  auto as_default = Settle(Call(&profile, "sites.settings", "{" + origin + "}", "default", &incognito));
+  assert(as_default->ok && ValueOf(as_default, "camera") == "ask");
+  assert(EngineCalls().size() == 1 && EngineCalls()[0].args.find("offTheRecord") == std::string::npos);
+  EngineCalls().clear();
+  incognito.shutdown_started = true;
+  auto closing = Settle(Call(&profile, "sites.setSetting", "{" + origin + R"(,"type":"camera","value":"block"})", session, &incognito));
+  assert(closing->code == "ERR_PROFILE_ENDING");
+  incognito.shutdown_started = false;
+  assert(EngineCalls().empty());
+  Registry().erase(session);
 }
 
 void BrowsingDataThroughTheService(Profile& profile, Profile& incognito) {
@@ -375,7 +442,22 @@ void WorkingBlocker(const std::filesystem::path& scratch) {
   assert(Dict(hosts).Find("allowedHosts")->GetList()[0].GetString() == "example.com");
   auto bad_host = Settle(Call(profile.get(), "contentBlocker.setAllowed", R"({"host":"/^(?:ardia-blocking-off|)/","allowed":true})"));
   assert(bad_host->code == "ERR_CONTENT_BLOCKER_REQUEST");
-  auto off = Settle(Call(profile.get(), "contentBlocker.setEnabled", R"({"enabled":false})", "incognito:w2@default"));
+  const auto allowed_before = Bridge().whitelist;
+  for (const char* change : {R"({"host":"private.test","allowed":true})", R"({"host":"example.com","allowed":false})"}) {
+    auto from_private_window = Settle(Call(profile.get(), "contentBlocker.setAllowed", change, "", &incognito));
+    assert(from_private_window->code == "ERR_PROFILE_PRIVATE");
+    auto named_private = Settle(Call(profile.get(), "contentBlocker.setAllowed", change, "incognito:w2@default"));
+    assert(named_private->code == "ERR_PROFILE_PRIVATE");
+  }
+  assert(Settle(Call(profile.get(), "contentBlocker.setEnabled", R"({"enabled":false})", "", &incognito))->code == "ERR_PROFILE_PRIVATE");
+  assert(Settle(Call(profile.get(), "contentBlocker.setListEnabled", R"({"id":"fanboy-cookiemonster","enabled":true})", "", &incognito))->code == "ERR_PROFILE_PRIVATE");
+  assert(Settle(Call(profile.get(), "contentBlocker.setEnabled", R"({"enabled":false})", "incognito:w2@default"))->code == "ERR_PROFILE_PRIVATE");
+  assert(Bridge().whitelist == allowed_before && !Bridge().lists["fanboy-cookiemonster"]);
+  assert(Settle(Call(profile.get(), "contentBlocker.isAllowed", R"({"host":"news.example.com"})", "", &incognito))->value.GetBool());
+  assert(Settle(Call(profile.get(), "contentBlocker.state", "{}", "", &incognito))->ok);
+  Advance(200);
+  assert(Events().size() == 1);
+  auto off = Settle(Call(profile.get(), "contentBlocker.setEnabled", R"({"enabled":false})"));
   assert(off->ok && !Bridge().auto_update);
   Advance(200);
   assert(Events().size() == 2 && !Events()[1].GetDict().Find("enabled")->GetBool());
@@ -683,6 +765,7 @@ int main() {
   Registry()["work"] = &work;
   Registry()["otr"] = &otr;
   SitePermissionsThroughTheService(profile, incognito);
+  PrivateSessionThroughTheService(profile, incognito);
   BrowsingDataThroughTheService(profile, incognito);
   MissingBlocker(scratch);
   WrongComponent(scratch);
