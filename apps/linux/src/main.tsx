@@ -76,6 +76,7 @@ async function start() {
       savedSession: !!saved,
       capabilities: linuxCapabilities(ardiaHost),
       locks: navigator.locks,
+      marks: sessionStorage,
     });
   }
   createRoot(document.getElementById("root")!, { onUncaughtError: (error) => console.error("[ardia linux] crashed", error) }).render(

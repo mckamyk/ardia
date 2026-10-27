@@ -113,6 +113,12 @@ export function visibleUnsupported(textByPane) {
   return shown;
 }
 
+export const LAUNCH_STEPS = ["version", "onboarding", "releaseNotes", "defaultBrowserOffer"];
+
+export function launchStepsComplete(steps) {
+  return Array.isArray(steps) && LAUNCH_STEPS.every((step) => steps.includes(step));
+}
+
 export function launchLockHolders(locks, name = "ardia.linux.app-launch") {
   return (locks?.held ?? []).filter((lock) => lock.name === name).map((lock) => lock.clientId);
 }

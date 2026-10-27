@@ -4,7 +4,7 @@ import { isDefaultBrowser, setAsDefaultBrowser, systemInfo } from "../../browser
 import { beginTracing, endTracing, isTracing, openTaskManager } from "../../browser/src/platform/performance";
 import { confirm } from "../../browser/src/platform/dialogs";
 import { revealFile } from "../../browser/src/platform/files";
-import { readDocument, saveDocument } from "../../browser/src/platform/documents";
+import { readDocument, removeDocument, saveDocument } from "../../browser/src/platform/documents";
 import { afterFirstWindow } from "../../browser/src/lib/afterFirstWindow";
 import { diagnostics, sendFeedback } from "../../browser/src/state/app/appIntegration";
 import { finishOnboarding, maybeStartOnboarding, onboardingCompletedAt, startOnboarding, useOnboarding } from "../../browser/src/state/onboarding/onboarding";
@@ -17,12 +17,14 @@ import type { LinuxCapabilities } from "./hostCapabilities.ts";
 import { hostSupports, invokeHost, type ArdiaHost } from "./host.ts";
 
 export const APP_LAUNCH_LOCK = "ardia.linux.app-launch";
+export const APP_LAUNCH_MARK = "ardia.linux.app-launch";
 export const ONBOARDING_DOCUMENT = "onboarding.json";
 export const FRESH_PROFILE_DOCUMENT = "linux-fresh-profile.json";
 export const LAUNCH_STEPS = ["version", "onboarding", "releaseNotes", "defaultBrowserOffer"] as const;
 
 export type LaunchStep = (typeof LAUNCH_STEPS)[number] | "versionUpdated";
 export type LaunchLocks = { request(name: string, callback: () => Promise<void>): Promise<unknown> };
+export type LaunchMarks = { setItem(key: string, value: string): void };
 export type LaunchRecord = { done(): Promise<ReadonlySet<string>>; complete(step: LaunchStep): Promise<unknown> };
 export type LaunchClaim = "ran" | "alreadyDone" | "failed" | "unavailable";
 export type DocumentPresence = "present" | "absent" | "unknown";
@@ -48,14 +50,15 @@ export const hostStoredDocument = (host: ArdiaHost): StoredDocumentReader => asy
   throw new Error(`Unexpected stored document reply for ${name}`);
 };
 
-export function claimAppLaunch(options: { locks?: LaunchLocks; record?: LaunchRecord; run: (done: ReadonlySet<string>) => Promise<void> }): Promise<LaunchClaim> {
-  const { locks, record, run } = options;
+export function claimAppLaunch(options: { locks?: LaunchLocks; record?: LaunchRecord; marks?: LaunchMarks; run: (done: ReadonlySet<string>) => Promise<void> }): Promise<LaunchClaim> {
+  const { locks, record, marks, run } = options;
   return new Promise((resolve) => {
     if (!locks || !record) return resolve("unavailable");
     locks.request(APP_LAUNCH_LOCK, async () => {
       const done = await record.done();
       if (LAUNCH_STEPS.every((step) => done.has(step))) return resolve("alreadyDone");
       try {
+        marks?.setItem(APP_LAUNCH_MARK, "ran");
         await run(done);
         resolve("ran");
       } catch (error) {
@@ -110,14 +113,15 @@ export async function runLaunchServices(options: {
 }) {
   const { windowId, savedSession, capabilities, done, complete, readStored } = options;
   const updatedNow = trackAppVersion();
-  const updated = done.has("version") ? done.has("versionUpdated") : updatedNow;
+  const updated = done.has("versionUpdated") || (!done.has("version") && updatedNow);
   if (!done.has("version")) {
-    if (updated) await complete("versionUpdated");
+    if (updated && !done.has("versionUpdated")) await complete("versionUpdated");
     await complete("version");
   }
   if (!done.has("onboarding")) {
     const evidence = { onboarding: await onboardingPresence(readStored), freshProfile: await storedPresence(FRESH_PROFILE_DOCUMENT, readStored), savedSession };
     const action = onboardingAction(evidence);
+    if (evidence.onboarding === "present" && evidence.freshProfile === "present") removeDocument(FRESH_PROFILE_DOCUMENT);
     if (action === "complete") finishOnboarding();
     if (action === "shared") {
       maybeStartOnboarding();
@@ -213,13 +217,15 @@ export function startLinuxAppServices(options: {
   savedSession: boolean;
   capabilities: LinuxCapabilities;
   locks?: LaunchLocks;
+  marks?: LaunchMarks;
 }) {
-  const { host, windowId, savedSession, capabilities, locks } = options;
+  const { host, windowId, savedSession, capabilities, locks, marks } = options;
   const commands = startAppCommands(windowId, capabilities);
   const record = hostLaunchRecord(host);
   const launch = claimAppLaunch({
     locks,
     record,
+    marks,
     run: (done) => runLaunchServices({ windowId, savedSession, capabilities, done, complete: record!.complete, readStored: hostStoredDocument(host) }),
   });
   return { commands, launch };

@@ -5,7 +5,7 @@ import { appInfo, docs } from "../../browser/src/test-native/index.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { useOnboarding, onboardingCompletedAt } from "../../browser/src/state/onboarding/onboarding.ts";
 import { useToasts } from "../../browser/src/state/splits/actions.ts";
-import { APP_LAUNCH_LOCK, FRESH_PROFILE_DOCUMENT, LAUNCH_STEPS, UTILITY_APP_COMMANDS, claimAppLaunch, hostLaunchRecord, onboardingAction, recordFreshProfile, runAppCommand, runLaunchServices, startAppCommands } from "./appServices.ts";
+import { APP_LAUNCH_LOCK, APP_LAUNCH_MARK, FRESH_PROFILE_DOCUMENT, LAUNCH_STEPS, UTILITY_APP_COMMANDS, claimAppLaunch, hostLaunchRecord, onboardingAction, recordFreshProfile, runAppCommand, runLaunchServices, startAppCommands } from "./appServices.ts";
 
 const capabilities = { defaultBrowser: false, launchAtLogin: false, thinScrollBars: false, webkit: false, cliControl: false, externalLinks: false, performanceRecording: false, taskManager: false };
 
@@ -268,4 +268,47 @@ test("utility windows run only the app commands that need no browser window", ()
   listeners[0]({ command: "taskManager", windowId: "settings" });
   assert.equal(toast("settings")?.title, "Not available on Linux yet");
   assert.equal(toast(first), undefined);
+});
+
+test("only the renderer that runs launch steps leaves the evidence mark", async () => {
+  const locks = lockManager();
+  const record = launchRecord();
+  const marks = [new Map(), new Map()];
+  const storage = (map) => ({ getItem: (key) => map.get(key) ?? null, setItem: (key, value) => void map.set(key, value) });
+  const run = async (done) => { for (const step of LAUNCH_STEPS) if (!done.has(step)) await record.complete(step); };
+  await claimAppLaunch({ locks: locks.forWindow("a"), record, run, marks: storage(marks[0]) });
+  await claimAppLaunch({ locks: locks.forWindow("b"), record, run, marks: storage(marks[1]) });
+  assert.equal(marks[0].get(APP_LAUNCH_MARK), "ran");
+  assert.equal(marks[1].get(APP_LAUNCH_MARK), undefined);
+});
+
+test("release notes still open when the holder died between recording versionUpdated and version", async () => {
+  const { first } = twoWindows();
+  appInfo.appVersion = "4.0";
+  appInfo.releaseNotesURL = "https://ardia.dev/release-notes";
+  appInfo.forceReleaseNotes = true;
+  docs.set("release-notes.json", JSON.stringify({ lastVersion: "4.0", pending: null, version: 1 }));
+  docs.set("onboarding.json", JSON.stringify({ completedAt: 1, version: 1 }));
+  try {
+    const record = await launch(first, { done: new Set(["versionUpdated"]), savedSession: true });
+    assert.deepEqual(record.completions, ["version", "onboarding", "releaseNotes", "defaultBrowserOffer"]);
+    assert.ok(Object.values(useBrowser.getState().tabs).some((tab) => (tab.url ?? tab.navigation?.url ?? "").startsWith("https://ardia.dev/release-notes")));
+  } finally {
+    delete appInfo.releaseNotesURL;
+    delete appInfo.forceReleaseNotes;
+  }
+});
+
+test("the fresh-profile marker is removed once an onboarding record exists on disk", async () => {
+  const { first } = twoWindows();
+  docs.set(FRESH_PROFILE_DOCUMENT, JSON.stringify({ version: 1, createdAt: 1 }));
+  docs.set("onboarding.json", JSON.stringify({ completedAt: null, startedAt: 5, version: 1 }));
+  await launch(first, { savedSession: true });
+  assert.equal(docs.has(FRESH_PROFILE_DOCUMENT), false);
+  docs.set(FRESH_PROFILE_DOCUMENT, JSON.stringify({ version: 1, createdAt: 1 }));
+  docs.delete("onboarding.json");
+  twoWindows();
+  docs.set(FRESH_PROFILE_DOCUMENT, JSON.stringify({ version: 1, createdAt: 1 }));
+  await launch(first, { savedSession: true, readStored: stored({ [FRESH_PROFILE_DOCUMENT]: "{}" }) });
+  assert.equal(docs.has(FRESH_PROFILE_DOCUMENT), true);
 });
