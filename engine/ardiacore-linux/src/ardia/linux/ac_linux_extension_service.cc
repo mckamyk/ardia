@@ -519,7 +519,9 @@ void Dispatch(const LinuxExtensionWindow& window, const std::string& name, base:
       LOG(WARNING) << "[ardia] extensions.chooseFolder: background instance, no folder panel shown";
       return std::move(done).Run(true, base::Value());
     }
-    return FolderChooser::Start(window.native_window, std::move(done));
+    const gfx::NativeWindow owner = window.native_window ? window.native_window.Run() : gfx::NativeWindow();
+    if (!owner) return Fail(std::move(done), "ERR_WINDOW_CLOSED", "The window closed before the folder picker opened");
+    return FolderChooser::Start(owner, std::move(done));
   }
   if (name == "extensions.resolveInstallPrompt") return ResolvePrompt(window, profile, input, std::move(done));
   if (name == "extensions.actionStates") return ActionStates(window, profile, input, std::move(done));

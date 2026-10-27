@@ -2623,7 +2623,9 @@ LinuxExtensionWindow ShellHostView::ExtensionWindow() {
   LinuxExtensionWindow window;
   window.profile = page_profile();
   window.window = id_;
-  window.native_window = GetWidget() ? GetWidget()->GetNativeWindow() : gfx::NativeWindow();
+  window.native_window = base::BindRepeating([](base::WeakPtr<ShellHostView> host) {
+    return host && host->browser() && host->GetWidget() ? host->GetWidget()->GetNativeWindow() : gfx::NativeWindow();
+  }, GetWeakPtr());
   window.tab = base::BindRepeating([](base::WeakPtr<ShellHostView> host, std::string_view key) -> content::WebContents* {
     TabBinding* binding = host ? host->BindingForKey(key) : nullptr;
     return binding ? binding->contents() : nullptr;

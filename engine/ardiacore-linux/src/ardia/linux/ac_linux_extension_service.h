@@ -29,7 +29,7 @@ struct LinuxExtensionWindow {
 
   Profile* profile = nullptr;
   int window = 0;
-  gfx::NativeWindow native_window = gfx::NativeWindow();
+  base::RepeatingCallback<gfx::NativeWindow()> native_window;
   base::RepeatingCallback<content::WebContents*(std::string_view)> tab;
 };
 
