@@ -396,10 +396,11 @@ AC_ENGINE_CALL(ac_passwords_reveal) {
                       base::DictValue result;
                       if (credential) {
                         result.Set("password", credential->password);
+                        ardia::Cleanse(credential->password);
                       } else {
                         result.Set("password", base::Value());
                       }
-                      reply.Send(std::move(result));
+                      reply.SendSecret(std::move(result));
                     },
                     entry->id));
           },

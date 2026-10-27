@@ -32,6 +32,7 @@ class Reply {
   ~Reply();
 
   void Send(base::DictValue result);
+  void SendSecret(base::DictValue result);
   void Ok();
   void Error(std::string_view message);
 

@@ -16,6 +16,10 @@ void Cleanse(std::string& string);
 void Cleanse(std::u16string& string);
 void Cleanse(base::Value& value);
 
+void SendSecretJson(base::DictValue result,
+                    void (*send)(void* context, const char* json),
+                    void* context);
+
 class Secret {
  public:
   Secret();

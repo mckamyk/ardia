@@ -4,9 +4,11 @@
 
 #include <string.h>
 
+#include <algorithm>
 #include <utility>
 
 #include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "third_party/boringssl/src/include/openssl/mem.h"
@@ -37,6 +39,50 @@ void Cleanse(base::Value& value) {
       Cleanse(child);
     }
   }
+}
+
+namespace {
+
+constexpr size_t kMaxEscapedBytesPerByte = 6;
+constexpr size_t kScalarBound = 32;
+constexpr size_t kMinimumJsonCapacity = 1024;
+
+size_t EscapedBound(std::string_view text) {
+  return kMaxEscapedBytesPerByte * text.size() + 2;
+}
+
+size_t JsonBound(const base::Value& value) {
+  if (value.is_string()) {
+    return EscapedBound(value.GetString());
+  }
+  size_t bound = 2;
+  if (value.is_dict()) {
+    for (const auto [key, child] : value.GetDict()) {
+      bound += EscapedBound(key) + 2 + JsonBound(child);
+    }
+    return bound;
+  }
+  if (value.is_list()) {
+    for (const base::Value& child : value.GetList()) {
+      bound += 1 + JsonBound(child);
+    }
+    return bound;
+  }
+  return kScalarBound;
+}
+
+}
+
+void SendSecretJson(base::DictValue result,
+                    void (*send)(void* context, const char* json),
+                    void* context) {
+  base::Value value(std::move(result));
+  std::string json;
+  json.reserve(std::max(JsonBound(value) + kScalarBound, kMinimumJsonCapacity));
+  const bool written = base::JSONWriter::Write(value, &json);
+  send(context, written ? json.c_str() : "{}");
+  Cleanse(json);
+  Cleanse(value);
 }
 
 Secret::Secret() = default;

@@ -16,6 +16,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/ardia/ac_autofill_internal.h"
 #include "chrome/browser/ardia/ac_reauth.h"
+#include "chrome/browser/ardia/ac_sensitive_args.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
@@ -98,6 +99,7 @@ std::u16string CardNumberPrompt() {
 
 std::string Digits(const std::string& text) {
   std::string digits;
+  digits.reserve(text.size());
   for (char c : text) {
     if (base::IsAsciiDigit(c)) {
       digits.push_back(c);
@@ -258,19 +260,24 @@ AC_ENGINE_CALL(ac_autofill_card_number) {
                           authenticated && pdm ? pdm->payments_data_manager()
                                                      .GetCreditCardByGUID(id)
                                                : nullptr;
-                      std::string number =
-                          card ? ardia::autofill_internal::Digits(
-                                     base::UTF16ToUTF8(card->GetRawInfo(
-                                         autofill::CREDIT_CARD_NUMBER)))
-                               : std::string();
+                      std::string number;
+                      if (card) {
+                        std::u16string raw =
+                            card->GetRawInfo(autofill::CREDIT_CARD_NUMBER);
+                        std::string utf8 = base::UTF16ToUTF8(raw);
+                        number = ardia::autofill_internal::Digits(utf8);
+                        ardia::Cleanse(raw);
+                        ardia::Cleanse(utf8);
+                      }
                       base::DictValue result;
                       if (number.empty()) {
                         result.Set("number", base::Value());
                       } else {
-                        result.Set("number", number);
+                        result.Set("number", std::move(number));
                       }
+                      ardia::Cleanse(number);
                       result.Set("authenticated", authenticated);
-                      reply.Send(std::move(result));
+                      reply.SendSecret(std::move(result));
                     },
                     id, pdm->GetWeakPtr(), std::move(reply)));
           },
