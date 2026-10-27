@@ -28,7 +28,7 @@ Linux had no profile authority. The host accepted only the empty or `default` en
 | `<letter>[A-Za-z0-9_-]{0,127}`, not `default` in any case | Isolated | `<user data>/Profile <id>`, loaded or created on demand. Never the default profile, never OTR, never another ID's profile. |
 | `incognito:<window>@<original>` | Private | The primary OTR profile of `<original>`. `<window>` must equal the window ID it opens. |
 
-Anything else is `ERR_PROFILE_INVALID`. Other errors: `ERR_PROFILE_DELETED`, `ERR_PROFILE_RELEASED` (a private name never comes back after release), `ERR_PROFILE_UNAVAILABLE`, `ERR_PROFILE_WINDOW` (a tab asks for a profile its window doesn't host) and `ERR_PROFILE_PRIVATE`.
+Anything else is `ERR_PROFILE_INVALID`. Other errors: `ERR_PROFILE_DELETED`, `ERR_PROFILE_RELEASED` (a private name never comes back after release), `ERR_PROFILE_UNAVAILABLE`, `ERR_PROFILE_WINDOW` (a tab asks for a profile its window doesn't host, or a window ID that is still opening is requested with a different profile), `ERR_PROFILE_PRIVATE`, and `ERR_PROFILE_ENDING` (the original's previous private session is still being destroyed after 5 s of retries).
 
 There is no fallback anywhere. A tab, adoption or transfer works only when the resolved profile is the window's own page profile, and adoption across profiles is rejected.
 
@@ -42,18 +42,31 @@ Private windows that share one original profile share Chrome's primary OTR profi
   - `installProfileWindows` keeps each regular native window on one engine profile:
     - Switching to a profile that shares the window's data switches in place.
     - Switching to an isolated profile focuses an existing window of that profile, or opens one.
-    - Moving a tab to an isolated profile reopens its URL in that profile's window.
+    - Moving a tab to an isolated profile reopens its URL in that profile's open window. Without one, it opens a new window and closes the source tab only after the opener confirms that window was created (`windowOpened`), so a failed open keeps the tab.
 - `hostSession.ts`, `main.tsx` and `shims/shellBase.tsx` only register these. A private window doesn't adopt the default profile's parked pins.
+
+## Review round 1
+
+| Finding | Fix | Failing-before test |
+| --- | --- | --- |
+| A new or reloaded renderer's startup `sweep()` closed private windows it didn't know | `ArdiaShell.windowIds` lists a private window only to that window (`WindowVisibleTo`). `requestWindowClose` and `closeWindow` on a private window are accepted only from the window itself or its opener (`WindowClosableBy`, with the opener recorded at `openWindow`). | `test_utility_close…test_private_window_close_requests_only_come_from_the_window_or_its_opener` (runs the real `requestWindowClose` branch; a stranger closes the window without the gate), `test_profiles` `private_window_access`, `test_profile_host…test_private_windows_are_hidden_from_and_protected_against_other_renderers` |
+| Reopening a private window while the last private session is still being destroyed | Chrome calls `OnProfileWillBeDestroyed` immediately, then keeps the dying OTR profile registered with its original until its renderer hosts exit, and `GetPrimaryOTRProfile(true)` hands that same profile back. The registry now inspects the existing OTR profile first. If its shutdown has started, it retries every 100 ms for up to 50 ticks, then fails with `ERR_PROFILE_ENDING`. `Watch` never observes a profile whose shutdown has started. The opener reconciles the failure, so no phantom window remains. | `test_profiles` `reopen_after_ending` / `ending_bounded` (the fake now returns the same dying profile, as Chrome does), `test_profile_host…test_dying_profiles_are_never_observed_and_private_creation_waits_for_them` |
+| Focusing an isolated window made it Chrome's last-used profile; the next launch used it (or the profile picker) as the app profile | Once the app profile is attached, local-state pref observers keep `profile.last_used` on the app profile's directory and `profile.last_active_profiles` limited to it. They also turn off `kBrowserShowProfilePickerOnStartup` (when it isn't policy-managed), because with two profiles in storage Chrome 156 shows the picker at launch by default. Isolated and private windows also set `omit_from_session_restore`. | `test_profiles` `startup_pinned`, `test_profile_host…test_app_profile_stays_the_startup_profile` |
+| Attach refusing a mismatched window closed it with no close event | `RefuseRequestedWindow` drops the request, broadcasts `onWindowEvent {type: "close"}` to every renderer, then closes the Chrome window. | `test_profile_host…test_refused_window_is_reported_closed_to_every_renderer_before_chrome_closes_it` (compiles the real functions), `…test_attach_refusal_and_private_close_use_the_broadcast` |
+| A cross-profile tab move closed the source before its target window existed | The move reuses that profile's open window. Otherwise the source tab closes only after the new window opened. | `hostProfiles.test.mjs`: "keeps the tab when that profile's window cannot open", "closes the source only after its window opens", "reuses that profile's open window" |
+| A duplicate `openWindow` for an ID still opening reported success, even for another profile or a load that never returns | `OpeningLedger` ties each pending opening to its profile. A duplicate with the same profile joins the pending result, and one with another profile gets `ERR_PROFILE_WINDOW`. Requests already created or attached also check their profile. Every opening expires after 30 s with `ERR_PROFILE_UNAVAILABLE`, and a profile that resolves late after expiry never creates a window. | `test_profiles` `opening_ledger`, `test_profile_host…test_window_openings_are_profile_bound_and_bounded` |
+
+Other regular windows still don't learn about private windows, for example in window menus. The coordinator is tracking that.
 
 ## Tests
 
 | Command | Result |
 | --- | --- |
-| `python3 -m unittest engine/ardiacore-linux/tests/test_profiles.py` | 2 passed. The compiled registry fixture covers parsing, lookup, no fallback, aliasing and OTR-as-regular rejection, private lifetime, disposal, release and delete during load, reentrancy and registry destruction. |
+| `python3 -m unittest engine/ardiacore-linux/tests/test_profiles.py test_profile_host.py` | 2 + 6 passed. The compiled registry fixture covers parsing, lookup, no fallback, aliasing and OTR-as-regular rejection, private lifetime, disposal, release and delete during load, reopening while a private session ends (bounded), reentrancy, registry destruction, startup profile pinning, private window access and the opening ledger. |
 | `python3 -m unittest engine/ardiacore-linux/tests/test_session_merge.py` | 2 passed, including the new private-session rejections. They fail when the check is reverted. |
-| `python3 -m unittest discover -s engine/ardiacore-linux/tests` | 121 run, 116 passed. `test_launch_claims` fakes now model the window's hosted profile, including an isolated-profile window that refuses a default-profile launch offer. The 1 failure and 4 errors are the same as on `linux`: `test_chromium_close` and the `test_document_close_*` fixtures can't apply the 156-rebased close patch to their 155 fixture. They are unrelated to this branch. |
+| `python3 -m unittest discover -s engine/ardiacore-linux/tests` | 215 run, 215 passed, on `linux` with #67. The `test_launch_claims` fakes model the window's hosted profile. The shared `document_host_fixture` fake host now has `access()` and can share one app profile across hosts, so close-dispatch tests can send requests between windows. |
 | `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs` | 7 passed |
-| `pnpm --filter @ardia/linux test:host` | 207 passed, including 5 new tests in `hostProfiles.test.mjs`. The private-bootstrap case fails without the session hook. |
+| `pnpm --filter @ardia/linux test:host` | 210 passed, including 8 in `hostProfiles.test.mjs`. The private-bootstrap case fails without the session hook. |
 | `pnpm --filter @ardia/linux typecheck`, `build`, `test:graph` | Pass |
 | `clang++ -fsyntax-only` against the 156 tree headers and build flags | `ac_linux_profiles.cc`, `ac_linux_profile_service.cc` and `ac_linux_session.cc` compile. `ac_linux_host.cc` could not be checked: the 156 output tree was mid-build and had no generated mojom headers yet. Its first compile happens in the next incremental 156 build. |
 
