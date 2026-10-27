@@ -217,7 +217,7 @@ struct ContentsContainerView {
   views::WebView devtools;
 };
 struct BrowserView {
-  views::WebView* contents_web_view() { return &contents; }
+  views::WebView* GetActiveContentsWebView() { return &contents; }
   ContentsContainerView* GetContentsContainerViewFor(content::WebContents* inspected) {
     return containers.contains(inspected) ? &containers[inspected] : nullptr;
   }

@@ -52,7 +52,7 @@ dbus::Bus* SystemBus() {
     dbus::Bus::Options options;
     options.bus_type = dbus::Bus::SYSTEM;
     options.connection_type = dbus::Bus::PRIVATE;
-    return base::MakeRefCounted<dbus::Bus>(options);
+    return base::MakeRefCounted<dbus::Bus>(std::move(options));
   }());
   return bus->get();
 }
