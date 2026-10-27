@@ -58,6 +58,11 @@ Private windows that share one original profile share Chrome's primary OTR profi
 
 Other regular windows still don't learn about private windows, for example in window menus. The coordinator is tracking that.
 
+## Integration with #61 and #64
+
+- Window lifecycle (#61): a new window still goes through the profile-bound opening ledger and the async profile resolution. It is shown with #61's `ShowNativeWindow(created, WindowFocus().Create(...))`, and its requested frame comes from `RequestedFrame`; both travel in `WindowOpening`. The reuse branches keep #61's `WindowFocus().Reuse` activation. A request that hasn't attached yet must also ask for the same profile. Private windows receive #61's focus, frame and fullScreen broadcasts like any window. Renderers that don't hold the window ignore them, because `setFocusedWindow` returns early for unknown IDs.
+- Downloads and files (#64): `downloads.*` calls and `ArdiaSystem`/`ArdiaFile*` file methods use the window's page profile, so an isolated window lists and clears its own downloads. A request naming another profile gets `ERR_PROFILE_WINDOW`. Private windows get `ERR_PROFILE_PRIVATE`; private downloads are tracked in #72. The Linux downloads adapter labels listed downloads with the window's `pageProfile` so the shared `downloadVisibleIn` shows them in that window. The shell WebView is #64's `LinuxShellWebView`, created on the app profile.
+
 ## Tests
 
 | Command | Result |

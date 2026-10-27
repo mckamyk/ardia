@@ -238,3 +238,26 @@ test("moving a tab to an isolated profile reuses that profile's open window", ()
   assert.ok(moved && moved.profileId === work);
   assert.deepEqual(focused, [workWindow]);
 });
+
+test("an isolated-profile window lists its own profile's downloads", async () => {
+  const { startHostDownloads } = await import("./hostDownloads.ts");
+  const { downloadVisibleIn } = await import("../../browser/src/state/windows/ui.ts");
+  const listed = { id: "3f2504e0-4f89-41d3-9a0c-000000000001", url: "https://example.test/1", filename: "1.zip", path: "/home/me/Downloads/1.zip",
+    state: "finished", paused: false, received: 1, total: 1, speed: 0, mimeType: "application/zip" };
+  const run = async (pageProfile) => {
+    const host = { bootstrap: { windowId: "w-work", profileId: "default", pageProfile }, call: async () => JSON.stringify([listed]), invoke: async () => null, onEvent: () => () => {} };
+    const state = { downloads: [], removeDownload() {}, clearDownloads() {} };
+    const running = startHostDownloads(host, { getState: () => state, setState: (patch) => Object.assign(state, patch) });
+    await running.ready;
+    running.stop();
+    return state.downloads;
+  };
+  const isolated = await run("p-work");
+  assert.equal(isolated.length, 1);
+  assert.equal(isolated[0].profile, "p-work");
+  assert.ok(downloadVisibleIn(isolated[0], { incognito: false, profileId: "p-work" }));
+  assert.ok(!downloadVisibleIn(isolated[0], { incognito: false, profileId: "default" }));
+  const regular = await run("");
+  assert.equal(regular[0].profile, "");
+  assert.ok(downloadVisibleIn(regular[0], { incognito: false, profileId: "default" }));
+});

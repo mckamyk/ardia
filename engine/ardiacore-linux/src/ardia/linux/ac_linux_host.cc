@@ -1301,7 +1301,12 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       if (const auto invalid = linux_downloads::ValidateRequest(name, input); !invalid.empty())
         return Fail(id, "ERR_DOWNLOAD_REQUEST", invalid);
       if (LinuxDownloadsHandles(name)) {
-        return LinuxDownloadsCall(host_->profile(), name, input,
+        Profile* page = host_->page_profile();
+        if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
+        if (profile_name->kind != ardiacore::linux_profiles::ProfileKind::kDefault && !host_->HostsProfile(profile)) {
+          return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kWindowMismatch);
+        }
+        return LinuxDownloadsCall(page, name, input,
             base::BindOnce([](base::WeakPtr<HostMessageHandler> handler, std::string id, bool ok, base::Value result) {
               if (!handler) return;
               if (ok) return handler->Resolve(id, std::move(result));
@@ -3362,7 +3367,12 @@ void ShellHostView::Invoke(
     base::OnceCallback<void(bool, base::Value)> done) {
   if (!browser_) return std::move(done).Run(false, base::Value("The native browser window has closed"));
   const base::ListValue& values = Arguments(args);
-  if (LinuxFilesHandles(method)) return LinuxFilesInvoke(profile(), shell_, method, values, std::move(done));
+  if (LinuxFilesHandles(method)) {
+    if (!page_profile() || page_profile()->IsOffTheRecord()) {
+      return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kPrivateService));
+    }
+    return LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done));
+  }
   if (method == "ArdiaShell.windowIdentity") {
     const auto* supplied = args.Find("args");
     const auto client = DialogClient();

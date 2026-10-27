@@ -102,6 +102,23 @@ int main() {
         open_window = branch(self.source, '  if (method == "ArdiaShell.openWindow") {')
         self.assertIn('opening.opener = window_id_;', open_window)
 
+    def test_downloads_and_files_use_the_window_page_profile_and_refuse_private_windows(self):
+        request = method(self.source, '  void Request(const base::ListValue& arguments) {')
+        downloads = request[request.index('if (LinuxDownloadsHandles(name)) {'):]
+        downloads = downloads[:downloads.index('return LinuxDownloadsCall(')]
+        self.assertIn('Profile* page = host_->page_profile();', downloads)
+        self.assertIn('page->IsOffTheRecord()', downloads)
+        self.assertIn('ProfileError::kPrivateService', downloads)
+        self.assertIn('!host_->HostsProfile(profile)', downloads)
+        self.assertIn('return LinuxDownloadsCall(page, name, input,', request)
+        self.assertNotIn('LinuxDownloadsCall(host_->profile()', request)
+        invoke = method(self.source, 'void ShellHostView::Invoke(')
+        files = invoke[invoke.index('if (LinuxFilesHandles(method)) {'):]
+        files = files[:files.index('\n  }\n') + 4]
+        self.assertIn('page_profile()->IsOffTheRecord()', files)
+        self.assertIn('ProfileError::kPrivateService', files)
+        self.assertIn('LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done))', files)
+
     def test_window_openings_are_profile_bound_and_bounded(self):
         open_window = branch(self.source, '  if (method == "ArdiaShell.openWindow") {')
         self.assertIn('OpeningWindows().Begin(id, profile_name->id, reply)', open_window)

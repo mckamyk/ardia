@@ -57,6 +57,7 @@ const removable = (d: Download) => nativeDownloadId(d.id) && d.state !== "downlo
 
 export function startHostDownloads(host: ArdiaHost, store: DownloadStore) {
   const { removeDownload, clearDownloads } = store.getState();
+  const pageProfile = host.bootstrap.pageProfile ?? "";
   const call = (verb: string, args: object) => callHost(`downloads.${verb}`, "", JSON.stringify(args), host);
   const kept = () => store.getState().downloads.map((d) => d.id).filter(nativeDownloadId).slice(0, DOWNLOAD_LIMIT);
   const clearNative = () => void call("clear", { keep: kept(), before: Date.now() }).catch(reportHostError);
@@ -95,7 +96,7 @@ export function startHostDownloads(host: ArdiaHost, store: DownloadStore) {
       if (plan.downloads) {
         const fresh = new Set(plan.added.map((d) => d.id));
         store.setState({ downloads: plan.downloads.map((d) => (fresh.has(d.id) ? { ...d, profile: SNAPSHOT_PROFILE } : d)) });
-        store.setState({ downloads: plan.downloads });
+        store.setState({ downloads: plan.downloads.map((d) => (fresh.has(d.id) ? { ...d, profile: pageProfile } : d)) });
       }
     })
     .catch(reportHostError)
