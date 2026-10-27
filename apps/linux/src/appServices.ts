@@ -122,9 +122,11 @@ export function runAppCommand(windowId: string, command: CommandEvent["command"]
   return false;
 }
 
-export function startAppCommands(windowId: string, capabilities: LinuxCapabilities, subscribe: typeof onCommand = onCommand) {
+export const UTILITY_APP_COMMANDS: ReadonlySet<string> = new Set(["copyDiagnostics", "recordPerformanceIssue", "taskManager"]);
+
+export function startAppCommands(windowId: string, capabilities: LinuxCapabilities, subscribe: typeof onCommand = onCommand, only?: ReadonlySet<string>) {
   return subscribe((event) => {
-    if (event.windowId === windowId) runAppCommand(windowId, event.command, capabilities);
+    if (event.windowId === windowId && (!only || only.has(event.command))) runAppCommand(windowId, event.command, capabilities);
   });
 }
 

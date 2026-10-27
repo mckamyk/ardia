@@ -13,7 +13,7 @@ import { usePages } from "../../browser/src/state/tabs/pageState";
 import { adoptParkedPins } from "../../browser/src/state/pins/parkedPins";
 import { decideLastTabClose, decideWindowClose } from "../../browser/src/state/windows/windowClose";
 import { firstWindowCommitted } from "../../browser/src/lib/afterFirstWindow";
-import { startLinuxAppServices } from "./appServices";
+import { startAppCommands, startLinuxAppServices, UTILITY_APP_COMMANDS } from "./appServices";
 import { linuxCapabilities } from "./hostCapabilities";
 import { ardiaHost, invokeHost } from "./host";
 import { startHostPersistence } from "./hostSession";
@@ -48,6 +48,7 @@ async function start() {
     const persistence = startHostPersistence(ardiaHost, useBrowser, saved ?? {}, createUtilitySessionSnapshot(useBrowser.getState(), saved ?? {}));
     setSessionFlush(persistence.flush);
     startHostData();
+    startAppCommands(windowId, linuxCapabilities(ardiaHost), undefined, UTILITY_APP_COMMANDS);
     await startUtility(ardiaHost);
   } else {
     useBrowser.setState(adoptParkedPins(useBrowser.getState(), windowId, profileId));

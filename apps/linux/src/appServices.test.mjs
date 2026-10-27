@@ -4,7 +4,7 @@ import { appInfo, docs } from "../../browser/src/test-native/index.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { useOnboarding, onboardingCompletedAt } from "../../browser/src/state/onboarding/onboarding.ts";
 import { useToasts } from "../../browser/src/state/splits/actions.ts";
-import { APP_LAUNCH_LOCK, APP_LAUNCH_MARK, claimAppLaunch, runAppCommand, runLaunchServices, startAppCommands } from "./appServices.ts";
+import { APP_LAUNCH_LOCK, APP_LAUNCH_MARK, UTILITY_APP_COMMANDS, claimAppLaunch, runAppCommand, runLaunchServices, startAppCommands } from "./appServices.ts";
 
 const capabilities = { defaultBrowser: false, launchAtLogin: false, thinScrollBars: false, webkit: false, cliControl: false, externalLinks: false, performanceRecording: false, taskManager: false };
 
@@ -133,4 +133,17 @@ test("Send Feedback copies the report and says where it went when no mail app ca
   runAppCommand(first, "sendFeedback", capabilities);
   for (let i = 0; i < 20 && !toast(first); i++) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(toast(first)?.title, "Feedback report copied");
+});
+
+test("utility windows run only the app commands that need no browser window", () => {
+  const { first } = twoWindows();
+  const listeners = [];
+  startAppCommands("settings", capabilities, (listener) => (listeners.push(listener), { remove() {} }), UTILITY_APP_COMMANDS);
+  assert.deepEqual([...UTILITY_APP_COMMANDS].sort(), ["copyDiagnostics", "recordPerformanceIssue", "taskManager"]);
+  useToasts.setState({ toasts: {} });
+  listeners[0]({ command: "showOnboarding", windowId: "settings" });
+  assert.equal(useOnboarding.getState().windowId, null);
+  listeners[0]({ command: "taskManager", windowId: "settings" });
+  assert.equal(toast("settings")?.title, "Not available on Linux yet");
+  assert.equal(toast(first), undefined);
 });
