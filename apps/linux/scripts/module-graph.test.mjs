@@ -52,6 +52,7 @@ test("production graph uses current Linux adapters and one canonical shared stat
     ["components/settings/settingsIndex.ts", "settingsIndex.ts", ["PANES", "SETTINGS_INDEX", "findSetting", "setting", "settingUnavailable"]],
     ["components/settings/Form.tsx", "settingsForm.tsx", ["Anchor", "Group", "Row", "SectionHeader", "SettingsPaneContext"]],
     ["state/engines/engines.ts", "hostEngines.ts", ["canSwitchEngine", "chosenEngine", "defaultEngine", "tabEngine", "siteOf"]],
+    ["state/import/apply.ts", "importApply.ts", ["applyResult", "applySafari", "emptyCounts", "importBookmarks"]],
   ];
   for (const [shared, adapter, names] of replacements) {
     const id = `${linux}${adapter}`;
@@ -90,6 +91,10 @@ test("production graph uses current Linux adapters and one canonical shared stat
     for (const name of names) assert.ok(graph.get(eager).exports.includes(name), `${feature}: ${name}`);
     assert.deepEqual(graph.get(wrapper).dynamicallyImportedIds, [eager]);
   }
+
+  const passwordsPane = graph.get(`${browser}components/settings/panes/Passwords.tsx`);
+  assert.ok(passwordsPane.importedIds.includes(`${linux}importedPasswordSave.ts`), "the Passwords pane saves imported handles through the Linux adapter");
+  assert.ok(!passwordsPane.importedIds.includes(`${browser}state/site/passwords.ts`));
 
   const outputs = Array.isArray(result) ? result : [result];
   const chunks = outputs.flatMap((output) => output.output).filter((entry) => entry.type === "chunk");
