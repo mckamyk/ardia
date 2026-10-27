@@ -503,7 +503,7 @@ test("session close tokens freeze producers before draining and only final cance
   }
 });
 
-async function closeSessionFixture({ failWrites = 0 } = {}) {
+async function closeSessionFixture({ failWrites = 0, endsSession = true } = {}) {
   const { quiesceLinuxSession, resumeLinuxSession } = await import("./sessionClose.ts");
   const { createWindowCloseBarrier } = await import("./utilityClose.ts");
   const { createWindowCloseCoordinator } = await import("./windowCloseCoordinator.ts");
@@ -513,7 +513,8 @@ async function closeSessionFixture({ failWrites = 0 } = {}) {
   const initial = browserSession();
   initial.settings = { ...initial.settings, warnBeforeClosingWindow: true, warnBeforeClosingLastTab: true };
   useBrowser.getState().hydrate(initial);
-  const state = { canonical: initial, failures: failWrites, log: [] };
+  const state = { canonical: initial, failures: failWrites, log: [], acknowledge: async () => {}, rejectBarrier: async () => {} };
+  const listeners = new Set();
   const native = {
     ...host(),
     async invoke(method, pair) {
@@ -523,39 +524,49 @@ async function closeSessionFixture({ failWrites = 0 } = {}) {
       state.log.push(["write", state.canonical.settings.warnBeforeClosingWindow]);
       return state.canonical;
     },
-    onEvent() { return () => {}; },
+    onEvent(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     onBeforeClose() { return () => {}; },
   };
   const persistence = startHostPersistence(native, useBrowser, initial);
   const token = (request) => JSON.stringify(request);
+  let coordinator;
   const barrier = createWindowCloseBarrier({
     quiesce: (request) => { state.log.push(["quiesce"]); quiesceLinuxSession(token(request)); },
     drain: async () => { await persistence.flush(); return 0; },
-    acknowledge: async () => { state.log.push(["seal", state.canonical.settings.warnBeforeClosingWindow]); },
-    reject: async () => {},
-    resume: (request) => resumeLinuxSession(token(request)),
+    acknowledge: async () => {
+      state.log.push(["seal", state.canonical.settings.warnBeforeClosingWindow, !!state.canonical.windows?.main, state.canonical.closedWindows?.length ?? 0]);
+      return state.acknowledge();
+    },
+    reject: () => state.rejectBarrier(),
+    resume: (request) => { coordinator.producersResumed(request); resumeLinuxSession(token(request)); },
   });
   let answer;
-  const coordinator = createWindowCloseCoordinator({
+  coordinator = createWindowCloseCoordinator({
     windowId: "main",
     utility: false,
     decide: async () => answer,
     suppress: (reason) => useBrowser.getState().updateSettings(reason === "lastTab" ? { warnBeforeClosingLastTab: false } : { warnBeforeClosingWindow: false }),
     flush: () => persistence.flush(),
-    request: async () => ({ windowId: "main", rendererGeneration: "1", closeGeneration: "1" }),
-    beginDrain: async () => { state.log.push(["begin", state.canonical.settings.warnBeforeClosingWindow]); },
+    request: async (id) => { state.log.push(["request", id]); return { windowId: id, rendererGeneration: "1", closeGeneration: "1" }; },
+    beginDrain: async () => { state.log.push(["begin", state.canonical.settings.warnBeforeClosingWindow]); return { accepted: true, endsSession }; },
     reject: async (request) => { state.log.push(["reject", request.closeGeneration]); },
+    depart: (request) => persistence.depart(token(request), request.windowId),
+    stay: (request) => persistence.stay(token(request)),
     barrier,
     cancelled: barrier.cancelled,
   });
   return {
-    state, persistence, coordinator, quiesceLinuxSession, resumeLinuxSession,
+    state, persistence, coordinator, quiesceLinuxSession, resumeLinuxSession, initial: structuredClone(initial),
     answer: (value) => { answer = value; },
+    peer: (session) => { for (const listener of listeners) listener("ArdiaHost", "session", { base: state.canonical, session }); state.canonical = session; },
     restore() { persistence(); globalThis.window = previousWindow; globalThis.document = previousDocument; },
   };
 }
 
-test("window-close suppression is in the canonical save and the frozen snapshot before the drain begins and the window seals", async () => {
+const closeRequest = (closeGeneration = "1") => ({ windowId: "main", rendererGeneration: "1", closeGeneration });
+const withoutIdentity = ({ id: _, closedAt: _at, ...entry }) => entry;
+
+test("window-close suppression reaches the canonical save and the frozen snapshot before quiescence and seal", async () => {
   const fixture = await closeSessionFixture();
   try {
     fixture.quiesceLinuxSession("probe");
@@ -568,11 +579,11 @@ test("window-close suppression is in the canonical save and the frozen snapshot 
     await fixture.persistence.flush();
     fixture.state.log.length = 0;
     fixture.answer({ decision: "allow", suppressWarning: true });
-    await fixture.coordinator.accept({ windowId: "main", rendererGeneration: "1", closeGeneration: "1" });
-    assert.deepEqual(fixture.state.log, [["write", false], ["begin", false], ["quiesce"], ["seal", false]]);
+    await fixture.coordinator.accept(closeRequest());
+    assert.deepEqual(fixture.state.log, [["begin", true], ["write", false], ["quiesce"], ["seal", false, true, 0]]);
     assert.equal(fixture.state.canonical.settings.warnBeforeClosingWindow, false);
   } finally {
-    fixture.resumeLinuxSession(JSON.stringify({ windowId: "main", rendererGeneration: "1", closeGeneration: "1" }));
+    fixture.resumeLinuxSession(JSON.stringify(closeRequest()));
     fixture.restore();
   }
 });
@@ -582,7 +593,7 @@ test("the don't-ask checkbox ticked on Cancel is saved while the window stays op
   try {
     fixture.answer({ decision: "cancel", suppressWarning: true });
     await assert.rejects(fixture.coordinator.close("window"), { code: "ERR_WINDOW_CLOSE_CANCELLED" });
-    assert.deepEqual(fixture.state.log, [["reject", "1"], ["write", false]]);
+    assert.deepEqual(fixture.state.log, [["request", "main"], ["reject", "1"], ["write", false]]);
     useBrowser.getState().updateSettings({ sidebarWidth: 290 });
     await fixture.persistence.flush();
     assert.equal(fixture.state.canonical.settings.sidebarWidth, 290);
@@ -591,18 +602,135 @@ test("the don't-ask checkbox ticked on Cancel is saved while the window stays op
   }
 });
 
-test("a failed suppression save rejects the close before draining and the next attempt retries the save", async () => {
+test("a failed suppression save rejects the close before quiescence and the next attempt retries the save", async () => {
   const fixture = await closeSessionFixture({ failWrites: 1 });
   try {
     fixture.answer({ decision: "allow", suppressWarning: true });
-    await assert.rejects(fixture.coordinator.accept({ windowId: "main", rendererGeneration: "1", closeGeneration: "1" }), /Save rejected/);
-    assert.deepEqual(fixture.state.log, [["write-failed"], ["reject", "1"]]);
+    await assert.rejects(fixture.coordinator.accept(closeRequest()), /Save rejected/);
+    assert.deepEqual(fixture.state.log, [["begin", true], ["write-failed"], ["reject", "1"]]);
     assert.equal(useBrowser.getState().settings.warnBeforeClosingWindow, false);
     fixture.state.log.length = 0;
-    await fixture.coordinator.accept({ windowId: "main", rendererGeneration: "1", closeGeneration: "2" });
-    assert.deepEqual(fixture.state.log, [["write", false], ["begin", false], ["quiesce"], ["seal", false]]);
+    await fixture.coordinator.accept(closeRequest("2"));
+    assert.deepEqual(fixture.state.log, [["begin", true], ["write", false], ["quiesce"], ["seal", false, true, 0]]);
   } finally {
-    fixture.resumeLinuxSession(JSON.stringify({ windowId: "main", rendererGeneration: "1", closeGeneration: "2" }));
+    fixture.resumeLinuxSession(JSON.stringify(closeRequest("2")));
+    fixture.restore();
+  }
+});
+
+test("a window closed natively is saved as closed for reopen exactly like the store close, before seal, while the live window stays intact", async () => {
+  const fixture = await closeSessionFixture({ endsSession: false });
+  const before = structuredClone({ windows: useBrowser.getState().windows, tabs: useBrowser.getState().tabs, closedWindows: useBrowser.getState().closedWindows });
+  try {
+    fixture.answer({ decision: "allow", suppressWarning: false });
+    await fixture.coordinator.accept(closeRequest());
+    assert.deepEqual(fixture.state.log, [["begin", true], ["write", true], ["quiesce"], ["seal", true, false, 1]]);
+    const saved = fixture.state.canonical.closedWindows.at(-1);
+    assert.equal(fixture.state.canonical.windows.main, undefined);
+    assert.deepEqual(fixture.state.canonical.windowOrder, []);
+    assert.deepEqual(Object.keys(fixture.state.canonical.tabs), []);
+    assert.deepEqual(useBrowser.getState().windows, before.windows);
+    assert.deepEqual(useBrowser.getState().closedWindows, before.closedWindows);
+    useBrowser.getState().hydrate(fixture.initial);
+    useBrowser.getState().closeWindow("main");
+    const mac = useBrowser.getState().closedWindows.at(-1);
+    assert.deepEqual(withoutIdentity(saved), withoutIdentity(mac));
+  } finally {
+    fixture.resumeLinuxSession(JSON.stringify(closeRequest()));
+    fixture.restore();
+  }
+});
+
+test("a peer update during a departure never removes the live window, and a confirmed veto restores it and drops the reopen entry", async () => {
+  const fixture = await closeSessionFixture({ endsSession: false });
+  let veto;
+  fixture.state.acknowledge = () => new Promise((_, reject) => { veto = reject; });
+  try {
+    fixture.answer({ decision: "allow", suppressWarning: false });
+    const closing = fixture.coordinator.accept(closeRequest());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(fixture.state.canonical.windows.main, undefined);
+    fixture.peer({ ...fixture.state.canonical, settings: { ...fixture.state.canonical.settings, sidebarWidth: 333 } });
+    assert.equal(useBrowser.getState().settings.sidebarWidth, 333);
+    assert.ok(useBrowser.getState().windows.main);
+    assert.equal(useBrowser.getState().closedWindows.length, 0);
+    veto(new Error("beforeunload veto"));
+    await assert.rejects(closing, /beforeunload veto/);
+    await fixture.persistence.flush();
+    assert.ok(fixture.state.canonical.windows.main);
+    assert.deepEqual(fixture.state.canonical.windowOrder, ["main"]);
+    assert.equal(fixture.state.canonical.closedWindows.length, 0);
+    assert.equal(fixture.state.canonical.settings.sidebarWidth, 333);
+    assert.ok(useBrowser.getState().windows.main);
+    assert.equal(useBrowser.getState().closedWindows.length, 0);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("an unconfirmed rejection keeps the departure frozen until native cancellation confirms it", async () => {
+  const fixture = await closeSessionFixture({ endsSession: false });
+  fixture.state.acknowledge = async () => { throw new Error("transport timeout"); };
+  fixture.state.rejectBarrier = async () => { throw new Error("rejection timed out"); };
+  try {
+    fixture.answer({ decision: "allow", suppressWarning: false });
+    await assert.rejects(fixture.coordinator.accept(closeRequest()), /rejection timed out/);
+    await fixture.persistence.flush();
+    assert.equal(fixture.state.canonical.windows.main, undefined);
+    assert.equal(fixture.state.canonical.closedWindows.length, 1);
+    fixture.coordinator.cancelled(closeRequest());
+    await fixture.persistence.flush();
+    assert.ok(fixture.state.canonical.windows.main);
+    assert.equal(fixture.state.canonical.closedWindows.length, 0);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("quitting or closing the last browser window keeps the window in the session for restore", async () => {
+  const fixture = await closeSessionFixture({ endsSession: true });
+  try {
+    fixture.answer({ decision: "allow", suppressWarning: false });
+    await fixture.coordinator.accept(closeRequest());
+    assert.deepEqual(fixture.state.log.filter(([step]) => step !== "write"), [["begin", true], ["quiesce"], ["seal", true, true, 0]]);
+    assert.ok(fixture.state.canonical.windows.main);
+  } finally {
+    fixture.resumeLinuxSession(JSON.stringify(closeRequest()));
+    fixture.restore();
+  }
+});
+
+test("a Little Ardia replacement close only asks the window's own renderer to close it, so no attempt is started or orphaned here", async () => {
+  const { createWindowSync } = await import("../../browser/src/state/windows/windowSync.ts");
+  const { closeWindowAnimated } = await import("../../browser/src/state/windows/closeAnimated.ts");
+  const { setManagedWindowClose } = await import("../../browser/src/platform/windowClose.ts");
+  const fixture = await closeSessionFixture({ endsSession: false });
+  const consulted = [];
+  setManagedWindowClose((windowId, reason) => { consulted.push([windowId, reason]); return windowId === "main"; });
+  try {
+    const small = useBrowser.getState().createWindow({ small: true, url: "https://link.example/" });
+    const replacement = useBrowser.getState().createWindow({ small: true, url: "https://link.example/next" });
+    const requested = [];
+    const sync = createWindowSync({
+      port: { open() {}, close: (id) => requested.push(fixture.coordinator.closeWindow(id)), setTitle() {}, windowIds: async () => [], restoreFullScreen() {}, onEvent() {}, releaseProfile() {} },
+      getState: () => useBrowser.getState(), isQuitting: () => false, lightsCenter: () => null, isUtilityWindow: () => false,
+    });
+    sync.sync(useBrowser.getState());
+    fixture.state.log.length = 0;
+    const previous = useBrowser.getState();
+    let followed = false;
+    closeWindowAnimated(small, replacement, () => { followed = true; });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sync.sync(useBrowser.getState(), previous);
+    await Promise.all(requested);
+    assert.equal(followed, true);
+    assert.deepEqual(consulted, []);
+    assert.deepEqual(fixture.state.log, [["request", small]]);
+    assert.ok(useBrowser.getState().windows.main);
+    const ownRenderer = initialLinuxSession(host(small), fixture.state.canonical);
+    assert.notEqual(ownRenderer.windows[small].kind, "small");
+  } finally {
+    setManagedWindowClose(() => false);
     fixture.restore();
   }
 });

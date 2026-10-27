@@ -19,7 +19,7 @@ import { setHostOverlayCheck } from "./hostViewport";
 import { MenuHost } from "./menus";
 import { startLinuxShortcuts } from "./shortcutsRuntime";
 import { TrafficLights } from "./TrafficLights";
-import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setSessionFlush } from "./session";
+import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setSessionDeparture, setSessionFlush } from "./session";
 import { startUtility } from "./utility";
 
 Object.assign(globalThis, { ardiaLinux: { store: useBrowser, emitCommand } });
@@ -53,6 +53,7 @@ async function start() {
     });
     const persistence = startHostPersistence(ardiaHost, useBrowser, saved ?? {});
     setSessionFlush(persistence.flush);
+    setSessionDeparture(persistence);
     await persistence.flush();
     startTabPages();
     startNativeSync();
