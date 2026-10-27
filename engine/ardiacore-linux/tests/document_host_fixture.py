@@ -20,7 +20,7 @@ def values():
 
 def host_methods():
     source = (ROOT / 'src/ardia/linux/ac_linux_host.cc').read_text()
-    signatures = ['LinuxDocumentClient ShellHostView::DocumentClient', 'bool ShellHostView::EnsureDocumentClient', 'bool ShellHostView::RetireDocuments', 'void ShellHostView::DocumentCall', 'std::optional<ShellHostView::StorageTicket> ShellHostView::BeginStorageIntent', 'void ShellHostView::CompleteStorageIntent', 'bool ShellHostView::TrackStorageWrite', 'void ShellHostView::CloseNativeWindow', 'void ShellHostView::ArmWindowClose', 'base::DictValue ShellHostView::RequestWindowClose', 'void ShellHostView::RequestUtilityClose', 'bool ShellHostView::ReadyForChromeClose', 'LinuxCloseAdmission ShellHostView::AdmitChromeTeardown', 'void ShellHostView::ReplyChromeClose', 'void ShellHostView::FinishChromePreparations', 'bool ShellHostView::DeferChromeClose', 'void ShellHostView::ChromeCloseCancelled', 'void ShellHostView::CancelWindowClose', 'void ShellHostView::CancelDocumentSeal', 'void ShellHostView::AcknowledgeWindowClose', 'void ShellHostView::OnWidgetClosing', 'void ShellHostView::OnWidgetDestroying']
+    signatures = ['LinuxDocumentClient ShellHostView::DocumentClient', 'bool ShellHostView::EnsureDocumentClient', 'bool ShellHostView::RetireDocuments', 'void ShellHostView::DocumentCall', 'std::optional<ShellHostView::StorageTicket> ShellHostView::BeginStorageIntent', 'void ShellHostView::CompleteStorageIntent', 'bool ShellHostView::TrackStorageWrite', 'void ShellHostView::CloseNativeWindow', 'void ShellHostView::ArmWindowClose', 'base::DictValue ShellHostView::RequestWindowClose', 'void ShellHostView::BeginWindowCloseDrain', 'void ShellHostView::RequestUtilityClose', 'bool ShellHostView::ReadyForChromeClose', 'LinuxCloseAdmission ShellHostView::AdmitChromeTeardown', 'void ShellHostView::ReplyChromeClose', 'void ShellHostView::FinishChromePreparations', 'bool ShellHostView::DeferChromeClose', 'void ShellHostView::ChromeCloseCancelled', 'void ShellHostView::CancelWindowClose', 'void ShellHostView::CancelDocumentSeal', 'void ShellHostView::AcknowledgeWindowClose', 'void ShellHostView::OnWidgetClosing', 'void ShellHostView::OnWidgetDestroying']
     return '\n'.join(method(source, signature) for signature in signatures)
 
 
@@ -308,6 +308,7 @@ struct ShellHostView {
   base::DictValue RequestWindowClose();
   void RequestUtilityClose();
   void CancelWindowClose(LinuxClose::Identity, base::OnceCallback<void(bool, base::Value)>);
+  void BeginWindowCloseDrain(const base::DictValue&, base::OnceCallback<void(bool, base::Value)>);
   void AcknowledgeWindowClose(const base::DictValue&, base::OnceCallback<void(bool, base::Value)>);
   void OnWidgetClosing(views::Widget*);
   void OnWidgetDestroying(views::Widget*);
@@ -335,6 +336,12 @@ base::DictValue CommitRequest(const LinuxDocumentClient& client, int sequence) {
   request.Set("operations", base::Value(std::move(operations)));
   return request;
 }
+base::DictValue Drained(ShellHostView& host, base::DictValue request) {
+  bool accepted = false;
+  host.BeginWindowCloseDrain(request, [&](bool ok, base::Value) { accepted = ok; });
+  assert(accepted);
+  return request;
+}
 base::DictValue Ack(const base::DictValue& identity, int watermark) {
   auto result = identity.Clone(); result.Set("watermark", base::Value(watermark)); return result;
 }
@@ -358,6 +365,7 @@ def close_invoke():
     branches = '\n'.join(method(source, signature) for signature in [
         '  if (method == "ArdiaShell.windowIdentity")',
         '  if (method == "ArdiaShell.requestWindowClose")',
+        '  if (method == "ArdiaShell.beginWindowCloseDrain")',
         '  if (method == "ArdiaShell.acknowledgeWindowClose" || method == "ArdiaShell.rejectWindowClose")'])
     return r'''
 std::map<int, ShellHostView*> hosts;
