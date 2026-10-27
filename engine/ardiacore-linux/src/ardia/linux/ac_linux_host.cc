@@ -28,6 +28,8 @@
 #include "ardia/linux/ac_linux_extension_views.h"
 #include "ardia/linux/ac_linux_extensions.h"
 #include "ardia/linux/ac_linux_files.h"
+#include "ardia/linux/ac_linux_import_formats.h"
+#include "ardia/linux/ac_linux_import_service.h"
 #include "ardia/linux/ac_linux_launch_config.h"
 #include "ardia/linux/ac_linux_page_channel.h"
 #include "ardia/linux/ac_linux_page_commands.h"
@@ -1536,6 +1538,7 @@ void ForgetOpenerHost(int host) {
 
 ShellHostView::~ShellHostView() {
   ForgetOpenerHost(id_);
+  LinuxImportWindowClosed(window_id_);
   WindowFocus().Forget(id_);
   weak_factory_.InvalidateWeakPtrs();
   handler_ = nullptr;
@@ -1649,6 +1652,7 @@ base::DictValue ShellHostView::Bootstrap() const {
   for (const char* route : ardiacore::kLinuxPageMessageRoutes)
     capabilities.Append(route);
   AppendLinuxSiteControlsCapabilities(capabilities);
+  for (const char* capability : linux_import::kImportCapabilities) capabilities.Append(capability);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
@@ -3676,6 +3680,16 @@ void ShellHostView::Invoke(
   if (LinuxExtensionSurfaces::Handles(method)) {
     return ExtensionSurfaces()->Invoke(method, args, page_profile(), renderer_generation_,
         blink::ZoomLevelToZoomFactor(zoom::ZoomController::GetZoomLevelForWebContents(shell())), std::move(done));
+  }
+  if (LinuxImportHandles(method)) {
+    return LinuxImportInvoke(
+        LinuxImportRequester{window_id_, shell(),
+                             base::BindRepeating(
+                                 [](base::WeakPtr<ShellHostView> host, base::Value payload) {
+                                   if (host) host->Event("ArdiaImport", "onImportEvent", std::move(payload));
+                                 },
+                                 GetWeakPtr())},
+        method, values, std::move(done));
   }
   if (method == "ArdiaShell.windowIdentity") {
     const auto* supplied = args.Find("args");

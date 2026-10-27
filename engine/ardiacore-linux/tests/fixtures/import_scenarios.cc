@@ -1,0 +1,353 @@
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <set>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include "ardia/linux/ac_linux_import_formats.h"
+#include "ardia/linux/ac_linux_import_readers.h"
+#include "base/values.h"
+
+using namespace ardia::linux_import;
+
+namespace {
+
+std::string Slurp(const char* path) {
+  std::ifstream in(path, std::ios::binary);
+  std::stringstream buffer;
+  buffer << in.rdbuf();
+  return buffer.str();
+}
+
+base::ListValue Rows(const std::vector<Credential>& credentials) {
+  base::ListValue rows;
+  for (const Credential& credential : credentials) {
+    base::DictValue row;
+    row.Set("url", credential.url);
+    row.Set("username", credential.username);
+    row.Set("password", credential.password);
+    if (!credential.realm.empty()) row.Set("realm", credential.realm);
+    if (!credential.title.empty()) row.Set("title", credential.title);
+    if (!credential.note.empty()) row.Set("note", credential.note);
+    if (credential.created > 0) row.Set("created", credential.created);
+    if (credential.last_used > 0) row.Set("lastUsed", credential.last_used);
+    if (credential.times_used > 0) row.Set("timesUsed", credential.times_used);
+    rows.Append(std::move(row));
+  }
+  return rows;
+}
+
+void ReviewUnits() {
+  static_assert(kPasswordChunk > 0 && kPasswordChunk <= 3000);
+  std::vector<Credential> chunk(3);
+  chunk[0].url = "https://a.example/login";
+  chunk[0].username = "u";
+  chunk[0].password = "p1";
+  chunk[1].url = "https://A.example/other";
+  chunk[1].username = "u";
+  chunk[1].password = "p2";
+  chunk[2].url = "https://b.example/";
+  chunk[2].username = "v";
+  chunk[2].password = "p3";
+  std::set<std::string> existing = {ExistingKey("https://a.example/", "u", "p1"), ExistingKey("https://b.example/x", "v", "other")};
+  assert(ExistingKey("https://a.example/login", "u", "p1") == ExistingKey("https://A.EXAMPLE/", "u", "p1"));
+  assert(CountExisting(chunk, existing) == 1);
+
+  PasswordTally tally;
+  tally.AddChunk(3, 1, 2, 1);
+  tally.AddChunk(2, 5, 0, 0);
+  assert(tally.added == 2 && tally.existing == 3 && tally.conflicts == 2 && tally.invalid == 1);
+  base::DictValue counts = tally.ToValue();
+  assert(counts.FindInt("added") == 2 && counts.FindInt("existing") == 3 && counts.FindInt("conflicts") == 2 &&
+         counts.FindInt("invalid") == 1);
+
+  base::ListValue summaries = CredentialSummaries(chunk);
+  assert(summaries.size() == 3);
+  assert(base::ToJson(summaries).find("p1") == std::string::npos);
+  assert(*summaries[0].GetDict().FindString("username") == "u");
+  std::vector<Credential> secrets(1);
+  secrets[0].password = "secret-two";
+  assert(!ReplyLeaksSecret(base::Value(std::move(summaries)), secrets));
+  base::DictValue exact;
+  base::ListValue nested;
+  nested.Append("secret-two");
+  exact.Set("rows", std::move(nested));
+  assert(ReplyLeaksSecret(base::Value(std::move(exact)), secrets));
+  base::DictValue substring;
+  substring.Set("title", "contains secret-two inside a history title");
+  assert(!ReplyLeaksSecret(base::Value(std::move(substring)), secrets));
+  base::DictValue field;
+  base::DictValue inner;
+  inner.Set("password", "x");
+  field.Set("entry", std::move(inner));
+  assert(ReplyLeaksSecret(base::Value(std::move(field)), {}));
+  base::DictValue rows;
+  base::ListValue listed;
+  listed.Append(base::DictValue());
+  rows.Set("credentials", std::move(listed));
+  assert(ReplyLeaksSecret(base::Value(std::move(rows)), {}));
+  base::DictValue empty_rows;
+  empty_rows.Set("credentials", base::ListValue());
+  empty_rows.Set("password", "");
+  assert(!ReplyLeaksSecret(base::Value(std::move(empty_rows)), {}));
+
+  std::string password;
+  assert(DecryptChromiumPassword("v12whatever", &password) == Decrypted::kKeyring && password.empty());
+  assert(kChromiumEmptyKey[0] == 0xd0 && kChromiumEmptyKey[15] == 0x7f);
+
+  CredentialVault vault;
+  assert(vault.Put("w1", "0000000000000000000000000000000a", {}, 5));
+  assert(vault.Put("w1", "0000000000000000000000000000000b", {}, 9));
+  assert(vault.NextExpiry() == 5 + kVaultLifetimeMs);
+  vault.Expire(5 + kVaultLifetimeMs);
+  assert(vault.NextExpiry() == 9 + kVaultLifetimeMs);
+  vault.Clear();
+  assert(!vault.NextExpiry());
+
+  BookmarksParse lt = ParseNetscapeBookmarks("<DL><p><DT><A HREF=\"https://lt.example/\">a < b &lt; c</A></DL>");
+  assert(lt.root && *lt.root->FindList("children")->begin()->GetDict().FindString("title") == "a < b < c");
+  std::printf("review units passed\n");
+}
+
+class Recorder : public ImportObserver {
+ public:
+  explicit Recorder(int cancel_at_history) : cancel_at_history_(cancel_at_history) {}
+  bool Cancelled() const override { return cancelled_; }
+  void Progress(std::string_view kind, std::string_view phase, int processed, std::optional<int> total) override {
+    base::DictValue event;
+    event.Set("kind", kind);
+    event.Set("phase", phase);
+    event.Set("processed", processed);
+    if (total) event.Set("total", *total);
+    events_.Append(std::move(event));
+    if (cancel_at_history_ > 0 && kind == "history" && processed >= cancel_at_history_) cancelled_ = true;
+  }
+  base::ListValue Take() { return std::move(events_); }
+
+ private:
+  int cancel_at_history_;
+  bool cancelled_ = false;
+  base::ListValue events_;
+};
+
+std::vector<std::string> Split(const std::string& text) {
+  std::vector<std::string> parts;
+  std::string part;
+  for (char c : text) {
+    if (c == ',') {
+      parts.push_back(part);
+      part.clear();
+    } else {
+      part.push_back(c);
+    }
+  }
+  if (!part.empty()) parts.push_back(part);
+  return parts;
+}
+
+void Units() {
+  assert(ClassifyProfile("") == ProfileTarget::kDefault);
+  assert(ClassifyProfile("default") == ProfileTarget::kDefault);
+  assert(ClassifyProfile("incognito:w1@") == ProfileTarget::kPrivate);
+  assert(ClassifyProfile("work") == ProfileTarget::kIsolated);
+  assert(ClassifyProfile("DEFAULT") == ProfileTarget::kInvalid);
+  assert(ClassifyProfile("../x") == ProfileTarget::kInvalid);
+  assert(ClassifyProfile("1abc") == ProfileTarget::kInvalid);
+  assert(ProfileErrorCode(ProfileTarget::kPrivate) == "ERR_PROFILE_PRIVATE");
+  assert(ProfileErrorCode(ProfileTarget::kIsolated) == "ERR_PROFILE_UNAVAILABLE");
+  assert(ProfileErrorCode(ProfileTarget::kDefault).empty());
+
+  assert(ValidProfileId("Default") && ValidProfileId("Profile 1") && ValidProfileId(".") &&
+         ValidProfileId("abcd.default-release") && ValidProfileId("_side_profiles/x"));
+  assert(!ValidProfileId("") && !ValidProfileId("..") && !ValidProfileId("a/../b") && !ValidProfileId("/etc") &&
+         !ValidProfileId("a//b") && !ValidProfileId("a/") && !ValidProfileId(std::string("a\nb")));
+  assert(ValidJobId("import-1") && !ValidJobId("") && !ValidJobId("a b") && !ValidJobId(std::string(65, 'a')));
+  assert(ValidBrowserId("chromeFlatpak") && !ValidBrowserId("chrome/../x") && !ValidBrowserId(""));
+  assert(ValidToken("0123456789abcdef0123456789abcdef") && !ValidToken("0123456789ABCDEF0123456789abcdef") &&
+         !ValidToken("short"));
+  assert(ValidChooserKind("bookmarksHTML") && ValidChooserKind("passwordsCSV") && !ValidChooserKind("safariExport"));
+  assert(ValidLocalFile("/tmp/x.html") && !ValidLocalFile("relative") && !ValidLocalFile(std::string("/a\0b", 4)));
+
+  base::ListValue kinds;
+  kinds.Append("passwords");
+  kinds.Append("bogus");
+  kinds.Append("bookmarks");
+  kinds.Append("passwords");
+  kinds.Append(3);
+  const std::vector<std::string> requested = RequestedKinds(&kinds);
+  assert((requested == std::vector<std::string>{"passwords", "bookmarks"}));
+  assert(RequestedKinds(nullptr).empty());
+
+  assert(OriginOf("https://User:pw@Example.COM:8443/path?q") == "https://example.com:8443");
+  assert(OriginOf("example.com/login") == "https://example.com");
+  assert(OriginOf("javascript:alert(1)").empty());
+  assert(OriginOf("mailto:a@example.com").empty());
+  assert(OriginOf("example.com:8080/x") == "https://example.com:8080");
+  assert(OriginOf("ftp://example.com").empty());
+  assert(OriginOf("https://").empty());
+  assert(OriginOf("android://hash@com.example.app/") == "android://hash@com.example.app");
+
+  ChosenFiles chosen;
+  chosen.Remember("w1", "bookmarksHTML", "/tmp/a.html", 1000);
+  assert(!chosen.Take("w2", "bookmarksHTML", "/tmp/a.html", 1001));
+  assert(!chosen.Take("w1", "passwordsCSV", "/tmp/a.html", 1001));
+  assert(chosen.Take("w1", "bookmarksHTML", "/tmp/a.html", 1002));
+  assert(!chosen.Take("w1", "bookmarksHTML", "/tmp/a.html", 1003));
+  chosen.Remember("w1", "passwordsCSV", "/tmp/p.csv", 0);
+  assert(!chosen.Take("w1", "passwordsCSV", "/tmp/p.csv", kChosenFileLifetimeMs));
+  for (int i = 0; i < 40; ++i) chosen.Remember("w1", "bookmarksHTML", "/tmp/" + std::to_string(i), 5);
+  assert(chosen.size() == kChosenFiles);
+  assert(!chosen.Take("w1", "bookmarksHTML", "/tmp/0", 6));
+  assert(chosen.Take("w1", "bookmarksHTML", "/tmp/39", 6));
+  chosen.Forget("w1");
+  assert(chosen.size() == 0);
+
+  CredentialVault vault;
+  const std::string token = "00000000000000000000000000000001";
+  std::vector<Credential> stored;
+  stored.emplace_back();
+  stored.back().url = "https://a.example";
+  stored.back().password = "s3cret";
+  assert(!vault.Put("w1", "BAD", {}, 0));
+  assert(vault.Put("w1", token, std::move(stored), 0));
+  assert(!vault.Put("w1", token, {}, 0));
+  assert(vault.Contains("w1", token, 1) && !vault.Contains("w2", token, 1) &&
+         !vault.Contains("w1", "00000000000000000000000000000002", 1));
+  assert(!vault.Take("w2", token, 1));
+  std::optional<std::vector<Credential>> taken = vault.Take("w1", token, 1);
+  assert(taken && taken->size() == 1 && (*taken)[0].password == "s3cret");
+  assert(!vault.Take("w1", token, 2));
+  assert(vault.Put("w1", token, {}, 0));
+  assert(!vault.Contains("w1", token, kVaultLifetimeMs));
+  assert(!vault.Take("w1", token, kVaultLifetimeMs));
+  for (int i = 0; i < 12; ++i) {
+    char buffer[33];
+    std::snprintf(buffer, sizeof(buffer), "%032x", i + 16);
+    assert(vault.Put("w1", buffer, {}, 10));
+  }
+  assert(vault.size() == kVaultEntriesPerOwner);
+  assert(vault.Put("w2", "0000000000000000000000000000abcd", {}, 10));
+  vault.DiscardOwner("w1");
+  assert(vault.size() == 1);
+  assert(vault.Discard("w2", "0000000000000000000000000000abcd"));
+  assert(vault.size() == 0);
+
+  Credential moved;
+  moved.password = "hunter2";
+  Credential target(std::move(moved));
+  assert(target.password == "hunter2" && moved.password.empty());
+  std::string secret = "wipe me please";
+  Wipe(secret);
+  assert(secret.empty());
+
+  assert(ValidUtf8("plain") && ValidUtf8("caf\xC3\xA9") && !ValidUtf8("\xC3") && !ValidUtf8("\xED\xA0\x80") &&
+         !ValidUtf8("\xC0\x80"));
+  assert(DecodeText("\xEF\xBB\xBFok") == "ok");
+  assert(DecodeText("caf\xE9") == "caf\xC3\xA9");
+  int64_t parsed = 0;
+  assert(ParseInt64(" 42 ", &parsed) && parsed == 42 && !ParseInt64("4x", &parsed) && !ParseInt64("", &parsed));
+
+  std::string password;
+  assert(DecryptChromiumPassword("v11whatever", &password) == Decrypted::kKeyring && password.empty());
+  assert(DecryptChromiumPassword("v10short", &password) == Decrypted::kFailed);
+  assert(DecryptChromiumPassword("legacy-plain", &password) == Decrypted::kOk && password == "legacy-plain");
+  assert(DecryptChromiumPassword("", &password) == Decrypted::kFailed);
+  std::printf("units passed\n");
+}
+
+}
+
+int main(int argc, char** argv) {
+  if (argc < 2) return 2;
+  const std::string command = argv[1];
+  if (command == "units") {
+    Units();
+    return 0;
+  }
+  if (command == "review") {
+    ReviewUnits();
+    return 0;
+  }
+  if (command == "readfile") {
+    std::string contents;
+    std::printf("%d\n", static_cast<int>(ReadFileLimited(argv[2], 1024, &contents)));
+    return 0;
+  }
+  if (command == "key") {
+    for (unsigned char byte : kChromiumBasicKey) std::printf("%02x", byte);
+    std::printf("\n");
+    return 0;
+  }
+  if (command == "html") {
+    BookmarksParse parse = ParseNetscapeBookmarks(Slurp(argv[2]));
+    base::DictValue out;
+    out.Set("links", parse.links);
+    out.Set("folders", parse.folders);
+    out.Set("truncated", parse.truncated);
+    out.Set("error", parse.error_code);
+    if (parse.root) {
+      out.Set("counted", CountBookmarkLinks(*parse.root));
+      out.Set("root", std::move(*parse.root));
+    }
+    std::cout << base::ToJson(out) << "\n";
+    return 0;
+  }
+  if (command == "csv") {
+    CsvParse parse = ParsePasswordsCsv(Slurp(argv[2]));
+    base::DictValue out;
+    out.Set("rows", parse.rows);
+    out.Set("duplicates", parse.duplicates);
+    out.Set("invalid", parse.invalid);
+    out.Set("error", parse.error_code);
+    out.Set("credentials", Rows(parse.credentials));
+    std::cout << base::ToJson(out) << "\n";
+    return 0;
+  }
+  if (command == "ini") {
+    base::ListValue out;
+    for (const FirefoxProfileEntry& entry : ParseProfilesIni(Slurp(argv[2]))) {
+      base::DictValue item;
+      item.Set("name", entry.name);
+      item.Set("path", entry.path);
+      item.Set("relative", entry.relative);
+      item.Set("default", entry.is_default);
+      out.Append(std::move(item));
+    }
+    std::cout << base::ToJson(out) << "\n";
+    return 0;
+  }
+  if (command == "sweep") {
+    std::printf("%d\n", RemoveStaleScratch(argv[2], std::atoll(argv[3]), std::atoll(argv[4])));
+    return 0;
+  }
+  if (argc < 6) return 2;
+  const Environment environment = MakeEnvironment(argv[2], argv[3], argv[4], argv[5]);
+  if (command == "discover") {
+    std::cout << base::ToJson(ListBrowsers(environment)) << "\n";
+    return 0;
+  }
+  if (command == "extensions") {
+    std::cout << base::ToJson(ListExtensions(environment, argv[6], argv[7])) << "\n";
+    return 0;
+  }
+  if (command == "read") {
+    ImportOptions options;
+    if (argc > 9 && std::atoi(argv[9]) > 0) options.history_limit = std::atoi(argv[9]);
+    if (argc > 10 && std::atof(argv[10]) > 0) options.history_since = std::atof(argv[10]);
+    Recorder recorder(argc > 11 ? std::atoi(argv[11]) : 0);
+    ImportOutcome outcome = ReadBrowserProfile(environment, argv[6], argv[7], Split(argv[8]), options, recorder);
+    base::DictValue out;
+    out.Set("cancelled", outcome.cancelled);
+    out.Set("error", outcome.error_code);
+    out.Set("result", std::move(outcome.result));
+    out.Set("credentials", Rows(outcome.credentials));
+    out.Set("progress", recorder.Take());
+    std::cout << base::ToJson(out) << "\n";
+    return 0;
+  }
+  return 2;
+}

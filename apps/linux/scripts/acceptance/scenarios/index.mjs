@@ -6,13 +6,14 @@ import f07 from "./f07-passwords-autofill.mjs";
 import f08 from "./f08-downloads.mjs";
 import f09 from "./f09-extensions.mjs";
 import f10 from "./f10-suggestions.mjs";
+import f12 from "./f12-import.mjs";
 import f20 from "./f20-drop.mjs";
 import f22 from "./f22-focus.mjs";
 import f23 from "./f23-history-zoom.mjs";
 import f26 from "./f26-platform-settings.mjs";
 import f27 from "./f27-app-services.mjs";
 
-export const SCENARIOS = [f01, f02, f03, f06, f23, f07, f08, f09, f20, f10, f22, f26, f27];
+export const SCENARIOS = [f01, f02, f03, f06, f23, f07, f08, f09, f20, f10, f12, f22, f26, f27];
 
 export function selectScenarios(only, scenarios = SCENARIOS) {
   if (!only?.length) return scenarios;
