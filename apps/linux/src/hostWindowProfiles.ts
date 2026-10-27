@@ -5,6 +5,7 @@ import type { CreateWindowOptions } from "../../browser/src/state/windows/window
 import type { ArdiaHost } from "./host";
 import { invokeHost, reportHostError } from "./host.ts";
 import { engineProfile, isIncognitoProfile } from "../../browser/src/state/browser/model";
+import { setPagerReach } from "./shims/web/motion/pager";
 
 export type PrivateWindowSeed = { window: BrowserWindow; tabs: Record<string, Tab> };
 type OpenOptions = Record<string, unknown> & { incognito?: boolean; profile?: string };
@@ -119,6 +120,12 @@ export function withPrivateWindow(host: ArdiaHost, session: HydrateData): Hydrat
 }
 
 const hostsOtherWindows = (w: BrowserWindow | undefined) => !!w && !w.incognito && w.kind !== "small";
+const crossesEngine = (windowProfile: string, profileId: string) => engineProfile(windowProfile) !== engineProfile(profileId);
+
+export function pagesInPlace(s: Pick<BrowserState, "windows" | "profiles">, windowId: string, profileId: string) {
+  const w = s.windows[windowId];
+  return !hostsOtherWindows(w) || !s.profiles[profileId] || !crossesEngine(w!.profileId, profileId);
+}
 
 export function profileWindowFor(s: Pick<BrowserState, "windows" | "windowOrder" | "ui">, profileId: string): string | undefined {
   const engine = engineProfile(profileId);
@@ -127,12 +134,14 @@ export function profileWindowFor(s: Pick<BrowserState, "windows" | "windowOrder"
 
 export function installProfileWindows(store: ProfileStore, focus: (windowId: string) => void, opened: (windowId: string) => Promise<boolean> = windowOpened) {
   const { switchProfile, moveTabToProfile } = store.getState();
-  const crossesEngine = (windowProfile: string, profileId: string) => engineProfile(windowProfile) !== engineProfile(profileId);
+  setPagerReach({
+    hosts: (windowId, profileId) => pagesInPlace(store.getState(), windowId, profileId),
+    route: (windowId, profileId) => store.getState().switchProfile(windowId, profileId),
+  });
   store.setState({
     switchProfile(windowId, profileId) {
       const s = store.getState();
-      const w = s.windows[windowId];
-      if (!hostsOtherWindows(w) || !s.profiles[profileId] || !crossesEngine(w!.profileId, profileId)) return switchProfile(windowId, profileId);
+      if (pagesInPlace(s, windowId, profileId)) return switchProfile(windowId, profileId);
       const target = profileWindowFor(s, profileId);
       if (target) {
         switchProfile(target, profileId);

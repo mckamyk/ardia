@@ -6,6 +6,7 @@ import { ardiaHost, hostModuleMethod, reportHostError } from "../host";
 import { hostLaunchConfig } from "../hostLaunchConfig";
 import { createHostDocuments } from "../hostDocuments";
 import { createHostWindowOpener, dropRefusedWindow } from "../hostWindowProfiles";
+import { createLinuxWindowIds } from "../windowSweep";
 import { useBrowser } from "../../../browser/src/state/browser/store";
 
 export * from "@ardia-real/shell";
@@ -74,7 +75,7 @@ export const setAppearance = async (mode: "auto" | "light" | "dark") => {
 };
 darkQuery?.addEventListener("change", (e) => appearance === "auto" && emitAppEvent({ type: "appearance", dark: e.matches }));
 
-export const windowIds = async () => ardiaHost ? hostModuleMethod("ArdiaShell", "windowIds")() as Promise<string[]> : [] as string[];
+export const windowIds = ardiaHost ? createLinuxWindowIds(ardiaHost, () => useBrowser.getState()) : async () => [] as string[];
 export const windowFrame = async (id: string): Promise<[number, number, number, number] | null> => ardiaHost ? hostModuleMethod("ArdiaShell", "windowFrame")(id) as Promise<[number, number, number, number] | null> : null;
 export const systemInfo = (): SystemInfo => ardiaHost ? (ardiaHost.bootstrap.nativeModules?.ArdiaApp?.systemInfo as SystemInfo | undefined) ?? { ...SYSTEM_INFO, appVersion: "linux-dev", appBuild: "host", bundleId: "dev.ardia.linux", osVersion: "Linux", osBuild: "Linux", arch: "unknown", model: "Linux" } : SYSTEM_INFO;
 export const launchConfig = () => hostLaunchConfig(ardiaHost);

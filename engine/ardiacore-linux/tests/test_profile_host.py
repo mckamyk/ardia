@@ -143,16 +143,23 @@ int main() {
         files = files[:files.index('\n  }\n') + 4]
         self.assertIn('LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done))', files)
 
-    def test_site_zoom_uses_the_window_page_profile_and_routes_private_sessions_off_the_record(self):
+    def test_site_zoom_resolves_named_profiles_and_routes_private_sessions_off_the_record(self):
         request = method(self.source, '  void Request(const base::ListValue& arguments) {')
         zoom = request[request.index('if (ardiacore::IsLinuxZoomDomainRoute(name)) {'):]
         zoom = zoom[:zoom.index('\n      }\n') + 8]
-        self.assertIn('Profile* page = host_->page_profile();', zoom)
-        self.assertIn('page->IsOffTheRecord()', zoom)
+        self.assertIn('ProfileKind::kPrivate', zoom)
+        self.assertIn('RoutePrivateCall(name,', zoom)
+        self.assertIn('page && host_->HostsProfile(profile)', zoom)
+        self.assertIn('prepared->args.Set(ardiacore::linux_private_services::kOffTheRecordKey, true)', zoom)
+        self.assertIn('const std::string path = page->GetOriginalProfile()->GetPath().value();', zoom)
+        private = zoom[zoom.index('if (private_session) {\n          const std::string path'):]
+        self.assertLess(private.index('return;'), private.index('ResolveLinuxProfile('))
+        self.assertIn('ardiacore::ResolveLinuxProfile(profile,', zoom)
+        self.assertIn('resolved->IsOffTheRecord()', zoom)
         self.assertIn('ProfileError::kPrivateService', zoom)
-        self.assertIn('!host_->HostsProfile(profile)', zoom)
-        self.assertIn('ProfileError::kWindowMismatch', zoom)
-        self.assertIn('const std::string path = (private_session ? page->GetOriginalProfile() : page)->GetPath().value();', zoom)
+        self.assertIn('const std::string path = resolved->GetPath().value();', zoom)
+        self.assertLess(zoom.index('PrepareLinuxZoomDomain(name, input)'), zoom.index('ResolveLinuxProfile('))
+        self.assertNotIn('kWindowMismatch', zoom)
         self.assertNotIn('host_->profile()', zoom)
 
     def test_window_openings_are_profile_bound_and_bounded(self):

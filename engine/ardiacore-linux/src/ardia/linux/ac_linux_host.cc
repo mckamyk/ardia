@@ -12,6 +12,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -29,6 +30,7 @@
 #include "ardia/linux/ac_linux_extension_views.h"
 #include "ardia/linux/ac_linux_extensions.h"
 #include "ardia/linux/ac_linux_files.h"
+#include "ardia/linux/ac_linux_fullscreen_restore.h"
 #include "ardia/linux/ac_linux_import_formats.h"
 #include "ardia/linux/ac_linux_import_service.h"
 #include "ardia/linux/ac_linux_launch_config.h"
@@ -49,6 +51,7 @@
 #include "ardia/linux/ac_linux_favicons.h"
 #include "ardia/linux/ac_linux_page_status.h"
 #include "ardia/linux/ac_linux_suggest.h"
+#include "ardia/linux/ac_linux_typeahead.h"
 #include "ardia/linux/host_bootstrap.h"
 #include "base/auto_reset.h"
 #include "base/base_paths.h"
@@ -157,6 +160,7 @@
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/base/ime/text_input_type.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -305,6 +309,21 @@ bool MayActivateNativeWindows() {
 linux_window::FocusLedger& WindowFocus() {
   static base::NoDestructor<linux_window::FocusLedger> ledger(MayActivateNativeWindows());
   return *ledger;
+}
+
+linux_window::FullScreenRestore& FullScreenRestorer() {
+  static base::NoDestructor<linux_window::FullScreenRestore> restore;
+  return *restore;
+}
+
+uint64_t& FullScreenRestoreEpoch() {
+  static uint64_t epoch = 0;
+  return epoch;
+}
+
+base::OneShotTimer& FullScreenRestoreTimer() {
+  static base::NoDestructor<base::OneShotTimer> timer;
+  return *timer;
 }
 
 bool GlobalScreenCoordinates() {
@@ -994,6 +1013,7 @@ class ShellHostView : public views::View,
   base::WeakPtr<ShellHostView> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
   void RendererReady();
   void SeedWindowActivation();
+  void RestoreFullScreenNow();
   std::vector<base::DictValue> WindowState() const;
 
  private:
@@ -1041,6 +1061,9 @@ class ShellHostView : public views::View,
   void UnregisterAccelerators();
   void FocusShell();
   void OnKeyEvent(ui::KeyEvent* event) override;
+  void ReplayTypeahead(bool field);
+  void DiscardTypeahead();
+  bool ShellHoldsTextField();
   bool OwnsKeyboardEvent(const ui::KeyEvent& event) const;
   void OnWindowDestroying(aura::Window* window) override;
   void ArmWindowClose();
@@ -1095,6 +1118,7 @@ class ShellHostView : public views::View,
   void OnWidgetClosing(views::Widget* widget) override;
   void OnWidgetDestroying(views::Widget* widget) override;
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
+  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override;
   void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds) override;
   void OnWidgetShowStateChanged(views::Widget* widget) override;
   void ReportWindowGeometry();
@@ -1172,6 +1196,8 @@ class ShellHostView : public views::View,
   bool app_operation_ = false;
   linux_window::GeometryLedger geometry_{GlobalScreenCoordinates()};
   base::OneShotTimer frame_timer_;
+  linux_window::Typeahead<ui::KeyEvent> typeahead_;
+  base::OneShotTimer typeahead_timer_;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
   base::ScopedObservation<aura::Window, aura::WindowObserver> input_observation_{this};
@@ -1488,20 +1514,32 @@ class HostMessageHandler : public content::WebUIMessageHandler,
           const auto error = ardiacore::linux_private_services::RoutePrivateCall(name,
               {page && page->IsOffTheRecord(), page && page->ShutdownStarted(), page && host_->HostsProfile(profile)});
           if (error != ardiacore::linux_profiles::ProfileError::kNone) return ProfileFail(id, error);
-        } else {
-          if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
-          if (profile_name->kind != ardiacore::linux_profiles::ProfileKind::kDefault && !host_->HostsProfile(profile)) {
-            return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kWindowMismatch);
-          }
         }
         auto prepared = ardiacore::PrepareLinuxZoomDomain(name, input);
         if (!prepared) return Fail(id, "ERR_ENGINE", "Invalid site zoom request");
         if (private_session) prepared->args.Set(ardiacore::linux_private_services::kOffTheRecordKey, true);
         const auto serialized = base::WriteJson(prepared->args);
         if (!serialized) return Fail(id, "ERR_BAD_REPLY", "Site zoom arguments are not JSON");
-        const std::string path = (private_session ? page->GetOriginalProfile() : page)->GetPath().value();
-        ac_engine_call(prepared->service.c_str(), path.c_str(), serialized->c_str(), Replied,
-                       new EngineReply{name, weak_factory_.GetWeakPtr(), id});
+        if (private_session) {
+          const std::string path = page->GetOriginalProfile()->GetPath().value();
+          ac_engine_call(prepared->service.c_str(), path.c_str(), serialized->c_str(), Replied,
+                         new EngineReply{name, weak_factory_.GetWeakPtr(), id});
+          return;
+        }
+        ardiacore::ResolveLinuxProfile(profile, base::BindOnce(
+            [](base::WeakPtr<HostMessageHandler> handler, std::string name, std::string id,
+               std::string service, std::string json, Profile* resolved,
+               ardiacore::linux_profiles::ProfileError error) {
+              using ardiacore::linux_profiles::ProfileError;
+              if (!handler) return;
+              if (!resolved || resolved->IsOffTheRecord()) {
+                return handler->ProfileFail(id, resolved ? ProfileError::kPrivateService
+                                                : error == ProfileError::kNone ? ProfileError::kUnavailable : error);
+              }
+              const std::string path = resolved->GetPath().value();
+              ac_engine_call(service.c_str(), path.c_str(), json.c_str(), Replied,
+                             new EngineReply{name, handler, id});
+            }, weak_factory_.GetWeakPtr(), name, id, prepared->service, *serialized));
         return;
       }
       if (LinuxCredentialsHandles(name)) {
@@ -1665,6 +1703,7 @@ void ShellHostView::Initialize() {
                                                   ardiacore::BackgroundInstance());
   close_observation_.Observe(GetWidget());
   SeedWindowActivation();
+  RestoreFullScreenNow();
   ArmWindowClose();
   focus_manager_ = GetFocusManager();
   aura::Window* input_window = GetWidget()->GetNativeWindow()->GetRootWindow();
@@ -1673,6 +1712,11 @@ void ShellHostView::Initialize() {
       base::BindRepeating(&ShellHostView::OnKeyEvent, GetWeakPtr()));
   input_window->AddPreTargetHandler(input_handler_.get(), ui::EventTarget::Priority::kSystem);
   input_window->AddPreTargetHandler(&pointer_handler_, ui::EventTarget::Priority::kSystem);
+  if (!is_utility()) {
+    typeahead_.Start();
+    typeahead_timer_.Start(FROM_HERE, base::Seconds(10),
+                           base::BindOnce(&ShellHostView::DiscardTypeahead, base::Unretained(this)));
+  }
   if (is_utility()) {
     browser_view_->SetPreferredSize(kind_ == "settings" ? gfx::Size(720, 480)
                                                        : gfx::Size(640, 600));
@@ -1746,7 +1790,9 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain")
       .Append("ArdiaSearch.suggest").Append("ArdiaSearch.cancelSuggest")
       .Append("ArdiaShell.launchSteps")
-      .Append("ArdiaShell.completeLaunchStep");
+      .Append("ArdiaShell.completeLaunchStep")
+      .Append("ArdiaShell.typeaheadReady")
+      .Append("ArdiaShell.restoreFullScreen");
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
   for (const auto& route : ardiacore::linux_contract::kRoutes)
     capabilities.Append(route.name);
@@ -1829,7 +1875,38 @@ bool ShellHostView::OwnsKeyboardEvent(const ui::KeyEvent& event) const {
   return true;
 }
 
+bool ShellHostView::ShellHoldsTextField() {
+  views::Widget* widget = GetWidget();
+  ui::InputMethod* input = widget ? widget->GetInputMethod() : nullptr;
+  ui::TextInputClient* client = input ? input->GetTextInputClient() : nullptr;
+  return shell_ && shell_->HasFocus() && client &&
+         client->GetTextInputType() != ui::TEXT_INPUT_TYPE_NONE;
+}
+
+void ShellHostView::DiscardTypeahead() {
+  typeahead_timer_.Stop();
+  std::ignore = typeahead_.Release();
+}
+
+void ShellHostView::ReplayTypeahead(bool field) {
+  typeahead_timer_.Stop();
+  std::vector<ui::KeyEvent> held = typeahead_.Release();
+  if (!field) return;
+  const auto weak = GetWeakPtr();
+  for (ui::KeyEvent& event : held) {
+    if (!ShellHoldsTextField()) return;
+    std::ignore = GetWidget()->GetInputMethod()->DispatchKeyEvent(&event);
+    if (!weak) return;
+  }
+}
+
 void ShellHostView::OnKeyEvent(ui::KeyEvent* event) {
+  if (typeahead_.capturing() && OwnsKeyboardEvent(*event) &&
+      (event->type() == ui::EventType::kKeyPressed || event->type() == ui::EventType::kKeyReleased) &&
+      typeahead_.Hold(ui::KeyEvent(*event))) {
+    event->StopPropagation();
+    return;
+  }
   if (!CanHandleAccelerators() || !OwnsKeyboardEvent(*event) || !focus_manager_ || shortcut_recording_ ||
       focus_manager_->shortcut_handling_suspended() ||
       event->type() != ui::EventType::kKeyPressed) return;
@@ -2562,8 +2639,53 @@ void ShellHostView::OnWidgetBoundsChanged(views::Widget*, const gfx::Rect&) {
                      base::BindOnce(&ShellHostView::ReportWindowGeometry, base::Unretained(this)));
 }
 
-void ShellHostView::OnWidgetShowStateChanged(views::Widget*) {
+void FinishFullScreenRestore() {
+  const auto focus = FullScreenRestorer().Finish();
+  if (FullScreenRestorer().active()) return;
+  FullScreenRestoreTimer().Stop();
+  if (!focus || WindowFocus().active() == 0 || WindowFocus().epoch() != FullScreenRestoreEpoch()) return;
+  for (const auto& [id, host] : Hosts()) {
+    if (!host->is_utility() && host->window_id() == *focus) {
+      ActivateNativeWindow(host->browser(), WindowFocus().Focus(host->id()));
+      return;
+    }
+  }
+}
+
+void ExpireFullScreenRestore() {
+  for (const std::string& id : FullScreenRestorer().Expire()) {
+    bool fullscreen = false;
+    for (const auto& [native, host] : Hosts()) {
+      if (host->window_id() == id && host->WindowFullScreen()) fullscreen = true;
+    }
+    if (!fullscreen) BroadcastWindowEvent(base::DictValue().Set("type", "fullScreen").Set("id", id).Set("on", false));
+  }
+  FinishFullScreenRestore();
+}
+
+void ShellHostView::RestoreFullScreenNow() {
+  views::Widget* widget = GetWidget();
+  if (is_utility() || window_id_.empty() || !browser_ || !widget || !widget->IsVisible() ||
+      widget->IsMinimized() || !FullScreenRestorer().Wants(window_id_)) return;
+  auto* manager = ExclusiveAccessManager::From(browser());
+  if (!manager) return;
+  FullscreenController* fullscreen = manager->fullscreen_controller();
+  if (FullScreenRestorer().Enter(window_id_, fullscreen->IsFullscreenForBrowser())) {
+    fullscreen->ToggleBrowserFullscreenMode(false);
+  }
+  FinishFullScreenRestore();
+}
+
+void ShellHostView::OnWidgetVisibilityChanged(views::Widget*, bool visible) {
+  if (visible) RestoreFullScreenNow();
+}
+
+void ShellHostView::OnWidgetShowStateChanged(views::Widget* widget) {
   ReportWindowGeometry();
+  if (widget && WindowFullScreen() && !window_id_.empty()) {
+    FullScreenRestorer().Entered(window_id_);
+    FinishFullScreenRestore();
+  }
 }
 
 bool ShellHostView::WindowFullScreen() const {
@@ -2613,6 +2735,7 @@ void ShellHostView::SeedWindowActivation() {
 void ShellHostView::RendererReady() {
   ActivateNativeWindow(browser_, WindowFocus().Ready(id_));
   if (is_utility()) return;
+  RestoreFullScreenNow();
   const auto focus = [](const base::DictValue& event) { return *event.FindString("type") == "focus"; };
   const std::vector<base::DictValue> own = WindowState();
   for (const auto& event : own) {
@@ -4314,6 +4437,35 @@ void ShellHostView::Invoke(
     }
     return std::move(done).Run(true, base::Value(std::move(windows)));
   }
+  if (method == "ArdiaShell.typeaheadReady") {
+    if (is_utility()) return std::move(done).Run(false, base::Value("Typeahead is for browser windows"));
+    if (values.size() != 1 || !values[0].is_bool())
+      return std::move(done).Run(false, base::Value("typeaheadReady takes whether a text field holds focus"));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&ShellHostView::ReplayTypeahead, GetWeakPtr(), values[0].GetBool()));
+    return std::move(done).Run(true, base::Value());
+  }
+  if (method == "ArdiaShell.restoreFullScreen") {
+    if (values.empty() || !values[0].is_list() || values.size() > 2 ||
+        (values.size() == 2 && !values[1].is_string() && !values[1].is_none()))
+      return std::move(done).Run(false, base::Value("Invalid fullscreen restore"));
+    if (is_utility() || !startup_) return std::move(done).Run(true, base::Value());
+    std::vector<std::string> ids;
+    for (const auto& id : values[0].GetList()) {
+      if (id.is_string()) ids.push_back(id.GetString());
+    }
+    const std::string focus = values.size() == 2 && values[1].is_string() ? values[1].GetString() : std::string();
+    if (FullScreenRestorer().Begin(ids, focus)) {
+      FullScreenRestoreEpoch() = WindowFocus().epoch();
+      FullScreenRestoreTimer().Start(FROM_HERE, base::Seconds(10), base::BindOnce(&ExpireFullScreenRestore));
+      std::vector<base::WeakPtr<ShellHostView>> windows;
+      for (const auto& [id, host] : Hosts()) windows.push_back(host->GetWeakPtr());
+      for (const auto& host : windows) {
+        if (host) host->RestoreFullScreenNow();
+      }
+    }
+    return std::move(done).Run(true, base::Value());
+  }
   if (method == "ArdiaShell.windowIds") {
     base::ListValue ids;
     for (const auto& [id, host] : Hosts()) {
@@ -4909,6 +5061,7 @@ class HostRegistry : public BrowserCollectionObserver,
     RequestedWindows().erase(browser->GetSessionID().id());
     const auto found = Hosts().find(browser->GetSessionID().id());
     if (found == Hosts().end()) return;
+    if (FullScreenRestorer().Forget(found->second->window_id())) FinishFullScreenRestore();
     found->second->ReleaseExtensions();
     if (found->second->is_utility()) {
       found->second->DetachBrowser();

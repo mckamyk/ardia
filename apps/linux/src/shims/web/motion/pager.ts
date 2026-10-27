@@ -21,7 +21,9 @@ export type PagerArea = {
   onState: (event: PagerStateEvent) => void;
 };
 
-type Drag = { start: number; lo: number; hi: number; home: number; detent: number; area: PagerArea | null };
+export type PagerReach = { hosts(key: string, profileId: string): boolean; route(key: string, profileId: string): void };
+
+type Drag = { start: number; raw: number; lo: number; hi: number; home: number; detent: number; area: PagerArea | null };
 type Spring = { from: number; target: number; velocity: number; start: number };
 
 const now = () => performance.now() / 1000;
@@ -31,6 +33,9 @@ let counter = 0;
 const next = () => ++counter;
 
 const pagers = new Map<string, Pager>();
+let reach: PagerReach | null = null;
+
+export const setPagerReach = (next: PagerReach | null) => void (reach = next);
 
 export class Pager {
   private areas = new Set<PagerArea>();
@@ -46,7 +51,7 @@ export class Pager {
   private selectionSequence = 0;
   private propSelected = 0;
   private propAck = 0;
-  private drag: Drag = { start: 0, lo: 0, hi: 0, home: 0, detent: 0, area: null };
+  private drag: Drag = { start: 0, raw: 0, lo: 0, hi: 0, home: 0, detent: 0, area: null };
   private history: { time: number; position: number }[] = [];
   private spring: Spring | null = null;
   private frameId = 0;
@@ -61,7 +66,20 @@ export class Pager {
     return pagers.get(key);
   }
 
-  private constructor(readonly key: string) {}
+  readonly key: string;
+
+  private constructor(key: string) {
+    this.key = key;
+  }
+
+  private profileAt(index: number) {
+    return this.orderIds && index >= 0 && index < this.orderIds.length ? this.orderIds[index]! : null;
+  }
+
+  private hosts(index: number) {
+    const id = this.profileAt(index);
+    return !reach || id === null || reach.hosts(this.key, id);
+  }
 
   attach(area: PagerArea) {
     this.areas.add(area);
@@ -158,9 +176,11 @@ export class Pager {
     this.stopSpring();
     const home = this.selected;
     const x = this.position;
-    const lo = Math.max(0, Math.min(home - 1, Math.floor(x)));
-    const hi = Math.min(this.count - 1, Math.max(home + 1, Math.ceil(x)));
-    this.drag = { start: x, lo, hi, home, detent: clamp(Math.round(x), lo, hi), area };
+    let lo = Math.max(0, Math.min(home - 1, Math.floor(x)));
+    let hi = Math.min(this.count - 1, Math.max(home + 1, Math.ceil(x)));
+    while (lo < home && !this.hosts(lo)) lo++;
+    while (hi > home && !this.hosts(hi)) hi--;
+    this.drag = { start: x, raw: x, lo, hi, home, detent: clamp(Math.round(x), lo, hi), area };
     this.history = [];
     this.velocity = 0;
     this.phase = "tracking";
@@ -174,6 +194,7 @@ export class Pager {
     const width = area.pageWidth();
     if (!(width > 0)) return;
     const raw = this.drag.start + (direction > 0 ? -1 : 1) * ((distance * TRACKING_SCALE) / width);
+    this.drag.raw = raw;
     const { lo, hi } = this.drag;
     const x = raw > hi ? hi + rubberBand((raw - hi) * width, RUBBER_DIMENSION) / width : raw < lo ? lo - rubberBand((lo - raw) * width, RUBBER_DIMENSION) / width : raw;
     this.position = x;
@@ -195,16 +216,21 @@ export class Pager {
   }
 
   private release(v: number, cancelled: boolean) {
-    const home = this.drag.home;
+    const { home, lo, hi, raw } = this.drag;
     const width = this.drag.area?.pageWidth() ?? 0;
     this.drag.area = null;
     let target = home;
+    let blocked: string | null = null;
     if (!cancelled) {
       const flick = Math.abs(v * width) >= FLICK_VELOCITY;
-      target = !flick ? Math.round(this.position) : v > 0 ? Math.floor(this.position) + 1 : Math.ceil(this.position) - 1;
-      target = Math.max(0, home - 1, Math.min(this.count - 1, home + 1, target));
+      const aim = (position: number) => Math.max(0, home - 1, Math.min(this.count - 1, home + 1,
+        !flick ? Math.round(position) : v > 0 ? Math.floor(position) + 1 : Math.ceil(position) - 1));
+      const intended = aim(raw);
+      if (intended !== home && !this.hosts(intended)) blocked = this.profileAt(intended);
+      target = clamp(aim(this.position), lo, hi);
     }
     this.settle(target, this.towards(target, v));
+    if (blocked !== null) reach?.route(this.key, blocked);
   }
 
   private towards(target: number, v: number) {
@@ -216,6 +242,7 @@ export class Pager {
     if (!this.configured) return false;
     this.sync(order);
     const target = clamp(index, 0, this.count - 1);
+    if (target !== this.selected && !this.hosts(target)) return false;
     this.drag.area = null;
     const v = this.phase === "settling" ? this.velocity : 0;
     this.settle(target, this.towards(target, v));
@@ -345,4 +372,4 @@ export class Pager {
   }
 }
 
-if (import.meta.env.DEV) (globalThis as { acLinuxPagers?: unknown }).acLinuxPagers = pagers;
+if (import.meta.env?.DEV) (globalThis as { acLinuxPagers?: unknown }).acLinuxPagers = pagers;
