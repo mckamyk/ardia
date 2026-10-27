@@ -924,10 +924,7 @@ class ShellHostView : public views::View,
     return nullptr;
   }
   void FetchFavicon(const GURL& url, ardiacore::LinuxFaviconReply reply) {
-    Profile* page = page_profile();
-    if (!favicon_fetcher_ || favicon_fetcher_->profile() != page)
-      favicon_fetcher_ = std::make_unique<ardiacore::LinuxFaviconFetcher>(page);
-    favicon_fetcher_->Fetch(url, std::move(reply));
+    ardiacore::FetchLinuxFavicon(page_profile(), url, std::move(reply));
   }
   bool WindowFullScreen() const;
   bool AutoPictureInPictureCancelled(content::WebContents* contents) const {
@@ -1132,7 +1129,6 @@ class ShellHostView : public views::View,
   std::map<int, std::unique_ptr<TabBinding>> bindings_;
   bool app_operation_ = false;
   linux_window::GeometryLedger geometry_{GlobalScreenCoordinates()};
-  std::unique_ptr<ardiacore::LinuxFaviconFetcher> favicon_fetcher_;
   base::OneShotTimer frame_timer_;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
@@ -2502,7 +2498,7 @@ void ShellHostView::OnWidgetShowStateChanged(views::Widget*) {
 bool ShellHostView::WindowFullScreen() const {
   const views::Widget* widget = GetWidget();
   if (!widget || !browser_) return false;
-  ExclusiveAccessManager* access = ExclusiveAccessManager::From(browser_.get());
+  ExclusiveAccessManager* access = ExclusiveAccessManager::From(browser());
   const FullscreenController* controller = access ? access->fullscreen_controller() : nullptr;
   return ardiacore::LinuxWindowFullScreen(
       widget->IsFullscreen(), controller && controller->IsWindowFullscreenForTabOrPending(),

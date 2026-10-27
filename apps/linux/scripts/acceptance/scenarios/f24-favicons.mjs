@@ -22,8 +22,9 @@ export default {
   ],
   async run(t) {
     const run = nonce("f24");
-    let state = await startBrowser(t, { name: "favicons" });
-    const { url } = t.fixtures;
+    const { url, ports } = t.fixtures;
+    const publicFixture = [`--ip-address-space-overrides=127.0.0.1:${ports.http}=public`];
+    let state = await startBrowser(t, { name: "favicons", extraArgs: publicFixture });
     const label = `fresh${run}`;
     const pageUrl = url.favicon(label);
     const iconPath = `/icon/${label}.png`;
@@ -53,9 +54,18 @@ export default {
       if (bad !== null || missing !== null || local !== null) throw new Error(`expected null fallbacks, got ${js({ bad, missing, local })}`);
       return { bad, missing, local };
     });
+    await t.check("favicons.fetch never reaches the local network", async () => {
+      const literal = await fetchIcon(state.shell, `http://127.0.0.1:${ports.http}/icon/lit${run}.png`);
+      const named = await fetchIcon(state.shell, `http://localhost:${ports.http}/icon/name${run}.png`);
+      const resolved = await fetchIcon(state.shell, url.https("icons.ardia.test", `/icon/lna${run}.png`));
+      if (literal !== null || named !== null || resolved !== null) throw new Error(`a local-network icon was fetched: ${js({ literal, named, resolved })}`);
+      const reached = t.fixtures.requests.filter((r) => [`/icon/lit${run}.png`, `/icon/name${run}.png`, `/icon/lna${run}.png`].includes(r.path));
+      if (reached.length) throw new Error(`local-network requests reached the fixture: ${js(reached.map((r) => r.path))}`);
+      return { literal, named, resolved };
+    });
     await t.check("the fetched favicon survives restart", async () => {
       const before = t.fixtures.requests.filter((r) => r.path === iconPath).length;
-      state = await restartBrowser(t, state);
+      state = await restartBrowser(t, state, { extraArgs: publicFixture });
       const icons = await until(async () => {
         const list = await shellIcons(state.shell);
         return list.length ? list : false;

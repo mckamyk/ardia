@@ -528,6 +528,24 @@ void Hung() {
   }
   Mount reentrant;reentrant.state->CreationState();reentrant.on_delivery=[&] { reentrant.state.reset(); };
   assert(reentrant.state->status()->Unresponsive(&hung,restart) && !reentrant.state && restarts==3);
+  {
+    Mount two;two.state->CreationState();auto* both=two.state->status();
+    content::RenderProcessHost first_process,second_process;first_process.id=21;second_process.id=22;
+    content::RenderWidgetHost a(&first_process,1),b(&second_process,1);a.unresponsive=b.unresponsive=true;
+    int ra=0,rb=0;
+    assert(both->Unresponsive(&a,base::RepeatingClosure([&] { ++ra; })) && both->Unresponsive(&b,base::RepeatingClosure([&] { ++rb; })));
+    const auto before=two.deliveries.size();
+    assert(both->Responsive(&a) && two.deliveries.size()==before);
+    assert(Named(*two.state->CreationState()->FindDict("snapshot"),"unresponsive"));
+    assert(both->Unresponsive(&a,base::RepeatingClosure([&] { ++ra; })));
+    assert(both->ResolveUnresponsive(base::ListValue().Append(false)) && ra==1 && rb==1);
+    assert(both->Unresponsive(&a,base::RepeatingClosure([&] { ++ra; })) && both->Unresponsive(&b,base::RepeatingClosure([&] { ++rb; })));
+    assert(both->ResolveUnresponsive(base::ListValue().Append(true)) && first_process.shutdown==content::RESULT_CODE_HUNG && second_process.shutdown==content::RESULT_CODE_HUNG && ra==1 && rb==1);
+    assert(both->Unresponsive(&a,base::RepeatingClosure([&] { ++ra; })) && both->Unresponsive(&b,base::RepeatingClosure([&] { ++rb; })));
+    assert(both->Responsive(&b) && both->Responsive(&a) && two.LastName()=="responsive" && ra==1 && rb==1);
+    assert(both->Unresponsive(&a,base::RepeatingClosure([&] { ++ra; })) && both->Unresponsive(&b,base::RepeatingClosure([&] { ++rb; })));
+    two.state->Retire();assert(ra==2 && rb==2);
+  }
 }
 
 void Popups() {

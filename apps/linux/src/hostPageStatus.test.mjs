@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { test } from "node:test";
 import { HostPageEvents } from "./hostPageEvents.ts";
+import { HostTab } from "./hostTab.ts";
 import { applyHostPageTheme, resetHostPage } from "./hostPageLifecycle.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { pageOf, patchPage } from "../../browser/src/state/tabs/pageState.ts";
@@ -110,27 +113,75 @@ test("a new document drops every producer's state and stale-epoch events cannot 
   assert.equal(h.page().fullscreen, false);
 });
 
-const source = (path) => readFileSync(new URL(`../../../${path}`, import.meta.url), "utf8");
+const bootstrap = readFileSync(new URL("../../../engine/ardiacore-linux/src/ardia/linux/bootstrap.js", import.meta.url), "utf8");
 
-test("native producers, commands and Chromium hooks are wired through the page-state envelope", () => {
-  const status = source("engine/ardiacore-linux/src/ardia/linux/ac_linux_page_status.cc");
-  const restored = source("apps/linux/src/hostPageLifecycle.ts");
-  for (const name of ["fullscreen", "status", "crashed", "unresponsive", "responsive", "popupBlocked"]) {
-    assert.match(status, new RegExp(`"${name}"`));
-    assert.match(restored, new RegExp(`\\b${name}:`));
+function nativeHost(replies = {}) {
+  const requests = [];
+  const mounts = new Map();
+  let nextTab = 6;
+  let bindings = 0;
+  const context = {
+    location: { protocol: "chrome:", hostname: "ardia" },
+    crypto: { randomUUID },
+    __ardiaBootstrap: { windowId: "status", profileId: "default" },
+    setTimeout, clearTimeout, addEventListener() {}, console,
+    chrome: { send(_name, [requestId, , { method, args }]) {
+      requests.push({ method, args });
+      if (method === "tab.create") {
+        const mount = { id: mounts.get(args.key)?.id ?? ++nextTab, claim: args.claim, binding: ++bindings, sequence: 1 };
+        mounts.set(args.key, mount);
+        const leaseOf = { claim: mount.claim, rendererGeneration: "1", bindingGeneration: String(mount.binding), documentEpoch: "1" };
+        mount.lease = leaseOf;
+        return context.__ardiaReply(requestId, true, { browserId: mount.id, chromeTabId: mount.id, lease: { ...leaseOf, type: "pageLease", sequence: 1 }, snapshot: { watermark: 1, events: [] } });
+      }
+      const reply = replies[args.command];
+      context.__ardiaReply(requestId, reply === undefined || reply.ok !== false, reply?.value ?? reply?.error ?? null);
+    } },
+  };
+  context.window = context;
+  context.top = context;
+  runInNewContext(bootstrap, context);
+  return {
+    host: context.__ardiaHost, requests,
+    send(key, name, data, mount = mounts.get(key)) {
+      context.__ardiaEvent("ArdiaWebView", String(mount.id), { ...mount.lease, type: "pageEvent", sequence: ++mount.sequence, event: { name, data } });
+    },
+    mount: (key) => mounts.get(key),
+  };
+}
+
+const receiver = (props) => (claim, nativeId, rebound) => new HostPageEvents(claim, nativeId, () => props, () => {}, () => {}, rebound);
+
+test("recovery, pop-up and favicon commands reach the exact pane and its producers reach only that pane", async () => {
+  const image = { uri: "data:image/png;base64,AAAA", width: 16, height: 16 };
+  const native = nativeHost({ downloadFavicon: { value: image }, openBlockedPopup: { ok: false, error: "The blocked pop-up is no longer available" } });
+  const left = [], right = [];
+  const props = (into) => ({
+    onFullscreen: (value) => into.push(["fullscreen", value]), onStatus: (value) => into.push(["status", value]),
+    onUnresponsive: () => into.push(["unresponsive"]), onPopupBlocked: (value) => into.push(["popup", value.id]),
+  });
+  const a = new HostTab(native.host, { key: "left" }, () => {}, receiver(props(left)));
+  const b = new HostTab(native.host, { key: "right" }, () => {}, receiver(props(right)));
+  await Promise.all([a.ready, b.ready]);
+  try {
+    assert.equal(await b.command("resolveUnresponsive", [true]), null);
+    assert.deepEqual(native.requests.at(-1), { method: "tab.command", args: { id: b.identity.browserId, claim: b.claim, command: "resolveUnresponsive", args: [true] } });
+    assert.deepEqual(await b.command("downloadFavicon", ["https://example.test/favicon.ico"]), image);
+    assert.equal(native.requests.at(-1).args.id, b.identity.browserId);
+    await assert.rejects(b.command("openBlockedPopup", ["4", false]), /no longer available/);
+    native.send("right", "fullscreen", { fullscreen: true });
+    native.send("right", "status", { text: "https://example.test/link" });
+    native.send("right", "unresponsive", {});
+    native.send("right", "popupBlocked", { id: "4", url: "https://pop.test/4", origin: "" });
+    assert.deepEqual(right, [["fullscreen", true], ["status", "https://example.test/link"], ["unresponsive"], ["popup", "4"]]);
+    assert.deepEqual(left, []);
+    const stale = native.mount("right");
+    const c = new HostTab(native.host, { key: "right" }, () => {}, receiver(props(right)));
+    await c.ready;
+    native.send("right", "status", { text: "old" }, stale);
+    assert.equal(right.filter(([kind, value]) => kind === "status" && value === "old").length, 0);
+    c.dispose();
+  } finally {
+    a.dispose(); b.dispose(); await new Promise(setImmediate);
   }
-  assert.doesNotMatch(status, /->Emit\(\*request, "(fullscreen|status|crashed|unresponsive|responsive)"/);
-  const state = source("engine/ardiacore-linux/src/ardia/linux/ac_linux_page_state.cc");
-  assert.match(state, /status_->AppendSnapshot\(events\);/);
-  const host = source("engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc");
-  for (const command of ["resolveUnresponsive", "openBlockedPopup", "downloadFavicon"]) assert.match(host, new RegExp(`command == "${command}"`));
-  for (const hook of ["g_ardia_linux_target_url", "g_ardia_linux_renderer_unresponsive", "g_ardia_linux_renderer_responsive"]) {
-    assert.match(host, new RegExp(`${hook} = \\[`));
-    assert.match(source("engine/patches/chromium-linux-page-status.patch"), new RegExp(`\\+bool \\(\\*${hook}\\)`));
-  }
-  assert.ok(source("engine/patches/series").split("\n").includes("chromium chromium-linux-page-status.patch linux"));
-  assert.match(host, /if \(name == "favicons\.fetch"\) \{/);
-  assert.match(host, /capabilities\.Append\("favicons\.fetch"\);/);
-  assert.match(host, /geometry_\.FullScreen\(WindowFullScreen\(\)\)/);
-  assert.match(host, /if \(WindowFullScreen\(\)\) state\.push_back/);
 });

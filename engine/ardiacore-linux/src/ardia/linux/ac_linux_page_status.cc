@@ -1,6 +1,7 @@
 #include "ardia/linux/ac_linux_page_status.h"
 
 #include <utility>
+#include <vector>
 
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -64,9 +65,11 @@ bool LinuxPageStatus::CurrentDocument(const content::WeakDocumentPtr& document) 
 }
 
 bool LinuxPageStatus::Hung() const {
-  if (!hung_) return false;
-  auto* host = content::RenderWidgetHost::FromID(hung_->first, hung_->second);
-  return host && host->IsCurrentlyUnresponsive();
+  for (const auto& [id, restarter] : hung_) {
+    auto* host = content::RenderWidgetHost::FromID(id.first, id.second);
+    if (host && host->IsCurrentlyUnresponsive()) return true;
+  }
+  return false;
 }
 
 blocked_content::PopupBlockerTabHelper* LinuxPageStatus::Popups() const {
@@ -123,45 +126,48 @@ bool LinuxPageStatus::TargetURL(const GURL& url) {
 bool LinuxPageStatus::Unresponsive(content::RenderWidgetHost* host,
                                    base::RepeatingClosure restarter) {
   if (!host || !host->GetProcess() || !Live()) return false;
-  hung_ = std::make_pair(host->GetProcess()->GetDeprecatedID(), host->GetRoutingID());
-  restarter_ = std::move(restarter);
+  const auto id = std::make_pair(host->GetProcess()->GetDeprecatedID(), host->GetRoutingID());
+  hung_[id] = std::move(restarter);
   const auto weak = weak_factory_.GetWeakPtr();
   if (Present("unresponsive", base::Value(base::DictValue()))) return true;
   if (!weak) return false;
-  hung_.reset();
-  restarter_.Reset();
+  hung_.erase(id);
   return false;
 }
 
 bool LinuxPageStatus::Responsive(content::RenderWidgetHost* host) {
-  if (!hung_ || !host || !host->GetProcess() ||
-      *hung_ != std::make_pair(host->GetProcess()->GetDeprecatedID(), host->GetRoutingID())) {
+  if (!host || !host->GetProcess() ||
+      !hung_.erase(std::make_pair(host->GetProcess()->GetDeprecatedID(), host->GetRoutingID()))) {
     return false;
   }
-  hung_.reset();
-  restarter_.Reset();
-  Present("responsive", base::Value(base::DictValue()));
+  if (hung_.empty()) Present("responsive", base::Value(base::DictValue()));
   return true;
 }
 
 void LinuxPageStatus::ReleaseHang(bool restart) {
-  auto restarter = std::move(restarter_);
-  restarter_.Reset();
-  hung_.reset();
-  if (restart && restarter) restarter.Run();
+  auto hung = std::move(hung_);
+  hung_.clear();
+  if (!restart) return;
+  for (auto& [id, restarter] : hung) {
+    if (restarter) restarter.Run();
+  }
 }
 
 bool LinuxPageStatus::ResolveUnresponsive(const base::ListValue& args) {
   if (args.size() != 1 || !args[0].is_bool() || !Live()) return false;
-  if (!hung_) return true;
+  if (hung_.empty()) return true;
   if (!args[0].GetBool()) {
     ReleaseHang(true);
     return true;
   }
-  auto* host = content::RenderWidgetHost::FromID(hung_->first, hung_->second);
+  std::vector<std::pair<int, int>> ids;
+  for (const auto& [id, restarter] : hung_) ids.push_back(id);
   ReleaseHang(false);
-  if (host && host->GetProcess() && host->GetProcess()->IsInitializedAndNotDead())
-    host->GetProcess()->Shutdown(content::RESULT_CODE_HUNG);
+  for (const auto& id : ids) {
+    auto* host = content::RenderWidgetHost::FromID(id.first, id.second);
+    if (host && host->GetProcess() && host->GetProcess()->IsInitializedAndNotDead())
+      host->GetProcess()->Shutdown(content::RESULT_CODE_HUNG);
+  }
   return true;
 }
 
@@ -195,8 +201,7 @@ void LinuxPageStatus::PrimaryMainFrameRenderProcessGone(base::TerminationStatus 
   auto* contents = Live();
   status_.clear();
   status_document_ = content::WeakDocumentPtr();
-  hung_.reset();
-  restarter_.Reset();
+  hung_.clear();
   if (!contents) return;
   const int code = contents->GetCrashedErrorCode();
   Present("crashed", base::Value(base::DictValue()
@@ -224,7 +229,7 @@ void LinuxPageStatus::StopObservingPopups() {
 }
 
 void LinuxPageStatus::WebContentsDestroyed() {
-  restarter_.Reset();
+  hung_.clear();
   Reset();
 }
 

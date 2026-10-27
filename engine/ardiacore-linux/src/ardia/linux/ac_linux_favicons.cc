@@ -1,6 +1,9 @@
 #include "ardia/linux/ac_linux_favicons.h"
 
 #include <map>
+#include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -9,16 +12,23 @@
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "chrome/browser/image_fetcher/image_decoder_impl.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/image_fetcher/core/image_fetcher.h"
-#include "components/image_fetcher/core/image_fetcher_impl.h"
-#include "components/image_fetcher/core/request_metadata.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
+#include "net/base/ip_address.h"
+#include "net/base/net_errors.h"
+#include "net/base/url_util.h"
+#include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "net/url_request/redirect_info.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/client_security_state.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "skia/ext/image_operations.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -81,11 +91,98 @@ PendingReplies& PageDownloads() {
   return *replies;
 }
 
-void ExpireAfter(base::OnceClosure expire) {
+void ExpireAfter(uint64_t key) {
   if (!base::SequencedTaskRunner::HasCurrentDefault()) return;
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, std::move(expire), base::Seconds(policy::kTimeoutSeconds));
+      FROM_HERE, base::BindOnce([](uint64_t key) { PageDownloads().Finish(key, base::Value()); }, key),
+      base::Seconds(policy::kTimeoutSeconds));
 }
+
+void FinishWithImage(uint64_t key, SkBitmap bitmap, base::OnceClosure done = base::OnceClosure()) {
+  if (bitmap.drawsNothing()) {
+    PageDownloads().Finish(key, base::Value());
+    if (done) std::move(done).Run();
+    return;
+  }
+  bitmap.setImmutable();
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
+      base::BindOnce(&LinuxFaviconImage, std::move(bitmap)),
+      base::BindOnce([](uint64_t key, base::OnceClosure done, base::Value image) {
+        PageDownloads().Finish(key, std::move(image));
+        if (done) std::move(done).Run();
+      }, key, std::move(done)));
+}
+
+class NetworkFavicon {
+ public:
+  static void Start(scoped_refptr<network::SharedURLLoaderFactory> factory, const GURL& url,
+                    uint64_t key) {
+    auto* fetch = new NetworkFavicon(key);
+    fetch->Load(std::move(factory), url);
+  }
+  NetworkFavicon(const NetworkFavicon&) = delete;
+  NetworkFavicon& operator=(const NetworkFavicon&) = delete;
+
+ private:
+  explicit NetworkFavicon(uint64_t key) : key_(key) {}
+  ~NetworkFavicon() = default;
+
+  void Load(scoped_refptr<network::SharedURLLoaderFactory> factory, const GURL& url) {
+    auto request = std::make_unique<network::ResourceRequest>();
+    request->url = url;
+    request->method = "GET";
+    request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+    request->destination = network::mojom::RequestDestination::kImage;
+    auto security = network::mojom::ClientSecurityState::New();
+    security->ip_address_space = network::mojom::IPAddressSpace::kPublic;
+    security->is_web_secure_context = false;
+    security->local_network_access_request_policy =
+        network::mojom::LocalNetworkAccessRequestPolicy::kBlock;
+    request->trusted_params = network::ResourceRequest::TrustedParams();
+    request->trusted_params->client_security_state = std::move(security);
+    loader_ = network::SimpleURLLoader::Create(std::move(request), kTrafficAnnotation);
+    loader_->SetTimeoutDuration(base::Seconds(policy::kTimeoutSeconds));
+    loader_->SetOnRedirectCallback(base::BindRepeating(&NetworkFavicon::Redirected, base::Unretained(this)));
+    loader_->DownloadToString(factory.get(),
+                              base::BindOnce(&NetworkFavicon::Loaded, base::Unretained(this)),
+                              policy::kMaxBytes);
+  }
+
+  void Redirected(const GURL&, const net::RedirectInfo& redirect, const network::mojom::URLResponseHead&,
+                  std::vector<std::string>*) {
+    if (LinuxFaviconPublicURL(redirect.new_url)) return;
+    loader_.reset();
+    Finish(base::Value());
+  }
+
+  void Loaded(std::optional<std::string> body) {
+    const auto* head = loader_ ? loader_->ResponseInfo() : nullptr;
+    const bool ok = loader_ && loader_->NetError() == net::OK && body && !body->empty() && head &&
+                    head->headers && head->headers->response_code() == 200;
+    loader_.reset();
+    if (!ok) return Finish(base::Value());
+    decoder_.DecodeImage(*body, gfx::Size(policy::kPixels, policy::kPixels), nullptr,
+                         base::BindOnce(&NetworkFavicon::Decoded, base::Unretained(this)));
+  }
+
+  void Decoded(const gfx::Image& image) {
+    const uint64_t key = key_;
+    SkBitmap bitmap = image.IsEmpty() ? SkBitmap() : image.AsBitmap();
+    base::OnceClosure release = base::BindOnce([](NetworkFavicon* fetch) { delete fetch; }, base::Unretained(this));
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&FinishWithImage, key, std::move(bitmap), std::move(release)));
+  }
+
+  void Finish(base::Value value) {
+    PageDownloads().Finish(key_, std::move(value));
+    delete this;
+  }
+
+  const uint64_t key_;
+  std::unique_ptr<network::SimpleURLLoader> loader_;
+  ImageDecoderImpl decoder_;
+};
 
 }
 
@@ -104,13 +201,20 @@ base::Value LinuxFaviconImage(const SkBitmap& bitmap) {
       .Set("width", scaled.width()).Set("height", scaled.height()));
 }
 
+bool LinuxFaviconPublicURL(const GURL& url) {
+  if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS() || !policy::PublicHost(url.host())) return false;
+  if (net::HostStringIsLocalhost(url.HostNoBracketsPiece())) return false;
+  net::IPAddress address;
+  return !address.AssignFromIPLiteral(url.HostNoBracketsPiece()) || address.IsPubliclyRoutable();
+}
+
 void DownloadLinuxFavicon(content::WebContents* contents, const GURL& url,
                           base::RepeatingCallback<bool()> current, LinuxFaviconReply reply) {
   if (!contents || !url.is_valid() || !policy::Allowed(url.spec(), policy::Source::kPage)) {
     return std::move(reply).Run(base::Value());
   }
   const uint64_t key = PageDownloads().Add(std::move(reply));
-  ExpireAfter(base::BindOnce([](uint64_t key) { PageDownloads().Finish(key, base::Value()); }, key));
+  ExpireAfter(key);
   contents->DownloadImage(
       url, true, gfx::Size(policy::kPixels, policy::kPixels), policy::kPixels, false,
       base::BindOnce([](uint64_t key, base::RepeatingCallback<bool()> current, int, int,
@@ -120,37 +224,19 @@ void DownloadLinuxFavicon(content::WebContents* contents, const GURL& url,
         std::vector<std::pair<int, int>> sizes;
         for (const auto& bitmap : bitmaps) sizes.emplace_back(bitmap.width(), bitmap.height());
         const int best = policy::Pick(sizes);
-        PageDownloads().Finish(key, best < 0 ? base::Value() : LinuxFaviconImage(bitmaps[best]));
+        FinishWithImage(key, best < 0 ? SkBitmap() : bitmaps[best]);
       }, key, std::move(current)));
 }
 
-LinuxFaviconFetcher::LinuxFaviconFetcher(Profile* profile)
-    : profile_(profile ? profile->GetWeakPtr() : nullptr) {
-  if (!profile || profile->IsOffTheRecord()) return;
-  fetcher_ = std::make_unique<image_fetcher::ImageFetcherImpl>(
-      std::make_unique<ImageDecoderImpl>(),
-      profile->GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess());
-}
-
-LinuxFaviconFetcher::~LinuxFaviconFetcher() = default;
-
-void LinuxFaviconFetcher::Fetch(const GURL& url, LinuxFaviconReply reply) {
-  if (!fetcher_ || !profile_ || !url.is_valid() ||
-      !policy::Allowed(url.spec(), policy::Source::kNetwork)) {
+void FetchLinuxFavicon(Profile* profile, const GURL& url, LinuxFaviconReply reply) {
+  if (!profile || profile->IsOffTheRecord() || !policy::Allowed(url.spec(), policy::Source::kNetwork) ||
+      !LinuxFaviconPublicURL(url)) {
     return std::move(reply).Run(base::Value());
   }
   const uint64_t key = PageDownloads().Add(std::move(reply));
-  ExpireAfter(base::BindOnce([](uint64_t key) { PageDownloads().Finish(key, base::Value()); }, key));
-  image_fetcher::ImageFetcherParams params(kTrafficAnnotation, "ArdiaLinuxFavicons");
-  params.set_max_download_size(policy::kMaxBytes);
-  params.set_frame_size(gfx::Size(policy::kPixels, policy::kPixels));
-  fetcher_->FetchImage(
-      url,
-      base::BindOnce([](uint64_t key, const gfx::Image& image,
-                        const image_fetcher::RequestMetadata&) {
-        PageDownloads().Finish(key, image.IsEmpty() ? base::Value() : LinuxFaviconImage(image.AsBitmap()));
-      }, key),
-      std::move(params));
+  ExpireAfter(key);
+  NetworkFavicon::Start(profile->GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess(),
+                        url, key);
 }
 
 }

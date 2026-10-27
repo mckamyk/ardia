@@ -61,8 +61,7 @@ class LinuxPageStatus : public content::WebContentsObserver,
   std::map<int32_t, BlockedPopup> blocked_;
   std::string status_;
   content::WeakDocumentPtr status_document_;
-  std::optional<std::pair<int, int>> hung_;
-  base::RepeatingClosure restarter_;
+  std::map<std::pair<int, int>, base::RepeatingClosure> hung_;
   base::WeakPtrFactory<LinuxPageStatus> weak_factory_{this};
 };
 

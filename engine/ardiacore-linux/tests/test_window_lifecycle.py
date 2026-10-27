@@ -449,6 +449,19 @@ struct Done {
 '''
 
 HOST_FAKE = r'''
+struct FullscreenController {
+  bool tab = false, caused_by_tab = false;
+  bool IsWindowFullscreenForTabOrPending() const { return tab; }
+  bool IsFullscreenCausedByTab() const { return caused_by_tab; }
+};
+struct ExclusiveAccessManager {
+  FullscreenController controller;
+  FullscreenController* fullscreen_controller() { return &controller; }
+  static ExclusiveAccessManager* From(BrowserWindowInterface* browser) {
+    static std::map<BrowserWindowInterface*, ExclusiveAccessManager> managers;
+    return browser ? &managers[browser] : nullptr;
+  }
+};
 struct ShellHostView {
   ShellHostView(int id, std::string window_id, BrowserWindowInterface* browser, std::string kind = "")
       : id_(id), window_id_(std::move(window_id)), kind_(std::move(kind)), browser_(browser) { Hosts()[id_] = this; }
@@ -494,6 +507,7 @@ struct ShellHostView {
   void OnWidgetShowStateChanged(views::Widget* widget);
   void ReportWindowGeometry();
   std::vector<base::DictValue> WindowState() const;
+  bool WindowFullScreen() const;
   void SeedWindowActivation();
   void RendererReady();
 };
@@ -660,9 +674,26 @@ static void Geometry() {
   assert(EventsOf(other, "frame", "main") == 1 && settings.events.empty());
   main.ReportWindowGeometry();
   assert(EventsOf(other, "frame", "main") == 1);
+  auto& tab = ExclusiveAccessManager::From(&main_browser)->controller;
+  tab.tab = tab.caused_by_tab = true;
+  main.widget.fullscreen = true;
+  main.OnWidgetShowStateChanged(&main.widget);
+  assert(EventsOf(main, "fullScreen", "main") == 0 && EventsOf(main, "frame", "main") == 1);
+  for (const auto& event : main.WindowState()) assert(*event.FindString("type") != "fullScreen");
+  main.widget.fullscreen = false;
+  tab.tab = tab.caused_by_tab = false;
+  main.OnWidgetShowStateChanged(&main.widget);
+  assert(EventsOf(main, "fullScreen", "main") == 0);
   main.widget.fullscreen = true;
   main.OnWidgetShowStateChanged(&main.widget);
   assert(*main.events.back().FindString("type") == "fullScreen" && main.events.back().FindBool("on") == std::optional<bool>(true));
+  tab.tab = true;
+  main.OnWidgetShowStateChanged(&main.widget);
+  assert(EventsOf(main, "fullScreen", "main") == 1);
+  bool listed = false;
+  for (const auto& event : main.WindowState()) listed = listed || *event.FindString("type") == "fullScreen";
+  assert(listed);
+  tab.tab = false;
   assert(EventsOf(main, "frame", "main") == 1);
   bool ok = false;
   base::Value reply = Call(main, "ArdiaShell.windowFrame", base::ListValue().Append("main"), &ok);
@@ -815,14 +846,19 @@ def host_harness():
         'void ShellHostView::OnWidgetShowStateChanged(',
         'void ShellHostView::ReportWindowGeometry(',
         'std::vector<base::DictValue> ShellHostView::WindowState(',
+        'bool ShellHostView::WindowFullScreen(',
         'void ShellHostView::SeedWindowActivation(',
         'void ShellHostView::RendererReady(',
         'void TabBinding::FocusFromHost(',
         'void TabBinding::OnWebContentsFocused('])
+    status = (LINUX / 'ac_linux_page_status.h').read_text()
+    fullscreen = 'namespace ardiacore {\n' + extract(status, 'inline bool LinuxWindowFullScreen(') + '\n}\n'
+    status = (LINUX / 'ac_linux_page_status.h').read_text()
+    fullscreen = 'namespace ardiacore {\n' + extract(status, 'inline bool LinuxWindowFullScreen(') + '\n}\n'
     hosts = 'struct ShellHostView;\nstd::map<int, ShellHostView*>& Hosts() { static std::map<int, ShellHostView*> hosts; return hosts; }\n'
     invoke = ('void ShellHostView::WindowInvoke(const std::string& method, const base::ListValue& values, Done done) {\n'
               + window_branch + '\n' + open_branch + '\n  std::move(done).Run(false, base::Value("unsupported"));\n}\n')
-    return PRELUDE + hosts + free + pointer + HOST_FAKE + broadcast + '\n' + profile_openings() + invoke + members + SCENARIOS
+    return PRELUDE + hosts + free + pointer + fullscreen + HOST_FAKE + broadcast + '\n' + profile_openings() + invoke + members + SCENARIOS
 
 
 class WindowLifecycleHostTests(unittest.TestCase):
