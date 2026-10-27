@@ -1,6 +1,6 @@
 # Lane J handoff: passwords and autofill management (#17 F07)
 
-Branch `t3/linux-passwords-autofill`, based on `linux` at `2376f370`. This lane is the source implementation for #17, tracked by #96. Runtime acceptance stays with #17 and the #81 suite.
+Branch `t3/linux-passwords-autofill`, rebased onto `linux` at `72a49259`, which includes #62 (profile registry) and #68. This lane is the source implementation for #17, tracked by #96. Runtime acceptance stays with #17 and the #81 suite.
 
 The path every secret takes, for the reviewer, is in [f07-security-notes.md](f07-security-notes.md).
 
@@ -25,13 +25,13 @@ The path every secret takes, for the reviewer, is in [f07-security-notes.md](f07
   - export cleanup.
 - **Chromium binding** (`ac_linux_credential_service.{h,cc}`)
   - **Arguments.** It converts WebUI values to wiping `Arg`s.
-  - **Profile.** It resolves the profile through `CredentialProfile()`.
+  - **Profile.** It resolves the requested engine profile through `ResolveCredentialProfile()`, on #62's registry.
   - **Store probe.** It checks the password store's `GetError()`, the `PersonalDataManager` and the OSCrypt encryptor (10 s deadline).
   - **Calls.** It runs preference reads and writes and calls `ac_engine_call`. It extracts only the secret field from secret replies and `Cleanse`s the parse.
   - **Export.** It runs the reauthentication probe, shows the save dialog only when authentication can happen, and cleans up a failed export.
 - **Host registration** (`ac_linux_host.cc`, four narrow hunks).
-  - Generic `passwords.*`/`autofill.*` names go to `LinuxCredentialsCall` before the route table; private windows get `ERR_PROFILE_PRIVATE`.
-  - Typed `ArdiaPasswords.*`/`ArdiaAutofill.*` methods go to `LinuxCredentialsInvoke`.
+  - Generic `passwords.*`/`autofill.*` names go to `LinuxCredentialsCall` before the route table, with the requested engine profile and whether the calling window's page profile is off the record.
+  - Typed `ArdiaPasswords.*`/`ArdiaAutofill.*` methods go to `LinuxCredentialsInvoke` with the same private-window flag.
   - The nine typed methods are advertised in bootstrap `capabilities`.
 - **Bootstrap.** `bootstrap.js` gives interactive credential invokes longer deadlines (180 s; export 900 s). Before, a polkit prompt or the save dialog was cut off at the 30 s request timeout.
 - **JS adapter** (`apps/linux/src/hostCredentials.ts`, one registration hunk in `hostModules.ts`)
@@ -70,7 +70,7 @@ The path every secret takes, for the reviewer, is in [f07-security-notes.md](f07
 - `storeFailed`;
 - `encryptionUnavailable`.
 
-The profile must be `""` or `"default"`.
+The first argument is the engine profile ID (#62's contract): `""`/`default`, an isolated ID, or a private name, which is refused.
 
 ### Generic domain calls (`engine.call`)
 
@@ -99,11 +99,16 @@ The profile must be `""` or `"default"`.
 
 ### Profile resolution
 
-All credential work goes through `CredentialProfile()` in `ac_linux_credential_service.cc`:
+All credential work goes through one function, `ResolveCredentialProfile()` in `ac_linux_credential_service.cc`. It was re-pointed at #62's registry when this branch was rebased.
 
-- today it accepts the window's regular (default) profile and refuses off-the-record windows with `ERR_PROFILE_PRIVATE`;
-- when #62's profile registry lands, re-point that one function;
-- the generic-route private check in `ac_linux_host.cc` must move with it.
+| Request | Result |
+| --- | --- |
+| The calling window's page profile is off the record (a private window's renderer) | `ERR_PROFILE_PRIVATE`, whatever profile it names |
+| A private name (`incognito:…`) | `ERR_PROFILE_PRIVATE` |
+| An unparseable name | `ERR_PROFILE_INVALID` |
+| `""`/`default` or an isolated ID | `ardiacore::ResolveLinuxProfile`; its errors (`ERR_PROFILE_DELETED`, `ERR_PROFILE_UNAVAILABLE`, …) pass through, and a resolved off-the-record profile is refused |
+
+Each isolated profile keeps its own Chromium password and autofill stores. As on macOS, Settings may manage any regular profile; there is no window restriction.
 
 ## Tests run
 
@@ -138,7 +143,7 @@ All on this machine (Arch, clang 22, Node 26). The native ones compile real sour
 
   The old `test_real_linux_reauth_never_grants` is replaced by this file. `test_linux_port.py` was already failing on `linux` before this lane, on a stale check that forbids `ardia/core/` includes and `//chrome/browser/device_reauth` outside `is_mac` (`ac_downloads.cc` hits it); it still has that one failure.
 - **`pnpm --filter @ardia/linux typecheck`:** clean.
-- **`pnpm --filter @ardia/linux test:host`:** 241/241, including the new `hostCredentials.test.mjs` (9 tests). Those tests run the real `bootstrap.js` in a VM and drive the shared `packages/ardiacore` `passwords.ts`/`autofill.ts` end to end. They cover:
+- **`pnpm --filter @ardia/linux test:host`:** 299/299 after the rebase, including the new `hostCredentials.test.mjs` (9 tests). Those tests run the real `bootstrap.js` in a VM and drive the shared `packages/ardiacore` `passwords.ts`/`autofill.ts` end to end. They cover:
   - generic versus typed wire traffic, with no secret in any `engine.call` payload;
   - local refusals that send nothing;
   - denied, cancelled and expired outcomes that never reveal, change or export;
@@ -147,7 +152,7 @@ All on this machine (Arch, clang 22, Node 26). The native ones compile real sour
   - console capture with no secret.
 - **`pnpm --filter @ardia/linux build`:** OK. The bundle contains the pane adapters.
 - **`pnpm --filter @ardia/linux test:graph`:** 1/1.
-- **`pnpm --filter @ardia/linux acceptance:self-test`:** 46/46, with the catalogue now including #17.
+- **`pnpm --filter @ardia/linux acceptance:self-test`:** 47/47 after the rebase, with the catalogue now including #17.
 - **`engine/patches/build/tests/test_platform_tooling.py`:** 17/17, including the policy in the package.
 - **Syntax check against Chromium 156.** `clang++ -fsyntax-only -Werror` ran with the real 156 headers and the `ardia/linux` and `chrome/browser/ardia` target flags read from the existing out-dir `.ninja` files (nothing built or written there). It passes for:
   - `ac_linux_credentials.cc`;
@@ -167,7 +172,7 @@ I couldn't build or run Chromium 156 here, so none of this has run as a browser.
   - the five-minute window;
   - the export dialog and the CSV mode `0600`;
   - a locked Secret Service;
-  - private windows after #62.
+  - a private window's own renderer (private names and isolated-profile separation are automated).
 - **First real build.** Confirm that the new GN deps resolve and that `SelectFileDialog` uses the portal or GTK under Ardia's host. Confirm too that polkit accepts the `system-bus-name` subject from the shared system bus.
 
 ## Follow-ups opened

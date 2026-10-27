@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Group, Row } from "../../browser/src/components/settings/Form";
+import { Group, Row } from "./settingsForm";
 import { ardiaHost } from "./host";
 import { autofillStatus, credentialNotice, passwordStatus } from "./hostCredentials";
 

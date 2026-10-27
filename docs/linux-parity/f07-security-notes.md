@@ -125,11 +125,11 @@ Without a grant the reply is `{"password": null}`, so the pane never shows a sta
 
   The engine reply is the same on macOS. Wiping it through `c_str()` would be undefined behaviour, so it is left to follow-up #103 (a cleansing secret reply in the shared engine).
 
-## Private windows
+## Private windows and profiles
 
-- **Default profile only.** Credential calls resolve the profile through one function, `CredentialProfile()` in `ac_linux_credential_service.cc`. Today it accepts only the window's regular profile.
-- **Private refusal.** An off-the-record window gets an explicit `ERR_PROFILE_PRIVATE` on both the typed and the generic route.
-- **#62.** When the profile registry lands, `CredentialProfile()` is the single place to re-point.
+- **One resolver.** Credential calls resolve their profile through one function, `ResolveCredentialProfile()` in `ac_linux_credential_service.cc`, on #62's profile registry.
+- **Private refusal.** A renderer whose window's page profile is off the record gets `ERR_PROFILE_PRIVATE` for every credential call, whatever profile it names. A private profile name (`incognito:…`) gets `ERR_PROFILE_PRIVATE` from any renderer. A name that resolves to an off-the-record profile is refused too. An OTR profile shares its parent's path, so letting it through would expose the regular vault.
+- **Isolated profiles.** These resolve to their own `Profile <id>` directory, with their own `Login Data`, `Web Data` and preferences. The F07 scenario checks that a credential saved in one profile doesn't appear in the other.
 
 ## Not covered here
 

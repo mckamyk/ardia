@@ -32,7 +32,7 @@ export default {
     { name: "System authentication gates reveal, edit, export and card numbers", steps: ["Install share/polkit-1/actions/dev.ardia.linux.policy into /usr/share/polkit-1/actions and run a polkit agent (hyprpolkitagent, polkit-gnome or the desktop's own).", "Settings › Passwords › Unlock: the agent asks for your password; entering it lists saved passwords.", "Open a saved password within five minutes: it shows without a second prompt; after five minutes it prompts again.", "Export CSV…: the save dialog appears, then the agent always prompts; the CSV is written with mode 0600.", "Settings › Autofill › a card › Show number: the agent always prompts."], reason: "needs a desktop session, the installed polkit policy and a person at the agent prompt" },
     { name: "Denied, dismissed and timed-out prompts never reveal", steps: ["Deny the agent prompt (wrong password three times), dismiss it, and leave it open for two minutes.", "Each time the password stays hidden, Edit does not save, Export reports nothing written and no file appears, and the card number stays masked."], reason: "needs a person at the agent prompt" },
     { name: "A locked keyring is reported as unavailable", steps: ["Start Ardia with --password-store=gnome-libsecret and a locked or absent Secret Service.", "Settings › Passwords shows 'Passwords are unavailable' with the keyring reason instead of an empty vault, and Unlock does not show 'No saved passwords'."], reason: "needs a real Secret Service session" },
-    { name: "Private windows refuse credential management", steps: ["Once private windows land (#62), open Settings from a private window: Passwords and Autofill report ERR_PROFILE_PRIVATE instead of showing the regular profile's data."], reason: "private windows are not merged yet" },
+    { name: "Private windows refuse credential management", steps: ["Open a private window (Ctrl+Shift+N) and, from its sidebar, try Passwords and Autofill (for example through the command palette or a settings link).", "The private window's renderer gets ERR_PROFILE_PRIVATE for every passwords.* and autofill.* call and never shows the regular profile's data."], reason: "driving a private window's own renderer through Settings needs the visible UI" },
   ],
   async run(t) {
     const run = nonce("f07");
@@ -75,6 +75,25 @@ export default {
       const never = await expectOk(shell.call("passwords.neverSaveOrigins"), "passwords.neverSaveOrigins");
       if (!Array.isArray(never.origins)) throw new Error(JSON.stringify(never));
       return { remaining: value.passwords.length };
+    });
+
+    await t.check("private profile names are refused and isolated profiles keep their own vault", async () => {
+      const privateName = "incognito:f07@default";
+      const refused = {
+        list: await expectCode(shell.call("passwords.list", {}, privateName), "ERR_PROFILE_PRIVATE", "private list"),
+        addresses: await expectCode(shell.call("autofill.addresses", {}, privateName), "ERR_PROFILE_PRIVATE", "private addresses"),
+        reveal: await expectCode(shell.invoke("ArdiaPasswords.reveal", { args: [privateName, ORIGIN, username] }), "ERR_PROFILE_PRIVATE", "private reveal"),
+        save: await expectCode(shell.invoke("ArdiaPasswords.save", { args: [privateName, ORIGIN, username, password] }), "ERR_PROFILE_PRIVATE", "private save"),
+      };
+      await expectOk(shell.invoke("ArdiaPasswords.save", { args: ["work", ORIGIN, `${username}-work`, password] }), "save in an isolated profile");
+      const work = await until(async () => {
+        const reply = await shell.call("passwords.list", {}, "work");
+        return reply.ok && reply.value.passwords.some((p) => p.username === `${username}-work`) ? reply.value : false;
+      }, { timeout: 15000, label: "isolated profile credential listed" });
+      const regular = await expectOk(shell.call("passwords.list"), "default list");
+      if (regular.passwords.some((p) => p.username === `${username}-work`)) throw new Error("the isolated profile's credential leaked into the default profile");
+      if (work.passwords.some((p) => p.username === username)) throw new Error("the default profile's credential leaked into the isolated profile");
+      return { refused, work: work.passwords.length, regular: regular.passwords.length };
     });
 
     await t.check("secret verbs are refused on the generic route", async () => {
