@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 
 #include "base/functional/callback.h"
@@ -107,7 +108,9 @@ class LinuxPageLease : public content::WebContentsObserver {
   uint64_t document_epoch_ = 1;
   uint64_t request_generation_ = 1;
   uint64_t sequence_ = 0;
-  std::optional<int64_t> provisional_navigation_;
+  bool Provisional() const;
+  std::set<int64_t> provisional_navigations_;
+  bool pending_at_mount_ = false;
   Sink sink_;
   SnapshotRequest request_snapshot_;
   base::WeakPtrFactory<LinuxPageLease> weak_factory_{this};

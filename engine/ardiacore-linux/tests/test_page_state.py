@@ -82,6 +82,12 @@ class PageStateTests(unittest.TestCase):
     def test_rebind_mints_new_binding_and_reentrant_teardown(self):
         self.run_case('rebinding')
 
+    def test_overlapping_primary_navigations_keep_provisional_until_all_finish(self):
+        self.run_case('overlapping')
+
+    def test_security_describes_the_committed_entry_not_a_pending_one(self):
+        self.run_case('committed-security')
+
 
 if __name__ == '__main__':
     unittest.main()

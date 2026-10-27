@@ -76,7 +76,7 @@ LinuxSecurity::~LinuxSecurity() { Reset(); }
 
 base::DictValue LinuxSecurity::Snapshot() const {
   auto* contents = lease_ ? lease_->contents() : nullptr;
-  auto* entry = contents ? contents->GetController().GetVisibleEntry() : nullptr;
+  auto* entry = contents ? contents->GetController().GetLastCommittedEntry() : nullptr;
   GURL url = entry ? entry->GetURL() : GURL();
   auto result = base::DictValue().Set("level", "none").Set("url", url.spec())
       .Set("origin", base::Value());
@@ -85,7 +85,7 @@ base::DictValue LinuxSecurity::Snapshot() const {
   if (url.SchemeIs("http")) { result.Set("level", "insecure"); return result; }
   if (url.SchemeIs("file") || url.SchemeIs("chrome") || url.SchemeIs("chrome-untrusted") ||
       url.SchemeIs("devtools")) { result.Set("level", "local"); return result; }
-  if (!url.SchemeIs("https")) return result;
+  if (!url.SchemeIs("https") || contents->GetController().GetVisibleEntry() != entry) return result;
   auto state = security_state::GetVisibleSecurityState(contents);
   if (!state || !state->connection_info_initialized) return result;
   constexpr auto mask = net::CERT_STATUS_ALL_ERRORS &

@@ -90,6 +90,35 @@ void Provisional() {
   content::NavigationHandle commit;h.Start(commit);h.page.frame.NewDocument();commit.committed=true;h.Boundary();h.Finish(commit);assert(h.lease->Capture()->document_epoch==2);
 }
 
+void Overlapping() {
+  Harness h;content::NavigationHandle first,second;second.id=2;
+  h.Start(first);assert(!h.lease->Capture());
+  h.Start(second);h.Finish(second);assert(!h.lease->Capture() && h.snapshots==0);
+  h.Finish(first);assert(h.lease->Capture() && h.snapshots==1);
+  content::NavigationHandle third,fourth;third.id=3;fourth.id=4;
+  h.Start(third);h.Start(fourth);h.Finish(third);h.Finish(third);assert(!h.lease->Capture() && h.snapshots==1);
+  h.Finish(fourth);assert(h.lease->Capture() && h.snapshots==2);
+  content::NavigationHandle commit,stray;commit.id=5;stray.id=6;
+  h.Start(commit);h.Start(stray);h.page.frame.NewDocument();commit.committed=true;h.Boundary();h.Finish(commit);
+  assert(h.lease->Capture());h.Finish(stray);assert(h.lease->Capture() && h.snapshots==3);
+  Harness pending;pending.page.controller.pending=&pending.page.entry;
+  LinuxPageLease mounted(pending.authority->GetWeakPtr(),[](std::string,std::string,base::DictValue) {},LinuxPageLease::SnapshotRequest());
+  assert(!mounted.Capture());content::NavigationHandle other;other.id=9;
+  pending.Start(other);pending.Finish(other);assert(!mounted.Capture());
+  content::NavigationHandle original;original.id=10;pending.Finish(original);assert(mounted.Capture());
+}
+
+void CommittedSecurity() {
+  Harness h;LinuxSecurity security(h.lease->GetWeakPtr());
+  h.page.security.connection_info_initialized=true;h.page.security.certificate=std::make_shared<net::X509Certificate>();
+  content::NavigationEntry pending;pending.url=GURL("https://pending.test/");h.page.controller.visible=&pending;
+  auto info=security.Snapshot();assert(Text(info,"url")=="https://example.test/" && Text(info,"level")=="none" && !info.Find("certificate"));
+  pending.url=GURL("http://pending.test/");assert(Text(security.Snapshot(),"url")=="https://example.test/");
+  h.page.controller.visible=nullptr;assert(Text(security.Snapshot(),"level")=="secure" && Text(security.Snapshot(),"url")=="https://example.test/");
+  h.page.entry.url=GURL("http://plain.test/");h.page.controller.visible=&pending;pending.url=GURL("https://pending.test/");
+  assert(Text(security.Snapshot(),"level")=="insecure" && Text(security.Snapshot(),"url")=="http://plain.test/");
+}
+
 void Transport() {
   Harness h;auto created=h.lease->CreationState(*h.lease->Capture(),base::ListValue());assert(created);
   auto* snapshot=created->FindDict("snapshot");assert(Number(*snapshot,"watermark")==1);
@@ -326,5 +355,5 @@ void Rebinding() {
 
 int main(int argc,char** argv) {
   assert(argc==2);std::string mode=argv[1];
-  if(mode=="authority") Authority();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
+  if(mode=="authority") Authority();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
 }

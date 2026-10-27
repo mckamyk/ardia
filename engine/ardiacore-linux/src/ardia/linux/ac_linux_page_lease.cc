@@ -58,6 +58,10 @@ content::WebContents* LinuxPageMountAuthority::contents() const {
   return Valid() ? contents_.get() : nullptr;
 }
 
+bool LinuxPageLease::Provisional() const {
+  return pending_at_mount_ || !provisional_navigations_.empty();
+}
+
 bool LinuxPageRequest::Valid() const { return lease && lease->Valid(*this); }
 
 LinuxPageLease::LinuxPageLease(base::WeakPtr<LinuxPageMountAuthority> authority,
@@ -68,7 +72,7 @@ LinuxPageLease::LinuxPageLease(base::WeakPtr<LinuxPageMountAuthority> authority,
   if (web_contents() && web_contents()->GetPrimaryMainFrame())
     document_ = web_contents()->GetPrimaryMainFrame()->GetWeakDocumentPtr();
   if (web_contents() && web_contents()->GetController().GetPendingEntry())
-    provisional_navigation_ = -1;
+    pending_at_mount_ = true;
 }
 
 LinuxPageLease::~LinuxPageLease() { Reset(); }
@@ -86,7 +90,7 @@ bool LinuxPageLease::Current() const {
 }
 
 std::optional<LinuxPageRequest> LinuxPageLease::Capture() {
-  if (provisional_navigation_) return std::nullopt;
+  if (Provisional()) return std::nullopt;
   return CapturePresentation();
 }
 
@@ -96,7 +100,7 @@ std::optional<LinuxPageRequest> LinuxPageLease::CapturePresentation() {
 }
 
 bool LinuxPageLease::Valid(const LinuxPageRequest& request) const {
-  return !provisional_navigation_ && ValidPresentation(request);
+  return !Provisional() && ValidPresentation(request);
 }
 
 bool LinuxPageLease::ValidPresentation(const LinuxPageRequest& request) const {
@@ -108,7 +112,7 @@ bool LinuxPageLease::ValidPresentation(const LinuxPageRequest& request) const {
 }
 
 content::WebContents* LinuxPageLease::contents() const {
-  return Current() && !provisional_navigation_ ? web_contents() : nullptr;
+  return Current() && !Provisional() ? web_contents() : nullptr;
 }
 
 content::WebContents* LinuxPageLease::observed_contents() const {
@@ -229,7 +233,8 @@ void LinuxPageLease::PrimaryPageChanged(content::Page&) {
   if (!authority_ || !authority_->Valid() || !web_contents()) { Reset(); return; }
   if (!Advance(document_epoch_) || !Advance(request_generation_)) return;
   document_ = web_contents()->GetPrimaryMainFrame()->GetWeakDocumentPtr();
-  provisional_navigation_.reset();
+  provisional_navigations_.clear();
+  pending_at_mount_ = false;
   auto weak = GetWeakPtr();
   Control("document");
   if (!weak || !Current()) return;
@@ -241,15 +246,18 @@ void LinuxPageLease::PrimaryPageChanged(content::Page&) {
 void LinuxPageLease::DidStartNavigation(content::NavigationHandle* navigation) {
   if (!navigation->IsInPrimaryMainFrame() || navigation->IsSameDocument()) return;
   if (!Current() || !Advance(request_generation_)) return;
-  provisional_navigation_ = navigation->GetNavigationId();
+  provisional_navigations_.insert(navigation->GetNavigationId());
   Control("provisional");
 }
 
 void LinuxPageLease::DidFinishNavigation(content::NavigationHandle* navigation) {
-  if (!navigation->IsInPrimaryMainFrame() || !provisional_navigation_ ||
-      (*provisional_navigation_ != -1 && *provisional_navigation_ != navigation->GetNavigationId()) ||
+  if (!navigation->IsInPrimaryMainFrame() || !Provisional() ||
       (navigation->HasCommitted() && !navigation->IsSameDocument())) return;
-  provisional_navigation_.reset();
+  if (!provisional_navigations_.erase(navigation->GetNavigationId())) {
+    if (!pending_at_mount_) return;
+    pending_at_mount_ = false;
+  }
+  if (Provisional()) return;
   if (!Advance(request_generation_) || !Current()) return;
   auto callback = request_snapshot_;
   auto request = Capture();

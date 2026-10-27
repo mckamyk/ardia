@@ -205,7 +205,9 @@ struct NavigationController {
   NavigationEntry* pending=nullptr;
   NavigationEntry* GetPendingEntry() { return pending; }
   int current=2, size=4, last=0, checks=0, goes=0;
-  NavigationEntry* GetVisibleEntry() { return entry; }
+  NavigationEntry* visible=nullptr;
+  NavigationEntry* GetVisibleEntry() { return visible ? visible : entry; }
+  NavigationEntry* GetLastCommittedEntry() { return entry; }
   int GetCurrentEntryIndex() { return current; }
   int GetEntryCount() { return size; }
   bool CanGoToOffset(int n) { ++checks; return current+n>=0 && current+n<size; }
