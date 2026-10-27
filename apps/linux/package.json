@@ -12,6 +12,7 @@
     "test:symbols": "node --experimental-strip-types --test src/shims/web/symbols/render.test.mjs",
     "test:graph": "node --test scripts/module-graph.test.mjs",
     "fixture:csp": "node scripts/host-csp-fixture.mjs",
+    "fixture:csp:check": "node scripts/host-csp-check.mjs",
     "test:keyboard-native": "node scripts/keyboard-native-test.mjs",
     "acceptance": "node scripts/acceptance/run.mjs",
     "acceptance:self-test": "node --test scripts/acceptance/tests/*.test.mjs"
