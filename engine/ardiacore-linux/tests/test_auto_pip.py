@@ -113,6 +113,7 @@ struct TabBinding {
   bool presentation_attached = false;
   bool presentation_departed = false;
   int cancelled_auto_pip_until = 0;
+  int replaced_id = 0;
   void RememberPendingAutoPictureInPicture() {}
   content::WebContents* contents() { return &value; }
 };
