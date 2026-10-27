@@ -5,6 +5,7 @@ export const CLAIM_RETRY_MS = 5_000;
 export const CALL_TIMEOUT_MS = 30_000;
 export const INTERACTIVE_CALL_TIMEOUT_MS = 900_000;
 export const AUTHORITY_WAIT_MS = 10_000;
+export const BECOME_RETRY_MAX_MS = 60_000;
 export const NO_AUTHORITY_MESSAGE = "Sync runs in an Ardia browser window, and none answered. Open a browser window and try again.";
 
 export const REMOTE_METHODS = [
@@ -181,14 +182,19 @@ export function startSyncAuthority<S>(options: AuthorityOptions<S>) {
   }
 
   async function lead() {
-    if (!(await claimUntilGranted()) || stopped) return;
-    let became: Awaited<ReturnType<typeof options.become>>;
-    try {
-      became = await options.become();
-    } catch (error) {
-      void options.release().catch(report);
-      throw error;
+    let became: Awaited<ReturnType<typeof options.become>> | null = null;
+    for (let attempt = 0; !became; attempt++) {
+      if (!(await claimUntilGranted()) || stopped) return;
+      try {
+        became = await options.become();
+      } catch (error) {
+        report(error);
+        await options.release().catch(report);
+        if (stopped) return;
+        await wait(Math.min(CLAIM_RETRY_MS * 2 ** attempt, BECOME_RETRY_MAX_MS));
+      }
     }
+    if (stopped) return;
     remote = became.remote;
     setRole("authority");
     const publish = (state: S) => {

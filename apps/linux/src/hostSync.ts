@@ -111,6 +111,35 @@ export function presentSyncState<S extends { status: string; error: string | nul
   return message ? { ...state, error: message } : state;
 }
 
+export const SYNC_DOCUMENTS = ["sync.json", "sync-state.nns", "sync-journal.nns"] as const;
+export const MAX_JOURNAL_PARTS = 1000;
+export const journalPartName = (n: number) => `sync-journal-${n}.nns`;
+
+export async function refreshSyncDocuments(io: {
+  refresh(name: string): Promise<boolean>;
+  remove(name: string): Promise<void>;
+  maxParts?: number;
+  batch?: number;
+}): Promise<{ parts: number; removed: string[] }> {
+  const maxParts = io.maxParts ?? MAX_JOURNAL_PARTS;
+  const batch = io.batch ?? 50;
+  for (const name of SYNC_DOCUMENTS) await io.refresh(name);
+  const present: boolean[] = [];
+  for (let start = 1; start <= maxParts; start += batch) {
+    const numbers = Array.from({ length: Math.min(batch, maxParts - start + 1) }, (_, i) => start + i);
+    present.push(...(await Promise.all(numbers.map((n) => io.refresh(journalPartName(n))))));
+  }
+  const gap = present.indexOf(false);
+  const parts = gap === -1 ? present.length : gap;
+  const removed: string[] = [];
+  for (let n = parts + 2; n <= present.length; n++) {
+    if (!present[n - 1]) continue;
+    await io.remove(journalPartName(n));
+    removed.push(journalPartName(n));
+  }
+  return { parts, removed };
+}
+
 export const syncKeyStoreStatus = (host: ArdiaHost) => invokeHost<SyncKeyStoreStatus>("ArdiaSync.status", { args: [] }, host);
 export const claimSyncAuthority = (host: ArdiaHost) => invokeHost<AuthorityClaim>("ArdiaSync.claimAuthority", { args: [] }, host);
 export const releaseSyncAuthority = (host: ArdiaHost) => invokeHost<void>("ArdiaSync.releaseAuthority", { args: [] }, host);

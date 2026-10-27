@@ -54,6 +54,7 @@ export const fetchBangList = async (_etag: string | null): Promise<{ status: num
 export const saveDocument = async (name: string, contents: string) => hostDocuments ? hostDocuments.write(name, contents) : void documents.set(name, contents);
 export const removeDocument = (name: string) => hostDocuments ? void hostDocuments.remove(name).catch(reportHostError) : void documents.delete(name);
 export const refreshDocument = async (name: string) => hostDocuments ? hostDocuments.refresh(name) : documents.has(name);
+export const deleteDocument = async (name: string) => hostDocuments ? hostDocuments.remove(name) : void documents.delete(name);
 
 export function copyText(text: string) {
   if (ardiaHost) return void hostModuleMethod("ArdiaShell", "copyText")(text).catch(reportHostError);

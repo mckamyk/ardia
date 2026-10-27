@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import * as engine from "../../browser/src/state/sync/engine";
-import { DOC, JOURNAL, STATE, type DataType, type SyncUi } from "../../browser/src/state/sync/syncDoc";
+import type { DataType, SyncUi } from "../../browser/src/state/sync/syncDoc";
 import type { FolderInfo, PhraseResult } from "../../browser/src/platform/sync";
 import { SyncNative } from "../../browser/src/platform/sync";
 import { ardiaHost, type ArdiaHost } from "./host";
@@ -9,13 +9,14 @@ import {
   keyringMessage,
   loadSyncDeviceName,
   presentSyncState,
+  refreshSyncDocuments,
   releaseSyncAuthority,
   syncDeviceName,
   syncKeyStoreStatus,
   withChosenSyncFolder,
   type SyncKeyStoreStatus,
 } from "./hostSync.ts";
-import { refreshDocument } from "./shims/shellBase";
+import { deleteDocument, refreshDocument } from "./shims/shellBase";
 import {
   INTERACTIVE_CALL_TIMEOUT_MS,
   SYNC_CHANNEL,
@@ -26,20 +27,12 @@ import {
   type SyncRemote,
 } from "./syncAuthority.ts";
 
-const MAX_JOURNAL_PARTS = 1000;
 const KEYCHAIN_ERROR = "Couldn’t save the sync key in your Keychain.";
 
 export const useSync = create<SyncUi>()(() => ({ ...engine.useSync.getState(), status: SyncNative ? "starting" : "unavailable" }));
 
 let authority: SyncAuthority | null = null;
 let keyStore: SyncKeyStoreStatus | null = null;
-
-async function refreshSyncDocuments() {
-  for (const name of [DOC, STATE, JOURNAL]) await refreshDocument(name);
-  for (let n = 1; n <= MAX_JOURNAL_PARTS; n++) {
-    if (!(await refreshDocument(`sync-journal-${n}.nns`))) break;
-  }
-}
 
 function remoteFor(host: ArdiaHost): SyncRemote {
   return {
@@ -64,7 +57,7 @@ function remoteFor(host: ArdiaHost): SyncRemote {
 
 async function becomeAuthority(host: ArdiaHost) {
   try {
-    await refreshSyncDocuments();
+    await refreshSyncDocuments({ refresh: refreshDocument, remove: deleteDocument });
   } catch (error) {
     useSync.setState({ status: "stalled", error: "Ardia couldn’t read this device’s sync files, so sync is paused to keep them." });
     throw error;

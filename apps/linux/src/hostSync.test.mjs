@@ -9,6 +9,7 @@ import {
   loadSyncDeviceName,
   newSyncDeviceId,
   presentSyncState,
+  refreshSyncDocuments,
   syncDeviceName,
   syncModuleMethod,
   withChosenSyncFolder,
@@ -288,4 +289,64 @@ test("refreshing a stored document waits for queued writes and mirrors deletions
   assert.equal(await documents.refresh("live.json"), false);
   host.invoke = async () => 42;
   await assert.rejects(documents.refresh("sync.json"), { code: "ERR_BAD_REPLY" });
+});
+
+test("a candidate that can't start sync keeps the lock and retries with backoff", async () => {
+  const channelName = `sync-${Math.random()}`;
+  const lease = nativeLease(5000);
+  const locks = fakeLocks();
+  let attempts = 0;
+  const releases = [];
+  const mirror = store({ status: "starting", error: null });
+  const authority = startSyncAuthority({
+    id: "flaky",
+    candidate: true,
+    locks,
+    channel: new BroadcastChannel(channelName),
+    mirror,
+    timers: fast,
+    report: () => {},
+    claim: async () => lease.claim("flaky"),
+    release: async () => {
+      releases.push(attempts);
+      lease.release("flaky");
+    },
+    become: async () => {
+      attempts += 1;
+      if (attempts < 3) throw new Error("ERR_DOCUMENT_READ");
+      return { store: store({ status: "off", error: null, owner: "flaky" }), remote: Object.fromEntries(REMOTE_METHODS.map((m) => [m, async () => null])) };
+    },
+  });
+  const engines = [];
+  const other = renderer("other", { candidate: true, locks, lease, engines, channelName });
+  await tick(250);
+  assert.equal(attempts, 3);
+  assert.deepEqual(releases, [1, 2]);
+  assert.equal(authority.role(), "authority");
+  assert.deepEqual(engines, []);
+  authority.stop();
+  other.authority.stop();
+});
+
+test("refreshing sync documents drops journal parts stranded after a gap", async () => {
+  const disk = new Set(["sync.json", "sync-state.nns", "sync-journal-1.nns", "sync-journal-2.nns", "sync-journal-4.nns", "sync-journal-7.nns"]);
+  const refreshed = [];
+  const removed = [];
+  const result = await refreshSyncDocuments({
+    refresh: async (name) => {
+      refreshed.push(name);
+      return disk.has(name);
+    },
+    remove: async (name) => {
+      removed.push(name);
+      disk.delete(name);
+    },
+    maxParts: 12,
+    batch: 5,
+  });
+  assert.deepEqual(result, { parts: 2, removed: ["sync-journal-4.nns", "sync-journal-7.nns"] });
+  assert.deepEqual(removed, ["sync-journal-4.nns", "sync-journal-7.nns"]);
+  assert.ok(refreshed.includes("sync.json") && refreshed.includes("sync-state.nns") && refreshed.includes("sync-journal.nns"));
+  assert.equal(refreshed.filter((name) => /^sync-journal-\d+\.nns$/.test(name)).length, 12);
+  await assert.rejects(refreshSyncDocuments({ refresh: async () => { throw new Error("read failed"); }, remove: async () => {}, maxParts: 3 }), /read failed/);
 });

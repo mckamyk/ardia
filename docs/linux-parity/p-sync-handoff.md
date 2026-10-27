@@ -113,12 +113,12 @@ Every method is a host invoke, `ArdiaSync.<method>` with `{ args: [...] }`. A fa
 | Command | Result |
 | --- | --- |
 | `pnpm --filter @ardia/linux typecheck` | Passes. |
-| `pnpm --filter @ardia/linux test:host` | 371 of 371 pass, including 8 new in `src/hostSync.test.mjs`. |
+| `pnpm --filter @ardia/linux test:host` | 413 of 413 pass, including 10 in `src/hostSync.test.mjs`. |
 | `pnpm --filter @ardia/linux build` | Passes. The bundle routes the shared Sync pane through `syncEngine.ts`. |
-| `python3 -m unittest discover -s engine/ardiacore-linux/tests` | 417 of 417 pass, including 3 new in `test_sync.py`. |
+| `python3 -m unittest discover -s engine/ardiacore-linux/tests` | 458 of 458 pass, including 3 in `test_sync.py`. |
 | `pnpm --filter @ardia/linux test:graph` | 3 of 3 pass. |
 | `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs` | 8 of 8 pass. |
-| `node --test scripts/acceptance/tests/*.test.mjs` (`acceptance:self-test`) | 65 of 65 pass, including 2 new in `f13.test.mjs` and the updated scenario inventory. |
+| `node --test scripts/acceptance/tests/*.test.mjs` (`acceptance:self-test`) | 65 of 65 pass, including 2 in `f13.test.mjs`. The stock-Chromium F09 check is flaky under load and passes on re-runs. |
 
 What `test_sync.py` covers:
 
