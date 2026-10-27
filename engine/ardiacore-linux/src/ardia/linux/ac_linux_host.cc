@@ -4318,6 +4318,7 @@ void TabBinding::ReportPresentation(std::string name, base::DictValue data) {
 }
 
 void TabBinding::Rebind(content::WebContents* contents) {
+  if (auto* channel = contents_ ? ardiacore::LinuxPageChannel::FromWebContents(contents_) : nullptr) channel->Detach();
   RetirePage();
   ++contents_generation_;
   ResetPageCommands();

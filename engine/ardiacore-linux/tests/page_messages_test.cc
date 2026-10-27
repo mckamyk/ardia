@@ -63,6 +63,21 @@ void Normalization() {
   auto long_text = NormalizeLinuxPageMessage(LinuxPageMessageKind::kSelection, Dict(base::DictValue().Set("text", std::string(4001, 'a'))
       .Set("rect", base::DictValue().Set("x", 0).Set("y", 0).Set("width", 1).Set("height", 1))));
   Expect(long_text && long_text->data.is_none(), "oversized selection clears");
+  auto selection_of = [](std::string text) {
+    return NormalizeLinuxPageMessage(LinuxPageMessageKind::kSelection, Dict(base::DictValue().Set("text", std::move(text))
+        .Set("rect", base::DictValue().Set("x", 0).Set("y", 0).Set("width", 1).Set("height", 1))));
+  };
+  std::string cjk;
+  for (int i = 0; i < 2000; ++i) cjk += "\xe6\x96\x87";
+  Expect(!selection_of(cjk)->data.is_none(), "2000 CJK characters are 2000 UTF-16 units");
+  std::string cjk_limit;
+  for (int i = 0; i < 4000; ++i) cjk_limit += "\xe6\x96\x87";
+  Expect(!selection_of(cjk_limit)->data.is_none(), "4000 CJK characters fit");
+  Expect(selection_of(cjk_limit + "\xe6\x96\x87")->data.is_none(), "4001 CJK characters clear");
+  std::string emoji;
+  for (int i = 0; i < 2000; ++i) emoji += "\xf0\x9f\x98\x80";
+  Expect(!selection_of(emoji)->data.is_none(), "2000 astral characters are 4000 UTF-16 units");
+  Expect(selection_of(emoji + "a")->data.is_none(), "4001 UTF-16 units clear");
 
   auto theme = NormalizeLinuxPageMessage(LinuxPageMessageKind::kTheme, Dict(base::DictValue().Set("color", "#A1B2C3").Set("source", "header")));
   Expect(theme && *theme->data.GetDict().FindString("color") == "#a1b2c3", "theme lowercased");

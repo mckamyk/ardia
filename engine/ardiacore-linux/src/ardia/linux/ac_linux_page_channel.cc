@@ -91,6 +91,13 @@ const char* Disposition(LinuxLinkOutcome outcome) {
 
 }
 
+LinuxPageDocumentBudget::LinuxPageDocumentBudget(content::RenderFrameHost* frame)
+    : content::DocumentUserData<LinuxPageDocumentBudget>(frame) {}
+
+LinuxPageDocumentBudget::~LinuxPageDocumentBudget() = default;
+
+DOCUMENT_USER_DATA_KEY_IMPL(LinuxPageDocumentBudget);
+
 LinuxPageChannel::LinuxPageChannel(content::WebContents* contents)
     : content::WebContentsObserver(contents),
       content::WebContentsUserData<LinuxPageChannel>(*contents),
@@ -131,7 +138,6 @@ void LinuxPageChannel::Detach() {
 }
 
 void LinuxPageChannel::ForgetDocument() {
-  budget_.Reset();
   scroll_.reset();
   selection_ = base::Value();
   message_document_ = content::WeakDocumentPtr();
@@ -184,7 +190,8 @@ void LinuxPageChannel::Post(const std::string& kind, const std::string& json) {
   const LinuxPageSender sender{frame.IsInPrimaryMainFrame(), frame.GetPage().IsPrimary(),
                                frame.IsActive() && frame.IsRenderFrameLive() && Scriptable(&frame)};
   if (!LinuxPageSenderAccepted(*type, sender)) return;
-  if (!budget_.Admit(Now(), kind.size() + json.size())) return;
+  if (!LinuxPageDocumentBudget::GetOrCreateForCurrentDocument(&frame)->budget.Admit(Now(), kind.size() + json.size()))
+    return;
   std::optional<base::Value> value = json == "null"
       ? std::optional<base::Value>(base::Value())
       : base::JSONReader::Read(json, base::JSON_PARSE_RFC, kLinuxPageMessageDepthMax + 1);
@@ -273,6 +280,11 @@ void LinuxPageChannel::RenderFrameHostChanged(content::RenderFrameHost* old_host
 void LinuxPageChannel::PrimaryPageChanged(content::Page& page) {
   ForgetDocument();
   Watch(page.GetMainDocument().GetRenderWidgetHost());
+  if (!hooks_) return;
+  const auto weak = weak_factory_.GetWeakPtr();
+  page.GetMainDocument().ForEachRenderFrameHost([&](content::RenderFrameHost* frame) {
+    if (weak && hooks_ && frame->GetPage().IsPrimary()) Greet(*frame);
+  });
 }
 
 void LinuxPageChannel::WebContentsDestroyed() {

@@ -16,6 +16,7 @@
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_observer.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/browser/document_user_data.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/browser/weak_document_ptr.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -25,6 +26,17 @@ class AssociatedInterfaceRegistry;
 }
 
 namespace ardiacore {
+
+class LinuxPageDocumentBudget : public content::DocumentUserData<LinuxPageDocumentBudget> {
+ public:
+  ~LinuxPageDocumentBudget() override;
+  LinuxPageMessageBudget budget;
+
+ private:
+  explicit LinuxPageDocumentBudget(content::RenderFrameHost* frame);
+  friend class content::DocumentUserData<LinuxPageDocumentBudget>;
+  DOCUMENT_USER_DATA_KEY_DECL();
+};
 
 struct LinuxPageChannelHooks {
   base::RepeatingCallback<bool()> visible;
@@ -69,7 +81,6 @@ class LinuxPageChannel : public content::WebContentsObserver,
 
   content::RenderFrameHostReceiverSet<ardia::linux_page::mojom::PageHost> receivers_;
   std::optional<LinuxPageChannelHooks> hooks_;
-  LinuxPageMessageBudget budget_;
   const uintptr_t surface_;
   std::set<content::RenderWidgetHost*> widgets_;
   std::optional<std::string> scroll_;

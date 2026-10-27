@@ -16,6 +16,15 @@ bool OneOf(std::string_view value, std::initializer_list<std::string_view> allow
   return std::find(allowed.begin(), allowed.end(), value) != allowed.end();
 }
 
+size_t Utf16Length(std::string_view text) {
+  size_t units = 0;
+  for (unsigned char c : text) {
+    if ((c & 0xc0) == 0x80) continue;
+    units += c >= 0xf0 ? 2 : 1;
+  }
+  return units;
+}
+
 const std::string* BoundedString(const base::DictValue& dict, std::string_view key, size_t limit) {
   const std::string* value = dict.FindString(key);
   return value && value->size() <= limit && value->find('\0') == std::string::npos ? value : nullptr;
@@ -66,7 +75,8 @@ std::optional<LinuxPageMessage> Peek(const base::DictValue& dict) {
 
 base::Value Selection(const base::Value& value) {
   const base::DictValue* dict = value.GetIfDict();
-  const std::string* text = dict ? BoundedString(*dict, "text", kLinuxSelectionTextMax) : nullptr;
+  const std::string* text = dict ? BoundedString(*dict, "text", kLinuxSelectionTextMax * 3) : nullptr;
+  if (text && Utf16Length(*text) > kLinuxSelectionTextMax) text = nullptr;
   const base::DictValue* rect = dict ? dict->FindDict("rect") : nullptr;
   if (!text || text->empty() || !rect) return base::Value();
   auto x = Finite(*rect, "x");
