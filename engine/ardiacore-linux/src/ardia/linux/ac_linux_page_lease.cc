@@ -42,7 +42,11 @@ bool LinuxPageMountAuthority::Valid() const {
       contents_->GetBrowserContext() != profile_.get() ||
       shell_->GetBrowserContext() != profile_.get()) return false;
   auto* strip = browser_->GetTabStripModel();
-  return strip && strip->GetIndexOfWebContents(contents_.get()) >= 0;
+  if (!strip) return false;
+  if (strip->ContainsIndex(strip_index_) && strip->GetWebContentsAt(strip_index_) == contents_.get())
+    return true;
+  strip_index_ = strip->GetIndexOfWebContents(contents_.get());
+  return strip_index_ >= 0;
 }
 
 void LinuxPageMountAuthority::Invalidate() {

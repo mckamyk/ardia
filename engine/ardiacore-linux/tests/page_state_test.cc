@@ -323,6 +323,19 @@ void Favicons() {
   Mount empty;assert(empty.state->CreationState()->FindDict("snapshot")->Find("events")->GetList().size()==3);
 }
 
+void StripLookups() {
+  Mount m;m.state->CreationState();
+  const int before=m.browser.strip.lookups;
+  for(int i=0;i<20;++i) assert(m.state->EmitPresentation("progress",base::Value(base::DictValue().Set("progress",0.5))));
+  assert(m.state->EmitNavigation() && m.state->EmitDocument("favicon",base::Value()));
+  assert(m.browser.strip.lookups==before);
+  content::WebContents other(&m.profile);m.browser.strip.tabs.insert(m.browser.strip.tabs.begin(),&other);
+  assert(m.state->EmitNavigation() && m.browser.strip.lookups==before+1);
+  assert(m.state->EmitNavigation() && m.browser.strip.lookups==before+1);
+  m.browser.strip.tabs[1]=&other;assert(!m.state->EmitNavigation());
+  m.browser.strip.tabs={&m.page};assert(m.state->EmitNavigation());
+}
+
 void Commands() {
   Mount m;m.page.controller.current=3;m.page.controller.size=4;
   assert(m.state->GoToOffset(Arg(-2)) && m.page.controller.current==1);
@@ -371,5 +384,5 @@ void Rebinding() {
 
 int main(int argc,char** argv) {
   assert(argc==2);std::string mode=argv[1];
-  if(mode=="authority") Authority();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
+  if(mode=="authority") Authority();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
 }

@@ -51,6 +51,7 @@ class LinuxPageMountAuthority {
   content::WeakDocumentPtr shell_document_;
   base::WeakPtr<views::Widget> window_;
   const ui::BaseWindow* browser_window_ = nullptr;
+  mutable int strip_index_ = -1;
   bool active_ = true;
   base::WeakPtrFactory<LinuxPageMountAuthority> weak_factory_{this};
 };

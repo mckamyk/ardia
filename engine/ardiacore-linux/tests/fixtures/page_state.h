@@ -270,7 +270,10 @@ enum PageZoom { PAGE_ZOOM_OUT=-1,PAGE_ZOOM_RESET=0,PAGE_ZOOM_IN=1 };
 }
 class TabStripModel {
  public: std::vector<content::WebContents*> tabs;
-  int GetIndexOfWebContents(content::WebContents* contents) { auto it=std::find(tabs.begin(),tabs.end(),contents); return it==tabs.end()?-1:it-tabs.begin(); }
+  int lookups=0;
+  int GetIndexOfWebContents(const content::WebContents* contents) { ++lookups; auto it=std::find(tabs.begin(),tabs.end(),contents); return it==tabs.end()?-1:it-tabs.begin(); }
+  bool ContainsIndex(int index) const { return index>=0 && index<static_cast<int>(tabs.size()); }
+  content::WebContents* GetWebContentsAt(int index) const { return ContainsIndex(index)?tabs[index]:nullptr; }
 };
 class BrowserWindowInterface {
  public:

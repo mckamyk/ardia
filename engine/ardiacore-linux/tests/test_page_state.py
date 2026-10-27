@@ -91,6 +91,9 @@ class PageStateTests(unittest.TestCase):
     def test_snapshots_carry_reason_and_resend_current_favicons(self):
         self.run_case('favicons')
 
+    def test_membership_checks_reuse_the_last_strip_index(self):
+        self.run_case('strip-lookups')
+
 
 if __name__ == '__main__':
     unittest.main()
