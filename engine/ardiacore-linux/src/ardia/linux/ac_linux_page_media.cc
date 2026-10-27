@@ -273,4 +273,13 @@ std::optional<bool> LinuxPageMedia::UnsavedInput() const {
   return LinuxUnsavedInput(before_unload, page->HadFormInteraction(), page->HadUserEdits());
 }
 
+std::optional<bool> LinuxPageMedia::EditedInput() const {
+  content::WebContents* contents = web_contents();
+  if (!contents || !performance_manager::PerformanceManager::IsAvailable()) return std::nullopt;
+  const base::WeakPtr<performance_manager::PageNode> page =
+      performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(contents);
+  if (!page) return std::nullopt;
+  return LinuxEditedInput(page->HadFormInteraction(), page->HadUserEdits());
+}
+
 }

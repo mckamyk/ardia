@@ -3675,6 +3675,10 @@ void ShellHostView::TabCommand(
     if (!values.empty()) return std::move(done).Run(false, base::Value("unsavedInput takes no arguments"));
     const auto unsaved = binding->media ? binding->media->UnsavedInput() : std::nullopt;
     return std::move(done).Run(true, unsaved ? base::Value(*unsaved) : base::Value());
+  } else if (command == "editedInput") {
+    if (!values.empty()) return std::move(done).Run(false, base::Value("editedInput takes no arguments"));
+    const auto edited = binding->media ? binding->media->EditedInput() : std::nullopt;
+    return std::move(done).Run(true, edited ? base::Value(*edited) : base::Value());
   } else if (command == "downloadImage") {
     const GURL url(ArgumentString(values, 0));
     const int limit = values.size() == 2 && values[1].is_int() ? values[1].GetInt() : 0;

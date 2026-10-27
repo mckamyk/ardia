@@ -8,12 +8,12 @@ export const UNSAVED_WORK = `(() => {
   post("result", JSON.stringify(fields.some(changed) || !!editing));
 })()`;
 
-export type HostPageScript = { command: string; args: unknown[] };
+export type HostPageScript = { command: string; args: unknown[]; map?: (result: unknown) => unknown };
 
 export function hostPageScript(method: string, args: readonly unknown[]): HostPageScript | null {
   if (args.length !== 1) return null;
   if (method === "evaluate" && args[0] === PICTURE_IN_PICTURE_STATE) return { command: "pictureInPictureState", args: [] };
   if (method === "executeJavaScript" && args[0] === CLOSE_DOCUMENT_PICTURE_IN_PICTURE) return { command: "exitPictureInPicture", args: [] };
-  if (method === "evaluate" && args[0] === UNSAVED_WORK) return { command: "unsavedInput", args: [] };
+  if (method === "evaluate" && args[0] === UNSAVED_WORK) return { command: "editedInput", args: [], map: (edited) => edited !== false };
   return null;
 }

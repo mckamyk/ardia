@@ -204,6 +204,8 @@ void Protection() {
   assert(LinuxUnsavedInput(false, false, false) == false);
   assert(LinuxUnsavedInput(true, std::nullopt, std::nullopt) == true && LinuxUnsavedInput(false, std::nullopt, true) == true);
   assert(!LinuxUnsavedInput(false, std::nullopt, false) && !LinuxUnsavedInput(std::nullopt, false, false));
+  assert(LinuxEditedInput(false, false) == false && LinuxEditedInput(true, false) == true && LinuxEditedInput(false, true) == true);
+  assert(LinuxEditedInput(std::nullopt, true) == true && !LinuxEditedInput(std::nullopt, false) && !LinuxEditedInput(false, std::nullopt));
 }
 
 void Power() {
