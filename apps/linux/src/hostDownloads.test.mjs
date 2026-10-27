@@ -11,19 +11,19 @@ const download = (n, patch = {}) => ({
   paused: false, received: 10, total: 10, speed: 0, mimeType: "application/zip", ...patch,
 });
 
-function fixture(list = []) {
+function fixture(list = [], capabilities = []) {
   const listeners = new Set();
   const calls = [];
   const replies = new Map([["downloads.list", JSON.stringify(list)]]);
   const host = {
-    bootstrap: { windowId: "main", profileId: "default", capabilities: [] },
+    bootstrap: { windowId: "main", profileId: "default", capabilities },
     call: async (name, profile, args) => {
       calls.push({ name, profile, args: JSON.parse(args) });
       const reply = replies.get(name);
       if (reply instanceof Error) throw reply;
       return reply ?? "null";
     },
-    invoke: async () => null,
+    invoke: async (method, args) => method === "ArdiaSystem.fileStatus" ? args.args[0].map(() => true) : null,
     onEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
   };
   const state = {
@@ -250,4 +250,18 @@ test("off-the-record snapshot entries are accepted only when asked for", () => {
   assert.deepEqual(snapshotDownload({ ...download(1), offTheRecord: true }, true), { ...download(1), offTheRecord: true, profile: "" });
   assert.equal(snapshotDownload(download(1), true), null);
   assert.equal(snapshotDownload({ ...download(1), offTheRecord: false }, true), null);
+});
+
+test("a download that finishes, or arrives finished in the startup list, never renders as missing first", async () => {
+  const { hostFiles } = await import("./hostFiles.ts");
+  const f = fixture([download(4)], ["ArdiaSystem.fileStatus"]);
+  const files = hostFiles(f.host);
+  const started = startHostDownloads(f.host, f.store);
+  await started.ready;
+  assert.equal(files.fileExists(download(4).path), true);
+  f.emit("ArdiaDownloads", "downloads", { name: "downloads.changed", data: download(5) });
+  assert.equal(files.fileExists(download(5).path), true);
+  f.emit("ArdiaDownloads", "downloads", { name: "downloads.changed", data: download(6, { state: "downloading", received: 1 }) });
+  assert.equal(files.fileExists(download(6).path), false);
+  started.stop();
 });

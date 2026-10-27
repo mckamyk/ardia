@@ -1,6 +1,8 @@
 #ifndef ARDIA_LINUX_AC_LINUX_DOWNLOADS_H_
 #define ARDIA_LINUX_AC_LINUX_DOWNLOADS_H_
 
+#include <sys/types.h>
+
 #include <cstddef>
 #include <ctime>
 #include <optional>
@@ -48,8 +50,14 @@ OpenBackend ChooseOpenBackend(bool xdg_open);
 enum class DragStart { kStart, kWindowClosed, kDragActive, kButtonReleased };
 DragStart ChooseDragStart(bool window, bool dragging, bool button_down);
 
-enum class RevealBackend { kDesktop, kUnavailable };
-RevealBackend ChooseRevealBackend(bool session_bus, bool xdg_open);
+enum class RevealBackend { kPortal, kFileManager, kOpenFolder, kUnavailable };
+struct RevealProbe {
+  bool portal = false;
+  bool file_manager = false;
+  bool xdg_open = false;
+  bool folder_handler = false;
+};
+RevealBackend ChooseRevealBackend(const RevealProbe& probe);
 
 bool PathListed(std::string_view path, const std::vector<std::string>& known);
 
@@ -63,6 +71,16 @@ struct TrashOutcome {
 std::string TrashDirectory(const char* xdg_data_home, const char* home);
 TrashOutcome MoveToTrash(const std::string& path, const std::string& trash_directory,
                          std::time_t now);
+std::string MountTop(const std::string& path);
+
+struct FolderCheck {
+  bool ok = false;
+  std::string code;
+  std::string message;
+};
+FolderCheck CheckDownloadFolder(const std::string& path);
+TrashOutcome MoveToTopdirTrash(const std::string& path, const std::string& topdir, uid_t uid,
+                               std::time_t now);
 
 }
 

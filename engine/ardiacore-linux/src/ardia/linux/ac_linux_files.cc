@@ -2,6 +2,7 @@
 
 #include <sys/stat.h>
 
+#include <algorithm>
 #include <ctime>
 #include <memory>
 #include <optional>
@@ -17,6 +18,10 @@
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/logging.h"
+#include "base/process/launch.h"
+#include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "chrome/browser/ardia/public/ac_engine.h"
@@ -27,12 +32,15 @@
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/download/public/common/download_item.h"
+#include "components/dbus/thread_linux/dbus_thread_linux.h"
+#include "components/dbus/utils/check_for_service_and_start.h"
 #include "components/download/public/common/download_source.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/drop_data.h"
+#include "dbus/bus.h"
 #include "extensions/browser/webstore_installer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/aura/env.h"
@@ -45,8 +53,15 @@
 #include "ui/display/screen.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/image/image.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
+#include "ui/shell_dialogs/select_file_policy.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
+
+namespace ardiacore {
+bool BackgroundInstance();
+}
 
 namespace ardia {
 namespace {
@@ -59,6 +74,8 @@ constexpr base::TaskTraits kFileReads = {base::MayBlock(), base::TaskPriority::U
 constexpr base::TaskTraits kFileWrites = {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
                                           base::TaskShutdownBehavior::BLOCK_SHUTDOWN};
 constexpr size_t kMaxDropName = 255;
+constexpr char kPortalService[] = "org.freedesktop.portal.Desktop";
+constexpr char kFileManagerService[] = "org.freedesktop.FileManager1";
 
 void Fail(Done done, std::string_view code, std::string_view message) {
   std::move(done).Run(false, base::Value(base::DictValue().Set("code", code).Set("message", message)));
@@ -144,14 +161,62 @@ bool SessionBus(base::Environment& environment) {
 
 struct RevealCheck {
   bool exists = false;
-  downloads::RevealBackend backend = downloads::RevealBackend::kUnavailable;
+  bool session_bus = false;
+  downloads::RevealProbe probe;
 };
+
+bool FolderHandler(base::Environment& environment) {
+  if (!base::ExecutableExistsInPath(&environment, "xdg-mime")) return true;
+  std::string handler;
+  return base::GetAppOutput(std::vector<std::string>{"xdg-mime", "query", "default", "inode/directory"}, &handler) &&
+         !base::TrimWhitespaceASCII(handler, base::TRIM_ALL).empty();
+}
 
 RevealCheck CheckReveal(const std::string& path) {
   auto environment = base::Environment::Create();
-  return {base::PathExists(base::FilePath(path)),
-          downloads::ChooseRevealBackend(SessionBus(*environment),
-                                         base::ExecutableExistsInPath(environment.get(), "xdg-open"))};
+  RevealCheck check;
+  check.exists = base::PathExists(base::FilePath(path));
+  check.session_bus = SessionBus(*environment);
+  check.probe.xdg_open = base::ExecutableExistsInPath(environment.get(), "xdg-open");
+  check.probe.folder_handler = check.probe.xdg_open && FolderHandler(*environment);
+  return check;
+}
+
+void ProbeService(scoped_refptr<dbus::Bus> bus, const char* name, base::OnceCallback<void(bool)> done) {
+  if (!bus) return std::move(done).Run(false);
+  dbus_utils::CheckForServiceAndStart(bus, name, base::BindOnce(
+      [](base::OnceCallback<void(bool)> done, std::optional<bool> running) {
+        std::move(done).Run(running.value_or(false));
+      }, std::move(done)));
+}
+
+void FinishReveal(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done,
+                  downloads::RevealProbe probe) {
+  if (!shell || !shell->GetBrowserContext()) return Fail(std::move(done), "ERR_WINDOW_CLOSED", "The window closed");
+  if (downloads::ChooseRevealBackend(probe) == downloads::RevealBackend::kUnavailable) {
+    return Fail(std::move(done), "ERR_REVEAL_UNAVAILABLE",
+                "No desktop portal, file manager or folder application can show this file");
+  }
+  platform_util::ShowItemInFolder(Profile::FromBrowserContext(shell->GetBrowserContext()), base::FilePath(path));
+  std::move(done).Run(true, base::Value(true));
+}
+
+void Reveal(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, RevealCheck check) {
+  if (!shell || !shell->GetBrowserContext()) return Fail(std::move(done), "ERR_WINDOW_CLOSED", "The window closed");
+  if (!check.exists) return Fail(std::move(done), "ERR_FILE_MISSING", "The file no longer exists");
+  scoped_refptr<dbus::Bus> bus = check.session_bus ? dbus_thread_linux::GetSharedSessionBus() : nullptr;
+  ProbeService(bus, kPortalService, base::BindOnce(
+      [](scoped_refptr<dbus::Bus> bus, base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done,
+         downloads::RevealProbe probe, bool portal) {
+        probe.portal = portal;
+        if (portal) return FinishReveal(shell, std::move(path), std::move(done), probe);
+        ProbeService(bus, kFileManagerService, base::BindOnce(
+            [](base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done,
+               downloads::RevealProbe probe, bool file_manager) {
+              probe.file_manager = file_manager;
+              FinishReveal(shell, std::move(path), std::move(done), probe);
+            }, shell, std::move(path), std::move(done), probe));
+      }, bus, shell, std::move(path), std::move(done), check.probe));
 }
 
 downloads::TrashOutcome Trash(const std::string& path) {
@@ -234,6 +299,67 @@ void Open(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, b
       }, std::move(done)));
 }
 
+class DownloadFolderPicker : public ui::SelectFileDialog::Listener {
+ public:
+  static void Start(gfx::NativeWindow window, const base::FilePath& current, Done done) {
+    auto* picker = new DownloadFolderPicker(std::move(done));
+    picker->dialog_ = ui::SelectFileDialog::Create(picker, nullptr);
+    picker->dialog_->SelectFile(ui::SelectFileDialog::SELECT_FOLDER, u"Choose a Download Folder", current,
+                                nullptr, 0, base::FilePath::StringType(), window);
+  }
+
+  void FileSelected(const ui::SelectedFileInfo& file, int) override {
+    Done done = std::move(done_);
+    const std::string path = file.path().value();
+    Finish();
+    if (!done) return;
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, kFileReads,
+        base::BindOnce(&downloads::CheckDownloadFolder, path),
+        base::BindOnce([](std::string path, Done done, downloads::FolderCheck check) {
+          if (!check.ok) return Fail(std::move(done), check.code, check.message);
+          std::move(done).Run(true, base::Value(std::move(path)));
+        }, path, std::move(done)));
+  }
+
+  void FileSelectionCanceled() override {
+    Done done = std::move(done_);
+    Finish();
+    if (done) std::move(done).Run(true, base::Value());
+  }
+
+  ~DownloadFolderPicker() override = default;
+
+ private:
+  explicit DownloadFolderPicker(Done done) : done_(std::move(done)) {}
+
+  void Finish() {
+    if (finished_) return;
+    finished_ = true;
+    if (dialog_) dialog_->ListenerDestroyed();
+    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
+  }
+
+  Done done_;
+  bool finished_ = false;
+  scoped_refptr<ui::SelectFileDialog> dialog_;
+};
+
+}
+
+void LinuxPickFolder(gfx::NativeWindow window, const base::ListValue& values, Done done) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (values.size() > 2 || std::ranges::any_of(values, [](const base::Value& value) {
+        return !value.is_string() && !value.is_none();
+      })) {
+    return Fail(std::move(done), "ERR_FOLDER_REQUEST", "A current folder and button title, or null, are expected");
+  }
+  const std::string current = !values.empty() && values[0].is_string() ? values[0].GetString() : std::string();
+  if (ardiacore::BackgroundInstance()) {
+    LOG(INFO) << "Ardia background instance: folder picker requested from " << current;
+    return std::move(done).Run(true, base::Value());
+  }
+  DownloadFolderPicker::Start(window, downloads::ValidLocalPath(current) ? base::FilePath(current) : base::FilePath(),
+                              std::move(done));
 }
 
 LinuxShellWebView::LinuxShellWebView(content::BrowserContext* context) : views::WebView(context) {}
@@ -360,15 +486,7 @@ void LinuxFilesInvoke(Profile* profile, LinuxShellWebView* shell, const std::str
   if (reveal) {
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, kFileReads,
         base::BindOnce(&CheckReveal, *path),
-        base::BindOnce([](base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, RevealCheck check) {
-          if (!shell || !shell->GetBrowserContext())
-            return Fail(std::move(done), "ERR_WINDOW_CLOSED", "The window closed");
-          if (check.backend == downloads::RevealBackend::kUnavailable)
-            return Fail(std::move(done), "ERR_REVEAL_UNAVAILABLE", "No desktop file manager or xdg-open is available");
-          if (!check.exists) return Fail(std::move(done), "ERR_FILE_MISSING", "The file no longer exists");
-          platform_util::ShowItemInFolder(Profile::FromBrowserContext(shell->GetBrowserContext()), base::FilePath(path));
-          std::move(done).Run(true, base::Value(true));
-        }, weak, *path, std::move(done)));
+        base::BindOnce(&Reveal, weak, *path, std::move(done)));
     return;
   }
   if (method == "ArdiaSystem.moveToTrash") {

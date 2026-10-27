@@ -1785,7 +1785,7 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Set("updates", false);
   base::FilePath user_data_directory;
   base::PathService::Get(chrome::DIR_USER_DATA, &user_data_directory);
-  base::ListValue capabilities = base::ListValue().Append("ArdiaWebView.call")
+  base::ListValue capabilities = base::ListValue().Append("ArdiaWebView.call").Append("ArdiaShell.pickFolder")
       .Append("ArdiaShell.windowIdentity").Append("ArdiaShell.beginDialog")
       .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain")
       .Append("ArdiaSearch.suggest").Append("ArdiaSearch.cancelSuggest")
@@ -4026,6 +4026,9 @@ void ShellHostView::Invoke(
     base::OnceCallback<void(bool, base::Value)> done) {
   if (!browser_) return std::move(done).Run(false, base::Value("The native browser window has closed"));
   const base::ListValue& values = Arguments(args);
+  if (method == "ArdiaShell.pickFolder") {
+    return LinuxPickFolder(GetWidget() ? GetWidget()->GetNativeWindow() : gfx::NativeWindow(), values, std::move(done));
+  }
   if (LinuxFilesHandles(method)) {
     if (!page_profile() || page_profile()->ShutdownStarted()) {
       return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kUnavailable));

@@ -86,19 +86,26 @@ export function startHostDownloads(host: ArdiaHost, store: DownloadStore) {
       clearNative();
     },
   });
+  const files = hostFiles(host);
+  const expectFinished = (d: { state?: unknown; path?: unknown } | null | undefined) => {
+    if (d?.state === "finished" && typeof d.path === "string") files.expect(d.path);
+  };
+  for (const d of store.getState().downloads) expectFinished(d);
   const stop = host.onEvent((module, event, payload) => {
     if (module !== "ArdiaDownloads" || event !== "downloads" || !payload || typeof payload !== "object") return;
-    const { name, data } = payload as { name?: unknown; data?: { id?: unknown } | null };
+    const { name, data } = payload as { name?: unknown; data?: { id?: unknown; state?: unknown; path?: unknown } | null };
+    if (name === "downloads.changed") return expectFinished(data);
     const id = data?.id;
     if (name !== "downloads.removed" || !nativeDownloadId(id)) return;
     if (listing) removedWhileListing.add(id);
     if (store.getState().downloads.some((d) => d.id === id)) removeDownload(id);
   });
-  const stopFiles = hostFiles(host).onChange(() => store.setState({ downloads: [...store.getState().downloads] }));
+  const stopFiles = files.onChange(() => store.setState({ downloads: [...store.getState().downloads] }));
   const ready = call("list", {})
     .then((reply) => {
       const plan = planDownloadSnapshot(store.getState().downloads, JSON.parse(reply), removedWhileListing, DOWNLOAD_LIMIT, original !== null);
       if (plan.downloads) {
+        for (const d of plan.added) expectFinished(d);
         const fresh = new Set(plan.added.map((d) => d.id));
         store.setState({ downloads: plan.downloads.map((d) => (fresh.has(d.id) ? { ...d, profile: SNAPSHOT_PROFILE } : d)) });
         store.setState({ downloads: plan.downloads.map((d) => (fresh.has(d.id) ? { ...d, profile: listedProfile } : d)) });

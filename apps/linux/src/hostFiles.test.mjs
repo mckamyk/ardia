@@ -139,3 +139,54 @@ test("file icons accept only PNG data URLs and fall back to null", async () => {
   assert.equal(await files.fileIcon("", 28), null);
   assert.equal(await files.appIcon(42, 32), null);
 });
+
+test("a finished download expected by the downloads list reads as present until the native check disagrees", async () => {
+  const f = fixture();
+  const present = new Set(["/d/kept.zip"]);
+  f.handlers.set("ArdiaSystem.fileStatus", (paths) => paths.map((path) => present.has(path)));
+  const files = createHostFiles(f.host, f.clock);
+  let changes = 0;
+  files.onChange(() => changes++);
+  files.expect("/d/kept.zip");
+  files.expect("/d/gone.zip");
+  assert.equal(files.fileExists("/d/kept.zip"), true);
+  assert.equal(files.fileExists("/d/gone.zip"), true);
+  await f.flush();
+  assert.deepEqual(f.invokes, [{ method: "ArdiaSystem.fileStatus", args: { args: [["/d/kept.zip", "/d/gone.zip"]] } }]);
+  assert.equal(files.fileExists("/d/kept.zip"), true);
+  assert.equal(files.fileExists("/d/gone.zip"), false);
+  assert.equal(changes, 1);
+  files.expect("/d/gone.zip");
+  assert.equal(files.fileExists("/d/gone.zip"), false, "a known answer is not overridden");
+  files.expect("relative");
+  assert.equal(files.fileExists("relative"), false);
+});
+
+test("a host without file status never treats an expected download as present", () => {
+  const f = fixture([]);
+  const files = createHostFiles(f.host, f.clock);
+  files.expect("/d/a.zip");
+  assert.equal(files.fileExists("/d/a.zip"), false);
+});
+
+test("failed open, reveal and trash are shown in the window, not only logged", async () => {
+  const f = fixture();
+  const notices = [];
+  f.handlers.set("ArdiaSystem.revealFile", () => { throw Object.assign(new Error("No desktop portal, file manager or folder application can show this file"), { code: "ERR_REVEAL_UNAVAILABLE" }); });
+  f.handlers.set("ArdiaSystem.openFile", () => { throw Object.assign(new Error("The file no longer exists"), { code: "ERR_FILE_MISSING" }); });
+  f.handlers.set("ArdiaSystem.moveToTrash", () => { throw Object.assign(new Error("This volume has no usable trash"), { code: "ERR_TRASH_UNAVAILABLE" }); });
+  const files = createHostFiles(f.host, f.clock, (title, message) => notices.push([title, message]));
+  await quiet(async () => {
+    assert.equal(await files.revealFile("/d/a.zip"), false);
+    assert.equal(await files.openFile("/d/a.zip"), false);
+    assert.equal(await files.moveToTrash("/d/a.zip"), false);
+  });
+  assert.deepEqual(notices, [
+    ["Couldn't Show the File", "No desktop portal, file manager or folder application can show this file"],
+    ["Couldn't Open the File", "The file no longer exists"],
+    ["Couldn't Move the File to the Trash", "This volume has no usable trash"],
+  ]);
+  f.handlers.set("ArdiaSystem.revealFile", () => true);
+  assert.equal(await files.revealFile("/d/a.zip"), true);
+  assert.equal(notices.length, 3);
+});
