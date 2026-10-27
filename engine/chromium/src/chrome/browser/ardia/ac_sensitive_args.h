@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "base/values.h"
+#include "build/build_config.h"
 
 namespace ardia {
 
@@ -16,9 +17,13 @@ void Cleanse(std::string& string);
 void Cleanse(std::u16string& string);
 void Cleanse(base::Value& value);
 
+#if BUILDFLAG(IS_LINUX)
+std::string SecretUTF8(std::u16string_view text);
+
 void SendSecretJson(base::DictValue result,
                     void (*send)(void* context, const char* json),
                     void* context);
+#endif
 
 class Secret {
  public:

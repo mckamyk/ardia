@@ -99,7 +99,6 @@ std::u16string CardNumberPrompt() {
 
 std::string Digits(const std::string& text) {
   std::string digits;
-  digits.reserve(text.size());
   for (char c : text) {
     if (base::IsAsciiDigit(c)) {
       digits.push_back(c);
@@ -260,11 +259,12 @@ AC_ENGINE_CALL(ac_autofill_card_number) {
                           authenticated && pdm ? pdm->payments_data_manager()
                                                      .GetCreditCardByGUID(id)
                                                : nullptr;
+#if BUILDFLAG(IS_LINUX)
                       std::string number;
                       if (card) {
                         std::u16string raw =
                             card->GetRawInfo(autofill::CREDIT_CARD_NUMBER);
-                        std::string utf8 = base::UTF16ToUTF8(raw);
+                        std::string utf8 = ardia::SecretUTF8(raw);
                         number = ardia::autofill_internal::Digits(utf8);
                         ardia::Cleanse(raw);
                         ardia::Cleanse(utf8);
@@ -273,11 +273,26 @@ AC_ENGINE_CALL(ac_autofill_card_number) {
                       if (number.empty()) {
                         result.Set("number", base::Value());
                       } else {
-                        result.Set("number", std::move(number));
+                        result.Set("number", number);
                       }
                       ardia::Cleanse(number);
                       result.Set("authenticated", authenticated);
                       reply.SendSecret(std::move(result));
+#else
+                      std::string number =
+                          card ? ardia::autofill_internal::Digits(
+                                     base::UTF16ToUTF8(card->GetRawInfo(
+                                         autofill::CREDIT_CARD_NUMBER)))
+                               : std::string();
+                      base::DictValue result;
+                      if (number.empty()) {
+                        result.Set("number", base::Value());
+                      } else {
+                        result.Set("number", number);
+                      }
+                      result.Set("authenticated", authenticated);
+                      reply.Send(std::move(result));
+#endif
                     },
                     id, pdm->GetWeakPtr(), std::move(reply)));
           },

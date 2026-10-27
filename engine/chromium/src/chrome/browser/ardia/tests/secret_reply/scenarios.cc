@@ -136,6 +136,36 @@ void NestedAndNonStringFieldsAreWiped() {
   Expect(g_leaks == 1, "the card number leaves only the receiver's copy");
 }
 
+void SecretUTF8EncodesLikeChromium() {
+  Expect(ardia::SecretUTF8(u"") == "", "empty");
+  Expect(ardia::SecretUTF8(u"abc") == "abc", "ascii");
+  Expect(ardia::SecretUTF8(u"\u00e9\u20ac") == "\xc3\xa9\xe2\x82\xac", "two and three bytes");
+  Expect(ardia::SecretUTF8(u"\U0001F511") == "\xf0\x9f\x94\x91", "surrogate pair");
+  const char16_t lone[] = {u'a', static_cast<char16_t>(0xD800), u'b', static_cast<char16_t>(0xDC00), 0};
+  Expect(ardia::SecretUTF8(lone) == "a\xef\xbf\xbd" "b\xef\xbf\xbd", "lone surrogates become U+FFFD");
+  const char16_t nonchar[] = {static_cast<char16_t>(0xFFFE), 0};
+  Expect(ardia::SecretUTF8(nonchar) == "\xef\xbf\xbe", "noncharacters pass through");
+}
+
+void NonAsciiPasswordLeavesNoFreedCopy() {
+  std::u16string password = u"sekr\u00e9t-\u20ac\u20ac-\U0001F511-unique-needle-0123456789";
+  for (int i = 0; i < 200; ++i) password += u"\u00e9";
+  std::string utf8 = ardia::SecretUTF8(password);
+  const std::string needle = utf8.substr(0, 24);
+  Seen seen;
+  {
+    Watch watch(needle);
+    {
+      std::string converted = ardia::SecretUTF8(password);
+      Expect(converted == utf8, "conversion is stable");
+      Expect(converted.capacity() >= 3 * password.size(), "the buffer is reserved up front");
+      ardia::Cleanse(converted);
+    }
+    Expect(g_leaks == 0, "converting a non-ASCII password frees no unwiped copy");
+  }
+  ardia::Cleanse(utf8);
+}
+
 void NullSecretStillReplies() {
   Seen seen;
   ardia::SendSecretJson(base::DictValue().Set("password", base::Value()), &Capture, &seen);
@@ -155,6 +185,8 @@ int main() {
   SecretReplyIsWipedAfterTheCallback(quoted, "quoted");
   NestedAndNonStringFieldsAreWiped();
   NullSecretStillReplies();
+  SecretUTF8EncodesLikeChromium();
+  NonAsciiPasswordLeavesNoFreedCopy();
   if (g_failures) return 1;
   std::printf("secret reply scenarios passed\n");
   return 0;

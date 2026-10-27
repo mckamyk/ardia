@@ -9,6 +9,7 @@ import unittest
 TESTS = pathlib.Path(__file__).resolve().parent
 ROOT = TESTS.parent
 STUBS = TESTS / "secret_reply"
+BUILD_CONFIG = "#pragma once\n#define BUILDFLAG(flag) (BUILDFLAG_INTERNAL_##flag())\n#define BUILDFLAG_INTERNAL_IS_LINUX() (1)\n"
 
 
 def body(source, start):
@@ -26,10 +27,12 @@ class SecretReplyFixtureTests(unittest.TestCase):
     def test_serialized_secret_is_wiped_after_the_reply_callback(self):
         with tempfile.TemporaryDirectory(prefix="ardia-secret-reply-") as directory:
             executable = pathlib.Path(directory) / "secret-reply"
+            (pathlib.Path(directory) / "build").mkdir()
+            (pathlib.Path(directory) / "build/build_config.h").write_text(BUILD_CONFIG)
             compiled = subprocess.run([
                 "clang++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-g", "-O0",
                 "-fsanitize=undefined", "-fno-omit-frame-pointer", "-fno-builtin",
-                "-I", str(STUBS), "-I", str(ROOT.parents[2]),
+                "-I", str(STUBS), "-I", directory, "-I", str(ROOT.parents[2]),
                 str(ROOT / "ac_sensitive_args.cc"), str(STUBS / "scenarios.cc"), "-o", str(executable),
             ], capture_output=True, text=True, timeout=180)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
@@ -38,26 +41,50 @@ class SecretReplyFixtureTests(unittest.TestCase):
             self.assertIn("secret reply scenarios passed", result.stdout)
 
 
+def linux_branch(block):
+    begin = block.index("#if BUILDFLAG(IS_LINUX)")
+    middle = block.index("#else", begin)
+    end = block.index("#endif", middle)
+    return block[begin:middle], block[middle:end]
+
+
 class SecretReplyWiringTests(unittest.TestCase):
-    def test_reply_sends_secrets_through_the_wiping_serializer(self):
+    def test_reply_sends_secrets_through_the_wiping_serializer_on_linux_only(self):
         header = (ROOT / "ac_engine.h").read_text()
-        self.assertIn("void SendSecret(base::DictValue result);", header)
+        declaration = header.index("void SendSecret(base::DictValue result);")
+        self.assertLess(header.rindex("#if BUILDFLAG(IS_LINUX)", 0, declaration), declaration)
+        self.assertLess(declaration, header.index("#endif", declaration))
         engine = (ROOT / "ac_engine.cc").read_text()
         send = body(engine, "void Reply::SendSecret(base::DictValue result) {")
         self.assertIn("SendSecretJson(std::move(result), reply, context);", send)
-        self.assertIn('#include "chrome/browser/ardia/ac_sensitive_args.h"', engine)
+        definition = engine.index("void Reply::SendSecret(base::DictValue result) {")
+        self.assertLess(engine.rindex("#if BUILDFLAG(IS_LINUX)", 0, definition), definition)
+        args = (ROOT / "ac_sensitive_args.h").read_text()
+        for name in ["std::string SecretUTF8(std::u16string_view text);", "void SendSecretJson("]:
+            at = args.index(name)
+            self.assertLess(args.rindex("#if BUILDFLAG(IS_LINUX)", 0, at), at)
+            self.assertLess(at, args.index("#endif", at))
 
-    def test_reveal_and_card_number_reply_with_send_secret(self):
+    def test_reveal_and_card_number_wipe_on_linux_and_keep_macos_unchanged(self):
         passwords = (ROOT / "ac_passwords.cc").read_text()
-        reveal = body(passwords, "AC_ENGINE_CALL(ac_passwords_reveal) {")
-        self.assertIn("reply.SendSecret(std::move(result));", reveal)
-        self.assertNotIn("reply.Send(std::move(result));", reveal)
-        self.assertIn("ardia::Cleanse(credential->password);", reveal)
+        linux, other = linux_branch(body(passwords, "AC_ENGINE_CALL(ac_passwords_reveal) {"))
+        self.assertIn("ardia::SecretUTF8(credential->password)", linux)
+        self.assertIn("ardia::Cleanse(credential->password);", linux)
+        self.assertIn("reply.SendSecret(std::move(result));", linux)
+        self.assertNotIn('result.Set("password", credential->password);', linux)
+        self.assertIn('result.Set("password", credential->password);', other)
+        self.assertIn("reply.Send(std::move(result));", other)
+        self.assertNotIn("Cleanse", other)
         autofill = (ROOT / "ac_autofill.cc").read_text()
-        number = body(autofill, "AC_ENGINE_CALL(ac_autofill_card_number) {")
-        self.assertIn("reply.SendSecret(std::move(result));", number)
-        self.assertNotIn("reply.Send(std::move(result));", number)
-        self.assertNotRegex(number, r"Digits\(\s*base::UTF16ToUTF8\(")
+        linux, other = linux_branch(body(autofill, "AC_ENGINE_CALL(ac_autofill_card_number) {"))
+        self.assertIn("ardia::SecretUTF8(raw)", linux)
+        self.assertIn("reply.SendSecret(std::move(result));", linux)
+        self.assertNotIn("UTF16ToUTF8", linux)
+        self.assertIn("base::UTF16ToUTF8(card->GetRawInfo(", other)
+        self.assertIn("reply.Send(std::move(result));", other)
+        self.assertNotIn("Cleanse", other)
+        digits = body(autofill, "std::string Digits(const std::string& text) {")
+        self.assertNotIn("reserve", digits)
 
     def test_no_comments_in_the_new_sources(self):
         for path in [ROOT / "ac_sensitive_args.cc", ROOT / "ac_sensitive_args.h", *STUBS.rglob("*.h"), STUBS / "scenarios.cc"]:

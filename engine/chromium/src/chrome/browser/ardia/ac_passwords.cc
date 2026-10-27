@@ -16,6 +16,7 @@
 #include "base/scoped_observation.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -394,13 +395,25 @@ AC_ENGINE_CALL(ac_passwords_reveal) {
                         credential = session.delegate->GetCredentialFromId(id);
                       }
                       base::DictValue result;
+#if BUILDFLAG(IS_LINUX)
                       if (credential) {
-                        result.Set("password", credential->password);
+                        std::string password =
+                            ardia::SecretUTF8(credential->password);
+                        result.Set("password", password);
+                        ardia::Cleanse(password);
                         ardia::Cleanse(credential->password);
                       } else {
                         result.Set("password", base::Value());
                       }
                       reply.SendSecret(std::move(result));
+#else
+                      if (credential) {
+                        result.Set("password", credential->password);
+                      } else {
+                        result.Set("password", base::Value());
+                      }
+                      reply.Send(std::move(result));
+#endif
                     },
                     entry->id));
           },

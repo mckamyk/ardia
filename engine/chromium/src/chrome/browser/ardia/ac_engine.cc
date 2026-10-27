@@ -66,6 +66,7 @@ void Reply::Send(base::DictValue result) {
   reply(context, ToJSON(result).c_str());
 }
 
+#if BUILDFLAG(IS_LINUX)
 void Reply::SendSecret(base::DictValue result) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!reply_) {
@@ -77,6 +78,7 @@ void Reply::SendSecret(base::DictValue result) {
   void* context = std::exchange(context_, nullptr);
   SendSecretJson(std::move(result), reply, context);
 }
+#endif
 
 void Reply::Ok() {
   Send(base::DictValue().Set("ok", true));
