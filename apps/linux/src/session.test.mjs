@@ -502,3 +502,107 @@ test("session close tokens freeze producers before draining and only final cance
     globalThis.window = previousWindow; globalThis.document = previousDocument;
   }
 });
+
+async function closeSessionFixture({ failWrites = 0 } = {}) {
+  const { quiesceLinuxSession, resumeLinuxSession } = await import("./sessionClose.ts");
+  const { createWindowCloseBarrier } = await import("./utilityClose.ts");
+  const { createWindowCloseCoordinator } = await import("./windowCloseCoordinator.ts");
+  const previousWindow = globalThis.window, previousDocument = globalThis.document;
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} };
+  const initial = browserSession();
+  initial.settings = { ...initial.settings, warnBeforeClosingWindow: true, warnBeforeClosingLastTab: true };
+  useBrowser.getState().hydrate(initial);
+  const state = { canonical: initial, failures: failWrites, log: [] };
+  const native = {
+    ...host(),
+    async invoke(method, pair) {
+      assert.equal(method, "session.write");
+      if (state.failures > 0) { state.failures--; state.log.push(["write-failed"]); throw new Error("Save rejected"); }
+      state.canonical = mergeSession(pair.base, pair.session, state.canonical);
+      state.log.push(["write", state.canonical.settings.warnBeforeClosingWindow]);
+      return state.canonical;
+    },
+    onEvent() { return () => {}; },
+    onBeforeClose() { return () => {}; },
+  };
+  const persistence = startHostPersistence(native, useBrowser, initial);
+  const token = (request) => JSON.stringify(request);
+  const barrier = createWindowCloseBarrier({
+    quiesce: (request) => { state.log.push(["quiesce"]); quiesceLinuxSession(token(request)); },
+    drain: async () => { await persistence.flush(); return 0; },
+    acknowledge: async () => { state.log.push(["seal", state.canonical.settings.warnBeforeClosingWindow]); },
+    reject: async () => {},
+    resume: (request) => resumeLinuxSession(token(request)),
+  });
+  let answer;
+  const coordinator = createWindowCloseCoordinator({
+    windowId: "main",
+    utility: false,
+    decide: async () => answer,
+    suppress: (reason) => useBrowser.getState().updateSettings(reason === "lastTab" ? { warnBeforeClosingLastTab: false } : { warnBeforeClosingWindow: false }),
+    flush: () => persistence.flush(),
+    request: async () => ({ windowId: "main", rendererGeneration: "1", closeGeneration: "1" }),
+    beginDrain: async () => { state.log.push(["begin", state.canonical.settings.warnBeforeClosingWindow]); },
+    reject: async (request) => { state.log.push(["reject", request.closeGeneration]); },
+    barrier,
+    cancelled: barrier.cancelled,
+  });
+  return {
+    state, persistence, coordinator, quiesceLinuxSession, resumeLinuxSession,
+    answer: (value) => { answer = value; },
+    restore() { persistence(); globalThis.window = previousWindow; globalThis.document = previousDocument; },
+  };
+}
+
+test("window-close suppression is in the canonical save and the frozen snapshot before the drain begins and the window seals", async () => {
+  const fixture = await closeSessionFixture();
+  try {
+    fixture.quiesceLinuxSession("probe");
+    useBrowser.getState().updateSettings({ warnBeforeClosingWindow: false });
+    await fixture.persistence.flush();
+    assert.equal(fixture.state.canonical.settings.warnBeforeClosingWindow, true, "a setting changed after quiescence misses the frozen snapshot");
+    fixture.resumeLinuxSession("probe");
+    await fixture.persistence.flush();
+    useBrowser.getState().updateSettings({ warnBeforeClosingWindow: true });
+    await fixture.persistence.flush();
+    fixture.state.log.length = 0;
+    fixture.answer({ decision: "allow", suppressWarning: true });
+    await fixture.coordinator.accept({ windowId: "main", rendererGeneration: "1", closeGeneration: "1" });
+    assert.deepEqual(fixture.state.log, [["write", false], ["begin", false], ["quiesce"], ["seal", false]]);
+    assert.equal(fixture.state.canonical.settings.warnBeforeClosingWindow, false);
+  } finally {
+    fixture.resumeLinuxSession(JSON.stringify({ windowId: "main", rendererGeneration: "1", closeGeneration: "1" }));
+    fixture.restore();
+  }
+});
+
+test("the don't-ask checkbox ticked on Cancel is saved while the window stays open and unfrozen", async () => {
+  const fixture = await closeSessionFixture();
+  try {
+    fixture.answer({ decision: "cancel", suppressWarning: true });
+    await assert.rejects(fixture.coordinator.close("window"), { code: "ERR_WINDOW_CLOSE_CANCELLED" });
+    assert.deepEqual(fixture.state.log, [["reject", "1"], ["write", false]]);
+    useBrowser.getState().updateSettings({ sidebarWidth: 290 });
+    await fixture.persistence.flush();
+    assert.equal(fixture.state.canonical.settings.sidebarWidth, 290);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("a failed suppression save rejects the close before draining and the next attempt retries the save", async () => {
+  const fixture = await closeSessionFixture({ failWrites: 1 });
+  try {
+    fixture.answer({ decision: "allow", suppressWarning: true });
+    await assert.rejects(fixture.coordinator.accept({ windowId: "main", rendererGeneration: "1", closeGeneration: "1" }), /Save rejected/);
+    assert.deepEqual(fixture.state.log, [["write-failed"], ["reject", "1"]]);
+    assert.equal(useBrowser.getState().settings.warnBeforeClosingWindow, false);
+    fixture.state.log.length = 0;
+    await fixture.coordinator.accept({ windowId: "main", rendererGeneration: "1", closeGeneration: "2" });
+    assert.deepEqual(fixture.state.log, [["write", false], ["begin", false], ["quiesce"], ["seal", false]]);
+  } finally {
+    fixture.resumeLinuxSession(JSON.stringify({ windowId: "main", rendererGeneration: "1", closeGeneration: "2" }));
+    fixture.restore();
+  }
+});
