@@ -3,6 +3,10 @@ type ModuleProvider = (name: string, method: string) => unknown;
 
 const INPUT_EVENTS = ["keydown", "pointerdown", "pointermove", "wheel", "touchstart"] as const;
 
+export const TAB_POLICY_LOCK = "ardia.linux.tab-policies";
+export const TAB_POLICY_CHANNEL = "ardia.linux.tab-policies";
+export const BATTERY_SAVER_WAIT_MS = 2_000;
+
 export function watchInputIdle(target: InputTarget, now: () => number = Date.now) {
   let last = now();
   const touch = () => { last = now(); };
@@ -14,26 +18,118 @@ export function watchInputIdle(target: InputTarget, now: () => number = Date.now
   };
 }
 
+type EngineEvents = { addListener(event: string, listener: (payload: unknown) => void): { remove(): void } };
+
+export function watchHostInputActivity(engine: EngineEvents, listener: () => void): () => void {
+  const subscription = engine.addListener("engine", (payload) => {
+    if ((payload as { name?: unknown } | null)?.name === "engine.inputActivity") listener();
+  });
+  return () => subscription.remove();
+}
+
+export type PolicyLocks = { request(name: string, callback: () => Promise<void>): Promise<unknown> };
+export type PolicyChannel = { postMessage(message: unknown): void; addEventListener(type: "message", listener: (event: { data: unknown }) => void): void; close(): void };
+
 export type LinuxPolicyDeps = {
   target: InputTarget;
   provide: (provider: ModuleProvider) => () => void;
   startLifecycle: () => void;
   startTrim: () => void;
   now?: () => number;
+  windowId?: string;
+  focused?: () => boolean;
+  activity?: (listener: () => void) => () => void;
+  locks?: PolicyLocks;
+  channel?: PolicyChannel;
 };
 
+type SaverReply = { mode: string; reply: unknown };
+
 let running: (() => void) | null = null;
+let owner = false;
+let ownWindow: string | undefined;
+let windowFocused: () => boolean = () => false;
+let channel: PolicyChannel | null = null;
+let ownerReply: SaverReply | null = null;
+const replyWaiters = new Set<(reply: SaverReply) => void>();
+
+export const isTabPolicyOwner = () => owner;
 
 export function startLinuxTabPolicies(deps: LinuxPolicyDeps): () => void {
   if (running) return running;
   const idle = watchInputIdle(deps.target, deps.now);
   const unprovide = deps.provide((name, method) => name === "ArdiaEngine" && method === "inputIdleSeconds" ? () => idle.seconds() : undefined);
+  const unwatch = deps.activity?.(idle.note) ?? (() => {});
+  ownWindow = deps.windowId;
+  windowFocused = deps.focused ?? (() => false);
+  channel = deps.channel ?? null;
+  channel?.addEventListener("message", ({ data }) => {
+    if (owner || !isSaverReply(data)) return;
+    ownerReply = data;
+    for (const resolve of [...replyWaiters]) resolve(data);
+  });
   deps.startLifecycle();
-  deps.startTrim();
+  let stopped = false;
+  const becomeOwner = () => {
+    if (stopped || owner) return;
+    owner = true;
+    deps.startTrim();
+  };
+  if (deps.locks) {
+    deps.locks.request(TAB_POLICY_LOCK, () => {
+      becomeOwner();
+      return new Promise<void>(() => {});
+    }).catch((error: unknown) => {
+      console.warn("[ardia linux] tab policy lock", error);
+      becomeOwner();
+    });
+  } else {
+    becomeOwner();
+  }
   const stop = () => {
+    stopped = true;
     idle.stop();
     unprovide();
+    unwatch();
   };
   running = stop;
   return stop;
+}
+
+const isSaverReply = (value: unknown): value is SaverReply =>
+  typeof value === "object" && value !== null && typeof (value as SaverReply).mode === "string" && "reply" in value;
+
+export function policyToastTarget(windowId: string): string | null {
+  if (!ownWindow) return windowId;
+  return windowFocused() ? ownWindow : null;
+}
+
+export async function sharedBatterySaver<T>(mode: string, apply: () => Promise<T>, waitMs = BATTERY_SAVER_WAIT_MS): Promise<T> {
+  if (owner || !channel) {
+    const reply = await apply();
+    if (owner) channel?.postMessage({ mode, reply });
+    return reply;
+  }
+  if (ownerReply?.mode === mode) return ownerReply.reply as T;
+  const shared = await new Promise<SaverReply | null>((resolve) => {
+    const timer = setTimeout(() => { replyWaiters.delete(done); resolve(null); }, waitMs);
+    const done = (reply: SaverReply) => {
+      if (reply.mode !== mode) return;
+      clearTimeout(timer);
+      replyWaiters.delete(done);
+      resolve(reply);
+    };
+    replyWaiters.add(done);
+  });
+  return shared ? shared.reply as T : apply();
+}
+
+export function resetLinuxTabPoliciesForTests() {
+  running = null;
+  owner = false;
+  ownWindow = undefined;
+  windowFocused = () => false;
+  channel = null;
+  ownerReply = null;
+  replyWaiters.clear();
 }
