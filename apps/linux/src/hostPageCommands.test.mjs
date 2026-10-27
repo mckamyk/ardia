@@ -3,9 +3,19 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
+import { stripTypeScriptTypes } from "node:module";
 import { HostTab } from "./hostTab.ts";
 
 const bootstrap = readFileSync(new URL("../../../engine/ardiacore-linux/src/ardia/linux/bootstrap.js", import.meta.url), "utf8");
+const webView = readFileSync(new URL("./shims/web/HostWebView.tsx", import.meta.url), "utf8");
+
+function hostWebViewReceiver(props) {
+  const table = webView.slice(webView.indexOf("const EVENT_CALLBACKS"), webView.indexOf("export const HostWebView"));
+  const start = webView.indexOf("  const receive = (event: HostTabEvent) => {");
+  const body = webView.slice(start, webView.indexOf("\n  };\n", start) + 5);
+  const code = `${stripTypeScriptTypes(`${table}\n${body}`)}\nreturn receive;`;
+  return new Function("latest", "ready", "navigation", "toAppUrl", code)({ current: props }, { current: false }, { current: null }, (url) => url);
+}
 
 function fixture() {
   const requests = [];
@@ -109,4 +119,23 @@ test("structured refusals reject with stable codes without changing target or re
   }
   f.refuse(undefined);
   tab.dispose(); await settle();
+});
+
+test("native Find results reach the shared FindBar callback of only the exact pane", async () => {
+  const f = fixture();
+  const left = [], right = [];
+  const a = new HostTab(f.host, { key: "left" }, hostWebViewReceiver({ onFindResult: (value) => left.push(value) }));
+  const b = new HostTab(f.host, { key: "right" }, hostWebViewReceiver({ onFindResult: (value) => right.push(value) }));
+  await Promise.all([a.ready, b.ready]);
+  assert.equal(await b.command("find", ["needle", true, false]), null);
+  f.emit(b.identity.browserId, { count: 7, active: 3, final: false });
+  f.emit(b.identity.browserId, { count: 7, active: 4, final: true });
+  assert.deepEqual(right, [{ count: 7, active: 3, final: false }, { count: 7, active: 4, final: true }]);
+  assert.deepEqual(left, []);
+  f.emit(a.identity.browserId, { count: 0, active: 0, final: true });
+  assert.deepEqual(left, [{ count: 0, active: 0, final: true }]);
+  assert.equal(right.length, 2);
+  a.dispose(); b.dispose(); await settle();
+  f.emit(b.identity.browserId, { count: 1, active: 1, final: true });
+  assert.equal(right.length, 2);
 });
