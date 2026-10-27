@@ -80,6 +80,7 @@ describe("F09 fixture in a stock Chromium", { skip: available ? false : `${CHROM
     const manifest = await evaluate(worker, "chrome.runtime.getManifest()");
     assert.equal(manifest.side_panel.default_path, "panel.html");
     const second = await app.browser.send("Target.createTarget", { url: "about:blank#b" });
+    await until(() => evaluate(worker, `chrome.tabs.query({}).then((tabs) => tabs.length === 2 && tabs.every((tab) => tab.status === "complete" && tab.url) && tabs.some((tab) => tab.url.endsWith("#b")))`), { timeout: 30000, label: "both fixture tabs committed" });
     const badges = await evaluate(worker, `chrome.tabs.query({}).then(async (tabs) => {
       const a = tabs.find((tab) => !tab.url.endsWith("#b"));
       const b = tabs.find((tab) => tab.url.endsWith("#b"));
