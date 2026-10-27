@@ -41,17 +41,19 @@ test("the Linux Vite config runs the wording transform", () => {
 
 test("a production build fails when a listed file was never reworded", () => {
   const context = { error(message) { throw new Error(message); } };
-  const run = (command, files) => {
+  const run = (command, files, modules = files.map(shared)) => {
     const plugin = credentialWording();
     plugin.configResolved({ command });
     for (const file of files) plugin.transform.call(context, readFileSync(shared(file), "utf8"), shared(file));
-    return () => plugin.buildEnd.call(context);
+    return () => plugin.buildEnd.call({ ...context, getModuleIds: () => [...modules].values() });
   };
   const all = CREDENTIAL_WORDING.map((entry) => entry.file);
   assert.doesNotThrow(run("build", all));
   assert.throws(run("build", all.filter((file) => !file.endsWith("Autofill.tsx"))), /panes\/Autofill\.tsx/);
   assert.doesNotThrow(run("serve", []));
+  assert.doesNotThrow(run("build", [], [shared("components/site/SiteControls.tsx")]));
+  assert.throws(run("build", [], all.map(shared)), /never reworded/);
   const failed = credentialWording();
   failed.configResolved({ command: "build" });
-  assert.doesNotThrow(() => failed.buildEnd.call(context, new Error("earlier failure")));
+  assert.doesNotThrow(() => failed.buildEnd.call({ ...context, getModuleIds: () => [].values() }, new Error("earlier failure")));
 });
