@@ -3035,13 +3035,25 @@ void ShellHostView::PresentDevTools(content::WebContents* inspected) {
 
 void ShellHostView::LayoutPane(TabBinding* binding) {
   views::WebView* page = binding->viewport();
-  if (!page || !browser_view_) return;
+  if (!browser_view_) return;
   content::WebContents* contents = binding->contents();
+  const bool claimed = contents && handler_ && !binding->claim.empty() &&
+                       binding->renderer_generation == renderer_generation_;
+  if (!page) {
+    DevToolsContentsResizingStrategy waiting_strategy;
+    content::WebContents* waiting =
+        claimed ? DevToolsWindow::GetInTabWebContents(contents, &waiting_strategy) : nullptr;
+    auto* container = waiting ? browser_view_->GetContentsContainerViewFor(contents) : nullptr;
+    if (container && container->devtools_web_view()->web_contents() == waiting) {
+      container->devtools_web_view()->SetWebContents(nullptr);
+      container->devtools_web_view()->SetVisible(false);
+    }
+    return;
+  }
   const bool visible = binding->pane_visible && contents;
   DevToolsContentsResizingStrategy strategy;
   content::WebContents* devtools =
-      visible && handler_ && !binding->claim.empty() && binding->renderer_generation == renderer_generation_
-          ? DevToolsWindow::GetInTabWebContents(contents, &strategy) : nullptr;
+      visible && claimed ? DevToolsWindow::GetInTabWebContents(contents, &strategy) : nullptr;
   const gfx::Rect pane(binding->pane_bounds.size());
   gfx::Rect tools_bounds;
   gfx::Rect page_bounds = pane;
