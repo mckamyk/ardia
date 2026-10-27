@@ -4,6 +4,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "ardia/linux/ac_linux_history_zoom.h"
 #include "ardia/linux/ac_linux_page_lease.h"
@@ -20,6 +22,8 @@ class LinuxPageState {
   using Navigation = base::RepeatingCallback<base::DictValue()>;
   using MessageSnapshot = base::RepeatingCallback<base::ListValue()>;
   static constexpr size_t kMessageSnapshotMax = 8;
+  using SnapshotProducer =
+      base::RepeatingCallback<std::vector<std::pair<std::string, base::Value>>()>;
   LinuxPageState(BrowserWindowInterface* browser, base::WeakPtr<views::Widget> window,
                  content::WebContents* contents, content::WebContents* shell,
                  LinuxPageIdentity identity, LinuxPageLease::Sink sink, Navigation navigation);
@@ -40,6 +44,7 @@ class LinuxPageState {
   void SetMessageSnapshot(MessageSnapshot snapshot);
   bool SetSampledTheme(std::optional<LinuxTheme::Sample> sample, content::WeakDocumentPtr document);
   LinuxPageStatus* status() const { return retired_ ? nullptr : status_.get(); }
+  void SetSnapshotProducer(SnapshotProducer producer);
   void Retire();
 
  private:
@@ -48,6 +53,7 @@ class LinuxPageState {
   void Snapshot(LinuxPageRequest request, std::string reason);
   Navigation navigation_;
   MessageSnapshot message_snapshot_;
+  SnapshotProducer producer_;
   std::unique_ptr<LinuxPageMountAuthority> authority_;
   std::unique_ptr<LinuxPageLease> lease_;
   std::unique_ptr<LinuxSecurity> security_;

@@ -248,6 +248,7 @@ class TabBinding {
   views::WebView* devtools_viewport() const { return devtools_viewport_; }
   void SetDevToolsViewport(views::WebView* view) { devtools_viewport_ = view; }
   void ResetPageCommands() { resets++; }
+  std::unique_ptr<int> media = std::make_unique<int>(1);
   struct Page {
     TabBinding* binding;
     bool EmitClosed();

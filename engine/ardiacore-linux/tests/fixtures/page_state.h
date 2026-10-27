@@ -239,6 +239,9 @@ struct NavigationController {
   NavigationEntry* entry=nullptr;
   NavigationEntry* pending=nullptr;
   NavigationEntry* GetPendingEntry() { return pending; }
+  bool needs_reload=false; int loads=0;
+  bool NeedsReload() { return needs_reload; }
+  void LoadIfNecessary() { ++loads; needs_reload=false; }
   int current=2, size=4, last=0, checks=0, goes=0;
   NavigationEntry* visible=nullptr;
   NavigationEntry* GetVisibleEntry() { return visible ? visible : entry; }
@@ -306,12 +309,20 @@ class WebContents {
   bool IsCrashed() { return crashed.has_value(); }
   base::TerminationStatus GetCrashedStatus() { return crashed.value_or(base::TERMINATION_STATUS_STILL_RUNNING); }
   int GetCrashedErrorCode() { return crash_code; }
+  bool discarded=false;
+  bool WasDiscarded() { return discarded; }
+  enum class Shown { HIDDEN, OCCLUDED, VISIBLE } visibility=Shown::HIDDEN;
+  Shown GetVisibility() const { return visibility; }
+  std::vector<bool> freezes;
+  void SetPageFrozen(bool frozen) { assert(frozen || visibility!=Shown::VISIBLE); freezes.push_back(frozen); }
+  GURL GetVisibleURL() const { return entry.url; }
   std::vector<WebContentsObserver*> observers;
  private: base::WeakPtrFactory<WebContents> weak{this};
 };
 inline WebContentsObserver::WebContentsObserver(WebContents* contents) { Observe(contents); }
 inline WebContentsObserver::~WebContentsObserver() { Observe(nullptr); }
 inline void WebContentsObserver::Observe(WebContents* contents) { if(contents_) std::erase(contents_->observers,this);contents_=contents; if(contents_) contents_->observers.push_back(this); }
+using Visibility=WebContents::Shown;
 enum PageZoom { PAGE_ZOOM_OUT=-1,PAGE_ZOOM_RESET=0,PAGE_ZOOM_IN=1 };
 }
 class TabStripModel {

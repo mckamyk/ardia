@@ -33,6 +33,9 @@
 #include "ardia/linux/ac_linux_launch_config.h"
 #include "ardia/linux/ac_linux_page_channel.h"
 #include "ardia/linux/ac_linux_page_commands.h"
+#include "ardia/linux/ac_linux_page_media.h"
+#include "ardia/linux/ac_linux_power.h"
+#include "ardia/linux/ac_linux_tab_policy.h"
 #include "ardia/linux/ac_linux_launch_steps.h"
 #include "ardia/linux/ac_linux_page_state.h"
 #include "ardia/linux/ac_linux_profile_service.h"
@@ -88,6 +91,8 @@
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
+#include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/tab_list/tab_removed_reason.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
@@ -132,9 +137,11 @@
 #include "content/public/browser/webui_config.h"
 #include "content/public/browser/webui_config_map.h"
 #include "content/public/common/url_constants.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "net/base/net_errors.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/blink/public/common/frame/user_activation_state.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #include "ui/aura/window.h"
@@ -155,6 +162,7 @@
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event.h"
@@ -698,6 +706,14 @@ class TabBinding : public content::WebContentsObserver {
   void SetDevToolsViewport(views::WebView* view) { devtools_viewport_ = view; }
   void RemoveViewports();
   void ResetPageCommands();
+  void StartMedia();
+  void Reveal();
+  std::string_view Discard(const ardiacore::LinuxDiscardRequest& request);
+  bool SetFrozen(bool value);
+  std::vector<std::pair<std::string, base::Value>> SnapshotExtras();
+  std::unique_ptr<ardiacore::LinuxPageMedia> media;
+  bool frozen = false;
+  bool discard_reported = false;
   std::unique_ptr<ardiacore::LinuxPageCommands> page_commands;
   std::optional<ardiacore::LinuxPageRequest> page_command_request;
   std::unique_ptr<DevToolsFrontendWatch> devtools_watch;
@@ -726,7 +742,9 @@ class TabBinding : public content::WebContentsObserver {
     cancelled_auto_pip_until = {};
     requested_auto_pip_until = {};
   }
+  void DidStartNavigation(content::NavigationHandle* handle) override;
   void DidFinishNavigation(content::NavigationHandle* handle) override;
+  void WasDiscarded() override;
   void DidStartLoading() override;
   void OnWebContentsFocused(content::RenderWidgetHost*) override;
   void DidStopLoading() override;
@@ -905,6 +923,7 @@ class ShellHostView : public views::View,
     extension_surfaces_.reset();
     LinuxExtensionsWindowRetired(id_);
   }
+  void WatchSystemState();
   void OfferTab(content::WebContents* contents) {
     if (contents && contents->GetBrowserContext() == page_profile()) offered_[TabId(contents)] = contents->GetWeakPtr();
   }
@@ -1133,6 +1152,7 @@ class ShellHostView : public views::View,
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
   base::ScopedObservation<aura::Window, aura::WindowObserver> input_observation_{this};
+  base::CallbackListSubscription system_state_subscription_;
   base::WeakPtrFactory<ShellHostView> weak_factory_{this};
 };
 
@@ -1419,6 +1439,13 @@ class HostMessageHandler : public content::WebUIMessageHandler,
               if (handler) handler->Resolve(id, std::move(image));
             }, weak_factory_.GetWeakPtr(), id));
       }
+      if (name == "engine.systemState") {
+        host_->WatchSystemState();
+        return ardiacore::LinuxPowerMonitor::Get().Current(base::BindOnce(
+            [](base::WeakPtr<HostMessageHandler> handler, std::string id, base::DictValue state) {
+              if (handler) handler->Resolve(id, base::Value(std::move(state)));
+            }, weak_factory_.GetWeakPtr(), id));
+      }
       if (ardiacore::IsLinuxZoomDomainRoute(name)) {
         Profile* page = host_->page_profile();
         if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
@@ -1686,6 +1713,7 @@ base::DictValue ShellHostView::Bootstrap() const {
   for (const char* capability : linux_extensions::kSurfaceCapabilities) capabilities.Append(capability);
   for (const char* route : ardiacore::kLinuxPageMessageRoutes)
     capabilities.Append(route);
+  capabilities.Append("engine.systemState");
   AppendLinuxSiteControlsCapabilities(capabilities);
   for (const char* capability : linux_import::kImportCapabilities) capabilities.Append(capability);
   capabilities.Append("favicons.fetch");
@@ -2668,10 +2696,26 @@ void ShellHostView::Event(std::string_view module, std::string_view event,
 
 void ShellHostView::ReportPictureInPicture(content::WebContents* contents,
                                            base::DictValue state) {
+  std::vector<base::WeakPtr<TabBinding>> owners;
   for (auto& [id, binding] : bindings_) {
-    if (contents && binding->contents() == contents)
-      binding->ReportPresentation("pictureInPicture", state.Clone());
+    if (contents && binding->contents() == contents) owners.push_back(binding->GetWeakPtr());
   }
+  const bool active = state.FindBool("active").value_or(false);
+  const std::string* kind = state.FindString("kind");
+  for (const auto& binding : owners) {
+    if (!binding) continue;
+    if (binding->media) binding->media->NotePictureInPicture(active, kind ? *kind : "video");
+    else binding->ReportPresentation("pictureInPicture", state.Clone());
+  }
+}
+
+void ShellHostView::WatchSystemState() {
+  if (system_state_subscription_) return;
+  system_state_subscription_ = ardiacore::LinuxPowerMonitor::Get().Subscribe(base::BindRepeating(
+      [](base::WeakPtr<ShellHostView> host, const base::DictValue& state) {
+        if (host) host->Event("ArdiaEngine", "engine", base::Value(base::DictValue()
+            .Set("name", "engine.systemState").Set("data", state.Clone())));
+      }, GetWeakPtr()));
 }
 
 std::unique_ptr<ardiacore::LinuxPageState> ShellHostView::MountPage(TabBinding* binding) {
@@ -2692,9 +2736,13 @@ std::unique_ptr<ardiacore::LinuxPageState> ShellHostView::MountPage(TabBinding* 
   auto navigation = base::BindRepeating([](base::WeakPtr<TabBinding> binding) {
     return binding ? binding->Navigation() : base::DictValue();
   }, binding->GetWeakPtr());
-  return std::make_unique<ardiacore::LinuxPageState>(
+  auto page = std::make_unique<ardiacore::LinuxPageState>(
       browser_, GetWidget()->GetWeakPtr(), contents, shell(), std::move(identity),
       std::move(sink), std::move(navigation));
+  page->SetSnapshotProducer(base::BindRepeating([](base::WeakPtr<TabBinding> binding) {
+    return binding ? binding->SnapshotExtras() : std::vector<std::pair<std::string, base::Value>>();
+  }, binding->GetWeakPtr()));
+  return page;
 }
 
 LinuxExtensionWindow ShellHostView::ExtensionWindow() {
@@ -3287,6 +3335,14 @@ void ShellHostView::TabCommand(
   }
   content::WebContents* contents = binding->contents();
   auto& controller = contents->GetController();
+  if (ardiacore::LinuxPageMedia::Handles(command)) {
+    if (!binding->media) return std::move(done).Run(false, base::Value("Media is unavailable for this tab"));
+    content::RenderFrameHost* shell_frame = shell() ? shell()->GetPrimaryMainFrame() : nullptr;
+    const bool press = command == "requestPictureInPicture" || command == "takeControlPress";
+    const bool activation = shell_frame && (press ? shell_frame->ConsumeTransientUserActivation()
+                                                  : shell_frame->HasTransientUserActivation());
+    return binding->media->Dispatch(command, values, activation, std::move(done));
+  }
   if (command == "captureViewport") {
     auto* view = contents->GetRenderWidgetHostView();
     if (!view || !view->IsSurfaceAvailableForCopy()) {
@@ -3405,6 +3461,40 @@ void ShellHostView::TabCommand(
                          .Set("current", index == controller.GetCurrentEntryIndex()));
     }
     return std::move(done).Run(true, base::Value(std::move(entries)));
+  } else if (command == "discard") {
+    const auto request = ardiacore::ParseLinuxDiscardRequest(values);
+    if (!request) return std::move(done).Run(false, base::Value("discard takes an optional {unload} object"));
+    return std::move(done).Run(true, base::Value(binding->Discard(*request)));
+  } else if (command == "setFrozen") {
+    const auto frozen = ardiacore::ParseLinuxFrozen(values);
+    if (!frozen) return std::move(done).Run(false, base::Value("setFrozen requires a boolean"));
+    return std::move(done).Run(true, base::Value(binding->SetFrozen(*frozen)));
+  } else if (command == "unsavedInput") {
+    if (!values.empty()) return std::move(done).Run(false, base::Value("unsavedInput takes no arguments"));
+    const auto unsaved = binding->media ? binding->media->UnsavedInput() : std::nullopt;
+    return std::move(done).Run(true, unsaved ? base::Value(*unsaved) : base::Value());
+  } else if (command == "downloadImage") {
+    const GURL url(ArgumentString(values, 0));
+    const int limit = values.size() == 2 && values[1].is_int() ? values[1].GetInt() : 0;
+    if (values.size() != 2 || limit < 1 || limit > 512 || !url.is_valid() ||
+        !(url.SchemeIsHTTPOrHTTPS() || url.SchemeIs("data"))) {
+      return std::move(done).Run(false, base::Value("downloadImage requires an http(s) or data URL and a pixel limit"));
+    }
+    contents->DownloadImage(url, false, gfx::Size(limit, limit), static_cast<uint32_t>(limit), false,
+        base::BindOnce([](base::OnceCallback<void(bool, base::Value)> reply, int, int,
+                          const GURL&, const std::vector<SkBitmap>& bitmaps,
+                          const std::vector<gfx::Size>&) {
+          for (const SkBitmap& bitmap : bitmaps) {
+            if (bitmap.drawsNothing()) continue;
+            const auto png = gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, false);
+            if (!png) continue;
+            return std::move(reply).Run(true, base::Value(base::DictValue()
+                .Set("uri", "data:image/png;base64," + base::Base64Encode(*png))
+                .Set("width", bitmap.width()).Set("height", bitmap.height())));
+          }
+          std::move(reply).Run(true, base::Value());
+        }, mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(done), true, base::Value())));
+    return;
   } else if (command == "close") {
     if (!CloseTab(binding)) return std::move(done).Run(false, base::Value("Tab is no longer in this window"));
   } else if (command == "executeExtensionAction") {
@@ -3524,6 +3614,7 @@ void ShellHostView::SetPresentations(
     binding->presented = visible;
   }
   std::vector<std::pair<base::WeakPtr<content::WebContents>, bool>> changes;
+  std::vector<base::WeakPtr<TabBinding>> revealed;
   for (const bool visible : {true, false}) {
     for (const auto& [id, binding] : bindings_) {
       if (!binding->contents() || binding->presented != visible ||
@@ -3531,6 +3622,7 @@ void ShellHostView::SetPresentations(
       binding->presentation_applied = visible;
       binding->presentation_departed = !visible;
       if (!visible) binding->cancelled_auto_pip_until = {};
+      if (visible) revealed.push_back(binding->GetWeakPtr());
       changes.emplace_back(binding->contents()->GetWeakPtr(), visible);
     }
   }
@@ -3539,6 +3631,9 @@ void ShellHostView::SetPresentations(
     if (auto* helper = AutoPictureInPictureTabHelper::FromWebContents(contents.get())) {
       helper->OnTabActivatedChanged(visible);
     }
+  }
+  for (const auto& binding : revealed) {
+    if (binding) binding->Reveal();
   }
   std::move(done).Run(true, base::Value());
 }
@@ -4329,9 +4424,12 @@ void ShellHostView::Invoke(
 TabBinding::TabBinding(ShellHostView* owner, content::WebContents* contents,
                        std::string key)
     : WebContentsObserver(contents), owner_(owner), contents_(contents),
-      key_(std::move(key)) {}
+      key_(std::move(key)) {
+  StartMedia();
+}
 
 TabBinding::~TabBinding() {
+  media.reset();
   RetirePage();
   ResetPageCommands();
   RemoveViewports();
@@ -4415,6 +4513,74 @@ void TabBinding::ReportPresentation(std::string name, base::DictValue data) {
   if (page_) page_->EmitPresentation(std::move(name), base::Value(std::move(data)));
 }
 
+void TabBinding::StartMedia() {
+  media.reset();
+  if (!contents_) return;
+  media = std::make_unique<ardiacore::LinuxPageMedia>(contents_, base::BindRepeating(
+      [](base::WeakPtr<TabBinding> binding, std::string name, base::DictValue data) {
+        if (binding) binding->ReportPresentation(std::move(name), std::move(data));
+      }, GetWeakPtr()));
+}
+
+void TabBinding::Reveal() {
+  if (!contents_) return;
+  if (frozen) {
+    frozen = false;
+    if (contents_->GetVisibility() != content::Visibility::VISIBLE) contents_->SetPageFrozen(false);
+  }
+  if (contents_->WasDiscarded() || contents_->GetController().NeedsReload())
+    contents_->GetController().LoadIfNecessary();
+}
+
+std::string_view TabBinding::Discard(const ardiacore::LinuxDiscardRequest& request) {
+  if (!contents_) return "refused";
+  const auto protection = media ? media->Protection(presented || pane_visible) : ardiacore::LinuxTabProtection();
+  const auto decision = ardiacore::DecideLinuxDiscard(true, contents_->WasDiscarded(), request, protection);
+  bool discarded = false;
+  if (decision == ardiacore::LinuxDiscardDecision::kDiscard) {
+    const auto weak = GetWeakPtr();
+    auto* unit = resource_coordinator::TabLifecycleUnitExternal::FromWebContents(contents_);
+    const bool accepted = unit && unit->DiscardTab(::mojom::LifecycleUnitDiscardReason::EXTERNAL);
+    discarded = accepted && weak && weak->contents() && weak->contents()->WasDiscarded();
+  }
+  return ardiacore::LinuxDiscardOutcome(decision, discarded);
+}
+
+bool TabBinding::SetFrozen(bool value) {
+  if (!contents_) return false;
+  if (value && (!media || !ardiacore::LinuxMayFreeze(media->Protection(presented || pane_visible)))) return false;
+  frozen = value;
+  if (value || contents_->GetVisibility() != content::Visibility::VISIBLE) contents_->SetPageFrozen(value);
+  return true;
+}
+
+std::string DiscardedUrl(content::WebContents* contents) {
+  const auto* entry = contents->GetController().GetLastCommittedEntry();
+  return entry && entry->GetURL().is_valid() ? entry->GetURL().spec() : contents->GetVisibleURL().spec();
+}
+
+std::vector<std::pair<std::string, base::Value>> TabBinding::SnapshotExtras() {
+  std::vector<std::pair<std::string, base::Value>> events;
+  if (media) events = media->Snapshot();
+  if (contents_ && contents_->WasDiscarded()) {
+    discard_reported = true;
+    events.emplace_back("discarded", base::Value(base::DictValue().Set("url", DiscardedUrl(contents_))));
+  }
+  return events;
+}
+
+void TabBinding::WasDiscarded() {
+  if (!contents_ || discard_reported || !contents_->WasDiscarded()) return;
+  discard_reported = true;
+  ReportPresentation("discarded", base::DictValue().Set("url", DiscardedUrl(contents_)));
+}
+
+void TabBinding::DidStartNavigation(content::NavigationHandle* handle) {
+  if (!contents_ || !discard_reported || !handle->IsInPrimaryMainFrame() || contents_->WasDiscarded()) return;
+  discard_reported = false;
+  ReportPresentation("ready", base::DictValue());
+}
+
 void TabBinding::Rebind(content::WebContents* contents) {
   if (auto* channel = contents_ ? ardiacore::LinuxPageChannel::FromWebContents(contents_) : nullptr) channel->Detach();
   RetirePage();
@@ -4430,6 +4596,9 @@ void TabBinding::Rebind(content::WebContents* contents) {
   requested_auto_pip_until = {};
   Observe(contents);
   contents_ = contents;
+  frozen = false;
+  discard_reported = false;
+  StartMedia();
   if (viewport_ && viewport_->GetVisible()) viewport_->SetWebContents(contents);
 }
 
@@ -4534,6 +4703,7 @@ void TabBinding::WebContentsDestroyed() {
   const auto weak = GetWeakPtr();
   if (page_) page_->EmitClosed();
   if (!weak) return;
+  media.reset();
   RetirePage();
   ResetPageCommands();
   contents_ = nullptr;

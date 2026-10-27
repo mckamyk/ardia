@@ -140,12 +140,23 @@ describe("report", () => {
 
 describe("scenario catalogue", () => {
   it("covers every issue #81 names and the later feature issues, once each", () => {
-    assert.deepEqual(SCENARIOS.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 16, 17, 18, 19, 20, 22, 27, 30, 32, 33, 34, 36, 37, 78]);
+    assert.deepEqual(SCENARIOS.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 16, 17, 18, 19, 20, 22, 25, 27, 28, 30, 32, 33, 34, 36, 37, 78]);
     assert.equal(new Set(SCENARIOS.map((s) => s.id)).size, SCENARIOS.length);
     for (const s of SCENARIOS) {
       assert.equal(typeof s.run, "function", s.id);
       for (const m of s.manual ?? []) assert.ok(m.name && m.steps?.length, `${s.id} manual steps`);
     }
+  });
+
+  it("drives media and policy checks through the shell's page handles with a stable PiP probe", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { PIP_PROBE, AUTOPLAY_ARGS } = await import("../scenarios/f15-media.mjs");
+    const scripts = await readFile(new URL("../../../src/hostPageScripts.ts", import.meta.url), "utf8");
+    assert.ok(scripts.includes(`'${PIP_PROBE}'`));
+    assert.deepEqual(AUTOPLAY_ARGS, ["--autoplay-policy=no-user-gesture-required"]);
+    const main = await readFile(new URL("../../../src/main.tsx", import.meta.url), "utf8");
+    for (const seam of ["webviews", "media: useMedia", "lifecycle: { state: useLifecycle, sleepTab }"]) assert.ok(main.includes(seam), seam);
+    assert.deepEqual(selectScenarios(["#25", "F18"]).map((s) => s.id), ["F15", "F18"]);
   });
 
   it("selects by finding or issue number", () => {

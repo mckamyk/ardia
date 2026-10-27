@@ -7,6 +7,10 @@ import { emitCommand, menuShown, setWindowCloseDecider } from "@ardia/shell";
 import { WindowRoot } from "../../browser/src/App";
 import { startNativeSync } from "../../browser/src/state/app/nativeSync";
 import { startTabPages } from "../../browser/src/state/tabs/tabPages";
+import { sleepTab, startTabLifecycle, useLifecycle } from "../../browser/src/state/tabs/tabLifecycle";
+import { useMedia } from "../../browser/src/state/media/media";
+import { webviews } from "../../browser/src/platform/webviews";
+import { startMemoryTrim } from "../../browser/src/state/tabs/memoryTrim";
 import { setNewTabPrewarm } from "../../browser/src/platform/preload";
 import { setStoreBatching, useBrowser, type HydrateData } from "../../browser/src/state/browser/store";
 import { usePages } from "../../browser/src/state/tabs/pageState";
@@ -22,6 +26,8 @@ import { startHostPersistence } from "./hostSession";
 import { startHostData } from "./hostData";
 import { startHostDownloads } from "./hostDownloads";
 import { startHostTabLifecycle } from "./hostTabLifecycle";
+import { startLinuxTabPolicies } from "./hostPolicies";
+import { provideNativeModuleProvider } from "./shims/expo-modules-core";
 import { setHostPageHooks } from "./hostPageHooks";
 import { applyHostPageTheme, resetHostPage } from "./hostPageLifecycle";
 import { setHostOverlayCheck } from "./hostViewport";
@@ -33,7 +39,7 @@ import { startUtility } from "./utility";
 import { installProfileWindows } from "./hostWindowProfiles";
 import { focus } from "../../browser/src/state/browser/actions";
 
-Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu } });
+Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle, sleepTab } } });
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme });
 setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
 
@@ -78,6 +84,7 @@ async function start() {
     startTabPages();
     startNativeSync();
     startHostDownloads(ardiaHost, useBrowser);
+    startLinuxTabPolicies({ target: window, provide: provideNativeModuleProvider, startLifecycle: startTabLifecycle, startTrim: startMemoryTrim });
     startLinuxAppServices({
       host: ardiaHost,
       windowId,
