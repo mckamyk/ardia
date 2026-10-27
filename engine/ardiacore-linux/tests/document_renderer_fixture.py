@@ -1,4 +1,4 @@
-from document_host_fixture import ROOT, PRELUDE, host_methods
+from document_host_fixture import ROOT, PRELUDE, HANDLER, host_methods
 from test_renderer_contract import method
 
 
@@ -38,6 +38,7 @@ struct HostMessageHandler {
   bool IsJavascriptAllowed() { return allowed; }
   void AllowJavascript() { allowed = true; }
   bool Authorized();
+  base::WeakPtr<HostMessageHandler> GetWeakPtr();
   void RegisterMessages();
   void ActivateCommittedRenderer();
   void PrimaryPageChanged(content::Page&);
@@ -61,7 +62,8 @@ struct TabBinding {
 };
 '''
     prelude = PRELUDE.replace('#include "ardia/linux/ac_linux_document_service.h"', '#include "ardia/linux/ac_linux_document_service.h"\n#include "base/json/json_writer.h"')
-    prelude = prelude.replace('struct Handler { bool authorized = true; bool Authorized() { return authorized; } };', types)
+    prelude = prelude.replace(HANDLER, types)
+    prelude = prelude.replace('  bool OwnsHandler(Handler* owner, uint64_t generation) const { return owner && owner == handler_ && generation == renderer_generation_; }\n', '')
     prelude = prelude.replace('  Handler handler;\n  Handler* handler_ = &handler;', '  HostMessageHandler* handler_ = nullptr;')
     prelude = prelude.replace('  uint64_t renderer_generation_ = 9007199254740993ULL;', r'''  uint64_t renderer_generation_ = 0;
   content::WeakDocumentPtr renderer_document_;
@@ -97,6 +99,7 @@ struct TabBinding {
     for name, signature in [
         ('~HostMessageHandler', '  ~HostMessageHandler('),
         ('Authorized', '  bool Authorized('),
+        ('GetWeakPtr', '  base::WeakPtr<HostMessageHandler> GetWeakPtr('),
         ('RegisterMessages', '  void RegisterMessages('),
         ('ActivateCommittedRenderer', '  void ActivateCommittedRenderer('),
         ('PrimaryPageChanged', '  void PrimaryPageChanged('),
