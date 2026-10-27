@@ -1,8 +1,8 @@
 import { closeWindow } from "@ardia/shell";
 import { TrafficLight, useTrafficLightsCenter } from "./shims/web/windowChrome";
 import { hostModuleMethod, reportHostError } from "./host";
-import { useBrowser } from "../../browser/src/store/browser";
-import { useFullscreenTab } from "../../browser/src/components/layout/pageState";
+import { useBrowser } from "../../browser/src/state/browser/store";
+import { useFullscreenTab } from "../../browser/src/state/tabs/pageState";
 
 const controls = [
   { light: "close", method: "closeWindow", label: "Close window" },

@@ -1,0 +1,92 @@
+import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+import { build } from "vite";
+
+const root = fileURLToPath(new URL("../", import.meta.url));
+const repo = fileURLToPath(new URL("../../../", import.meta.url));
+const browser = `${repo}apps/browser/src/`;
+const linux = `${root}src/`;
+
+test("production graph uses current Linux adapters and one canonical shared state and native module graph", { timeout: 60000 }, async () => {
+  let graph;
+  const result = await build({
+    root,
+    configFile: `${root}vite.config.ts`,
+    logLevel: "error",
+    build: { write: false },
+    plugins: [{
+      name: "ardia-linux:test-module-graph",
+      generateBundle() {
+        graph = new Map([...this.getModuleIds()].map((id) => [id, this.getModuleInfo(id)]));
+      },
+    }],
+  });
+  assert.ok(graph?.size > 1000);
+  const ids = [...graph.keys()];
+  assert.deepEqual(ids.filter((id) => id.includes("/apps/demo/")), []);
+  assert.deepEqual(ids.filter((id) => /\/apps\/browser\/src\/(store\/|lib\/(native|tabPages|preload|theme)\.)/.test(id)), []);
+
+  const singletons = [
+    `${browser}state/browser/store.ts`,
+    `${browser}state/settings/settingsWindows.ts`,
+    `${browser}platform/preload.ts`,
+    `${linux}settingsWindows.ts`,
+    `${linux}menus.tsx`,
+    `${linux}host.ts`,
+    `${linux}shims/expo-modules-core.ts`,
+    `${linux}shims/ardiacore.tsx`,
+    `${linux}shims/shell.tsx`,
+    `${linux}shims/web/HostWebView.tsx`,
+    `${linux}shims/web/Symbol.tsx`,
+    `${linux}shims/web/symbols/render.ts`,
+  ];
+  for (const id of singletons) assert.deepEqual(ids.filter((candidate) => candidate.split("?")[0] === id), [id], id);
+
+  const replacements = [
+    ["components/sidebar/HoverCard.tsx", "SidebarHoverCard.tsx", ["HoverCard"]],
+    ["components/profiles/ProfileIndicator.tsx", "ProfileIndicator.tsx", ["PROFILE_INDICATOR_X", "ProfileIndicator", "useProfileIndicatorWidth"]],
+    ["components/sidebar/AddressBar.tsx", "SidebarAddressBar.tsx", ["SidebarAddressRow", "SidebarHeaderTools"]],
+    ["components/sidebar/TileFace.tsx", "TileFace.tsx", ["FolderDropRing", "RestingTile", "TILE_RADIUS", "TileFace", "useSlotPosition"]],
+    ["state/settings/settingsWindows.ts", "settingsWindows.ts", ["goToSettingsPane", "openImport", "openSettings", "useSettingsNav"]],
+  ];
+  for (const [shared, adapter, names] of replacements) {
+    const id = `${linux}${adapter}`;
+    const original = `${browser}${shared}`;
+    assert.deepEqual(ids.filter((candidate) => candidate.split("?")[0] === id), [id], adapter);
+    for (const name of names) {
+      const exports = graph.get(id)?.exports ?? [];
+      assert.ok(exports.includes(name) || exports.includes("*") && graph.get(original)?.exports.includes(name), `${adapter}: ${name}`);
+    }
+    assert.deepEqual(graph.get(original)?.importers, [id], `${shared} is only loaded by its adapter`);
+    assert.ok(graph.get(id).importedIds.includes(original));
+  }
+
+  const lazyModules = [
+    ["settings/UtilityWindow", ["UtilityWindow"]],
+    ["onboarding/OnboardingOverlay", ["OnboardingOverlay"]],
+    ["pages/InternalPage", ["InternalPage"]],
+    ["extensions/ExtensionOverlays", ["ExtensionOverlays", "InstallDialogHost"]],
+    ["extensions/SidePanel", ["ExtensionSidePanel"]],
+    ["bookmarks/BookmarkDialog", ["BookmarkDialog"]],
+    ["bookmarks/EditBookmarkDialog", ["EditBookmarkDialog"]],
+    ["littleArdia/LittleArdiaWindow", ["LittleArdiaWindow"]],
+  ];
+  for (const [feature, names] of lazyModules) {
+    const original = `${browser}components/${feature}.tsx`;
+    const wrapper = `\0ardia-lazy:${original}`;
+    const eager = `${original}?ardia-eager`;
+    assert.ok(graph.has(wrapper), feature);
+    assert.ok(graph.has(eager), feature);
+    assert.ok(!graph.has(original), `${feature} has no second eager instance`);
+    assert.deepEqual(graph.get(wrapper).exports.toSorted(), names.toSorted());
+    for (const name of names) assert.ok(graph.get(eager).exports.includes(name), `${feature}: ${name}`);
+    assert.deepEqual(graph.get(wrapper).dynamicallyImportedIds, [eager]);
+  }
+
+  const outputs = Array.isArray(result) ? result : [result];
+  const chunks = outputs.flatMap((output) => output.output).filter((entry) => entry.type === "chunk");
+  for (const id of singletons) assert.equal(chunks.filter((chunk) => id in chunk.modules).length, 1, id);
+  assert.ok(graph.get(`${linux}main.tsx`).importedIds.includes(`${browser}state/browser/store.ts`));
+  assert.ok(graph.get(`${linux}main.tsx`).importedIds.includes(`${browser}platform/preload.ts`));
+});

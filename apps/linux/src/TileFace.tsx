@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { View } from "react-native";
-import { layout, useTheme } from "../../browser/src/lib/theme";
-import { useTab } from "../../browser/src/store/hooks";
+import { layout, useTheme } from "../../browser/src/components/ui/theme";
+import { useTab } from "../../browser/src/state/browser/hooks";
 import { TabBadges } from "../../browser/src/components/media/TabBadges";
 import { TabIcon } from "../../browser/src/components/sidebar/TabIcon";
 import { TILE_RADIUS } from "../../browser/src/components/sidebar/TileFace.tsx";
