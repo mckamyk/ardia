@@ -580,7 +580,44 @@ void Popups() {
   Mount destroyed;destroyed.page.Notify([](auto* o) { o->WebContentsDestroyed(); });assert(destroyed.popup_helper.manager()->observers.empty());
 }
 
+void Producers() {
+  Mount m;int runs=0;
+  m.state->SetSnapshotProducer([&runs] {
+    ++runs;std::vector<std::pair<std::string,base::Value>> events;
+    events.emplace_back("media",base::Value(base::DictValue().Set("playing",true).Set("muted",false)));
+    events.emplace_back("",base::Value());
+    events.emplace_back("pictureInPicture",base::Value(base::DictValue().Set("kind","video").Set("active",true)));
+    return events;
+  });
+  std::optional<base::DictValue> created;const auto& snapshot=Created(m,created);
+  const auto& events=snapshot.Find("events")->GetList();
+  assert(runs==1 && Text(events[events.size()-2].GetDict(),"name")=="media" && Text(events[events.size()-1].GetDict(),"name")=="pictureInPicture");
+  assert(Named(snapshot,"navigation") && Named(snapshot,"status") && Named(snapshot,"media")->FindBool("playing")==true && Named(snapshot,"pictureInPicture")->FindBool("active")==true);
+  assert(Count(snapshot,"media")==1 && Count(snapshot,"")==0);
+  m.page.frame.NewDocument();m.Boundary();
+  const auto& document=LastSnapshot(m);
+  assert(runs==2 && Text(document,"reason")=="document" && Named(document,"media")->FindBool("muted")==false && Count(document,"pictureInPicture")==1);
+}
+
+void ProducerLifetimes() {
+  Mount retired;int runs=0;
+  retired.state->Retire();retired.state->SetSnapshotProducer([&runs] { ++runs;return std::vector<std::pair<std::string,base::Value>>(); });
+  assert(!retired.state->CreationState() && runs==0);
+  Mount reentrant;
+  reentrant.state->SetSnapshotProducer([&reentrant] { reentrant.state.reset();return std::vector<std::pair<std::string,base::Value>>(); });
+  assert(!reentrant.state->CreationState());
+  assert(!reentrant.state && reentrant.deliveries.empty());
+  Mount bounded;
+  bounded.state->SetSnapshotProducer([] {
+    std::vector<std::pair<std::string,base::Value>> events;
+    for (int i=0;i<200;++i) events.emplace_back("status",base::Value(base::DictValue().Set("text","")));
+    events.emplace_back(std::string(65,'x'),base::Value());
+    return events;
+  });
+  auto created=bounded.state->CreationState();assert(created->FindDict("snapshot")->Find("events")->GetList().size()==128);
+}
+
 int main(int argc,char** argv) {
   assert(argc==2);std::string mode=argv[1];
-  if(mode=="authority") Authority();else if(mode=="split-profiles") SplitProfiles();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="sampled-theme") SampledTheme();else if(mode=="page-messages") PageMessages();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else if(mode=="page-status") PageStatus();else if(mode=="hung") Hung();else if(mode=="popups") Popups();else return 2;
+  if(mode=="authority") Authority();else if(mode=="split-profiles") SplitProfiles();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="sampled-theme") SampledTheme();else if(mode=="page-messages") PageMessages();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else if(mode=="page-status") PageStatus();else if(mode=="hung") Hung();else if(mode=="popups") Popups();else if(mode=="producers") Producers();else if(mode=="producer-lifetimes") ProducerLifetimes();else return 2;
 }

@@ -48,6 +48,7 @@ class Value {
   bool is_dict() const { return std::holds_alternative<std::shared_ptr<DictValue>>(data_); }
   bool is_bool() const { return std::holds_alternative<bool>(data_); }
   bool is_list() const { return std::holds_alternative<std::shared_ptr<ListValue>>(data_); }
+  bool is_string() const { return std::holds_alternative<std::string>(data_); }
   const DictValue* GetIfDict() const { return is_dict() ? &GetDict() : nullptr; }
   Value Clone() const;
  private:
@@ -306,6 +307,7 @@ class WebContents {
   bool IsCrashed() { return crashed.has_value(); }
   base::TerminationStatus GetCrashedStatus() { return crashed.value_or(base::TERMINATION_STATUS_STILL_RUNNING); }
   int GetCrashedErrorCode() { return crash_code; }
+  bool discarded=false;
   std::vector<WebContentsObserver*> observers;
  private: base::WeakPtrFactory<WebContents> weak{this};
 };

@@ -55,7 +55,7 @@ struct AutoPictureInPictureTabHelper {
 class TabBinding : public content::WebContentsObserver {
  public:
   TabBinding(ShellHostView* owner, content::WebContents* contents, std::string key)
-      : content::WebContentsObserver(contents), owner_(owner), contents_(contents), key_(std::move(key)) {}
+      : content::WebContentsObserver(contents), owner_(owner), contents_(contents), key_(std::move(key)) { StartMedia(); }
   ~TabBinding() override { RetirePage(); }
   const std::string& key() const { return key_; }
   std::string claim;
@@ -71,6 +71,22 @@ class TabBinding : public content::WebContentsObserver {
   void RememberPendingAutoPictureInPicture() { ++remembered; }
   int command_resets = 0;
   void ResetPageCommands() { ++command_resets; }
+  int media_starts = 0;
+  void StartMedia() { media = contents_ ? std::make_unique<int>(++media_starts) : nullptr; }
+  std::unique_ptr<int> media;
+  bool frozen = false;
+  bool discard_reported = false;
+  int reveals = 0;
+  void Reveal() { ++reveals; }
+  std::vector<std::pair<std::string, base::Value>> SnapshotExtras() {
+    std::vector<std::pair<std::string, base::Value>> events;
+    if (media) events.emplace_back("media", base::Value(base::DictValue().Set("playing", false).Set("muted", false)));
+    if (contents_ && contents_->discarded) {
+      discard_reported = true;
+      events.emplace_back("discarded", base::Value(base::DictValue().Set("url", contents_->entry.url.spec())));
+    }
+    return events;
+  }
   std::unique_ptr<int> devtools_watch;
   bool devtools_had_focus = false;
   raw_ptr<views::WebView> devtools_viewport_ = nullptr;
@@ -343,6 +359,49 @@ void StatusMigration() {
   w.browser.strip.tabs.clear();
 }
 
+const base::DictValue* Named(const base::ListValue& events, const char* name) {
+  for (const auto& event : events) if (Text(event.GetDict(), "name") == name) return event.GetDict().FindDict("data");
+  return nullptr;
+}
+
+void MediaProducer() {
+  World w;
+  assert(w.binding->media && *w.binding->media == 1);
+  w.Claim();
+  const auto creation = *w.binding->page()->CreationState();
+  const auto& events = creation.FindDict("snapshot")->Find("events")->GetList();
+  assert(Text(events[0].GetDict(), "name") == "navigation" && Named(events, "media") && !Named(events, "discarded"));
+  w.browser.strip.tabs.clear();
+  w.first.reset();
+  assert(!w.binding->media && !w.binding->contents());
+}
+
+void DiscardedRebind() {
+  World w;
+  w.Claim();
+  w.second->discarded = true;
+  w.binding->frozen = true;
+  w.host.sent.clear();
+  w.Swap();
+  assert(w.host.sent.size() == 1 && Text(w.host.sent[0].payload, "action") == "rebind");
+  const auto& events = w.host.sent[0].payload.FindDict("creation")->FindDict("snapshot")->Find("events")->GetList();
+  const auto* discarded = Named(events, "discarded");
+  assert(discarded && Text(*discarded, "url") == "https://discarded.test/" && Named(events, "media"));
+  assert(w.binding->discard_reported && !w.binding->frozen && w.binding->media && *w.binding->media == 2);
+  w.second->discarded = false;
+  const auto again = *w.binding->page()->CreationState();
+  assert(!Named(again.FindDict("snapshot")->Find("events")->GetList(), "discarded"));
+}
+
+void Reveals() {
+  World w;
+  w.Claim();
+  assert(Present(w, 7, "claim", true) && w.binding->reveals == 1);
+  assert(Present(w, 7, "claim", true) && w.binding->reveals == 1);
+  assert(Present(w, 7, "claim", false) && w.binding->reveals == 1);
+  assert(Present(w, 7, "claim", true) && w.binding->reveals == 2);
+}
+
 int main(int argc, char** argv) {
   assert(argc == 2);
   std::string mode = argv[1];
@@ -354,6 +413,9 @@ int main(int argc, char** argv) {
   else if (mode == "two-discards") TwoDiscards();
   else if (mode == "failed-remount") FailedRemount();
   else if (mode == "status-migration") StatusMigration();
+  else if (mode == "media-producer") MediaProducer();
+  else if (mode == "discarded-rebind") DiscardedRebind();
+  else if (mode == "reveals") Reveals();
   else return 2;
 }
 '''
@@ -415,6 +477,15 @@ class PageHostJoinTests(unittest.TestCase):
 
     def test_page_status_producers_stop_at_discard_migration_and_transfer(self):
         self.run_case('status-migration')
+
+    def test_mounted_pages_snapshot_media_state_and_destruction_drops_it(self):
+        self.run_case('media-producer')
+
+    def test_discard_swap_sends_discarded_in_the_rebind_snapshot(self):
+        self.run_case('discarded-rebind')
+
+    def test_presenting_a_tab_reveals_it_once_per_transition(self):
+        self.run_case('reveals')
 
 
 if __name__ == '__main__':

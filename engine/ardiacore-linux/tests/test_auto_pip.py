@@ -117,6 +117,9 @@ struct TabBinding {
   std::vector<int> replaced_ids;
   void RememberPendingAutoPictureInPicture() {}
   content::WebContents* contents() { return &value; }
+  int reveals = 0;
+  void Reveal() { ++reveals; }
+  base::WeakPtr<TabBinding> GetWeakPtr() { return this; }
 };
 struct ShellHostView {
   bool handler_ = true;

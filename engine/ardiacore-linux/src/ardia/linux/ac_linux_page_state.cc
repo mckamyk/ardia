@@ -56,6 +56,11 @@ void LinuxPageState::Retire() {
   security_->Reset();
   navigation_.Reset();
   message_snapshot_.Reset();
+  producer_.Reset();
+}
+
+void LinuxPageState::SetSnapshotProducer(SnapshotProducer producer) {
+  if (!retired_) producer_ = std::move(producer);
 }
 
 std::optional<LinuxPageRequest> LinuxPageState::Capture() {
@@ -97,6 +102,15 @@ std::optional<base::ListValue> LinuxPageState::SnapshotEvents() {
     for (const auto& message : messages) {
       if (appended++ == kMessageSnapshotMax) break;
       events.Append(message.Clone());
+    }
+  }
+  if (producer_) {
+    auto producer = producer_;
+    auto produced = producer.Run();
+    if (!weak || retired_) return std::nullopt;
+    for (auto& [name, data] : produced) {
+      if (name.empty() || name.size() > 64 || events.size() >= 128) continue;
+      events.Append(PageEvent(std::move(name), std::move(data)));
     }
   }
   return events;
