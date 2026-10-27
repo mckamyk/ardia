@@ -110,7 +110,8 @@ int main(int argc, char** argv) {
     host.handler.authorized = false; refused(request.Clone()); host.handler.authorized = true;
     auto begun = Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()));
     assert(begun->called && begun->ok && begun->value.is_dict());
-    assert(begun->value.GetDict().size() == 1 && begun->value.GetDict().Find("accepted")->GetBool());
+    assert(begun->value.GetDict().size() == 2 && begun->value.GetDict().Find("accepted")->GetBool());
+    assert(begun->value.GetDict().Find("endsSession")->GetBool());
     assert(host.close_.phase() == LinuxClose::Phase::kDraining && UI()->timers.size() == 1);
     assert(files.tasks.empty() && !host.close_.BlocksWrites());
     auto again = Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()));
@@ -193,6 +194,59 @@ int main(int argc, char** argv) {
     assert(host.close_.phase() == LinuxClose::Phase::kCancelled && Named(host, "shell.closeCancelled") == 1);
     Commit(host, 1, true);
   }
+  if (mode == "sealed-stuck") {
+    ShellHostView host; Watch(host); host.ArmWindowClose();
+    hosts[1] = &host;
+    const auto request = host.RequestWindowClose();
+    assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()))->ok);
+    bool replied = false, acknowledged = true;
+    host.AcknowledgeWindowClose(Ack(request, 0), [&](bool ok, auto) { replied = true; acknowledged = ok; });
+    files.Drain(); UI()->One();
+    assert(host.close_.phase() == LinuxClose::Phase::kSealed && !host.chrome_close_token_ && UI()->tasks.size() == 1);
+    host.handler.authorized = false; UI()->One(); host.handler.authorized = true;
+    Drain();
+    assert(host.close_.phase() == LinuxClose::Phase::kSealed && host.close_.BlocksWrites());
+    assert(!replied && !host.native.widget.IsClosed() && !host.chrome_close_token_);
+    UI()->Expire(); Drain();
+    assert(host.close_.phase() == LinuxClose::Phase::kCancelled && !host.close_.BlocksWrites());
+    assert(replied && !acknowledged && host.native.discard_requests == 0);
+    assert(Named(host, "shell.closeCancelled") == 1);
+    Commit(host, 1, true);
+  }
+  if (mode == "handoff") {
+    ShellHostView host; Watch(host); host.ArmWindowClose();
+    hosts[1] = &host;
+    host.native.widget.veto = true;
+    const auto request = host.RequestWindowClose();
+    assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()))->ok);
+    host.AcknowledgeWindowClose(Ack(request, 0), Ignore);
+    Drain();
+    assert(host.close_.phase() == LinuxClose::Phase::kHandedOff && host.chrome_close_token_);
+    const auto token = *host.chrome_close_token_;
+    UI()->Expire(); Drain();
+    assert(host.close_.phase() == LinuxClose::Phase::kHandedOff && *host.chrome_close_token_ == token);
+    assert(host.native.discard_requests == 0 && Named(host, "shell.closeCancelled") == 0);
+  }
+  if (mode == "ends-session") {
+    ShellHostView host; Watch(host);
+    ShellHostView other; other.window_id_ = "window-2";
+    ShellHostView utility; utility.window_id_ = "import"; utility.kind_ = "import";
+    hosts[1] = &host; hosts[2] = &utility;
+    auto ends = [&](const base::DictValue& request) {
+      auto reply = Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()));
+      assert(reply->ok);
+      return reply->value.GetDict().Find("endsSession")->GetBool();
+    };
+    auto request = host.RequestWindowClose();
+    assert(ends(request));
+    hosts[3] = &other;
+    assert(!ends(request));
+    browser_shutdown::trying_to_quit = true;
+    assert(ends(request));
+    browser_shutdown::trying_to_quit = false;
+    other.native.widget.closed = true;
+    assert(ends(request));
+  }
   if (mode == "decision-cancel") {
     ShellHostView host; Watch(host); host.ArmWindowClose();
     hosts[1] = &host;
@@ -261,6 +315,15 @@ class CloseDeliberationTests(unittest.TestCase):
 
     def test_drain_deadline_requests_coordinated_chrome_cancellation(self):
         self.run_mode('drain', 'chrome-drain-deadline')
+
+    def test_sealed_attempt_that_never_reaches_chrome_is_cancelled_by_the_backstop(self):
+        self.run_mode('drain', 'sealed-stuck')
+
+    def test_backstop_never_fires_after_chrome_handoff(self):
+        self.run_mode('drain', 'handoff')
+
+    def test_drain_reports_whether_closing_ends_the_session(self):
+        self.run_mode('drain', 'ends-session')
 
     def test_cancel_decision_rejects_the_pending_attempt_through_chrome(self):
         self.run_mode('drain', 'decision-cancel')

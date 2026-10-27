@@ -20,7 +20,7 @@ def values():
 
 def host_methods():
     source = (ROOT / 'src/ardia/linux/ac_linux_host.cc').read_text()
-    signatures = ['LinuxDocumentClient ShellHostView::DocumentClient', 'bool ShellHostView::EnsureDocumentClient', 'bool ShellHostView::RetireDocuments', 'void ShellHostView::DocumentCall', 'std::optional<ShellHostView::StorageTicket> ShellHostView::BeginStorageIntent', 'void ShellHostView::CompleteStorageIntent', 'bool ShellHostView::TrackStorageWrite', 'void ShellHostView::CloseNativeWindow', 'void ShellHostView::ArmWindowClose', 'base::DictValue ShellHostView::RequestWindowClose', 'void ShellHostView::BeginWindowCloseDrain', 'void ShellHostView::RequestUtilityClose', 'bool ShellHostView::ReadyForChromeClose', 'LinuxCloseAdmission ShellHostView::AdmitChromeTeardown', 'void ShellHostView::ReplyChromeClose', 'void ShellHostView::FinishChromePreparations', 'bool ShellHostView::DeferChromeClose', 'void ShellHostView::ChromeCloseCancelled', 'void ShellHostView::CancelWindowClose', 'void ShellHostView::CancelDocumentSeal', 'void ShellHostView::AcknowledgeWindowClose', 'void ShellHostView::OnWidgetClosing', 'void ShellHostView::OnWidgetDestroying']
+    signatures = ['LinuxDocumentClient ShellHostView::DocumentClient', 'bool ShellHostView::EnsureDocumentClient', 'bool ShellHostView::RetireDocuments', 'void ShellHostView::DocumentCall', 'std::optional<ShellHostView::StorageTicket> ShellHostView::BeginStorageIntent', 'void ShellHostView::CompleteStorageIntent', 'bool ShellHostView::TrackStorageWrite', 'void ShellHostView::CloseNativeWindow', 'void ShellHostView::ArmWindowClose', 'base::DictValue ShellHostView::RequestWindowClose', 'void ShellHostView::BeginWindowCloseDrain', 'bool ShellHostView::AwaitingChromeHandoff', 'bool ShellHostView::ClosingEndsSession', 'void ShellHostView::RequestUtilityClose', 'bool ShellHostView::ReadyForChromeClose', 'LinuxCloseAdmission ShellHostView::AdmitChromeTeardown', 'void ShellHostView::ReplyChromeClose', 'void ShellHostView::FinishChromePreparations', 'bool ShellHostView::DeferChromeClose', 'void ShellHostView::ChromeCloseCancelled', 'void ShellHostView::CancelWindowClose', 'void ShellHostView::CancelDocumentSeal', 'void ShellHostView::AcknowledgeWindowClose', 'void ShellHostView::OnWidgetClosing', 'void ShellHostView::OnWidgetDestroying']
     return '\n'.join(method(source, signature) for signature in signatures)
 
 
@@ -29,6 +29,7 @@ PRELUDE = r'''
 #include <cassert>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -92,6 +93,10 @@ struct SingleThreadTaskRunner {
 };
 int Seconds(int n) { return n; }
 std::string NumberToString(uint64_t n) { return std::to_string(n); }
+}
+namespace browser_shutdown {
+inline bool trying_to_quit = false;
+inline bool IsTryingToQuit() { return trying_to_quit; }
 }
 base::SingleThreadTaskRunner files;
 void Drain() {
@@ -272,6 +277,8 @@ struct ShellHostView {
   bool utility_ready_ = true;
   bool utility_close_pending_ = false;
   std::string window_id_ = "settings";
+  std::string kind_;
+  bool is_utility() const { return !kind_.empty(); }
   struct Observation { void Reset() {} } close_observation_;
   std::vector<std::tuple<std::string, std::string, base::Value>> events;
   ShellHostView() {
@@ -309,10 +316,14 @@ struct ShellHostView {
   void RequestUtilityClose();
   void CancelWindowClose(LinuxClose::Identity, base::OnceCallback<void(bool, base::Value)>);
   void BeginWindowCloseDrain(const base::DictValue&, base::OnceCallback<void(bool, base::Value)>);
+  bool AwaitingChromeHandoff() const;
+  bool ClosingEndsSession() const;
   void AcknowledgeWindowClose(const base::DictValue&, base::OnceCallback<void(bool, base::Value)>);
   void OnWidgetClosing(views::Widget*);
   void OnWidgetDestroying(views::Widget*);
 };
+std::map<int, ShellHostView*> hosts;
+auto& Hosts() { return hosts; }
 std::string String(const base::DictValue& request, const char* key) {
   const auto* value = request.FindString(key);
   return value ? *value : "";
@@ -368,8 +379,6 @@ def close_invoke():
         '  if (method == "ArdiaShell.beginWindowCloseDrain")',
         '  if (method == "ArdiaShell.acknowledgeWindowClose" || method == "ArdiaShell.rejectWindowClose")'])
     return r'''
-std::map<int, ShellHostView*> hosts;
-auto& Hosts() { return hosts; }
 void ShellHostView::CloseInvoke(std::string method, const base::DictValue& args,
                                 base::OnceCallback<void(bool, base::Value)> done) {
   const base::ListValue empty;
