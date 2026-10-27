@@ -352,3 +352,180 @@ test("identity awaits count toward the bounded pending queue", async () => {
   identity.resolve({ windowId: "a", rendererGeneration: "1" });
   await turn(); assert.equal(f.requests.length, 16);
 });
+
+const requestsFor = (f, method) => f.requests.filter((request) => request.method === `ArdiaShell.${method}`);
+
+test("abort after a decision longer than 30 s cancels only that request and ignores its late confirm", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const a = fixture("a", "7"), b = fixture("b", "8");
+  const abort = new AbortController();
+  let settlements = 0;
+  const aborted = a.dialogs.abortableConfirm({ title: "Close tab?", suppression: "Hide" }, abort.signal).then((value) => { settlements++; return value; });
+  await turn();
+  const abortedId = requestsFor(a, "beginDialog")[0].args[0].dialogId;
+  const sibling = a.dialogs.confirm({ title: "Sibling", suppression: "Hide" });
+  const other = b.dialogs.prompt({ title: "Other window" });
+  await turn();
+  t.mock.timers.tick(45_000);
+  await turn();
+  abort.abort(); abort.abort();
+  assert.deepEqual(await aborted, { confirmed: false, suppressed: false });
+  assert.deepEqual(requestsFor(a, "cancelDialog").map((request) => request.args[0]), [abortedId]);
+  assert.equal(requestsFor(b, "cancelDialog").length, 0);
+  a.emit({ confirmed: true, suppressed: true }, { dialogId: abortedId });
+  a.emit({ confirmed: true, suppressed: true }, { dialogId: abortedId });
+  await turn(); assert.equal(settlements, 1);
+  assert.equal(a.listeners.size, 1);
+  a.emit({ confirmed: true, suppressed: true }, { rendererGeneration: "8" });
+  a.emit({ confirmed: false, suppressed: true });
+  a.emit({ confirmed: true, suppressed: false });
+  b.emit("Window B");
+  assert.deepEqual(await sibling, { confirmed: false, suppressed: true });
+  assert.equal(await other, "Window B");
+  const next = a.dialogs.prompt({ title: "Still admitted" });
+  await turn(); a.emit("Next"); assert.equal(await next, "Next");
+  a.dialogs.retire(); b.dialogs.retire();
+});
+
+test("abort while the identity query is pending never begins the dialog", async () => {
+  const f = fixture();
+  const identity = deferred();
+  const original = f.host.invoke;
+  f.host.invoke = (method, data) => { f.requests.push({ method, ...data }); return identity.promise; };
+  const abort = new AbortController();
+  const work = f.dialogs.abortablePrompt({ title: "Rename" }, abort.signal);
+  await turn();
+  abort.abort();
+  assert.equal(await work, null);
+  f.host.invoke = original;
+  identity.resolve({ windowId: "a", rendererGeneration: "9007199254740993" });
+  await turn(); await turn();
+  assert.deepEqual(f.requests.map((request) => request.method), ["ArdiaShell.windowIdentity"]);
+  const failed = deferred();
+  f.host.invoke = (method, data) => { f.requests.push({ method, ...data }); return failed.promise; };
+  const second = new AbortController();
+  const rejected = f.dialogs.abortableConfirm({ title: "Fails late" }, second.signal);
+  await turn(); second.abort();
+  assert.deepEqual(await rejected, { confirmed: false, suppressed: false });
+  failed.reject(new Error("late failure"));
+  await turn();
+  assert.equal(requestsFor(f, "beginDialog").length + requestsFor(f, "cancelDialog").length, 0);
+  f.dialogs.retire();
+});
+
+test("abort after an early event and before begin acknowledgement settles as cancel once", async () => {
+  const f = fixture();
+  const ack = deferred();
+  const abort = new AbortController();
+  f.host.invoke = (method, data) => {
+    f.requests.push({ method, ...data });
+    if (method.endsWith("windowIdentity")) return Promise.resolve({ windowId: "a", rendererGeneration: "9007199254740993" });
+    if (method.endsWith("cancelDialog")) return Promise.resolve();
+    f.emit({ confirmed: true, suppressed: true });
+    return ack.promise;
+  };
+  let settlements = 0;
+  const work = f.dialogs.abortableConfirm({ title: "Early", suppression: "Hide" }, abort.signal).then((value) => { settlements++; return value; });
+  await turn();
+  abort.abort();
+  assert.deepEqual(await work, { confirmed: false, suppressed: false });
+  ack.resolve({ accepted: true });
+  await turn();
+  f.emit({ confirmed: true, suppressed: true });
+  await turn();
+  assert.equal(settlements, 1);
+  assert.deepEqual(f.requests.map((request) => request.method), ["ArdiaShell.windowIdentity", "ArdiaShell.beginDialog", "ArdiaShell.cancelDialog"]);
+  f.dialogs.retire();
+});
+
+test("an already aborted signal settles as cancel without native traffic", async () => {
+  const f = fixture();
+  const abort = new AbortController();
+  abort.abort();
+  assert.deepEqual(await f.dialogs.abortableConfirm({ title: "Never" }, abort.signal), { confirmed: false, suppressed: false });
+  assert.equal(await f.dialogs.abortablePrompt({ title: "Never" }, abort.signal), null);
+  assert.equal(f.requests.length, 0);
+  await assert.rejects(f.dialogs.abortablePrompt({ title: 1 }, abort.signal), /Invalid dialog owner or title/);
+  f.dialogs.retire();
+});
+
+test("aborting one entry of a saturated 16-entry queue releases exactly one slot", async () => {
+  const f = fixture();
+  const abort = new AbortController();
+  const target = f.dialogs.abortablePrompt({ title: "Abortable" }, abort.signal);
+  const rest = Array.from({ length: 15 }, () => f.dialogs.prompt({ title: "Queued" }));
+  await assert.rejects(f.dialogs.prompt({ title: "Overflow" }), /Too many/);
+  await turn();
+  abort.abort();
+  assert.equal(await target, null);
+  const admitted = f.dialogs.prompt({ title: "Admitted" });
+  await assert.rejects(f.dialogs.prompt({ title: "Overflow again" }), /Too many/);
+  await turn();
+  f.dialogs.retire();
+  assert.deepEqual(await Promise.all([...rest, admitted]), Array(16).fill(null));
+  assert.equal(requestsFor(f, "cancelDialog").length, 17);
+});
+
+test("suspend cancels every pending request once, refuses new admissions and keeps result dispatch", async () => {
+  const a = fixture(), b = fixture("b", "5");
+  const identity = deferred();
+  const original = a.host.invoke;
+  const begun = a.dialogs.confirm({ title: "Begun", suppression: "Hide" });
+  const buffered = a.dialogs.prompt({ title: "Awaiting result" });
+  await turn();
+  const ids = requestsFor(a, "beginDialog").map((request) => request.args[0].dialogId);
+  a.host.invoke = (method, data) => {
+    if (!method.endsWith("windowIdentity")) return original(method, data);
+    a.requests.push({ method, ...data });
+    return identity.promise;
+  };
+  const querying = a.dialogs.prompt({ title: "Querying" });
+  const abort = new AbortController();
+  const abortable = a.dialogs.abortableConfirm({ title: "Abortable" }, abort.signal);
+  const otherWindow = b.dialogs.prompt({ title: "Other window" });
+  await turn();
+  const continuations = [];
+  const settlements = [begun, buffered, querying, abortable].map((work, index) => work.then((value) => { continuations.push(index); return value; }));
+  const suspension = a.dialogs.suspend();
+  assert.ok(Object.isFrozen(suspension));
+  await suspension.settled;
+  assert.deepEqual(continuations.sort(), [0, 1, 2, 3]);
+  assert.deepEqual(await Promise.all(settlements), [{ confirmed: false, suppressed: false }, null, null, { confirmed: false, suppressed: false }]);
+  const canceled = requestsFor(a, "cancelDialog").map((request) => request.args[0]);
+  assert.deepEqual(canceled.sort(), [...ids].sort());
+  const before = a.requests.length;
+  await assert.rejects(a.dialogs.confirm({ title: "Refused" }), { code: "ERR_DIALOG", message: "Dialogs are suspended for this window" });
+  await assert.rejects(a.dialogs.abortablePrompt({ title: "Refused" }, new AbortController().signal), /suspended/);
+  assert.equal(a.requests.length, before);
+  identity.resolve({ windowId: "a", rendererGeneration: "9007199254740993" });
+  await turn(); await turn();
+  assert.equal(requestsFor(a, "beginDialog").length, ids.length);
+  for (const dialogId of ids) a.emit({ confirmed: true, suppressed: true }, { dialogId });
+  abort.abort();
+  await turn();
+  assert.equal(continuations.length, 4);
+  assert.equal(a.listeners.size, 1);
+  assert.equal(a.closing.size, 1);
+  b.emit("Other");
+  assert.equal(await otherWindow, "Other");
+  a.dialogs.retire(); b.dialogs.retire();
+});
+
+test("stale resume is ignored and only the current suspension re-admits", async () => {
+  const f = fixture();
+  const first = f.dialogs.suspend();
+  const second = f.dialogs.suspend();
+  assert.notEqual(first, second);
+  assert.equal(f.dialogs.resume(first), false);
+  await assert.rejects(f.dialogs.prompt({ title: "Still suspended" }), /suspended/);
+  for (const forged of [undefined, null, {}, { settled: second.settled }]) assert.equal(f.dialogs.resume(forged), false);
+  await assert.rejects(f.dialogs.prompt({ title: "Still suspended" }), /suspended/);
+  assert.equal(f.dialogs.resume(second), true);
+  assert.equal(f.dialogs.resume(second), false);
+  const work = f.dialogs.prompt({ title: "Re-admitted" });
+  await turn(); f.emit("Again"); assert.equal(await work, "Again");
+  const third = f.dialogs.suspend();
+  f.dialogs.retire();
+  assert.equal(f.dialogs.resume(third), false);
+  await assert.rejects(f.dialogs.prompt({ title: "Retired" }), /unavailable/);
+});
