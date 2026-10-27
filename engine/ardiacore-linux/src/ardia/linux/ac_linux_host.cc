@@ -26,6 +26,8 @@
 #include "ardia/linux/ac_linux_launch_config.h"
 #include "ardia/linux/ac_linux_page_commands.h"
 #include "ardia/linux/ac_linux_launch_steps.h"
+#include "ardia/linux/ac_linux_profile_service.h"
+#include "ardia/linux/ac_linux_profiles.h"
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/linux/ac_linux_window_lifecycle.h"
@@ -250,6 +252,9 @@ struct RequestedWindow {
   std::string title;
   base::DictValue utility;
   base::WeakPtr<BrowserWindowInterface> browser;
+  std::string page_profile;
+  base::WeakPtr<Profile> app_profile;
+  base::DictValue private_window;
 };
 std::map<int, RequestedWindow>& RequestedWindows();
 
@@ -341,9 +346,13 @@ std::string ArgumentString(const base::ListValue& args, size_t index) {
              : std::string();
 }
 
-bool DefaultProfileId(std::string_view id) {
-  return id.empty() || id == "default";
+base::Value ProfileFailure(ardiacore::linux_profiles::ProfileError error) {
+  return base::Value(base::DictValue()
+      .Set("code", ardiacore::linux_profiles::ProfileErrorCode(error))
+      .Set("message", ardiacore::linux_profiles::ProfileErrorMessage(error)));
 }
+
+constexpr size_t kPrivateWindowLimit = 1024 * 1024;
 
 bool ValidUtilityPlacement(const base::DictValue* placement) {
   if (!placement || !placement->FindBool("maximized")) return false;
@@ -739,7 +748,7 @@ class ShellHostView : public views::View,
   METADATA_HEADER(ShellHostView, views::View)
 
  public:
-  ShellHostView(BrowserWindowInterface* browser, BrowserView* parent, bool startup);
+  ShellHostView(BrowserWindowInterface* browser, BrowserView* parent, bool startup, Profile* app_profile);
   ~ShellHostView() override;
   void Initialize();
   void DetachBrowser();
@@ -752,6 +761,8 @@ class ShellHostView : public views::View,
     kind_ = std::move(request.kind);
     title_ = std::move(request.title);
     utility_ = std::move(request.utility);
+    page_profile_ = std::move(request.page_profile);
+    private_window_ = std::move(request.private_window);
   }
   void NavigateUtility(base::DictValue utility) {
     utility_ = std::move(utility);
@@ -761,7 +772,10 @@ class ShellHostView : public views::View,
   }
   BrowserWindowInterface* browser() const { return browser_; }
   content::WebContents* shell() const { return shell_->GetWebContents(); }
-  Profile* profile() const { return browser_ ? browser_->GetProfile() : nullptr; }
+  Profile* profile() const { return browser_ ? app_profile_.get() : nullptr; }
+  Profile* page_profile() const { return browser_ ? browser_->GetProfile() : nullptr; }
+  const std::string& page_profile_id() const { return page_profile_; }
+  bool HostsProfile(std::string_view id) const { return ardiacore::LinuxProfileHosts(id, page_profile()); }
   bool Trusted(content::WebUI* ui) const;
   bool DeferChromeClose(const base::UnguessableToken& token, LinuxCloseStage stage,
                          base::OnceCallback<void(bool)> continuation);
@@ -840,7 +854,7 @@ class ShellHostView : public views::View,
               base::OnceCallback<void(bool, base::Value)> done);
   void ReportTab(int id, base::DictValue event);
   void OfferTab(content::WebContents* contents) {
-    if (contents && contents->GetBrowserContext() == profile()) offered_[TabId(contents)] = contents->GetWeakPtr();
+    if (contents && contents->GetBrowserContext() == page_profile()) offered_[TabId(contents)] = contents->GetWeakPtr();
   }
   int TabShown(content::WebContents* contents) const {
     for (const auto& [id, binding] : bindings_) {
@@ -987,6 +1001,9 @@ class ShellHostView : public views::View,
 
   raw_ptr<BrowserWindowInterface> browser_;
   raw_ptr<BrowserView> browser_view_;
+  base::WeakPtr<Profile> app_profile_;
+  std::string page_profile_;
+  base::DictValue private_window_;
   raw_ptr<LinuxShellWebView> shell_ = nullptr;
   raw_ptr<HostMessageHandler> handler_ = nullptr;
   uint64_t renderer_generation_ = 0;
@@ -1185,6 +1202,9 @@ class HostMessageHandler : public content::WebUIMessageHandler,
   void Fail(const std::string& id, std::string_view code, std::string_view message) {
     Reply(id, false, base::Value(base::DictValue().Set("code", code).Set("message", message)));
   }
+  void ProfileFail(const std::string& id, ardiacore::linux_profiles::ProfileError error) {
+    Fail(id, ardiacore::linux_profiles::ProfileErrorCode(error), ardiacore::linux_profiles::ProfileErrorMessage(error));
+  }
   void Request(const base::ListValue& arguments) {
     CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
     if (!host_ || !host_->OwnsHandler(this, generation_) || !host_->Trusted(web_ui()) || arguments.size() != 3 ||
@@ -1198,9 +1218,13 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       const std::string name = String(args, "name");
       if (!args.FindString("profile")) return Fail(id, "ERR_ENGINE", "Profile must be a string");
       const std::string profile = String(args, "profile");
-      if (!DefaultProfileId(profile) || !host_->profile() ||
-          host_->profile()->IsOffTheRecord()) {
-        return Reply(id, false, base::Value(base::DictValue().Set("code", "ERR_ENGINE").Set("message", "Only the default regular profile is supported")));
+      const auto profile_name = ardiacore::linux_profiles::ParseProfileName(profile);
+      if (!profile_name || !host_->profile() || host_->profile()->IsOffTheRecord()) {
+        return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kInvalid);
+      }
+      if (name == "profiles.release") {
+        ardiacore::ReleaseLinuxProfile(profile);
+        return Resolve(id, base::Value());
       }
       const base::Value* value = args.Find("args");
       if (name.starts_with("documents.") && args.size() != 3)
@@ -1223,6 +1247,9 @@ class HostMessageHandler : public content::WebUIMessageHandler,
         return Fail(id, "ERR_ENGINE", "Engine arguments require a regular-profile JSON object");
       }
       const auto& input = parsed->GetDict();
+      if (name.starts_with("documents.") && profile_name->kind != ardiacore::linux_profiles::ProfileKind::kDefault) {
+        return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kInvalid);
+      }
       if (name.starts_with("documents.")) {
         return host_->DocumentCall(name.substr(10), input.Clone(),
             base::BindOnce([](base::WeakPtr<HostMessageHandler> handler,
@@ -1281,7 +1308,9 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       }
       const auto* route = ardiacore::linux_contract::FindRoute(name);
       if (!route) return Fail(id, "ERR_UNKNOWN_CALL", "This call is unavailable on Linux");
-      const std::string path = host_->profile()->GetPath().value();
+      if (profile_name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate) {
+        return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
+      }
       if (name == "extensions.configure") {
         const auto configured = ExtensionConfiguration(input);
         if (!configured) return Fail(id, "ERR_ENGINE", "Unsupported or invalid extension options");
@@ -1290,8 +1319,18 @@ class HostMessageHandler : public content::WebUIMessageHandler,
         json = *serialized;
       }
       const std::string service(route->service);
-      ac_engine_call(service.c_str(), path.c_str(), json.c_str(), Replied,
-                     new EngineReply{name, weak_factory_.GetWeakPtr(), id});
+      ardiacore::ResolveLinuxProfile(profile, base::BindOnce(
+          [](base::WeakPtr<HostMessageHandler> handler, std::string name, std::string id,
+             std::string service, std::string json, Profile* resolved,
+             ardiacore::linux_profiles::ProfileError error) {
+            if (!handler) return;
+            if (!resolved || resolved->IsOffTheRecord()) {
+              return handler->ProfileFail(id, resolved ? ardiacore::linux_profiles::ProfileError::kPrivateService : error);
+            }
+            const std::string path = resolved->GetPath().value();
+            ac_engine_call(service.c_str(), path.c_str(), json.c_str(), Replied,
+                           new EngineReply{name, handler, id});
+          }, weak_factory_.GetWeakPtr(), name, id, service, json));
       return;
     }
     if (arguments[1].GetString() != "host.invoke") {
@@ -1381,12 +1420,12 @@ class ShellConfig : public content::DefaultWebUIConfig<ShellController> {
 };
 
 ShellHostView::ShellHostView(BrowserWindowInterface* browser, BrowserView* parent,
-                             bool startup)
-    : browser_(browser), browser_view_(parent),
+                             bool startup, Profile* app_profile)
+    : browser_(browser), browser_view_(parent), app_profile_(app_profile->GetWeakPtr()),
       id_(browser->GetSessionID().id()), startup_(startup),
       window_id_(Hosts().empty() ? "main" : "window-" + base::NumberToString(id_)) {
   Hosts()[id_] = this;
-  shell_ = AddChildView(std::make_unique<LinuxShellWebView>(browser->GetProfile()));
+  shell_ = AddChildView(std::make_unique<LinuxShellWebView>(app_profile));
   view_observation_.Observe(parent);
   browser->GetTabStripModel()->AddObserver(this);
 }
@@ -1501,6 +1540,8 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Set("launchConfig", ardiacore::LinuxLaunchConfig(DocumentDirectory(profile()), user_data_directory))
       .Set("capabilities", std::move(capabilities));
   if (is_utility()) bootstrap.Set("utility", utility_.Clone());
+  bootstrap.Set("pageProfile", page_profile_);
+  if (!private_window_.empty()) bootstrap.Set("privateWindow", private_window_.Clone());
   return bootstrap;
 }
 
@@ -2632,7 +2673,7 @@ base::DictValue ShellHostView::Strip() const {
       .Set("strip", id_)
       .Set("window", id_)
       .Set("appWindow", window_id_)
-      .Set("profile", "")
+      .Set("profile", page_profile_)
       .Set("tabs", std::move(tabs));
 }
 
@@ -2670,16 +2711,14 @@ void ShellHostView::EngineEvent(std::string_view topic,
   base::DictValue translated = payload.Clone();
   if (translated.FindBool("offTheRecord").value_or(false)) return;
   if (!translated.FindString("profile")) return;
-  if (const std::string* path = translated.FindString("profile")) {
-    if (*path != profile()->GetPath().value() ||
-        translated.FindBool("offTheRecord").value_or(false)) return;
-    translated.Set("profile", "");
-  }
+  const auto engine_profile = ardiacore::LinuxProfileNameForPath(String(translated, "profile"));
+  if (!engine_profile) return;
+  translated.Set("profile", *engine_profile);
   if (topic == "downloads.changed") {
     const auto* download = translated.FindDict("download");
     if (!download || download->FindBool("offTheRecord").value_or(false)) return;
     translated = download->Clone();
-    translated.Set("profile", "");
+    translated.Set("profile", *engine_profile);
   }
   const auto name = ardiacore::linux_contract::EventName(topic);
   if (name.empty()) return;
@@ -2742,7 +2781,7 @@ void ShellHostView::ClaimLaunchTab(
     return std::move(done).Run(false, base::Value("A launch key, URL and profile are required"));
   }
   const auto tab = launch_decision_.Consume(values[0].GetString(), values[1].GetString(), values[2].GetString());
-  if (!tab || !DefaultProfileId(values[2].GetString())) return std::move(done).Run(false, base::Value("No matching unconsumed native launch offer"));
+  if (!tab || !HostsProfile(values[2].GetString())) return std::move(done).Run(false, base::Value("No matching unconsumed native launch offer"));
   if (*tab == 0) return std::move(done).Run(true, base::Value());
   const bool adopted = AdoptLaunchOffer(*tab, values[0].GetString(), values[1].GetString());
   std::move(done).Run(adopted, adopted ? base::Value() : base::Value("The native launch offer is no longer available"));
@@ -2754,7 +2793,7 @@ bool ShellHostView::AdoptLaunchOffer(int tab, std::string_view key, std::string_
   for (int index = 0; index < model->count(); ++index) {
     auto* contents = model->GetWebContentsAt(index);
     if (TabId(contents) != tab) continue;
-    if (contents->GetBrowserContext() != profile() || contents->GetVisibleURL() != GURL(url)) return false;
+    if (contents->GetBrowserContext() != page_profile() || contents->GetVisibleURL() != GURL(url)) return false;
     bindings_[tab] = std::make_unique<TabBinding>(this, contents, std::string(key));
     bindings_[tab]->renderer_generation = renderer_generation_;
     QueueTransaction(-1);
@@ -2769,9 +2808,16 @@ void ShellHostView::CreateTab(
   const std::string key = String(args, "key");
   const std::string claim = String(args, "claim");
   if (claim.empty() || claim.size() > 256) return std::move(done).Run(false, base::Value("A bounded tab claim is required"));
-  if (!browser_ || key.empty() || key.size() > 256 ||
-      !args.FindString("profile") || !DefaultProfileId(String(args, "profile"))) {
-    return std::move(done).Run(false, base::Value("A key and the default regular profile are required"));
+  if (!browser_ || key.empty() || key.size() > 256 || !args.FindString("profile")) {
+    return std::move(done).Run(false, base::Value("A key and a profile are required"));
+  }
+  if (!HostsProfile(String(args, "profile"))) {
+    const auto name = ardiacore::linux_profiles::ParseProfileName(String(args, "profile"));
+    const auto error = !name ? ardiacore::linux_profiles::ProfileError::kInvalid
+                             : ardiacore::linux_profiles::ProfileError::kWindowMismatch;
+    return std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", ardiacore::linux_profiles::ProfileErrorCode(error))
+        .Set("message", ardiacore::linux_profiles::ProfileErrorMessage(error))));
   }
   TabStripModel* model = browser_->GetTabStripModel();
   std::string text = String(args, "url");
@@ -2790,11 +2836,11 @@ void ShellHostView::CreateTab(
       if (source == this) continue;
       TabBinding* existing = source->BindingForKey(key);
       if (!existing || !existing->contents()) continue;
-      if (!ardiacore::linux_contract::CanTransfer(existing->transferable, existing->temporary, source->profile() == profile())) return std::move(done).Run(false, base::Value("This tab has not been offered for transfer"));
+      if (!ardiacore::linux_contract::CanTransfer(existing->transferable, existing->temporary, source->page_profile() == page_profile())) return std::move(done).Run(false, base::Value("This tab has not been offered for transfer"));
       const int id = TabId(existing->contents());
       TabStripModel* source_model = source->browser()->GetTabStripModel();
       const int index = source_model->GetIndexOfWebContents(existing->contents());
-      if (index < 0 || source->profile() != profile()) {
+      if (index < 0 || source->page_profile() != page_profile()) {
         return std::move(done).Run(false, base::Value("The transfer source is unavailable"));
       }
       source->app_operation_ = true;
@@ -2827,12 +2873,13 @@ void ShellHostView::CreateTab(
       bool offered = false;
       for (auto& [window, source] : Hosts()) {
         const auto offer = source->offered_.find(wanted);
-        if (source->profile() == profile() && offer != source->offered_.end() && offer->second) offered = true;
+        if (source->page_profile() == page_profile() && offer != source->offered_.end() && offer->second &&
+            offer->second->GetBrowserContext() == page_profile()) offered = true;
       }
       if (!offered) return std::move(done).Run(false, base::Value("This tab has not been offered for adoption"));
       GlobalBrowserCollection::GetInstance()->ForEach(
           [&](BrowserWindowInterface* candidate) {
-            if (candidate->GetProfile() != profile() || candidate->GetProfile()->IsOffTheRecord()) return true;
+            if (candidate->GetProfile() != page_profile()) return true;
             TabStripModel* strip = candidate->GetTabStripModel();
             for (int index = 0; index < strip->count(); ++index) {
               if (TabId(strip->GetWebContentsAt(index)) == wanted) {
@@ -3081,7 +3128,7 @@ void ShellHostView::SetViewport(
     }
   }
   if (!binding->viewport()) {
-    binding->SetViewport(AddChildView(std::make_unique<ViewportView>(profile())));
+    binding->SetViewport(AddChildView(std::make_unique<ViewportView>(page_profile())));
   }
   binding->pane_bounds = bounds;
   binding->pane_shape = std::move(shape);
@@ -3190,6 +3237,89 @@ void ShellHostView::StripCommand(
               target->Event("ArdiaTabs", "tabs", base::Value(base::DictValue().Set("name", "tabs.strips").Set("data", transaction.Clone())));
             }
           }, GetWeakPtr(), std::move(transaction)));
+}
+
+struct WindowOpening {
+  std::string id;
+  std::string kind;
+  std::string title;
+  std::string page_profile;
+  std::optional<linux_window::Requested> requested;
+  linux_window::OpenIntent intent;
+  std::optional<base::DictValue> utility;
+  base::DictValue private_window;
+  base::WeakPtr<Profile> app_profile;
+};
+
+std::set<std::string>& OpeningWindows() {
+  static base::NoDestructor<std::set<std::string>> ids;
+  return *ids;
+}
+
+void OpenNativeWindow(WindowOpening opening, Profile* page,
+                      ardiacore::linux_profiles::ProfileError error,
+                      base::OnceCallback<void(bool, base::Value)> done) {
+  OpeningWindows().erase(opening.id);
+  Profile* app = opening.app_profile.get();
+  const bool utility = !opening.kind.empty();
+  if (!page || !app) {
+    return std::move(done).Run(false, ProfileFailure(
+        error == ardiacore::linux_profiles::ProfileError::kNone
+            ? ardiacore::linux_profiles::ProfileError::kUnavailable : error));
+  }
+  if (!utility && !ardiacore::LinuxProfileHosts(opening.page_profile, page)) {
+    return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kUnavailable));
+  }
+  for (const auto& [native_id, host] : Hosts()) {
+    if (host->window_id() == opening.id) return std::move(done).Run(true, base::Value());
+  }
+  if (browser_shutdown::IsTryingToQuit() ||
+      GetBrowserWindowCreationStatusForProfile(*page) != BrowserWindowInterface::CreationStatus::kOk) {
+    return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kUnavailable));
+  }
+  BrowserWindowCreateParams params(page, true);
+  if (opening.requested) {
+    const auto& b = opening.requested->bounds;
+    params.initial_bounds = opening.requested->positioned ? gfx::Rect(b.x, b.y, b.width, b.height)
+                                                          : gfx::Rect(b.width, b.height);
+  }
+  if (!utility && page != app) {
+    params.omit_from_session_restore = true;
+    params.should_trigger_session_restore = false;
+  }
+  if (utility) {
+    params.type = BrowserWindowInterface::TYPE_APP;
+    params.app_name = opening.kind == "settings" ? "ArdiaSettings" : "ArdiaImport";
+    params.is_trusted_source = true;
+    params.omit_from_session_restore = true;
+    params.should_trigger_session_restore = false;
+    params.user_title = opening.title;
+    params.can_resize = opening.kind == "settings";
+    params.can_maximize = opening.kind == "settings";
+    params.can_fullscreen = opening.kind == "settings";
+    const base::DictValue* placement = chrome::GetWindowPlacementDictionaryReadOnly(
+        params.app_name, app->GetPrefs());
+    const bool saved = ValidUtilityPlacement(placement);
+    if (opening.kind == "import" || !saved) {
+      params.initial_bounds = gfx::Rect(opening.kind == "settings" ? 820 : 640,
+                                        opening.kind == "settings" ? 640 : 600);
+      params.initial_show_state = ui::mojom::WindowShowState::kNormal;
+    }
+  }
+  BrowserWindowInterface* created = CreateBrowserWindow(std::move(params));
+  if (!created) return std::move(done).Run(false, base::Value("Chrome could not create a window"));
+  RequestedWindow request;
+  request.id = opening.id;
+  request.kind = opening.kind;
+  request.title = opening.title;
+  if (opening.utility) request.utility = std::move(*opening.utility);
+  request.browser = created->GetWeakPtr();
+  request.page_profile = opening.page_profile;
+  request.app_profile = opening.app_profile;
+  request.private_window = std::move(opening.private_window);
+  RequestedWindows()[created->GetSessionID().id()] = std::move(request);
+  ShowNativeWindow(created, WindowFocus().Create(created->GetSessionID().id(), opening.intent));
+  std::move(done).Run(true, base::Value());
 }
 
 void ShellHostView::Invoke(
@@ -3548,7 +3678,7 @@ void ShellHostView::Invoke(
       const int active_id = strip->GetActiveWebContents() ? TabId(strip->GetActiveWebContents()) : 0;
       const int first_id = strip->count() ? TabId(strip->GetWebContentsAt(0)) : 0;
       windows.Append(base::DictValue()
-          .Set("profile", "").Set("window", id)
+          .Set("profile", host->page_profile_id()).Set("window", id)
           .Set("frame", window->GetBounds().ToString())
           .Set("alpha", 1.0).Set("key", window->IsActive())
           .Set("canBecomeKey", true).Set("visible", window->IsVisible())
@@ -3645,10 +3775,18 @@ void ShellHostView::Invoke(
     }
     if (id.empty() || id.size() > 256 ||
         (utility && id != kind) ||
-        (!utility && (id == "settings" || id == "import")) ||
-        (options && (options->FindBool("incognito").value_or(false) ||
-                     !DefaultProfileId(String(*options, "profile"))))) {
-      return std::move(done).Run(false, base::Value("Only regular default-profile windows are supported"));
+        (!utility && (id == "settings" || id == "import"))) {
+      return std::move(done).Run(false, base::Value("Invalid native window request"));
+    }
+    const std::string requested_profile = options ? String(*options, "profile") : "";
+    const auto profile_name = ardiacore::linux_profiles::ParseProfileName(requested_profile);
+    const bool incognito = options && options->FindBool("incognito").value_or(false);
+    const base::DictValue* private_window = options ? options->FindDict("privateWindow") : nullptr;
+    const auto private_json = private_window ? base::WriteJson(*private_window) : std::nullopt;
+    if (!profile_name || !ardiacore::linux_profiles::ProfileOpensWindow(*profile_name, incognito, utility) ||
+        (profile_name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate && profile_name->window != id) ||
+        (private_window && (!incognito || !private_json || private_json->size() > kPrivateWindowLimit))) {
+      return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kInvalid));
     }
     const std::string* behind = options ? options->FindString("behind") : nullptr;
     const linux_window::OpenIntent intent{
@@ -3676,42 +3814,25 @@ void ShellHostView::Invoke(
       ActivateNativeWindow(request.browser.get(), WindowFocus().Reuse(native_id, intent, false));
       return std::move(done).Run(true, base::Value());
     }
-    BrowserWindowCreateParams params(profile(), true);
-    if (requested) {
-      const auto& b = requested->bounds;
-      params.initial_bounds = requested->positioned ? gfx::Rect(b.x, b.y, b.width, b.height)
-                                                    : gfx::Rect(b.width, b.height);
-    }
-    if (utility) {
-      params.type = BrowserWindowInterface::TYPE_APP;
-      params.app_name = kind == "settings" ? "ArdiaSettings" : "ArdiaImport";
-      params.is_trusted_source = true;
-      params.omit_from_session_restore = true;
-      params.should_trigger_session_restore = false;
-      params.user_title = options ? String(*options, "title") : "";
-      params.can_resize = kind == "settings";
-      params.can_maximize = kind == "settings";
-      params.can_fullscreen = kind == "settings";
-      const base::DictValue* placement = chrome::GetWindowPlacementDictionaryReadOnly(
-          params.app_name, profile()->GetPrefs());
-      const bool saved = ValidUtilityPlacement(placement);
-      if (kind == "import" || !saved) {
-        params.initial_bounds = gfx::Rect(kind == "settings" ? 820 : 640,
-                                          kind == "settings" ? 640 : 600);
-        params.initial_show_state = ui::mojom::WindowShowState::kNormal;
-      }
-    }
-    BrowserWindowInterface* created = CreateBrowserWindow(std::move(params));
-    if (!created) return std::move(done).Run(false, base::Value("Chrome could not create a window"));
-    RequestedWindow request;
-    request.id = id;
-    request.kind = utility ? kind : "";
-    request.title = options ? String(*options, "title") : "";
-    if (utility_navigation) request.utility = utility_navigation->Clone();
-    request.browser = created->GetWeakPtr();
-    RequestedWindows()[created->GetSessionID().id()] = std::move(request);
-    ShowNativeWindow(created, WindowFocus().Create(created->GetSessionID().id(), intent));
-    return std::move(done).Run(true, base::Value());
+    if (!profile()) return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kUnavailable));
+    if (!OpeningWindows().insert(id).second) return std::move(done).Run(true, base::Value());
+    WindowOpening opening;
+    opening.id = id;
+    opening.kind = utility ? kind : "";
+    opening.title = options ? String(*options, "title") : "";
+    opening.page_profile = profile_name->id;
+    opening.requested = requested;
+    opening.intent = intent;
+    opening.utility = std::move(utility_navigation);
+    if (private_window) opening.private_window = private_window->Clone();
+    opening.app_profile = profile()->GetWeakPtr();
+    if (utility) return OpenNativeWindow(std::move(opening), profile(), ardiacore::linux_profiles::ProfileError::kNone, std::move(done));
+    ardiacore::ResolveLinuxProfile(profile_name->id, base::BindOnce(
+        [](WindowOpening opening, base::OnceCallback<void(bool, base::Value)> done,
+           Profile* page, ardiacore::linux_profiles::ProfileError error) {
+          OpenNativeWindow(std::move(opening), page, error, std::move(done));
+        }, std::move(opening), std::move(done)));
+    return;
   }
   if (method == "ArdiaShell.isDarkAppearance") {
     return std::move(done).Run(true, base::Value(
@@ -3977,21 +4098,37 @@ class HostRegistry : public BrowserCollectionObserver,
   }
 
   void Attach(base::WeakPtr<BrowserWindowInterface> browser, bool startup) {
-    if (!browser || browser->GetProfile()->IsOffTheRecord() ||
-        Hosts().contains(browser->GetSessionID().id())) return;
+    if (!browser || Hosts().contains(browser->GetSessionID().id())) return;
     const auto requested = RequestedWindows().find(browser->GetSessionID().id());
     const bool utility = requested != RequestedWindows().end() &&
                          !requested->second.kind.empty();
     if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL &&
         !(utility && browser->GetType() == BrowserWindowInterface::TYPE_APP)) return;
-    if (profile_path_.empty()) profile_path_ = browser->GetProfile()->GetPath();
-    if (browser->GetProfile()->GetPath() != profile_path_) return;
+    Profile* app_profile = browser->GetProfile();
+    if (requested != RequestedWindows().end() && requested->second.browser.get() == browser.get()) {
+      app_profile = requested->second.app_profile.get();
+      if (!app_profile || app_profile->GetPath() != profile_path_ ||
+          !(utility ? browser->GetProfile() == app_profile
+                    : ardiacore::LinuxProfileHosts(requested->second.page_profile, browser->GetProfile()))) {
+        LOG(WARNING) << "Ardia Linux host refused a window whose profile no longer matches its request";
+        RequestedWindows().erase(requested);
+        browser->GetWindow()->Close();
+        return;
+      }
+    } else {
+      if (browser->GetProfile()->IsOffTheRecord()) return;
+      if (profile_path_.empty()) {
+        profile_path_ = browser->GetProfile()->GetPath();
+        ardiacore::SetLinuxAppProfile(browser->GetProfile());
+      }
+      if (browser->GetProfile()->GetPath() != profile_path_) return;
+    }
     BrowserView* view = BrowserView::GetBrowserViewForBrowser(browser.get());
     if (!view || !view->GetWidget()) {
       LOG(WARNING) << "Ardia Linux host could not attach to a Chrome BrowserView";
       return;
     }
-    auto overlay = std::make_unique<ShellHostView>(browser.get(), view, startup);
+    auto overlay = std::make_unique<ShellHostView>(browser.get(), view, startup, app_profile);
     auto* shell = overlay.get();
     if (const auto found = RequestedWindows().find(shell->id());
         found != RequestedWindows().end()) {
@@ -4018,7 +4155,16 @@ class HostRegistry : public BrowserCollectionObserver,
     base::DictValue strip = found->second->Strip();
     strip.Set("closed", true);
     strip.Set("tabs", base::ListValue());
+    const std::string closed_window = found->second->window_id();
+    const auto closed_profile = ardiacore::linux_profiles::ParseProfileName(found->second->page_profile_id());
+    const bool private_window = closed_profile && closed_profile->kind == ardiacore::linux_profiles::ProfileKind::kPrivate;
     found->second->DetachBrowser();
+    if (private_window) {
+      for (const auto& [id, host] : Hosts()) {
+        host->Event("ArdiaShell", "onWindowEvent", base::Value(base::DictValue()
+            .Set("type", "close").Set("id", closed_window)));
+      }
+    }
     base::DictValue tx = base::DictValue()
         .Set("rev", ++Revision()).Set("cmd", base::Value())
         .Set("strips", base::ListValue().Append(std::move(strip)));
