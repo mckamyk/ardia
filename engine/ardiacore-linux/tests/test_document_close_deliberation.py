@@ -247,6 +247,43 @@ int main(int argc, char** argv) {
     other.native.widget.closed = true;
     assert(ends(request));
   }
+  if (mode == "replacement-suspension") {
+    ShellHostView host; Watch(host); host.ArmWindowClose();
+    hosts[1] = &host;
+    const auto first = host.RequestWindowClose();
+    assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(first.Clone()))->ok);
+    assert(host.dialogs_->controller_.suspensions.size() == 1);
+    host.Replace();
+    assert(host.close_.phase() == LinuxClose::Phase::kIdle);
+    const auto second = host.RequestWindowClose();
+    assert(!second.empty() && *second.FindString("closeGeneration") != *first.FindString("closeGeneration"));
+    assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(second.Clone()))->ok);
+    assert(host.dialogs_->controller_.suspensions.size() == 2);
+    Drain();
+    assert(host.dialogs_->controller_.suspensions.size() == 1);
+    host.CancelWindowClose(host.close_.identity(), Ignore);
+    Drain();
+    assert(host.close_.phase() == LinuxClose::Phase::kCancelled);
+    assert(host.dialogs_->controller_.suspensions.empty() && !host.dialogs_->controller_.exhausted);
+    base::DictValue identity;
+    assert(host.dialogs_->controller().Identify(*host.DialogClient(), &identity));
+  }
+  if (mode == "suspension-bound") {
+    ShellHostView host; Watch(host); host.ArmWindowClose();
+    hosts[1] = &host;
+    for (size_t n = 0; n <= LinuxDialogController::kMaxSuspensions; ++n) {
+      const auto request = host.RequestWindowClose();
+      assert(!request.empty());
+      assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()))->ok);
+      host.Replace();
+    }
+    assert(host.dialogs_->controller_.suspensions.size() == LinuxDialogController::kMaxSuspensions);
+    assert(host.dialogs_->controller_.exhausted);
+    Drain();
+    assert(host.dialogs_->controller_.suspensions.empty() && host.dialogs_->controller_.exhausted);
+    base::DictValue identity;
+    assert(!host.dialogs_->controller().Identify(*host.DialogClient(), &identity));
+  }
   if (mode == "decision-cancel") {
     ShellHostView host; Watch(host); host.ArmWindowClose();
     hosts[1] = &host;
@@ -324,6 +361,12 @@ class CloseDeliberationTests(unittest.TestCase):
 
     def test_drain_reports_whether_closing_ends_the_session(self):
         self.run_mode('drain', 'ends-session')
+
+    def test_renderer_replacement_mid_drain_resumes_each_attempt_suspension(self):
+        self.run_mode('drain', 'replacement-suspension')
+
+    def test_close_suspensions_are_bounded_and_fail_closed(self):
+        self.run_mode('drain', 'suspension-bound')
 
     def test_cancel_decision_rejects_the_pending_attempt_through_chrome(self):
         self.run_mode('drain', 'decision-cancel')
