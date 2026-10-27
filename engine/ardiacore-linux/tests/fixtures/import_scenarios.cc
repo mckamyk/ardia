@@ -128,11 +128,14 @@ void Units() {
   assert(!vault.Put("w1", "BAD", {}, 0));
   assert(vault.Put("w1", token, std::move(stored), 0));
   assert(!vault.Put("w1", token, {}, 0));
+  assert(vault.Contains("w1", token, 1) && !vault.Contains("w2", token, 1) &&
+         !vault.Contains("w1", "00000000000000000000000000000002", 1));
   assert(!vault.Take("w2", token, 1));
   std::optional<std::vector<Credential>> taken = vault.Take("w1", token, 1);
   assert(taken && taken->size() == 1 && (*taken)[0].password == "s3cret");
   assert(!vault.Take("w1", token, 2));
   assert(vault.Put("w1", token, {}, 0));
+  assert(!vault.Contains("w1", token, kVaultLifetimeMs));
   assert(!vault.Take("w1", token, kVaultLifetimeMs));
   for (int i = 0; i < 12; ++i) {
     char buffer[33];

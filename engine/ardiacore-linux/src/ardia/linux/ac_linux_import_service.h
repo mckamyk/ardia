@@ -8,8 +8,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
 
-class Profile;
-
 namespace content {
 class WebContents;
 }
@@ -18,7 +16,6 @@ namespace ardia {
 
 struct LinuxImportRequester {
   std::string owner;
-  raw_ptr<Profile> profile = nullptr;
   raw_ptr<content::WebContents> contents = nullptr;
   base::RepeatingCallback<void(base::Value)> emit;
 };

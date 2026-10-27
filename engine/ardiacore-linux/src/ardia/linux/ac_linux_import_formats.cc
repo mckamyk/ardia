@@ -836,6 +836,12 @@ bool CredentialVault::Put(std::string_view owner, std::string_view token, std::v
   return true;
 }
 
+bool CredentialVault::Contains(std::string_view owner, std::string_view token, double now) {
+  Expire(now);
+  return std::any_of(entries_.begin(), entries_.end(),
+                     [&](const Entry& entry) { return entry.owner == owner && entry.token == token; });
+}
+
 std::optional<std::vector<Credential>> CredentialVault::Take(std::string_view owner, std::string_view token, double now) {
   Expire(now);
   const auto found = std::find_if(entries_.begin(), entries_.end(), [&](const Entry& entry) {

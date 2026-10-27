@@ -135,6 +135,7 @@ class CredentialVault {
   CredentialVault& operator=(const CredentialVault&) = delete;
 
   bool Put(std::string_view owner, std::string_view token, std::vector<Credential> credentials, double now);
+  bool Contains(std::string_view owner, std::string_view token, double now);
   std::optional<std::vector<Credential>> Take(std::string_view owner, std::string_view token, double now);
   bool Discard(std::string_view owner, std::string_view token);
   void DiscardOwner(std::string_view owner);

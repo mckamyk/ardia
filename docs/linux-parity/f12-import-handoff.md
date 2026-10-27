@@ -65,10 +65,14 @@ Events arrive on module `ArdiaImport`, event `onImportEvent`, with `jobId` set t
 - `{type:"failed", code, message}`. `code` is `cancelled`, `notFound` and so on.
 - `{type:"chosen", path}`
 
-**Profile resolution.** `ResolveImportProfile` in `ac_linux_import_service.cc` is the one place a target profile is chosen:
-- `""` or `default` resolves to the window's regular profile.
-- A private window or an `incognito:` id gets `ERR_PROFILE_PRIVATE`.
-- An isolated id gets `ERR_PROFILE_UNAVAILABLE` until #62's registry lands. Re-point this function then; [#112](https://github.com/mckamyk/ardia/issues/112) tracks it.
+**Profile resolution.** `writePasswords` resolves its target in `ac_linux_import_service.cc`, in this order:
+
+1. A private (`incognito:`) id fails with `ERR_PROFILE_PRIVATE`, and an invalid id with `ERR_PROFILE_INVALID`. Either way the token is discarded.
+2. A token the window doesn't hold fails with `expired` before any profile is resolved, so a bogus request never creates an isolated profile.
+3. `ResolveImportProfile` hands `""`/`default` and isolated ids to #62's registry (`ardiacore::ResolveLinuxProfile`). That loads or creates `<user data>/Profile <id>`.
+4. A registry error keeps its `ERR_PROFILE_*` code. An off-the-record result fails closed with `ERR_PROFILE_PRIVATE`.
+
+So "Import as new profile" in the shared flow stores the passwords in that profile ([#112](https://github.com/mckamyk/ardia/issues/112)).
 
 ## Where a secret goes
 
@@ -91,9 +95,9 @@ Events arrive on module `ArdiaImport`, event `onImportEvent`, with `jobId` set t
 | `python3 -m unittest engine/ardiacore-linux/tests/test_import.py` | 15 passed, run under ASan/UBSan with system SQLite and OpenSSL. Coverage: units, nested HTML, HTML limits, CSV variants, `profiles.ini`, discovery, a Chromium import with WAL snapshots and source hashes, history limit and since, partial errors, traversal, cancellation with temp cleanup, Firefox import, extensions, the stale-copy sweep, and GN/no-comment rules. |
 | `python3 -m unittest discover -s engine/ardiacore-linux/tests` | 246 passed |
 | `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs` | 7 passed |
-| `pnpm --filter @ardia/linux test:host` | 245 passed, 13 of them new in `hostImport.test.mjs` |
-| `pnpm --filter @ardia/linux typecheck`, `build`, `test:graph` | Pass. The graph test now requires `state/import/apply.ts` to be loaded only by `importApply.ts`. |
-| `pnpm --filter @ardia/linux acceptance:self-test` | 49 passed, 3 of them new fixture tests |
+| `pnpm --filter @ardia/linux test:host` | 329 passed after rebasing on #62, #63 and #68, 13 of them new in `hostImport.test.mjs` |
+| `pnpm --filter @ardia/linux typecheck`, `build`, `test:graph` | Pass (graph: 3 tests). The graph test now requires `state/import/apply.ts` to be loaded only by `importApply.ts`. |
+| `pnpm --filter @ardia/linux acceptance:self-test` | 50 passed, 3 of them new fixture tests |
 | `clang++ -fsyntax-only` with the 156 tree's flags | `ac_linux_import_formats.cc` and `ac_linux_import_readers.cc` compile with no warnings. `ac_linux_import_service.cc` and the host hunks could not be checked: the 156 output tree is mid-build and lacks its generated mojom headers. |
 | Cross-check | The native reader run over the acceptance generator's scratch profiles returns the counts the F12 scenario expects. |
 
@@ -102,7 +106,7 @@ Events arrive on module `ArdiaImport`, event `onImportEvent`, with `jobId` set t
 None of this has run inside Ardia, because I can't build Chromium in this lane. Run `pnpm --filter @ardia/linux acceptance -- <ardia> apps/linux/dist --only F12`, then the manual steps in `acceptance-suite.md` (#22 F12). Specifically:
 
 1. The first compile of `ac_linux_import_service.cc` and the host hunks.
-2. `PasswordImporter` writing into the basic store, and the duplicate import adding nothing.
+2. `PasswordImporter` writing into the basic store, the duplicate import adding nothing, and an isolated target landing in `Profile work`.
 3. Chooser behaviour headless and on a desktop (portal and GTK).
 4. Cancellation timing on a large history.
 5. The import window end to end.
@@ -112,7 +116,6 @@ None of this has run inside Ardia, because I can't build Chromium in this lane. 
 - [#109](https://github.com/mckamyk/ardia/issues/109): keyring (`v11`) Chromium passwords
 - [#110](https://github.com/mckamyk/ardia/issues/110): Firefox passwords (NSS `key4.db`)
 - [#111](https://github.com/mckamyk/ardia/issues/111): tabs, cookies, addresses and cards
-- [#112](https://github.com/mckamyk/ardia/issues/112): writing to isolated profiles
 - [#113](https://github.com/mckamyk/ardia/issues/113): CSV import in Settings › Passwords
 
 Safari and Apple automation are not applicable on Linux.

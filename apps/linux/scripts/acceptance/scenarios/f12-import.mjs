@@ -112,10 +112,29 @@ export default {
       if (imported.length !== fixtures.expected.chromePasswords) throw new Error(`stored ${imported.length} rows after a duplicate import`);
       const matches = fixtures.secrets.slice(0, 3).every((secret) => imported.some((row) => row.password === secret));
       if (!matches) throw new Error("stored passwords don't match the source");
-      const isolated = await shell.invoke("ArdiaImport.writePasswords", { args: ["0".repeat(32), "work"] });
-      const privateProfile = await shell.invoke("ArdiaImport.writePasswords", { args: ["0".repeat(32), "incognito:w1@"] });
-      if (isolated.code !== "ERR_PROFILE_UNAVAILABLE" || privateProfile.code !== "ERR_PROFILE_PRIVATE") throw new Error(`profile errors ${JSON.stringify({ isolated, privateProfile })}`);
+      const bogus = await shell.invoke("ArdiaImport.writePasswords", { args: ["0".repeat(32), "work"] });
+      if (bogus.code !== "expired") throw new Error(`an unknown token resolved a profile: ${JSON.stringify(bogus)}`);
       return { first, second, stored: imported.length };
+    });
+
+    await t.check("passwords go into the chosen isolated profile and never into a private one", async () => {
+      const privateRun = await runJob(shell, [`${run}-private`, "chrome", "Default", ["passwords"], {}]);
+      const refused = await shell.invoke("ArdiaImport.writePasswords", { args: [privateRun.result.passwords.token, "incognito:w1@"] });
+      const invalid = await shell.invoke("ArdiaImport.writePasswords", { args: [privateRun.result.passwords.token, "../escape"] });
+      if (refused.code !== "ERR_PROFILE_PRIVATE" || invalid.code !== "ERR_PROFILE_INVALID") throw new Error(`profile errors ${JSON.stringify({ refused, invalid })}`);
+      const discarded = await shell.invoke("ArdiaImport.writePasswords", { args: [privateRun.result.passwords.token, ""] });
+      if (discarded.code !== "expired") throw new Error(`a refused token stayed usable: ${JSON.stringify(discarded)}`);
+      const isolatedRun = await runJob(shell, [`${run}-isolated`, "chrome", "Default", ["passwords"], {}]);
+      const written = await invokeOk(shell, "ArdiaImport.writePasswords", [isolatedRun.result.passwords.token, "work"]);
+      const rows = await until(async () => {
+        const found = (await savedLogins(join(scratch, "Profile work", "Login Data"), tmp)).filter((row) => row.origin.includes(".ardia.test"));
+        return found.length >= fixtures.expected.chromePasswords ? found : false;
+      }, { timeout: 20000, label: "the isolated profile's Login Data to hold the imported passwords" });
+      const defaults = (await savedLogins(join(scratch, "Default", "Login Data"), tmp)).filter((row) => row.origin.includes(".ardia.test"));
+      if (written.imported !== fixtures.expected.chromePasswords || rows.length !== fixtures.expected.chromePasswords || defaults.length !== fixtures.expected.chromePasswords) {
+        throw new Error(`isolated ${rows.length}, default ${defaults.length}, written ${JSON.stringify(written)}`);
+      }
+      return { written, isolated: rows.length, default: defaults.length };
     });
 
     await t.check("partial errors keep the readable kinds", async () => {

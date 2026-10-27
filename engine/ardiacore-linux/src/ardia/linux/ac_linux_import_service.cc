@@ -11,6 +11,8 @@
 
 #include "ardia/linux/ac_linux_import_formats.h"
 #include "ardia/linux/ac_linux_import_readers.h"
+#include "ardia/linux/ac_linux_profile_service.h"
+#include "ardia/linux/ac_linux_profiles.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -82,23 +84,25 @@ li::Environment CurrentEnvironment() {
                              temp.value().c_str(), own.value());
 }
 
-Profile* ResolveImportProfile(const LinuxImportRequester& requester, std::string_view engine_profile,
-                              std::string* code) {
+using ProfileResolved = base::OnceCallback<void(Profile*, std::string)>;
+
+void ResolveImportProfile(std::string_view engine_profile, ProfileResolved done) {
   const li::ProfileTarget target = li::ClassifyProfile(engine_profile);
-  if (target != li::ProfileTarget::kDefault) {
-    *code = li::ProfileErrorCode(target);
-    return nullptr;
+  if (target == li::ProfileTarget::kPrivate || target == li::ProfileTarget::kInvalid) {
+    return std::move(done).Run(nullptr, li::ProfileErrorCode(target));
   }
-  Profile* profile = requester.profile.get();
-  if (!profile) {
-    *code = "ERR_PROFILE_UNAVAILABLE";
-    return nullptr;
-  }
-  if (profile->IsOffTheRecord()) {
-    *code = "ERR_PROFILE_PRIVATE";
-    return nullptr;
-  }
-  return profile;
+  ardiacore::ResolveLinuxProfile(
+      engine_profile,
+      base::BindOnce(
+          [](ProfileResolved done, Profile* profile, ardiacore::linux_profiles::ProfileError error) {
+            if (!profile) {
+              const std::string_view code = ardiacore::linux_profiles::ProfileErrorCode(error);
+              return std::move(done).Run(nullptr, code.empty() ? "ERR_PROFILE_UNAVAILABLE" : std::string(code));
+            }
+            if (profile->IsOffTheRecord()) return std::move(done).Run(nullptr, "ERR_PROFILE_PRIVATE");
+            std::move(done).Run(profile, std::string());
+          },
+          std::move(done)));
 }
 
 class JobObserver : public li::ImportObserver {
@@ -423,13 +427,26 @@ class ImportService {
   void WritePasswords(LinuxImportRequester requester, const base::ListValue& values, Done done) {
     const std::string token = Argument(values, 0);
     if (!li::ValidToken(token)) return Fail(std::move(done), "invalid", "Invalid password token");
-    std::string code;
-    Profile* profile = ResolveImportProfile(requester, Argument(values, 1), &code);
-    if (!profile) {
+    const std::string engine_profile = Argument(values, 1);
+    const li::ProfileTarget target = li::ClassifyProfile(engine_profile);
+    if (target == li::ProfileTarget::kPrivate || target == li::ProfileTarget::kInvalid) {
       vault_.Discard(requester.owner, token);
+      return Fail(std::move(done), li::ProfileErrorCode(target), "Passwords can't be imported into that profile");
+    }
+    if (!vault_.Contains(requester.owner, token, NowMs())) {
+      return Fail(std::move(done), "expired", "The imported passwords are no longer available");
+    }
+    ResolveImportProfile(engine_profile,
+                         base::BindOnce(&ImportService::WriteResolved, weak_factory_.GetWeakPtr(), requester.owner,
+                                        token, std::move(done)));
+  }
+
+  void WriteResolved(std::string owner, std::string token, Done done, Profile* profile, std::string code) {
+    if (!profile) {
+      vault_.Discard(owner, token);
       return Fail(std::move(done), code, "Passwords can't be imported into that profile");
     }
-    std::optional<std::vector<li::Credential>> credentials = vault_.Take(requester.owner, token, NowMs());
+    std::optional<std::vector<li::Credential>> credentials = vault_.Take(owner, token, NowMs());
     if (!credentials) return Fail(std::move(done), "expired", "The imported passwords are no longer available");
     const int id = ++next_writer_;
     auto writer = std::make_unique<PasswordWriter>(

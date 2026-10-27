@@ -3683,7 +3683,7 @@ void ShellHostView::Invoke(
   }
   if (LinuxImportHandles(method)) {
     return LinuxImportInvoke(
-        LinuxImportRequester{window_id_, profile(), shell(),
+        LinuxImportRequester{window_id_, shell(),
                              base::BindRepeating(
                                  [](base::WeakPtr<ShellHostView> host, base::Value payload) {
                                    if (host) host->Event("ArdiaImport", "onImportEvent", std::move(payload));
