@@ -65,6 +65,7 @@ function mount(native, options = {}) {
     onFavicon: (url, urls) => calls.push(["favicon", url, urls]),
     onPictureInPicture: (state) => calls.push(["pictureInPicture", state]),
     onLoadError: (error) => calls.push(["loadError", error]),
+    onPageFocus: (...args) => calls.push(["pageFocus", ...args]),
   };
   const ready = [];
   const tab = new HostTab(native.host, { key: options.key ?? "stable" }, (event) => ready.push(event),
@@ -91,6 +92,10 @@ test("create response installs the lease snapshot and ignores legacy ID-only eve
   assert.deepEqual(calls.slice(4), [["progress", 0.5], ["favicon", "https://example.test/a.ico", ["https://example.test/a.ico"]],
     ["openWindow", { url: "ardia://settings", disposition: "foreground", adoptId: "tab:9", profile: "" }],
     ["pictureInPicture", { active: true, kind: "video" }], ["loadError", { url: "https://down.test/", code: -105, text: "ERR_NAME_NOT_RESOLVED" }]]);
+  native.page("focus", {});
+  assert.deepEqual(calls.at(-1), ["pageFocus"]);
+  native.emit({ type: "pageFocus" });
+  assert.deepEqual(calls.at(-1), ["pageFocus"]);
   native.page("windowClose", {});
   assert.deepEqual(calls.at(-1), ["windowClose"]);
   tab.dispose();
