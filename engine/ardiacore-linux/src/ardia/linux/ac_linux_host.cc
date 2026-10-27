@@ -36,6 +36,7 @@
 #include "ardia/linux/ac_linux_profiles.h"
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/ac_linux_session.h"
+#include "ardia/linux/ac_linux_site_controls_service.h"
 #include "ardia/linux/ac_linux_window_lifecycle.h"
 #include "ardia/linux/ac_linux_suggest.h"
 #include "ardia/linux/host_bootstrap.h"
@@ -1274,6 +1275,17 @@ class HostMessageHandler : public content::WebUIMessageHandler,
               handler->Fail(id, code ? *code : "ERR_ENGINE", message ? *message : "Extension request failed");
             }, weak_factory_.GetWeakPtr(), id));
       }
+      if (LinuxSiteControlsHandles(name)) {
+        if (args.size() != 3) return Fail(id, "ERR_ENGINE", "Invalid engine transport request");
+        return LinuxSiteControlsCall(host_->profile(), host_->page_profile(), name, profile, args.Find("args"),
+            base::BindOnce([](base::WeakPtr<HostMessageHandler> handler, std::string id, bool ok, base::Value result) {
+              if (!handler) return;
+              if (ok) return handler->Resolve(id, std::move(result));
+              const std::string* code = result.is_dict() ? result.GetDict().FindString("code") : nullptr;
+              const std::string* message = result.is_dict() ? result.GetDict().FindString("message") : nullptr;
+              handler->Fail(id, code ? *code : "ERR_ENGINE", message ? *message : "Site control request failed");
+            }, weak_factory_.GetWeakPtr(), id));
+      }
       const base::Value* value = args.Find("args");
       if (name.starts_with("documents.") && args.size() != 3)
         return Fail(id, "ERR_DOCUMENT_REQUEST", "Invalid document transport request");
@@ -1548,6 +1560,7 @@ void ShellHostView::Initialize() {
     GetWidget()->OnSizeConstraintsChanged();
   }
   LayoutOverlay();
+  StartLinuxContentBlocker(profile());
   if (!title_.empty()) {
     browser_->GetWindow()->GetNativeWindow()->SetTitle(base::UTF8ToUTF16(title_));
   }
@@ -1621,6 +1634,7 @@ base::DictValue ShellHostView::Bootstrap() const {
     capabilities.Append(route);
   for (const char* capability : linux_credentials::kCapabilities) capabilities.Append(capability);
   for (const char* capability : linux_extensions::kSurfaceCapabilities) capabilities.Append(capability);
+  AppendLinuxSiteControlsCapabilities(capabilities);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
@@ -4609,6 +4623,13 @@ void StartLinuxHost() {
   });
   StartLinuxExtensions(std::move(extensions));
   ac_engine_set_event_sink(EngineEvent, nullptr);
+  StartLinuxSiteControls(base::BindRepeating([](Profile* profile, base::Value stats) {
+    for (const auto& [id, host] : Hosts()) {
+      if (!host->profile() || host->profile()->GetOriginalProfile() != profile) continue;
+      host->Event("ArdiaContentBlocker", "contentBlocker", base::Value(base::DictValue()
+          .Set("name", "contentBlocker.changed").Set("data", stats.Clone())));
+    }
+  }));
   static base::NoDestructor<HostRegistry> registry;
   registry->Start();
 }

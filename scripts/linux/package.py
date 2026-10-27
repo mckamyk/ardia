@@ -1,15 +1,30 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import os
 import pathlib
 import shutil
 import tarfile
 import tempfile
 
+BRIDGE = pathlib.Path(__file__).resolve().parents[2] / 'engine/ardiacore-linux/content-blocker'
+BRIDGE_SCRIPTS = ('js/vapi.js', 'js/vapi-common.js', 'js/vapi-client.js')
 REQUIRED = ('chrome', 'chrome_crashpad_handler', 'icudtl.dat', 'resources.pak', 'chrome_100_percent.pak', 'chrome_200_percent.pak', 'locales', 'v8_context_snapshot.bin')
 
 
-def package(output, ui, destination):
+def check_content_blocker(source):
+    manifest_path = source / 'manifest.json'
+    if not manifest_path.is_file():
+        raise ValueError(f'no uBlock Origin manifest at {manifest_path}')
+    manifest = json.loads(manifest_path.read_text())
+    if not isinstance(manifest.get('key'), str) or manifest.get('manifest_version') != 2:
+        raise ValueError('the content blocker is not the keyed uBlock Origin build from scripts/linux/fetch-ubo.sh')
+    missing = [name for name in BRIDGE_SCRIPTS if not (source / name).is_file()]
+    if missing:
+        raise ValueError('the content blocker lacks ' + ', '.join(missing))
+
+
+def package(output, ui, destination, content_blocker=None):
     missing = [name for name in REQUIRED if not (output / name).exists()]
     if missing:
         raise ValueError('missing Linux build outputs: ' + ', '.join(missing))
@@ -33,6 +48,12 @@ def package(output, ui, destination):
             else:
                 shutil.copy2(source, runtime / name)
         shutil.copytree(ui, runtime / 'ardia-ui')
+        if content_blocker is not None:
+            check_content_blocker(content_blocker)
+            blocker = runtime / 'extensions/ublock'
+            shutil.copytree(content_blocker, blocker, ignore=shutil.ignore_patterns('_metadata'))
+            for path in sorted(BRIDGE.iterdir()):
+                shutil.copy2(path, blocker / path.name)
         launcher = root / 'bin/ardia'
         launcher.parent.mkdir()
         launcher.write_text('#!/usr/bin/env sh\nardia_bin_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$ardia_bin_dir/../lib/ardia/chrome" "$@"\n')
@@ -58,10 +79,12 @@ def main():
     parser.add_argument('--out', type=pathlib.Path, required=True)
     parser.add_argument('--ui', type=pathlib.Path, required=True)
     parser.add_argument('--destination', type=pathlib.Path, required=True)
+    parser.add_argument('--content-blocker', type=pathlib.Path)
     args = parser.parse_args()
     try:
-        print(package(args.out.resolve(), args.ui.resolve(), args.destination.resolve()))
-    except (ValueError, OSError) as error:
+        blocker = args.content_blocker.resolve() if args.content_blocker else None
+        print(package(args.out.resolve(), args.ui.resolve(), args.destination.resolve(), blocker))
+    except (ValueError, OSError, json.JSONDecodeError) as error:
         parser.error(str(error))
 
 

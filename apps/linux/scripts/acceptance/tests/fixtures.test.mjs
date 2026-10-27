@@ -42,6 +42,22 @@ describe("fixture servers and certificates", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("serves the site-control pages: storage setters, the permissions page and the blocker page's ad and control images", async () => {
+    const setter = await get(fixtures.url.storage("data.ardia.test", "f06data"));
+    assert.match(setter.body.toString(), /document\.cookie = "f06data=1; max-age=86400; path=\/"/);
+    assert.match(setter.body.toString(), /localStorage\.setItem\("f06data", "1"\)/);
+    assert.doesNotMatch((await get(fixtures.url.storage("data.ardia.test", "bad name<"))).body.toString(), /cookie/);
+    assert.doesNotMatch((await get(fixtures.url.storage("data.ardia.test"))).body.toString(), /<script>/);
+    assert.equal(fixtures.url.permissionsOrigin(), `https://secure.ardia.test:${fixtures.ports.https}`);
+    assert.match((await get(fixtures.url.permissions(), { ca: tls.ca })).body.toString(), /Permissions fixture/);
+    const page = (await get(fixtures.url.blocker("news.ardia.test", "r1<x"))).body.toString();
+    assert.match(page, /<img id="ad" src="\/ads\/banners\/r1x\.png"/);
+    assert.match(page, /<img id="control" src="\/pixel\.png\?blocker=r1x"/);
+    const ad = await get(`http://news.ardia.test:${fixtures.ports.http}/ads/banners/r1x.png`);
+    assert.equal(ad.headers["content-type"], "image/png");
+    assert.ok(fixtures.requests.some((r) => r.host === "news.ardia.test" && r.path === "/ads/banners/r1x.png"));
+  });
+
   it("hashes the trusted key the way Chromium's SPKI list expects", async () => {
     const { stdout } = await run("sh", ["-c", `openssl x509 -in "${join(tls.dir, "leaf.pem")}" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl base64`]);
     assert.equal(stdout.trim(), tls.trustedSpki);

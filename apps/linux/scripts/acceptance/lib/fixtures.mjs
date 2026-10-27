@@ -65,6 +65,19 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     if (url.pathname === "/print") return html("Print fixture", "<h1>Ardia print fixture</h1><p>Printable text.</p>");
     if (url.pathname === "/zoom") return html("Zoom fixture", "<h1>Zoom fixture</h1>");
     if (url.pathname === "/pixel.png") return send(200, "image/png", PIXEL_PNG);
+    if (url.pathname.startsWith("/ads/banners/")) return send(200, "image/png", PIXEL_PNG);
+    if (url.pathname === "/storage") {
+      const name = url.searchParams.get("set");
+      const set = name && /^[A-Za-z0-9_-]{1,40}$/.test(name)
+        ? `<script>document.cookie = ${JSON.stringify(`${name}=1; max-age=86400; path=/`)}; localStorage.setItem(${JSON.stringify(name)}, "1");</script>`
+        : "";
+      return html("Storage fixture", `<h1>Storage fixture</h1>${set}`);
+    }
+    if (url.pathname === "/permissions") return html("Permissions fixture", "<h1>Permissions fixture</h1>");
+    if (url.pathname === "/blocker") {
+      const run = String(url.searchParams.get("run") ?? "").replace(/[^A-Za-z0-9_-]/g, "");
+      return html("Blocker fixture", `<h1>Blocker fixture</h1><img id="ad" src="/ads/banners/${run}.png" width="1" height="1"><img id="control" src="/pixel.png?blocker=${run}" width="1" height="1">`);
+    }
     const download = /^\/download\/([A-Za-z0-9._-]+)$/.exec(url.pathname);
     if (download) {
       const size = Math.max(1, Math.min(8 << 20, Number(url.searchParams.get("size") ?? 4096) | 0));
@@ -129,6 +142,10 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     slow: (name, size = 4 << 20) => `http://plain.ardia.test:${ports.http}/slow/${name}?size=${size}`,
     print: () => `http://plain.ardia.test:${ports.http}/print`,
     zoom: (host = "zoom.ardia.test") => `http://${host}:${ports.http}/zoom`,
+    storage: (host, set) => `http://${host}:${ports.http}/storage${set ? `?set=${encodeURIComponent(set)}` : ""}`,
+    permissions: () => `https://secure.ardia.test:${ports.https}/permissions`,
+    permissionsOrigin: () => `https://secure.ardia.test:${ports.https}`,
+    blocker: (host, run) => `http://${host}:${ports.http}/blocker?run=${encodeURIComponent(run)}`,
   };
   const chromiumArgs = [
     `--host-resolver-rules=MAP *.ardia.test 127.0.0.1, MAP ${SUGGEST_HOST} 127.0.0.1:${ports.https}, MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1`,
