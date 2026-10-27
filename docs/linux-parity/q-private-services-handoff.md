@@ -1,6 +1,6 @@
 # Lane Q handoff: private-window services and profile follow-ups
 
-Issues: #88, #72, #71, #89, #101, #73 and #99, tracked at source level by #142. Branch `t3/linux-private-services`, rebased on `linux` at `6bf5097b`. None of this has run in a Chromium 156 build; see the last section.
+Issues: #88, #72, #71, #89, #101, #73 and #99, tracked at source level by #142. Branch `t3/linux-private-services`, rebased on `linux` at `980389e1`. None of this has run in a Chromium 156 build; see the last section.
 
 ## What changed
 
@@ -24,7 +24,8 @@ Issues: #88, #72, #71, #89, #101, #73 and #99, tracked at source level by #142. 
 
 - `ac_linux_auto_pip.h` keeps the last preference the app sent. `ac_linux_auto_pip_service.cc` is a `ProfileManagerObserver`. It writes the `AUTO_PICTURE_IN_PICTURE` default into every loaded regular profile, and into each profile added later.
 - Chrome calls `OnProfileAdded` before it runs the `CreateProfileAsync` callback that opens the isolated window, so that window already has the setting.
-- OTR profiles take their content-setting defaults from their original. Nothing is written until the app has sent the preference.
+- Nothing is written until the app has sent the preference, and only regular profiles get it.
+- Private windows don't inherit an ALLOW. `AUTO_PICTURE_IN_PICTURE` is `INHERIT_IF_LESS_PERMISSIVE`, so with the preference on a private window reads ASK; with it off it inherits BLOCK, and the global switch blocks every window anyway. Chromium ignores default-setting writes on OTR profiles, so ALLOW can't be set there. macOS writes only regular profiles too and also reads ASK in private windows. macOS gates entry on ALLOW, though, so it never auto-enters PiP in a private window, while on Linux Chrome's helper enters and asks inside the PiP window. That gap is #173.
 
 ### #101 Page commands in isolated and private windows
 
@@ -51,9 +52,14 @@ Save Page and DevTools follow Chrome's incognito behaviour through the checks th
 ### #71 Open Link in Incognito Window
 
 - `chromium-linux-private-links.patch` adds a Linux-only hook to `NavigateImpl`. It sits after `AdjustNavigateParamsForURL`, so URLs that can't open in incognito are already back in a regular tab, and before any Browser or contents is created.
+- The hook takes only browser-initiated navigations with a user gesture. A compromised renderer that sends `OFF_THE_RECORD` therefore can't open an Ardia private window. Chrome's context-menu entry builds its params with `CreateBrowserInitiated` and a gesture, so it qualifies.
 - The host takes an `OFF_THE_RECORD` navigation when the source is one of its tabs with a live page channel. It sends that page `openWindow` with disposition `incognito` and the source window's original profile. The shared `openFromPage` then opens an Ardia private window.
 - Other sources keep Chrome's behaviour: extension popups, side panels and DevTools (#150).
 - The patch applies to the 156 tree and compiles there with the navigator target's flags. Both were checked on a copy.
+
+### Review round 1: content blocker in private windows
+
+Content-blocker calls route to the app profile, so `setAllowed`, `setEnabled` and `setListEnabled` from a private window, or naming a private session, wrote the regular profile's uBlock state. `PrivateBlockerRefusal` now refuses them with `ERR_PROFILE_PRIVATE`. Reads still answer, so a private window's site panel shows the regular rules it is filtered by; changing them takes a regular window.
 
 ### #89 Private windows in other windows' lists
 
@@ -77,6 +83,8 @@ Save Page and DevTools follow Chrome's incognito behaviour through the checks th
 | --- | --- | --- |
 | `sites.settings/setSetting/origins/reset/clearData`, `sites.zoomLevels/setZoom` | OTR profile via the engine's `offTheRecord` call; `ERR_PROFILE_ENDING` while closing | `ERR_PROFILE_WINDOW` |
 | `history.*`, `bookmarks.*`, `favicons.*`, `profiles.clearBrowsingData`, extension management | `ERR_PROFILE_PRIVATE` | `ERR_PROFILE_PRIVATE` (site controls: `ERR_PROFILE_WINDOW` first) |
+| `contentBlocker.setAllowed/setEnabled/setListEnabled` | `ERR_PROFILE_PRIVATE` (the blocker lives in the regular profile) | `ERR_PROFILE_PRIVATE` |
+| `contentBlocker.state/isAllowed` | Answered from the app profile's blocker | Answered |
 | `downloads.list/remove/clear/cancel/pause/resume/keep` | The OTR `DownloadManager`, own GUIDs only | `ERR_PROFILE_WINDOW` |
 | Find, Print, Save Page, DevTools | Served (Chrome's policies apply) | n/a |
 | `extensions.actionStates/sidePanelUrl`, `extensionView.create` | Served for incognito-allowed extensions; `ERR_EXTENSION_PRIVATE` otherwise | `ERR_PROFILE_WINDOW` for views |
@@ -84,7 +92,7 @@ Save Page and DevTools follow Chrome's incognito behaviour through the checks th
 
 ## Tests
 
-Final runs, after rebasing onto `linux` at `6bf5097b` (#131):
+Full runs on `linux` at `6bf5097b`, plus review round 1 on `980389e1`. Round 1 re-ran the touched native tests (106 passed across the 16 touched modules, and 25 patch-tooling tests), `test:host` (376 passed), the acceptance self-test (63 passed; its stock-Chromium extension test flaked once under load and then passed), `typecheck` and `build`:
 
 | Command | Result |
 | --- | --- |
@@ -127,3 +135,5 @@ I couldn't build or run Chromium 156 in this lane, so nothing here has run in a 
 - #148: a Linux Window menu listing regular and private windows.
 - #149: spanning-mode extensions and live action updates in private windows.
 - #150: incognito links from extension popups, side panels and DevTools.
+- #172: `downloads.removed` for private downloads still reaches every window (ids only).
+- #173: automatic PiP in private windows asks instead of matching macOS.
