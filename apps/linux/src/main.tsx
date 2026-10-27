@@ -26,6 +26,8 @@ import { startLinuxShortcuts } from "./shortcutsRuntime";
 import { TrafficLights } from "./TrafficLights";
 import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setSessionDeparture, setSessionFlush } from "./session";
 import { startUtility } from "./utility";
+import { installProfileWindows } from "./hostWindowProfiles";
+import { focus } from "../../browser/src/state/browser/actions";
 
 Object.assign(globalThis, { ardiaLinux: { store: useBrowser, emitCommand } });
 setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
@@ -51,7 +53,8 @@ async function start() {
     startAppCommands(windowId, linuxCapabilities(ardiaHost), undefined, UTILITY_APP_COMMANDS);
     await startUtility(ardiaHost);
   } else {
-    useBrowser.setState(adoptParkedPins(useBrowser.getState(), windowId, profileId));
+    if (!ardiaHost.bootstrap.privateWindow) useBrowser.setState(adoptParkedPins(useBrowser.getState(), windowId, profileId));
+    installProfileWindows(useBrowser, focus);
     startHostData();
     startHostTabLifecycle(ardiaHost, useBrowser);
     setHostOverlayCheck((key) => {

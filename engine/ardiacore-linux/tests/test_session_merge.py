@@ -323,6 +323,53 @@ int main() {
   base::DictValue encoded;
   encoded.Set("text", base::Value(std::string(ardia::kLinuxSessionMaxBytes / 5, '\0')));
   assert(!ardia::MergeLinuxSession(empty, encoded, empty));
+  auto session_with = [](const char* table, base::DictValue entry) {
+    base::DictValue session;
+    session.Set(table, std::move(entry));
+    return session;
+  };
+  base::DictValue public_window;
+  public_window.Set("w", base::DictValue().Set("profileId", "default").Set("incognito", base::Value(false)).Set("title", "incognito: notes"));
+  base::DictValue extension_settings;
+  extension_settings.Set("extensions", base::DictValue().Set("x", base::DictValue().Set("incognito", base::Value(true))));
+  base::DictValue public_session = session_with("windows", std::move(public_window));
+  public_session.Set("settings", std::move(extension_settings));
+  public_session.Set("lastProfileId", "p-work");
+  assert(ardia::ValidLinuxSession(public_session));
+  assert(ardia::MergeLinuxSession(empty, public_session, empty));
+  base::DictValue private_window;
+  private_window.Set("p", base::DictValue().Set("profileId", "incognito:p@").Set("incognito", base::Value(true)));
+  assert(!ardia::MergeLinuxSession(empty, session_with("windows", std::move(private_window)), empty));
+  base::DictValue flagged_window;
+  flagged_window.Set("p", base::DictValue().Set("profileId", "default").Set("incognito", base::Value(true)));
+  assert(!ardia::ValidLinuxSession(session_with("windows", std::move(flagged_window))));
+  base::DictValue original_window;
+  original_window.Set("p", base::DictValue().Set("profileId", "default").Set("originalProfileId", "default"));
+  assert(!ardia::ValidLinuxSession(session_with("windows", std::move(original_window))));
+  base::DictValue private_tab;
+  private_tab.Set("t", base::DictValue().Set("profileId", "incognito:p@p-work").Set("url", "https://private.test"));
+  assert(!ardia::MergeLinuxSession(empty, session_with("tabs", std::move(private_tab)), empty));
+  base::DictValue private_profile;
+  private_profile.Set("incognito:p@", base::DictValue());
+  assert(!ardia::ValidLinuxSession(session_with("profiles", std::move(private_profile))));
+  base::DictValue private_pins;
+  private_pins.Set("incognito:p@", base::DictValue());
+  assert(!ardia::ValidLinuxSession(session_with("parkedPins", std::move(private_pins))));
+  base::DictValue order_session;
+  order_session.Set("profileOrder", base::Value(base::ListValue().Append(base::Value("default")).Append(base::Value("incognito:p@"))));
+  assert(!ardia::ValidLinuxSession(order_session));
+  base::DictValue focus_session;
+  focus_session.Set("lastProfileId", "incognito:p@");
+  assert(!ardia::ValidLinuxSession(focus_session));
+  base::DictValue closed_tab;
+  closed_tab.Set("tab", base::DictValue().Set("profileId", "incognito:p@").Set("url", "https://private.test"));
+  base::DictValue closed_session;
+  closed_session.Set("closedTabs", base::Value(base::ListValue().Append(base::Value(std::move(closed_tab)))));
+  assert(!ardia::MergeLinuxSession(empty, closed_session, empty));
+  base::DictValue private_disk;
+  private_disk.Set("t", base::DictValue().Set("profileId", "incognito:p@"));
+  assert(!ardia::MergeLinuxSession(empty, empty, session_with("tabs", std::move(private_disk))));
+  std::cout << "private_sessions=rejected\n";
 }
 '''
         with tempfile.TemporaryDirectory(prefix='ardia-session-merge-') as scratch:
@@ -336,6 +383,7 @@ int main() {
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             result = subprocess.run([str(binary)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('private_sessions=rejected', result.stdout)
 
     def test_real_file_worker_and_source_independent_delivery(self):
         compiler = shutil.which('clang++') or shutil.which('c++')

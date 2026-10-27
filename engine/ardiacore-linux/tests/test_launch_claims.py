@@ -43,6 +43,16 @@ class LaunchClaimsTests(unittest.TestCase):
   ShellHostView wrong_profile;
   wrong_profile.launch_decision_.Offer({"launch", "https://offered.test", "default", 18});
   assert(!call(wrong_profile, "launch", "https://offered.test", "private"));
+  ShellHostView isolated;
+  isolated.hosted = "p-work";
+  isolated.launch_decision_.Offer({"launch", "https://offered.test", "default", 21});
+  assert(!call(isolated, "launch", "https://offered.test", "default"));
+  assert(isolated.adopted == 0);
+  ShellHostView isolated_own;
+  isolated_own.hosted = "p-work";
+  isolated_own.launch_decision_.Offer({"launch", "https://offered.test", "p-work", 22});
+  assert(call(isolated_own, "launch", "https://offered.test", "p-work"));
+  assert(isolated_own.adopted == 22);
 '''
         else:
             branch = method(source, '  if (method == "ArdiaTabs.claimLaunchTab")')
@@ -93,7 +103,9 @@ struct Binding { std::string claim; };
 struct ShellHostView {
   int creates = 0;
   int adopted = 0;
+  std::string hosted = "default";
   Binding binding;
+  bool HostsProfile(std::string_view profile) const { return profile == hosted || (hosted == "default" && profile.empty()); }
   ARDIA_STATE
   ShellHostView* GetWeakPtr() { return this; }
   Binding* BindingForKey(const std::string&) { return &binding; }
@@ -179,7 +191,7 @@ struct ShellHostView {
   int renderer_generation_ = 1;
   int transactions = 0;
   std::map<int, std::unique_ptr<TabBinding>> bindings_;
-  void* profile() { return profile_; }
+  void* page_profile() { return profile_; }
   TabBinding* Binding(int id) { const auto found = bindings_.find(id); return found == bindings_.end() ? nullptr : found->second.get(); }
   TabBinding* BindingForKey(std::string_view key) {
     for (const auto& [id, binding] : bindings_) if (binding->key_ == key) return binding.get();
