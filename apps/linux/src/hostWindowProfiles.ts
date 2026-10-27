@@ -14,31 +14,38 @@ type ProfileStore = {
 };
 
 const PRIVATE_SEED_LIMIT = 1024 * 1024;
-type Opening = { promise: Promise<boolean>; resolve: (opened: boolean) => void; settled: boolean };
+type Opening = { promise: Promise<boolean>; resolve: (opened: boolean) => void };
 const openings = new Map<string, Opening>();
 
-function openingOf(id: string) {
+function settleOpening(id: string, opened: boolean) {
+  const entry = openings.get(id);
+  openings.delete(id);
+  entry?.resolve(opened);
+}
+
+export function windowOpened(id: string): Promise<boolean> {
   let entry = openings.get(id);
   if (!entry) {
     let resolve: (opened: boolean) => void = () => {};
     const promise = new Promise<boolean>((done) => { resolve = done; });
-    entry = { promise, resolve, settled: false };
+    entry = { promise, resolve };
     openings.set(id, entry);
   }
-  return entry;
-}
-
-function settleOpening(id: string, opened: boolean) {
-  if (openings.get(id)?.settled) openings.delete(id);
-  const entry = openingOf(id);
-  entry.settled = true;
-  entry.resolve(opened);
-}
-
-export function windowOpened(id: string): Promise<boolean> {
-  const entry = openingOf(id);
-  if (entry.settled) openings.delete(id);
   return entry.promise;
+}
+
+export const pendingOpenings = () => openings.size;
+
+type RefusableStore = {
+  getState(): Pick<BrowserState, "windows" | "closedWindows" | "closedTabs" | "closeWindow">;
+  setState(patch: Partial<Pick<BrowserState, "closedWindows" | "closedTabs">>): void;
+};
+
+export function dropRefusedWindow(store: RefusableStore, id: string) {
+  const { windows, closedWindows, closedTabs, closeWindow } = store.getState();
+  if (!windows[id]) return;
+  closeWindow(id);
+  store.setState({ closedWindows, closedTabs });
 }
 
 export function privateWindowSeed(state: Pick<BrowserState, "windows" | "tabs">, id: string): PrivateWindowSeed | undefined {
@@ -54,13 +61,35 @@ export function privateWindowSeed(state: Pick<BrowserState, "windows" | "tabs">,
   return JSON.stringify(seed).length <= PRIVATE_SEED_LIMIT ? seed : undefined;
 }
 
-export function createHostWindowOpener(host: ArdiaHost, state: () => Pick<BrowserState, "windows" | "tabs">, emit: (event: WindowEvent) => void) {
+const attaching = new WeakMap<ArdiaHost, Set<string>>();
+
+function watchAttachments(host: ArdiaHost, drop: (id: string) => void) {
+  const waiting = new Set<string>();
+  attaching.set(host, waiting);
+  host.onEvent((module, event, payload) => {
+    if (module !== "ArdiaShell" || event !== "onWindowEvent" || !payload || typeof payload !== "object") return;
+    const { type, id } = payload as { type?: unknown; id?: unknown };
+    if (typeof id !== "string") return;
+    if (type === "refused") {
+      waiting.delete(id);
+      settleOpening(id, false);
+      drop(id);
+    } else if (type === "attached" && waiting.delete(id)) {
+      settleOpening(id, true);
+    }
+  });
+  return waiting;
+}
+
+export function createHostWindowOpener(host: ArdiaHost, state: () => Pick<BrowserState, "windows" | "tabs">, emit: (event: WindowEvent) => void, drop: (id: string) => void = () => {}) {
+  const waiting = attaching.get(host) ?? watchAttachments(host, drop);
   return async (id: string, options: OpenOptions = {}) => {
     const seed = options.incognito ? privateWindowSeed(state(), id) : undefined;
     try {
       if (options.incognito && !seed) throw Object.assign(new Error("The private window has no state to open"), { code: "ERR_PROFILE_INVALID" });
-      await invokeHost("ArdiaShell.openWindow", { args: [id, seed ? { ...options, privateWindow: seed } : options] }, host);
-      settleOpening(id, true);
+      const reply = await invokeHost<{ pending?: boolean } | null>("ArdiaShell.openWindow", { args: [id, seed ? { ...options, privateWindow: seed } : options] }, host);
+      if (reply?.pending === true) waiting.add(id);
+      else settleOpening(id, true);
     } catch (error) {
       reportHostError(error);
       settleOpening(id, false);

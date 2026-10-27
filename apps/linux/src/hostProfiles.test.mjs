@@ -3,7 +3,7 @@ import test from "node:test";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { engineProfile, setSharedDataIds } from "../../browser/src/state/browser/model.ts";
 import { initialHostSession, snapshotHostSession, startHostPersistence } from "./hostSession.ts";
-import { createHostWindowOpener, installProfileWindows, privateWindowSeed, profileWindowFor, withPrivateWindow } from "./hostWindowProfiles.ts";
+import { createHostWindowOpener, dropRefusedWindow, installProfileWindows, pendingOpenings, privateWindowSeed, profileWindowFor, windowOpened, withPrivateWindow } from "./hostWindowProfiles.ts";
 
 const S = () => useBrowser.getState();
 const tick = () => new Promise(setImmediate);
@@ -22,18 +22,20 @@ function regularSession() {
   return { work, shared };
 }
 
-function fakeHost({ reject, bootstrap = { windowId: "main", profileId: "default", startup: false } } = {}) {
+function fakeHost({ reject, pending = false, bootstrap = { windowId: "main", profileId: "default", startup: false } } = {}) {
   const calls = [];
+  const listeners = new Set();
   return {
     calls,
     bootstrap,
     invoke(method, args) {
       calls.push([method, structuredClone(args)]);
       if (method === "ArdiaShell.openWindow" && reject) return Promise.reject(Object.assign(new Error(reject), { code: "ERR_PROFILE_UNAVAILABLE" }));
-      return Promise.resolve(null);
+      return Promise.resolve(method === "ArdiaShell.openWindow" && pending ? { pending: true } : null);
     },
     call: async () => "null",
-    onEvent: () => () => {},
+    onEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+    native: (event) => { for (const listener of [...listeners]) listener("ArdiaShell", "onWindowEvent", event); },
   };
 }
 
@@ -261,3 +263,59 @@ test("an isolated-profile window lists its own profile's downloads", async () =>
   assert.equal(regular[0].profile, "");
   assert.ok(downloadVisibleIn(regular[0], { incognito: false, profileId: "default" }));
 });
+
+test("a refused window leaves the store without closed-window history and its move keeps the source", quiet(async () => {
+  const { work } = regularSession();
+  installProfileWindows(useBrowser, () => {});
+  const tab = S().windows.main.tabIds[0];
+  useBrowser.setState((s) => ({ tabs: { ...s.tabs, [tab]: { ...s.tabs[tab], url: "https://refused.test/" } } }));
+  const host = fakeHost({ pending: true });
+  const open = createHostWindowOpener(host, () => S(), () => {}, (id) => dropRefusedWindow(useBrowser, id));
+  const closedWindows = S().closedWindows;
+  const closedTabs = S().closedTabs;
+  const before = new Set(S().windowOrder);
+  S().moveTabToProfile(tab, work);
+  const created = S().windowOrder.find((id) => !before.has(id));
+  await open(created, { profile: work });
+  await tick();
+  assert.ok(S().tabs[tab], "a pending window does not yet confirm the move");
+  assert.ok(S().windows[created]);
+  host.native({ type: "refused", id: created });
+  await tick();
+  assert.equal(S().windows[created], undefined, "the refused window leaves the store");
+  assert.equal(S().closedWindows, closedWindows, "no Reopen Closed Window entry for a window that never opened");
+  assert.equal(S().closedTabs, closedTabs);
+  assert.ok(S().tabs[tab], "the source tab survives the refusal");
+  assert.equal(pendingOpenings(), 0);
+}));
+
+test("a cross-profile move closes its source only once the target window attaches", quiet(async () => {
+  const { work } = regularSession();
+  installProfileWindows(useBrowser, () => {});
+  const tab = S().windows.main.tabIds[0];
+  useBrowser.setState((s) => ({ tabs: { ...s.tabs, [tab]: { ...s.tabs[tab], url: "https://attached.test/" } } }));
+  const host = fakeHost({ pending: true });
+  const open = createHostWindowOpener(host, () => S(), () => {}, (id) => dropRefusedWindow(useBrowser, id));
+  const before = new Set(S().windowOrder);
+  S().moveTabToProfile(tab, work);
+  const created = S().windowOrder.find((id) => !before.has(id));
+  await open(created, { profile: work });
+  host.native({ type: "attached", id: "someone-else" });
+  await tick();
+  assert.ok(S().tabs[tab]);
+  host.native({ type: "attached", id: created });
+  await tick();
+  assert.equal(S().tabs[tab], undefined);
+  assert.equal(pendingOpenings(), 0, "settled openings are removed");
+}));
+
+test("an opening settled before anyone waits leaves nothing behind", quiet(async () => {
+  const host = fakeHost();
+  await createHostWindowOpener(host, () => ({ windows: {}, tabs: {} }), () => {})("w-unwatched", { profile: "" });
+  assert.equal(pendingOpenings(), 0);
+  const waiting = windowOpened("w-waits");
+  assert.equal(pendingOpenings(), 1);
+  await createHostWindowOpener(host, () => ({ windows: {}, tabs: {} }), () => {})("w-waits", { profile: "" });
+  assert.equal(await waiting, true);
+  assert.equal(pendingOpenings(), 0);
+}));
