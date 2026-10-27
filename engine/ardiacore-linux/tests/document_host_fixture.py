@@ -452,6 +452,8 @@ int generic_reads = 0;
 int generic_writes = 0;
 std::string DocumentDirectory(Profile*) { return "/native/Ardia"; }
 std::optional<std::string> ReadDocument(const std::string&, const std::string&) { ++generic_reads; return "ok"; }
+struct StoredDocument { ardia::linux_policy::StoredRead outcome; std::string contents; };
+StoredDocument ReadStoredDocument(const std::string& directory, const std::string& name) { auto contents = ReadDocument(directory, name); return {contents ? ardia::linux_policy::StoredRead::kFound : ardia::linux_policy::StoredRead::kFailed, contents.value_or(std::string())}; }
 bool WriteDocument(const std::string&, const std::string&, const std::optional<std::string>&) { ++generic_writes; return true; }
 std::string ArgumentString(const base::ListValue& values, size_t index) { return values[index].GetString(); }
 constexpr char kSessionName[] = "linux-session.json";

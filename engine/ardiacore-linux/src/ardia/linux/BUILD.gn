@@ -63,11 +63,15 @@ source_set("linux") {
     "ac_linux_host.h",
     "ac_linux_page_commands.cc",
     "ac_linux_page_commands.h",
+    "ac_linux_launch_steps.h",
     "ac_linux_policy.h",
     "ac_linux_session.cc",
     "ac_linux_session.h",
     "ac_linux_window_lifecycle.cc",
     "ac_linux_window_lifecycle.h",
+    "ac_linux_suggest.cc",
+    "ac_linux_suggest.h",
+    "ac_linux_suggest_policy.h",
   ]
   sources += get_target_outputs(":bootstrap")
   deps = [
@@ -116,6 +120,7 @@ source_set("linux") {
     "//net",
     "//pdf:buildflags",
     "//printing/buildflags",
+    "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//third_party/blink/public/common",
     "//ui/base",
