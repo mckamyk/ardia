@@ -1,0 +1,42 @@
+--- a/chrome/browser/extensions/api/messaging/launch_context_posix.cc
++++ b/chrome/browser/extensions/api/messaging/launch_context_posix.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <memory>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/command_line.h"
+ #include "base/files/file_util.h"
+@@ -19,6 +20,10 @@
+ #include "chrome/common/chrome_paths.h"
+ #include "net/base/file_stream.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++std::vector<base::FilePath> (*g_ardia_native_messaging_directories)() = nullptr;
++#endif
++
+ namespace extensions {
+ 
+ namespace {
+@@ -51,6 +56,20 @@
+     result = FindManifestInDir(chrome::DIR_CHROME_USER_NATIVE_MESSAGING, host_name);
+   }
+ 
++#if BUILDFLAG(IS_LINUX)
++  if (result.empty() && allow_user_level_hosts &&
++      g_ardia_native_messaging_directories) {
++    for (const base::FilePath& directory :
++         g_ardia_native_messaging_directories()) {
++      base::FilePath path = directory.Append(host_name + ".json");
++      if (base::PathExists(path)) {
++        result = path;
++        break;
++      }
++    }
++  }
++#endif
++
+   if (result.empty()) {
+     result = FindManifestInDir(chrome::DIR_NATIVE_MESSAGING, host_name);
+   }

@@ -1,0 +1,133 @@
+import pathlib
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+from test_downloads import compile_and_run
+from test_renderer_contract import method
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+REPO = ROOT.parents[1]
+LINUX = ROOT / 'src/ardia/linux'
+FIXTURES = ROOT / 'tests/fixtures'
+CHROMIUM = pathlib.Path.home() / 'ardia-linux-build-156/chromium_git/chromium/src'
+NEW_SOURCES = ['ac_linux_extension_shortcuts', 'ac_linux_extension_keybindings', 'ac_linux_native_messaging']
+
+
+def added_lines(patch):
+    return '\n'.join(line for line in patch.splitlines() if line.startswith('+') and not line.startswith('+++'))
+
+
+def dry_run(test, patch, relative):
+    source = CHROMIUM / relative
+    if not source.exists() or shutil.which('patch') is None:
+        test.skipTest('Chromium 156 source is unavailable')
+    with tempfile.TemporaryDirectory(prefix='ardia-followup-patch-') as directory:
+        target = pathlib.Path(directory) / relative
+        target.parent.mkdir(parents=True)
+        target.write_text(source.read_text())
+        result = subprocess.run(['patch', '-p1', '--dry-run', '-F0', '-i', str(patch)], cwd=directory, capture_output=True, text=True)
+        test.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class ExtensionFollowupHelperTests(unittest.TestCase):
+    def test_shortcut_book_and_native_messaging_lookup(self):
+        with tempfile.TemporaryDirectory(prefix='ardia-extension-followups-') as directory:
+            scratch = pathlib.Path(directory)
+            for folder in ('first', 'second'):
+                (scratch / folder).mkdir()
+            (scratch / 'second/com.example.host.json').write_text('{}')
+            (scratch / 'first/com.example.both.json').write_text('{}')
+            (scratch / 'second/com.example.both.json').write_text('{}')
+            (scratch / 'first/com.example.folder.json').mkdir()
+            output = compile_and_run(self, 'extension-followups', [
+                LINUX / 'ac_linux_extension_shortcuts.cc', LINUX / 'ac_linux_native_messaging.cc',
+                FIXTURES / 'extension_followups_scenarios.cc',
+            ], args=[str(scratch)])
+        self.assertIn('extension follow-up scenarios passed', output)
+
+
+class ExtensionShortcutWiringTests(unittest.TestCase):
+    host = (LINUX / 'ac_linux_host.cc').read_text()
+    glue = (LINUX / 'ac_linux_extension_keybindings.cc').read_text()
+
+    def test_ardia_shortcuts_run_first_and_extensions_never_shadow_them(self):
+        key = method(self.host, 'void ShellHostView::OnKeyEvent(ui::KeyEvent* event) {')
+        self.assertIn('AcceleratorPressed(accelerator) || ExtensionShortcutPressed(*event, shortcuts_.contains(accelerator))', key)
+        self.assertLess(key.index('AcceleratorPressed(accelerator)'), key.index('ExtensionShortcutPressed'))
+        pressed = method(self.host, 'bool ShellHostView::ExtensionShortcutPressed(')
+        self.assertIn('!ExtensionsListening()', pressed)
+        self.assertIn('IsOffTheRecord()', pressed)
+        self.assertIn('ui::Accelerator(event.key_code(), event.flags())', pressed)
+        self.assertIn('linux_extension_shortcuts::kActionShortcutEvent', pressed)
+        self.assertIn('ExtensionTabKey(contents)', pressed)
+        self.assertIn('GetWeakPtr()', pressed)
+
+    def test_registry_lifetime_follows_the_window_keyboard_handler(self):
+        unregister = method(self.host, 'void ShellHostView::UnregisterAccelerators() {')
+        self.assertIn('extension_keybindings_.reset();', unregister)
+        detach = method(self.host, 'void ShellHostView::DetachBrowser() {')
+        self.assertLess(detach.index('UnregisterAccelerators();'), detach.index('browser_ = nullptr;'))
+        destructor = method(self.host, 'ShellHostView::~ShellHostView() {')
+        self.assertIn('UnregisterAccelerators();', destructor)
+
+    def test_glue_registers_actions_and_regular_commands_only(self):
+        self.assertIn('ShouldIgnoreCommand(const std::string&) const {\n  return false;', self.glue)
+        self.assertIn('extensions::CommandService::REGULAR', self.glue)
+        self.assertNotIn('CommandService::GLOBAL', self.glue)
+        self.assertIn('ActionInfo::Type::kAction', self.glue)
+        self.assertIn('NotifyEventTargets(', self.glue)
+        self.assertIn('GetActiveWebContents()', self.glue)
+        events = re.findall(r'"(extensions\.actionShortcut)"', (LINUX / 'ac_linux_extension_shortcuts.h').read_text())
+        api = (REPO / 'packages/ardiacore/src/engine/api.ts').read_text()
+        self.assertEqual(events, ['extensions.actionShortcut'])
+        self.assertIn('"extensions.actionShortcut": ActionPopupRequest;', api)
+
+
+class ExtensionFollowupPatchTests(unittest.TestCase):
+    series = (REPO / 'engine/patches/series').read_text()
+
+    def test_settings_overrides_patch_only_adds_linux_to_the_manifest_feature(self):
+        self.assertIn('chromium chromium-linux-settings-overrides.patch linux', self.series)
+        patch = REPO / 'engine/patches/chromium-linux-settings-overrides.patch'
+        text = patch.read_text()
+        self.assertEqual(added_lines(text), '+    "platforms": ["win", "mac", "linux"]')
+        self.assertIn('-    "platforms": ["win", "mac"]', text)
+        self.assertIn('"chrome_settings_overrides": {', text)
+        dry_run(self, patch, 'chrome/common/extensions/api/_manifest_features.json')
+
+    def test_native_messaging_patch_adds_a_linux_lookup_hook_the_host_installs(self):
+        self.assertIn('chromium chromium-linux-native-messaging-hosts.patch linux', self.series)
+        patch = REPO / 'engine/patches/chromium-linux-native-messaging-hosts.patch'
+        text = patch.read_text()
+        added = added_lines(text)
+        self.assertNotRegex(added, r'^\+\s*(//|/\*)')
+        declaration = 'std::vector<base::FilePath> (*g_ardia_native_messaging_directories)()'
+        self.assertIn(declaration + ' = nullptr;', added)
+        self.assertIn('allow_user_level_hosts', added)
+        host = (LINUX / 'ac_linux_host.cc').read_text()
+        self.assertIn(f'extern {declaration};', host)
+        self.assertIn('g_ardia_native_messaging_directories = &NativeMessagingDirectories;', host)
+        self.assertLess(text.index('DIR_CHROME_USER_NATIVE_MESSAGING'), text.index('g_ardia_native_messaging_directories()'))
+        self.assertLess(text.index('g_ardia_native_messaging_directories()'), text.index('DIR_NATIVE_MESSAGING, host_name'))
+        dry_run(self, patch, 'chrome/browser/extensions/api/messaging/launch_context_posix.cc')
+
+
+class ExtensionFollowupSourceRules(unittest.TestCase):
+    def test_new_sources_have_no_comments_and_are_built(self):
+        build = (LINUX / 'BUILD.gn').read_text()
+        target = build[build.index('source_set("linux")'):]
+        for name in NEW_SOURCES:
+            for suffix in ['.cc', '.h']:
+                path = LINUX / f'{name}{suffix}'
+                self.assertIn(f'"{name}{suffix}"', target)
+                self.assertIsNone(re.search(r'(^|\s)//(?!\s*nogncheck)|/\*', path.read_text()), path)
+        self.assertIn('"//chrome/browser/tab_list"', target)
+        fixture = (FIXTURES / 'extension_followups_scenarios.cc').read_text()
+        self.assertIsNone(re.search(r'(^|\s)//|/\*', fixture))
+
+
+if __name__ == '__main__':
+    unittest.main()
