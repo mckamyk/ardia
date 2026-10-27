@@ -25,6 +25,7 @@
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/linux/ac_linux_window_lifecycle.h"
+#include "ardia/linux/ac_linux_suggest.h"
 #include "ardia/linux/host_bootstrap.h"
 #include "base/auto_reset.h"
 #include "base/base_paths.h"
@@ -1461,7 +1462,8 @@ base::DictValue ShellHostView::Bootstrap() const {
   base::PathService::Get(chrome::DIR_USER_DATA, &user_data_directory);
   base::ListValue capabilities = base::ListValue().Append("ArdiaWebView.call")
       .Append("ArdiaShell.windowIdentity").Append("ArdiaShell.beginDialog")
-      .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain");
+      .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain")
+      .Append("ArdiaSearch.suggest");
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
@@ -3179,6 +3181,19 @@ void ShellHostView::Invoke(
       return std::move(done).Run(false, base::Value(base::DictValue()
           .Set("code", "ERR_WINDOW_IDENTITY").Set("message", "Committed window identity unavailable")));
     return std::move(done).Run(true, base::Value(std::move(identity)));
+  }
+  if (method == "ArdiaSearch.suggest") {
+    if (values.size() != 1 || !values[0].is_string() ||
+        !ardia::linux_suggest::CanFetchSuggestions(profile(), values[0].GetString()))
+      return std::move(done).Run(false, base::Value(base::DictValue()
+          .Set("code", "ERR_SUGGEST_REFUSED").Set("message", "Search suggestion request refused")));
+    return ardia::linux_suggest::FetchSuggestions(profile(), values[0].GetString(), base::BindOnce(
+        [](base::OnceCallback<void(bool, base::Value)> done, std::optional<std::string> body) {
+          if (!body) return std::move(done).Run(false, base::Value(base::DictValue()
+              .Set("code", "ERR_SUGGEST").Set("message", "Search suggestions are unavailable")));
+          std::move(done).Run(true, base::Value(base::DictValue().Set("body", std::move(*body))));
+        },
+        std::move(done)));
   }
   if (method == "ArdiaShell.beginDialog" || method == "ArdiaShell.cancelDialog") {
     const auto* supplied = args.Find("args");

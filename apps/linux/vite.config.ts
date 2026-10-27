@@ -7,6 +7,7 @@ const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const replacements = new Map([
   ...inputAdapters,
   [here("../browser/src/platform/livePersistence.ts"), here("./src/livePersistence.ts")],
+  [here("../../packages/core/src/suggestFetcher.ts"), here("./src/suggestFetcher.ts")],
   [here("../browser/src/components/sidebar/HoverCard.tsx"), here("./src/SidebarHoverCard.tsx")],
   [here("../browser/src/state/settings/settingsWindows.ts"), here("./src/settingsWindows.ts")],
   [here("../browser/src/components/profiles/ProfileIndicator.tsx"), here("./src/ProfileIndicator.tsx")],

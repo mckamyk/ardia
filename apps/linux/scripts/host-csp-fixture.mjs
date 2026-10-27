@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
+import { shellContentSecurityPolicy } from "./shell-csp.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const scratch = await mkdtemp(join(tmpdir(), "ardia-symbol-csp-"));
@@ -19,9 +20,9 @@ await build({
   },
 });
 
-const policy = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types ardia-symbols;";
+const policy = shellContentSecurityPolicy();
 const mock = `
-window.__ardiaCspFixture = { errors: [], htmlAssignments: [] };
+window.__ardiaCspFixture = { errors: [], htmlAssignments: [], suggestRequests: [] };
 window.addEventListener('error', event => __ardiaCspFixture.errors.push(event.error?.stack || event.message));
 window.addEventListener('unhandledrejection', event => __ardiaCspFixture.errors.push(String(event.reason)));
 const html = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
@@ -32,18 +33,20 @@ Object.defineProperty(Element.prototype, 'innerHTML', { ...html, set(value) {
 const listeners = new Set();
 const closing = new Set();
 const folder = (id) => ({ id, k:'f', t:id, a:0, c:[] });
-const noops = new Set(['ArdiaShell.openWindow','ArdiaShell.setWindowTitle','ArdiaShell.setMenuState','ArdiaShell.setMenuBookmarks','ArdiaShell.cancelFocusMove','ArdiaShell.replyToTerminate','ArdiaCEF.setDisplayMediaPicker','ArdiaCEF.setSearchEngineName','ArdiaChromeUI.watchCastRoutes','ArdiaCEF.prepareTransfer','ArdiaCEF.releaseTransfer','ArdiaShell.writeDocument','ArdiaShell.removeDocument']);
+const noops = new Set(['ArdiaShell.openWindow','ArdiaShell.setKeyboardShortcuts','ArdiaShell.setWindowTitle','ArdiaShell.setMenuState','ArdiaShell.setMenuBookmarks','ArdiaShell.cancelFocusMove','ArdiaShell.replyToTerminate','ArdiaCEF.setDisplayMediaPicker','ArdiaCEF.setSearchEngineName','ArdiaChromeUI.watchCastRoutes','ArdiaCEF.prepareTransfer','ArdiaCEF.releaseTransfer','ArdiaShell.writeDocument','ArdiaShell.removeDocument']);
 window.__ardiaHost = {
-  bootstrap: { windowId:'w_csp', profileId:'default', documents:{}, nativeModules:{ArdiaApp:{}} },
+  bootstrap: { windowId:'w_csp', profileId:'default', documents:{}, nativeModules:{ArdiaApp:{}}, capabilities:['ArdiaSearch.suggest'] },
   async call(name) {
-    if(name==='ac_bookmarks_tree')return JSON.stringify({bar:folder('bar'),other:folder('other')});
-    if(name==='ac_history_query')return JSON.stringify({entries:[]});
-    if(name==='ac_favicons_get')return JSON.stringify({pages:{},icons:{}});
-    if(name==='ac_tabs_last_tab_policy')return JSON.stringify({closesWindow:false});
-    if(['ac_bookmarks_watch','ac_history_watch','ac_extensions_watch_actions','ac_omnibox_opened'].includes(name))return '{}';
+    if(['ac_bookmarks_tree','bookmarks.tree'].includes(name))return JSON.stringify({bar:folder('bar'),other:folder('other')});
+    if(['ac_history_query','history.query'].includes(name))return JSON.stringify({entries:[]});
+    if(['ac_favicons_get','favicons.get'].includes(name))return JSON.stringify({pages:{},icons:{}});
+    if(['ac_tabs_last_tab_policy','tabs.lastTabPolicy'].includes(name))return JSON.stringify({closesWindow:false});
+    if(name==='tabs.strips')return JSON.stringify({rev:0,cmd:null,strips:[]});
+    if(['ac_bookmarks_watch','ac_history_watch','ac_extensions_watch_actions','ac_omnibox_opened','bookmarks.watch','history.watch','extensions.watchActions','omnibox.opened','media.watchCastRoutes','search.setEngineName'].includes(name)||name.startsWith('webView.set'))return '{}';
     throw new Error('Unexpected fixture engine call '+name);
   },
-  async invoke(method) {
+  async invoke(method, args) {
+    if(method==='ArdiaSearch.suggest'){__ardiaCspFixture.suggestRequests.push(args.args[0]);return {body:JSON.stringify(['ardia csp',['ardia csp fixture']])};}
     if(method==='session.read')return null;
     if(method==='session.write')return;
     if(method==='ArdiaExtensions.list')return {extensions:[]};
