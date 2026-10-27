@@ -20,6 +20,7 @@ export {
 } from "./web/chrome";
 export { FadeLabel } from "./web/FadeLabel";
 export { MouseArea } from "./web/MouseArea";
+export { FileDropArea } from "./web/FileDropArea";
 export { showMenu } from "../menus";
 export { setTrafficLightsCenter } from "./web/windowChrome";
 
