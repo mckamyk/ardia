@@ -308,6 +308,7 @@ void EngineErrors() {
   assert(ClassifyEngineError("invalid number").code == "ERR_CARD_NUMBER");
   assert(ReauthMessage("available").empty());
   assert(ReauthMessage("policyMissing").find("polkit policy isn't installed") != std::string::npos);
+  assert(ReauthMessage("policyMissing").find("/usr/share/polkit-1/actions") != std::string::npos);
   assert(ReauthMessage("noPolkit").find("polkit isn't running") != std::string::npos);
   assert(ReauthMessage("background").find("background") != std::string::npos);
   assert(ReauthMessage("notPermitted").find("isn't allowed") != std::string::npos);
@@ -395,6 +396,7 @@ void Origins() {
 }
 
 int main(int argc, char** argv) {
+  StorageProtection();
   assert(argc == 2);
   GenericCalls();
   TypedMethods();

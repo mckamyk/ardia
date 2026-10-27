@@ -344,6 +344,86 @@ class PackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'keyed uBlock Origin'):
                 packaging.package(output, ui, root / 'unkeyed.tar.xz', ubo)
 
+    def fake_package(self, root):
+        output, ui = root / 'out', root / 'ui'
+        output.mkdir()
+        ui.mkdir()
+        for name in packaging.REQUIRED:
+            if name == 'locales':
+                (output / name).mkdir()
+                (output / name / 'en-US.pak').write_bytes(b'locale')
+            else:
+                (output / name).write_bytes(b'runtime')
+        (output / 'chrome').chmod(0o755)
+        (ui / 'index.html').write_text('<html></html>')
+        archive = packaging.package(output, ui, root / 'ardia.tar.xz')
+        extracted = root / 'extracted'
+        with tarfile.open(archive) as packed:
+            self.assertIn('ardia/install.sh', packed.getnames())
+            self.assertTrue(packed.getmember('ardia/install.sh').mode & 0o111)
+            packed.extractall(extracted, filter='tar')
+        return archive, extracted / 'ardia'
+
+    def test_installer_puts_the_polkit_policy_where_polkit_reads_it(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            _, package_root = self.fake_package(root)
+            installer = package_root / 'install.sh'
+            usage = subprocess.run([str(installer), '--help'], capture_output=True, text=True, timeout=30)
+            self.assertEqual(usage.returncode, 0, usage.stderr)
+            self.assertIn('/usr/share/polkit-1/actions', usage.stdout)
+            for prefix in ['/usr', '/opt/ardia', '/usr/local']:
+                destdir = root / ('dest' + prefix.replace('/', '-'))
+                result = subprocess.run([str(installer), '--prefix', prefix, '--destdir', str(destdir)],
+                                        capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                policy = destdir / 'usr/share/polkit-1/actions/dev.ardia.linux.policy'
+                self.assertEqual(policy.read_text(), (REPO / 'scripts/linux/dev.ardia.linux.policy').read_text())
+                self.assertEqual(policy.stat().st_mode & 0o777, 0o644)
+                installed = destdir / prefix.lstrip('/')
+                self.assertTrue((installed / 'lib/ardia/chrome').is_file())
+                self.assertTrue(os.access(installed / 'lib/ardia/chrome', os.X_OK))
+                self.assertTrue((installed / 'lib/ardia/ardia-ui/index.html').is_file())
+                launcher = (installed / 'bin/ardia').read_text()
+                self.assertIn(f'exec "{prefix}/lib/ardia/chrome" "$@"', launcher)
+                self.assertNotIn(str(destdir), launcher)
+                self.assertTrue(os.access(installed / 'bin/ardia', os.X_OK))
+                desktop = (installed / 'share/applications/ardia.desktop').read_text()
+                self.assertIn(f'Exec={prefix}/bin/ardia %U', desktop)
+                self.assertFalse((installed / 'install.sh').exists())
+                self.assertFalse((installed / 'share/polkit-1').exists() and prefix != '/usr')
+            refused = subprocess.run([str(installer), '--prefix', 'relative'], capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(refused.returncode, 0)
+
+    def test_arch_package_installs_the_policy_through_the_installer(self):
+        pkgbuild = (REPO / 'scripts/linux/arch/PKGBUILD').read_text()
+        self.assertIn("'polkit'", pkgbuild)
+        self.assertNotRegex(pkgbuild, r'(^|\s)#')
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            _, package_root = self.fake_package(root)
+            srcdir, pkgdir = package_root.parent, root / 'pkg'
+            pkgdir.mkdir()
+            script = f'set -euo pipefail; source "$1"; srcdir="$2"; pkgdir="$3"; cd "$srcdir"; package'
+            result = subprocess.run(['bash', '-c', script, 'pkgbuild', str(REPO / 'scripts/linux/arch/PKGBUILD'), str(srcdir), str(pkgdir)],
+                                    capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue((pkgdir / 'usr/share/polkit-1/actions/dev.ardia.linux.policy').is_file())
+            self.assertTrue((pkgdir / 'usr/bin/ardia').is_file())
+            self.assertTrue((pkgdir / 'usr/lib/ardia/chrome').is_file())
+        if shutil.which('makepkg'):
+            with tempfile.TemporaryDirectory() as scratch:
+                shutil.copy(REPO / 'scripts/linux/arch/PKGBUILD', scratch)
+                info = subprocess.run(['makepkg', '--printsrcinfo'], cwd=scratch, capture_output=True, text=True, timeout=60)
+                self.assertEqual(info.returncode, 0, info.stderr)
+                self.assertIn('depends = polkit', info.stdout)
+
+    def test_installer_and_pkgbuild_carry_no_comments(self):
+        for path in [REPO / 'scripts/linux/install.sh', REPO / 'scripts/linux/arch/PKGBUILD']:
+            lines = path.read_text().splitlines()
+            self.assertTrue(lines[0].startswith('#!') or path.name == 'PKGBUILD')
+            self.assertFalse([line for line in lines[1:] if line.lstrip().startswith('#')], path)
+
 
 if __name__ == '__main__':
     unittest.main()

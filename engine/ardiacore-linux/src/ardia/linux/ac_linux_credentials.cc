@@ -830,8 +830,8 @@ std::string ReauthMessage(std::string_view reason) {
     return "polkit isn't running, so saved passwords and card numbers can't be shown, changed or exported";
   }
   if (reason == "policyMissing") {
-    return "Ardia's polkit policy isn't installed, so saved passwords and card numbers can't be shown, changed or "
-           "exported";
+    return "Ardia's polkit policy isn't installed in /usr/share/polkit-1/actions (install Ardia from a package or run "
+           "its install.sh), so saved passwords and card numbers can't be shown, changed or exported";
   }
   if (reason == "notPermitted") {
     return "This session isn't allowed to authenticate, so saved passwords and card numbers can't be shown, "
