@@ -82,7 +82,7 @@ LinuxHistoryZoom::~LinuxHistoryZoom() { Reset(); }
 
 bool LinuxHistoryZoom::GoToOffset(const base::ListValue& args) {
   auto offset = Integer(args);
-  auto* contents = lease_ ? lease_->contents() : nullptr;
+  auto* contents = lease_ ? lease_->presentation_contents() : nullptr;
   if (!offset || !contents) return false;
   if (*offset == 0) return true;
   auto& controller = contents->GetController();
@@ -94,7 +94,7 @@ bool LinuxHistoryZoom::GoToOffset(const base::ListValue& args) {
 
 bool LinuxHistoryZoom::ZoomStep(const base::ListValue& args) {
   auto step = Integer(args);
-  auto* contents = lease_ ? lease_->contents() : nullptr;
+  auto* contents = lease_ ? lease_->presentation_contents() : nullptr;
   if (!step || *step < -1 || *step > 1 || !contents || !controller_) return false;
   zoom::PageZoom::Zoom(contents, static_cast<content::PageZoom>(*step));
   return true;

@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'src'
-FILES = [SOURCE / 'ardia/linux' / f'ac_linux_{name}.cc' for name in ['page_lease', 'security', 'history_zoom', 'theme']]
+FILES = [SOURCE / 'ardia/linux' / f'ac_linux_{name}.cc' for name in ['page_lease', 'security', 'history_zoom', 'theme', 'page_state']]
 FIXTURE = ROOT / 'tests/fixtures/page_state.h'
 
 
@@ -66,6 +66,21 @@ class PageStateTests(unittest.TestCase):
 
     def test_reentrant_sink_and_snapshot_self_destruction(self):
         self.run_case('reentrant')
+
+    def test_creation_response_carries_lease_and_ordered_snapshot(self):
+        self.run_case('creation')
+
+    def test_document_reset_snapshot_stale_epoch_and_provisional_presentation(self):
+        self.run_case('boundaries')
+
+    def test_history_offsets_and_zoom_reports_through_joined_state(self):
+        self.run_case('commands')
+
+    def test_terminal_close_uses_original_lease_once(self):
+        self.run_case('closing')
+
+    def test_rebind_mints_new_binding_and_reentrant_teardown(self):
+        self.run_case('rebinding')
 
 
 if __name__ == '__main__':

@@ -115,6 +115,10 @@ content::WebContents* LinuxPageLease::observed_contents() const {
   return authority_ ? authority_->contents() : nullptr;
 }
 
+content::WebContents* LinuxPageLease::presentation_contents() const {
+  return Current() ? web_contents() : nullptr;
+}
+
 bool LinuxPageLease::Advance(uint64_t& value) {
   if (value == std::numeric_limits<uint64_t>::max()) { Reset(); return false; }
   ++value;
@@ -123,6 +127,11 @@ bool LinuxPageLease::Advance(uint64_t& value) {
 
 std::optional<base::DictValue> LinuxPageLease::Envelope(std::string type) {
   if (!Current()) return std::nullopt;
+  return Metadata(std::move(type));
+}
+
+std::optional<base::DictValue> LinuxPageLease::Metadata(std::string type) {
+  if (!sink_ || !authority_) return std::nullopt;
   if (sequence_ >= 9007199254740991ULL) { Reset(); return std::nullopt; }
   const auto& identity = authority_->identity;
   return base::DictValue().Set("type", std::move(type))
@@ -139,13 +148,31 @@ void LinuxPageLease::Send(base::DictValue payload) {
   sink.Run("ArdiaWebView", std::move(id), std::move(payload));
 }
 
-bool LinuxPageLease::Emit(const LinuxPageRequest& request, std::string name,
-                          base::Value data) {
-  if (!Valid(request)) return false;
+bool LinuxPageLease::SendEvent(std::string name, base::Value data) {
   auto envelope = Envelope("pageEvent");
   if (!envelope) return false;
   envelope->Set("event", base::DictValue().Set("name", std::move(name)).Set("data", std::move(data)));
   Send(std::move(*envelope));
+  return true;
+}
+
+bool LinuxPageLease::Emit(const LinuxPageRequest& request, std::string name,
+                          base::Value data) {
+  return Valid(request) && SendEvent(std::move(name), std::move(data));
+}
+
+bool LinuxPageLease::EmitPresentation(const LinuxPageRequest& request, std::string name,
+                                      base::Value data) {
+  return ValidPresentation(request) && SendEvent(std::move(name), std::move(data));
+}
+
+bool LinuxPageLease::EmitClosed() {
+  auto envelope = Metadata("pageEvent");
+  if (!envelope) return false;
+  envelope->Set("event", base::DictValue().Set("name", "windowClose").Set("data", base::DictValue()));
+  auto weak = GetWeakPtr();
+  Send(std::move(*envelope));
+  if (weak) Reset();
   return true;
 }
 

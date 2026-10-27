@@ -77,7 +77,10 @@ class LinuxPageLease : public content::WebContentsObserver {
   bool Valid(const LinuxPageRequest& request) const;
   content::WebContents* contents() const;
   content::WebContents* observed_contents() const;
+  content::WebContents* presentation_contents() const;
   bool Emit(const LinuxPageRequest& request, std::string name, base::Value data);
+  bool EmitPresentation(const LinuxPageRequest& request, std::string name, base::Value data);
+  bool EmitClosed();
   bool EmitSnapshot(const LinuxPageRequest& request, base::ListValue events);
   std::optional<base::DictValue> CreationState(const LinuxPageRequest& request,
                                              base::ListValue events);
@@ -90,6 +93,8 @@ class LinuxPageLease : public content::WebContentsObserver {
   bool ValidPresentation(const LinuxPageRequest& request) const;
   bool Advance(uint64_t& value);
   std::optional<base::DictValue> Envelope(std::string type);
+  std::optional<base::DictValue> Metadata(std::string type);
+  bool SendEvent(std::string name, base::Value data);
   void Send(base::DictValue payload);
   void Control(std::string reason);
   void PrimaryPageChanged(content::Page& page) override;

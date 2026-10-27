@@ -124,6 +124,7 @@ template<class R,class... A> class RepeatingCallback<R(A...)> {
   void Reset() { fn_={}; }
  private: std::function<R(A...)> fn_;
 };
+template<class F,class... B> auto BindRepeating(F f,B... bound) { return [f,bound...](auto&&... args) { return f(bound...,std::forward<decltype(args)>(args)...); }; }
 class CheckedObserver {};
 template<class... Args> std::string StringPrintf(const char* format, Args... args) { char out[128]; std::snprintf(out,sizeof(out),format,args...); return out; }
 template<class T> std::string HexEncode(const T& bytes) { std::string result; for (auto c:bytes) result+=StringPrintf("%02X",static_cast<unsigned char>(c)); return result; }

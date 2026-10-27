@@ -3,6 +3,7 @@
 #include "ardia/linux/ac_linux_security.h"
 #include "ardia/linux/ac_linux_history_zoom.h"
 #include "ardia/linux/ac_linux_theme.h"
+#include "ardia/linux/ac_linux_page_state.h"
 #include <climits>
 #include <limits>
 
@@ -201,7 +202,120 @@ void Reentrant() {
   zoom_helper=std::make_unique<LinuxHistoryZoom>(zoom_lease.GetWeakPtr());assert(zoom_helper->ZoomStep(Arg(1)));assert(!zoom_helper && controller.observers.empty());
 }
 
+struct Mount {
+  Profile profile;
+  views::Widget window;
+  BrowserWindowInterface browser{&profile};
+  content::WebContents shell{&profile}, page{&profile};
+  zoom::ZoomController controller;
+  std::vector<base::DictValue> deliveries;
+  int navigations=0;
+  std::function<void()> on_delivery;
+  std::unique_ptr<LinuxPageState> state;
+  explicit Mount(uint64_t binding=3) {
+    browser.strip.tabs.push_back(&page);page.zoom=&controller;
+    state=std::make_unique<LinuxPageState>(&browser,window.GetWeakPtr(),&page,&shell,LinuxPageIdentity{7,"tab","claim",2,binding,1,9},
+      [this](std::string module,std::string id,base::DictValue payload) { assert(module=="ArdiaWebView" && id=="7");deliveries.push_back(std::move(payload));if(on_delivery) on_delivery(); },
+      [this] { ++navigations;return base::DictValue().Set("url",page.entry.url.spec()).Set("title","T").Set("canGoBack",true).Set("canGoForward",false).Set("isLoading",false); });
+  }
+  void Boundary() { content::Page primary;page.Notify([&](auto* observer) { observer->PrimaryPageChanged(primary); }); }
+  void Start(content::NavigationHandle& handle) { page.Notify([&](auto* observer) { observer->DidStartNavigation(&handle); }); }
+  void Finish(content::NavigationHandle& handle) { page.Notify([&](auto* observer) { observer->DidFinishNavigation(&handle); }); }
+  const base::DictValue& Last() { assert(!deliveries.empty());return deliveries.back(); }
+  std::string LastName() { return Text(*Last().FindDict("event"),"name"); }
+  const base::DictValue& LastData() { return Last().FindDict("event")->Find("data")->GetDict(); }
+};
+
+const base::DictValue& EventAt(const base::DictValue& holder,size_t index,const char* name) {
+  const auto& list=holder.Find("events")->GetList();assert(index<list.size());
+  const auto& event=list[index].GetDict();assert(Text(event,"name")==name);return event.Find("data")->GetDict();
+}
+
+void Creation() {
+  Mount m;m.page.theme=0xff102030;m.page.security.connection_info_initialized=true;m.page.security.certificate=std::make_shared<net::X509Certificate>();m.controller.level=1;
+  auto created=m.state->CreationState();assert(created && m.deliveries.empty());
+  const auto& lease=*created->FindDict("lease");assert(Text(lease,"claim")=="claim" && Text(lease,"rendererGeneration")=="2" && Text(lease,"bindingGeneration")=="3" && Text(lease,"documentEpoch")=="1");
+  const auto& snapshot=*created->FindDict("snapshot");assert(Number(snapshot,"watermark")==Number(lease,"sequence") && snapshot.Find("events")->GetList().size()==3);
+  const auto& navigation=EventAt(snapshot,0,"navigation");assert(Text(navigation,"url")=="https://example.test/" && Text(navigation,"themeColor")=="#102030" && Text(navigation,"themeColorSource")=="meta");
+  assert(Text(EventAt(snapshot,1,"security"),"level")=="secure");
+  assert(std::abs(Number(EventAt(snapshot,2,"zoom"),"zoom")-1.2)<1e-12 && !EventAt(snapshot,2,"zoom").Find("isDefault")->GetBool());
+  for (auto* observer:std::vector<zoom::ZoomObserver*>(m.controller.observers)) observer->OnZoomControllerDestroyed(&m.controller);
+  auto without_zoom=m.state->CreationState();assert(without_zoom->FindDict("snapshot")->Find("events")->GetList().size()==2 && m.controller.observers.empty());
+  Mount provisional;content::NavigationHandle start;provisional.Start(start);auto cleared=provisional.state->CreationState();assert(cleared);
+  const auto& cleared_navigation=EventAt(*cleared->FindDict("snapshot"),0,"navigation");assert(cleared_navigation.Find("themeColor")->is_none());
+  assert(Text(EventAt(*cleared->FindDict("snapshot"),1,"security"),"level")=="none");
+  Mount gone;gone.browser.strip.tabs.clear();assert(!gone.state->CreationState());
+  Mount retired;retired.state->Retire();assert(!retired.state->CreationState() && !retired.state->EmitNavigation());
+}
+
+void Boundaries() {
+  Mount m;m.state->CreationState();auto old=m.state->Capture();assert(old);
+  m.page.entry.url=GURL("http://plain.test/");m.page.frame.NewDocument();m.Boundary();
+  assert(m.deliveries.size()==2);
+  assert(Text(m.deliveries[0],"type")=="pageLifecycle" && Text(m.deliveries[0],"action")=="reset" && Text(m.deliveries[0],"reason")=="document" && Text(m.deliveries[0],"documentEpoch")=="2");
+  assert(Text(m.deliveries[1],"action")=="snapshot" && Text(m.deliveries[1],"documentEpoch")=="2" && Number(m.deliveries[1],"sequence")>Number(m.deliveries[0],"sequence"));
+  assert(Text(EventAt(m.deliveries[1],1,"security"),"level")=="insecure" && Text(EventAt(m.deliveries[1],0,"navigation"),"url")=="http://plain.test/");
+  assert(!old->Valid() && !EmitLinuxPageEvent(*old,"find",base::Value()) && m.deliveries.size()==2);
+  auto current=m.state->Capture();assert(EmitLinuxPageEvent(*current,"find",base::Value(base::DictValue().Set("count",1))) && m.LastName()=="find" && Text(m.Last(),"documentEpoch")=="2");
+  content::NavigationHandle pending;m.Start(pending);assert(Text(m.Last(),"reason")=="provisional");
+  const auto before=m.deliveries.size();
+  assert(!m.state->EmitDocument("favicon",base::Value()) && !EmitLinuxPageEvent(*current,"find",base::Value()) && m.deliveries.size()==before);
+  assert(m.state->EmitNavigation() && m.LastName()=="navigation" && m.LastData().Find("themeColor")->is_none());
+  assert(m.state->EmitPresentation("progress",base::Value(base::DictValue().Set("progress",0.5))) && m.LastName()=="progress");
+  assert(m.state->SecurityInfo().is_none());
+  const auto restoring=m.deliveries.size();m.Finish(pending);assert(m.deliveries.size()==restoring+2);
+  assert(Text(m.deliveries[restoring],"action")=="snapshot" && Text(m.deliveries[restoring],"documentEpoch")=="2" && m.LastName()=="zoom");
+  assert(!m.state->SecurityInfo().is_none() && Text(m.state->SecurityInfo().GetDict(),"level")=="insecure");
+  double last=0;for(const auto& delivery:m.deliveries) { assert(Number(delivery,"sequence")>last);last=Number(delivery,"sequence"); }
+}
+
+void Commands() {
+  Mount m;m.page.controller.current=3;m.page.controller.size=4;
+  assert(m.state->GoToOffset(Arg(-2)) && m.page.controller.current==1);
+  assert(m.state->GoToOffset(Arg(2)) && m.page.controller.current==3);
+  assert(m.state->GoToOffset(Arg(-3)) && m.page.controller.current==0);
+  assert(m.state->GoToOffset(Arg(-2)) && m.page.controller.current==0 && m.page.controller.goes==3);
+  assert(!m.state->GoToOffset(Arg(1.5)) && !m.state->GoToOffset(base::ListValue()));
+  content::NavigationHandle pending;m.Start(pending);
+  assert(m.state->GoToOffset(Arg(2)) && m.page.controller.current==2);
+  assert(m.state->ZoomStep(Arg(1)) && m.controller.level==1);
+  m.Finish(pending);
+  const auto zooms=m.deliveries.size();
+  assert(m.state->ZoomStep(Arg(1)) && m.controller.level==2 && m.deliveries.size()==zooms+1 && m.LastName()=="zoom");
+  assert(std::abs(Number(m.LastData(),"zoom")-1.44)<1e-12 && !m.LastData().Find("isDefault")->GetBool() && Text(m.LastData(),"host")=="example.test");
+  assert(m.state->ZoomStep(Arg(0)) && m.controller.level==0 && m.LastData().Find("isDefault")->GetBool() && Number(m.LastData(),"zoom")==1);
+  assert(!m.state->ZoomStep(Arg(-2)));
+  m.state->Retire();assert(!m.state->GoToOffset(Arg(-1)) && !m.state->ZoomStep(Arg(1)) && m.controller.observers.empty());
+}
+
+void Closing() {
+  Mount m;m.state->CreationState();m.browser.strip.tabs.clear();
+  assert(!m.state->EmitNavigation() && !m.state->EmitPresentation("progress",base::Value()));
+  assert(m.state->EmitClosed() && m.LastName()=="windowClose" && Text(m.Last(),"claim")=="claim");
+  assert(!m.state->EmitClosed() && m.deliveries.size()==1);
+  Mount retired;retired.state->Retire();assert(!retired.state->EmitClosed() && retired.deliveries.empty());
+  Mount destroyed;auto* page=&destroyed.page;destroyed.state->CreationState();
+  page->Notify([](auto* o) { o->WebContentsDestroyed(); });assert(!destroyed.state->EmitClosed() && destroyed.deliveries.empty());
+}
+
+void Rebinding() {
+  Mount first(3);auto first_request=first.state->Capture();first.state->Retire();
+  assert(!first_request->Valid() && !EmitLinuxPageEvent(*first_request,"find",base::Value()));
+  first.state=std::make_unique<LinuxPageState>(&first.browser,first.window.GetWeakPtr(),&first.page,&first.shell,LinuxPageIdentity{7,"tab","claim",2,4,1,9},
+      [&first](std::string,std::string,base::DictValue payload) { first.deliveries.push_back(std::move(payload)); },[] { return base::DictValue(); });
+  assert(!first_request->Valid());auto created=first.state->CreationState();assert(Text(*created->FindDict("lease"),"bindingGeneration")=="4");
+  assert(first.controller.observers.size()==1);
+  Mount reentrant;reentrant.state->CreationState();reentrant.on_delivery=[&] { reentrant.state.reset(); };
+  reentrant.page.frame.NewDocument();reentrant.Boundary();assert(!reentrant.state && reentrant.deliveries.size()==1);
+  Mount snapshot_reentrant;snapshot_reentrant.state->CreationState();int seen=0;snapshot_reentrant.on_delivery=[&] { if(++seen==2) snapshot_reentrant.state.reset(); };
+  snapshot_reentrant.page.frame.NewDocument();snapshot_reentrant.Boundary();assert(!snapshot_reentrant.state && snapshot_reentrant.deliveries.size()==2 && snapshot_reentrant.controller.observers.empty());
+  Mount navigation_reentrant;bool destroy=false;
+  navigation_reentrant.state=std::make_unique<LinuxPageState>(&navigation_reentrant.browser,navigation_reentrant.window.GetWeakPtr(),&navigation_reentrant.page,&navigation_reentrant.shell,LinuxPageIdentity{7,"tab","claim",2,5,1,9},
+      [](std::string,std::string,base::DictValue) {},[&] { if (destroy) navigation_reentrant.state.reset();return base::DictValue(); });
+  destroy=true;assert(!navigation_reentrant.state->EmitNavigation() && !navigation_reentrant.state);
+}
+
 int main(int argc,char** argv) {
   assert(argc==2);std::string mode=argv[1];
-  if(mode=="authority") Authority();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else return 2;
+  if(mode=="authority") Authority();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
 }
