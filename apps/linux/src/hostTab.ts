@@ -6,6 +6,13 @@ import { hostProfile, invokeHost } from "./host.ts";
 export type HostTabEvent = { type: string; [key: string]: unknown };
 export type HostTabIdentity = { browserId: number; chromeTabId: number; state?: unknown };
 export type HostTabOptions = { key: string; profile?: string; url?: string; adoptId?: string; temporary?: boolean };
+export type HostPageReceiver = {
+  receive(module: string, id: string, payload: unknown): boolean;
+  install(value: unknown): boolean;
+  captureRequest(): (() => boolean) | null;
+  dispose(): void;
+};
+export type HostPageFactory = (claim: string, nativeId: () => number | undefined) => HostPageReceiver;
 export type TabViewport = { rect: { x: number; y: number; width: number; height: number }; visible: boolean };
 
 const claims = new WeakMap<ArdiaHost, Map<string, HostTab>>();
@@ -20,10 +27,12 @@ export class HostTab {
   unsubscribe: () => void;
   lastViewport = "";
   releaseScheduled = false;
+  page: HostPageReceiver | undefined;
 
-  constructor(host: ArdiaHost, options: HostTabOptions, onEvent: (event: HostTabEvent) => void) {
+  constructor(host: ArdiaHost, options: HostTabOptions, onEvent: (event: HostTabEvent) => void, page?: HostPageFactory) {
     this.host = host;
     this.key = options.key;
+    this.page = page?.(this.claim, () => this.identity?.browserId);
     const owners = claims.get(host) ?? new Map<string, HostTab>();
     claims.set(host, owners);
     const early: { id: string; event: HostTabEvent }[] = [];
@@ -31,7 +40,12 @@ export class HostTab {
       try { onEvent(event); } catch (error) { console.error("[ardia host] tab listener failed", error); }
     };
     this.unsubscribe = host.onEvent((module, id, payload) => {
-      if (this.disposed || (this.identity && owners.get(this.key) !== this) || module !== "ArdiaWebView" || !payload || typeof payload !== "object" || !("type" in payload)) return;
+      if (this.disposed || (this.identity && owners.get(this.key) !== this)) return;
+      if (this.page) {
+        this.page.receive(module, id, payload);
+        return;
+      }
+      if (module !== "ArdiaWebView" || !payload || typeof payload !== "object" || !("type" in payload)) return;
       const event = payload as HostTabEvent;
       if (!this.identity) {
         if (early.length === 128) early.shift();
@@ -47,7 +61,16 @@ export class HostTab {
       this.identity = identity;
       owners.set(this.key, this);
       if (this.disposed) this.detach();
-      else if (owners.get(this.key) === this) {
+      else if (owners.get(this.key) === this && this.page) {
+        if (!this.page.install(identity)) {
+          this.page.dispose();
+          this.disposed = true;
+          this.unsubscribe();
+          this.detach();
+          throw new Error("Invalid Ardia page lease");
+        }
+        deliver({ type: "ready", browserId: identity.browserId, chromeTabId: identity.chromeTabId });
+      } else if (owners.get(this.key) === this) {
         deliver({ type: "ready", ...identity });
         if (identity.state) deliver({ type: "navigation", state: identity.state });
         for (const queued of early) if (queued.id === String(identity.browserId) && queued.event.type !== "ready") deliver(queued.event);
@@ -57,7 +80,7 @@ export class HostTab {
     }).catch((error) => {
       early.length = 0;
       this.unsubscribe();
-      if (owners.get(this.key) === this) owners.delete(this.key);
+      if (owners.get(this.key) === this && !this.releaseScheduled) owners.delete(this.key);
       throw error;
     });
   }
@@ -68,6 +91,14 @@ export class HostTab {
       if (this.disposed || claims.get(this.host)?.get(this.key) !== this) throw new Error(`Ardia tab released: ${this.key}`);
       return invokeHost<T>("tab.command", { id: browserId, claim: this.claim, command, args }, this.host);
     });
+  }
+
+  async pageResult<T = unknown>(command: string, args: unknown[] = []): Promise<T | null> {
+    await this.ready;
+    const current = this.disposed ? null : this.page?.captureRequest() ?? null;
+    if (!current) return null;
+    const result = await this.command<T>(command, args);
+    return current() ? result : null;
   }
 
   presentation(visible: boolean): Promise<void> {
@@ -103,6 +134,7 @@ export class HostTab {
 
   dispose() {
     this.disposed = true;
+    this.page?.dispose();
     this.unsubscribe();
     this.detach();
   }

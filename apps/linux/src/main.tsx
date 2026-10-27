@@ -20,6 +20,8 @@ import { startHostPersistence } from "./hostSession";
 import { startHostData } from "./hostData";
 import { startHostDownloads } from "./hostDownloads";
 import { startHostTabLifecycle } from "./hostTabLifecycle";
+import { setHostPageHooks } from "./hostPageHooks";
+import { applyHostPageTheme, resetHostPage } from "./hostPageLifecycle";
 import { setHostOverlayCheck } from "./hostViewport";
 import { MenuHost } from "./menus";
 import { startLinuxShortcuts } from "./shortcutsRuntime";
@@ -30,6 +32,7 @@ import { installProfileWindows } from "./hostWindowProfiles";
 import { focus } from "../../browser/src/state/browser/actions";
 
 Object.assign(globalThis, { ardiaLinux: { store: useBrowser, emitCommand } });
+setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme });
 setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
 
 function FirstWindowCommitted() {

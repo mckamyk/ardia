@@ -9,22 +9,11 @@ import { build } from "vite";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const shared = fileURLToPath(new URL("../../browser/src/components/site/SiteConnection.tsx", import.meta.url));
 const adapter = `${root}src/SiteConnection.tsx`;
+const store = fileURLToPath(new URL("../../browser/src/state/browser/store.ts", import.meta.url));
 
-function reservedAlias() {
-  return {
-    name: "ardia-linux:test-reserved-site-connection",
-    enforce: "pre",
-    async resolveId(source, importer, options) {
-      if (!importer || importer === adapter) return null;
-      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
-      return resolved?.id === shared ? adapter : null;
-    },
-  };
-}
-
-test("reserved Linux SiteConnection replacement reaches real SiteControls and only delegates original through wrapper", { timeout: 60000 }, async () => {
+test("production Linux SiteConnection replacement reaches real SiteControls and only delegates original through wrapper", { timeout: 60000 }, async () => {
   let graph;
-  await build({ root, configFile: `${root}vite.config.ts`, logLevel: "error", build: { write: false }, plugins: [reservedAlias(), {
+  await build({ root, configFile: `${root}vite.config.ts`, logLevel: "error", build: { write: false }, plugins: [{
     name: "ardia-linux:test-page-state-graph",
     generateBundle() { graph = new Map([...this.getModuleIds()].map((id) => [id, this.getModuleInfo(id)])); },
   }] });
@@ -34,13 +23,18 @@ test("reserved Linux SiteConnection replacement reaches real SiteControls and on
   const consumer = fileURLToPath(new URL("../../browser/src/components/site/SiteControls.tsx", import.meta.url));
   assert.ok(graph.get(consumer).importedIds.includes(adapter));
   assert.deepEqual([...graph.keys()].filter((id) => id.includes("/apps/demo/")), []);
+  const pageState = fileURLToPath(new URL("../../browser/src/state/tabs/pageState.ts", import.meta.url));
+  const webView = `${root}src/shims/ardiacore.tsx`;
+  const seen = new Set([webView]);
+  for (const queue = [webView]; queue.length;) for (const next of graph.get(queue.shift())?.importedIds ?? []) if (!seen.has(next)) { seen.add(next); queue.push(next); }
+  assert.ok(!seen.has(pageState), "the WebView shim must not statically reach shared page state");
 });
 
 test("actual Linux connection wrapper renders unknown honestly and delegates every known state and certificate details", { timeout: 60000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "ardia-site-connection-"));
   const entry = `${root}scripts/.page-state-entry-${process.pid}.tsx`;
   try {
-    await writeFile(entry, `import {createElement} from "react";\nimport {renderToStaticMarkup} from "react-dom/server";\nimport * as linux from ${JSON.stringify(adapter)};\nimport * as shared from ${JSON.stringify(shared)};\nexport {linux,shared};\nexport const render=(kind,security)=>renderToStaticMarkup(createElement(linux[kind],{security,open:false,onPress:()=>{}}));\n`);
+    await writeFile(entry, `import ${JSON.stringify(store)};\nimport {createElement} from "react";\nimport {renderToStaticMarkup} from "react-dom/server";\nimport * as linux from ${JSON.stringify(adapter)};\nimport * as shared from ${JSON.stringify(shared)};\nexport {linux,shared};\nexport const render=(kind,security)=>renderToStaticMarkup(createElement(linux[kind],{security,open:false,onPress:()=>{}}));\n`);
     await build({ root, configFile: `${root}vite.config.ts`, logLevel: "error", ssr: { noExternal: true }, build: { ssr: entry, outDir: directory, emptyOutDir: false, minify: false, rollupOptions: { output: { entryFileNames: "fixture.mjs" } } } });
     const fixture = await import(pathToFileURL(join(directory, "fixture.mjs")).href);
     assert.equal(fixture.linux.CertificateDetails, fixture.shared.CertificateDetails);
