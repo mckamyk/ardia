@@ -19,6 +19,7 @@ type PendingDialog = {
 export type DialogSuspension = { readonly settled: Promise<void> };
 
 const MAX_PENDING = 16;
+const MAX_SUSPENSIONS = 64;
 const decimal = (value: unknown): value is string => typeof value === "string" && /^[1-9][0-9]{0,19}$/.test(value);
 const failure = (message: string) => Object.assign(new Error(message), { code: "ERR_DIALOG" });
 const canceled = (kind: PendingDialog["kind"]): DialogResult => kind === "confirm" ? { confirmed: false, suppressed: false } : null;
@@ -27,7 +28,8 @@ export function createHostDialogs(host: ArdiaHost, newId = () => `dialog:${crypt
   const windowId = host.bootstrap.windowId;
   const pending = new Map<string, PendingDialog>();
   let retired = false;
-  let suspension: DialogSuspension | undefined;
+  const suspensions = new Set<DialogSuspension>();
+  let suspensionsExhausted = false;
   let sequence = 0;
 
   const cancelNative = (id: string) => { void invokeHost("ArdiaShell.cancelDialog", { args: [id] }, host).catch(() => {}); };
@@ -79,20 +81,21 @@ export function createHostDialogs(host: ArdiaHost, newId = () => `dialog:${crypt
   const suspend = (): DialogSuspension => {
     const entries = [...pending];
     const current: DialogSuspension = Object.freeze({ settled: Promise.allSettled(entries.map(([, entry]) => entry.settled)).then(() => undefined) });
-    suspension = current;
+    if (suspensions.size >= MAX_SUSPENSIONS) suspensionsExhausted = true;
+    else suspensions.add(current);
     for (const [id, entry] of entries) cancelEntry(id, entry);
     return current;
   };
   const resume = (token: unknown) => {
-    if (retired || !suspension || token !== suspension) return false;
-    suspension = undefined;
-    return true;
+    if (retired) return false;
+    return suspensions.delete(token as DialogSuspension);
   };
 
   const begin = (kind: PendingDialog["kind"], options: ConfirmOptions | PromptOptions, signal?: AbortSignal): Promise<DialogResult> => {
     if (retired) return Promise.reject(failure("The dialog renderer is unavailable"));
-    if (suspension) return Promise.reject(failure("Dialogs are suspended for this window"));
+    if (suspensionsExhausted || suspensions.size) return Promise.reject(failure("Dialogs are suspended for this window"));
     if (!options || typeof options.title !== "string" || options.title.length > 4096 || (options.windowId !== undefined && options.windowId !== windowId)) return Promise.reject(failure("Invalid dialog owner or title"));
+    if (signal !== undefined && !(signal instanceof AbortSignal)) return Promise.reject(failure("Invalid abort signal"));
     if (signal?.aborted) return Promise.resolve(canceled(kind));
     if (pending.size >= MAX_PENDING) return Promise.reject(failure("Too many pending dialogs"));
     if (sequence === Number.MAX_SAFE_INTEGER) return Promise.reject(failure("Dialog identities exhausted"));

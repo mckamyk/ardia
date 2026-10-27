@@ -350,23 +350,53 @@ void QueuedWarningsCancelOncePerDialog() {
   const auto again = f.controller->Suspend();
   assert(completions.size() == 3);
   for (const auto& [id, count] : completions) assert(count == 1);
-  assert(!f.controller->Resume(suspension) && f.controller->Resume(again));
+  assert(f.controller->Resume(suspension) && f.controller->suspended());
+  assert(f.controller->Resume(again) && !f.controller->suspended());
 }
 
-void StaleResumeCannotReleaseNewerSuspension() {
+void OverlappingSuspensionsReleaseIndependently() {
   Fixture f, other;
   const auto first = f.controller->Suspend();
   const auto second = f.controller->Suspend();
   assert(first && second && !(first == second));
-  assert(!f.controller->Resume(first));
   assert(!f.controller->Resume(LinuxDialogSuspension()));
   const auto foreign = other.controller->Suspend();
   assert(!f.controller->Resume(foreign) && !other.controller->Resume(second));
-  assert(!f.Begin("dialog:still-suspended"));
-  assert(f.controller->Resume(second));
-  assert(!f.controller->Resume(second));
+  assert(f.controller->Resume(second) && !f.controller->Resume(second));
+  assert(f.controller->suspended() && !f.Begin("dialog:first-still-outstanding"));
+  base::DictValue identity;
+  assert(!f.controller->Identify(f.client, &identity));
+  assert(f.controller->Resume(first) && !f.controller->Resume(first));
+  assert(!f.controller->suspended());
   assert(f.Begin("dialog:resumed-identity") && f.shown.size() == 1);
   assert(other.controller->Resume(foreign));
+}
+
+void NestedResumeKeepsOuterSuspension() {
+  Fixture f;
+  std::string error;
+  assert(f.controller->Begin(f.client, Request("dialog:nested-resume-1"), [&](auto) {
+    const auto inner = f.controller->Suspend();
+    assert(f.controller->Resume(inner));
+  }, &error));
+  const auto outer = f.controller->Suspend();
+  assert(outer && f.controller->suspended());
+  assert(!f.Begin("dialog:nested-resume-admission") && f.shown.size() == 1);
+  assert(f.controller->Resume(outer) && !f.controller->suspended());
+}
+
+void SuspensionBoundFailsClosed() {
+  Fixture f;
+  std::vector<LinuxDialogSuspension> held;
+  for (size_t i = 0; i < LinuxDialogController::kMaxSuspensions; ++i) {
+    held.push_back(f.controller->Suspend());
+    assert(held.back());
+  }
+  const auto overflow = f.controller->Suspend();
+  assert(!overflow && f.controller->suspended());
+  for (const auto& suspension : held) assert(f.controller->Resume(suspension));
+  assert(!f.controller->Resume(overflow));
+  assert(f.controller->suspended() && !f.Begin("dialog:after-suspension-overflow"));
 }
 
 void ReplacementDuringSuspension() {
@@ -426,7 +456,8 @@ void ReentrantSuspension() {
   const auto outer = f.controller->Suspend();
   assert(completions == 2 && f.controller->pending() == 0 && f.shown.size() == 1);
   assert(nested && !(nested == outer));
-  assert(!f.controller->Resume(outer) && f.controller->Resume(nested));
+  assert(f.controller->Resume(nested) && f.controller->suspended());
+  assert(f.controller->Resume(outer) && !f.controller->suspended());
   Fixture destroyed;
   assert(destroyed.controller->Begin(destroyed.client, Request("dialog:destroy-in-suspend-1"),
       [&](auto) { destroyed.controller.reset(); }, &error));
@@ -466,7 +497,9 @@ int main() {
   InvalidRequestsAndOptionalOwner();
   TwoWindowsSuspendIndependently();
   QueuedWarningsCancelOncePerDialog();
-  StaleResumeCannotReleaseNewerSuspension();
+  OverlappingSuspensionsReleaseIndependently();
+  NestedResumeKeepsOuterSuspension();
+  SuspensionBoundFailsClosed();
   ReplacementDuringSuspension();
   ParentDestructionAndTeardownWhileSuspended();
   ReentrantSuspension();

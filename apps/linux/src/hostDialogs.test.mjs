@@ -511,21 +511,41 @@ test("suspend cancels every pending request once, refuses new admissions and kee
   a.dialogs.retire(); b.dialogs.retire();
 });
 
-test("stale resume is ignored and only the current suspension re-admits", async () => {
+test("overlapping suspensions release independently and forged tokens are refused", async () => {
   const f = fixture();
   const first = f.dialogs.suspend();
   const second = f.dialogs.suspend();
   assert.notEqual(first, second);
-  assert.equal(f.dialogs.resume(first), false);
-  await assert.rejects(f.dialogs.prompt({ title: "Still suspended" }), /suspended/);
   for (const forged of [undefined, null, {}, { settled: second.settled }]) assert.equal(f.dialogs.resume(forged), false);
-  await assert.rejects(f.dialogs.prompt({ title: "Still suspended" }), /suspended/);
   assert.equal(f.dialogs.resume(second), true);
   assert.equal(f.dialogs.resume(second), false);
+  await assert.rejects(f.dialogs.prompt({ title: "First still outstanding" }), /suspended/);
+  await turn();
+  assert.equal(requestsFor(f, "windowIdentity").length, 0);
+  assert.equal(f.dialogs.resume(first), true);
+  assert.equal(f.dialogs.resume(first), false);
   const work = f.dialogs.prompt({ title: "Re-admitted" });
   await turn(); f.emit("Again"); assert.equal(await work, "Again");
   const third = f.dialogs.suspend();
   f.dialogs.retire();
   assert.equal(f.dialogs.resume(third), false);
   await assert.rejects(f.dialogs.prompt({ title: "Retired" }), /unavailable/);
+});
+
+test("suspensions beyond the bound keep the window suspended", async () => {
+  const f = fixture();
+  const held = Array.from({ length: 64 }, () => f.dialogs.suspend());
+  const overflow = f.dialogs.suspend();
+  for (const suspension of held) assert.equal(f.dialogs.resume(suspension), true);
+  assert.equal(f.dialogs.resume(overflow), false);
+  await assert.rejects(f.dialogs.confirm({ title: "Still suspended" }), /suspended/);
+});
+
+test("a non-AbortSignal argument rejects without holding a pending slot", async () => {
+  const f = fixture();
+  for (let i = 0; i < 16; i++) await assert.rejects(f.dialogs.abortableConfirm({ title: "Bad signal" }, { aborted: false }), { code: "ERR_DIALOG" });
+  await turn();
+  assert.equal(f.requests.length, 0);
+  const work = f.dialogs.prompt({ title: "Admitted" });
+  await turn(); f.emit("Fine"); assert.equal(await work, "Fine");
 });
