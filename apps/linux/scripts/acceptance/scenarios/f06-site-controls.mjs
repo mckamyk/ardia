@@ -132,7 +132,7 @@ export default {
       const privateReply = await state.shell.call("sites.setSetting", { origin, type: "camera", value: "allow" }, "incognito:f06@default");
       const badOrigin = await state.shell.call("sites.setSetting", { origin: "chrome://settings", type: "camera", value: "allow" });
       const badClear = await state.shell.call("profiles.clearBrowsingData", { types: ["passwords"], since: null });
-      if (privateReply.code !== "ERR_PROFILE_PRIVATE" || badOrigin.code !== "ERR_SITE_REQUEST" || badClear.code !== "ERR_SITE_REQUEST")
+      if (privateReply.code !== "ERR_PROFILE_WINDOW" || badOrigin.code !== "ERR_SITE_REQUEST" || badClear.code !== "ERR_SITE_REQUEST")
         throw new Error(JSON.stringify({ privateReply, badOrigin, badClear }));
       const settings = await call(state.shell, "sites.settings", { origin });
       if (!settings.camera?.isDefault) throw new Error(`camera changed: ${JSON.stringify(settings.camera)}`);
