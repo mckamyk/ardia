@@ -93,7 +93,7 @@ So "Import as new profile" in the shared flow stores the passwords in that profi
 | Command | Result |
 | --- | --- |
 | `python3 -m unittest engine/ardiacore-linux/tests/test_import.py` | 15 passed, run under ASan/UBSan with system SQLite and OpenSSL. Coverage: units, nested HTML, HTML limits, CSV variants, `profiles.ini`, discovery, a Chromium import with WAL snapshots and source hashes, history limit and since, partial errors, traversal, cancellation with temp cleanup, Firefox import, extensions, the stale-copy sweep, and GN/no-comment rules. |
-| `python3 -m unittest discover -s engine/ardiacore-linux/tests` | 246 passed |
+| `python3 -m unittest discover -s engine/ardiacore-linux/tests` | 303 passed on `linux` before #62, #63 and #68 were merged. After rebasing, `test_import.py` passes (15); the full rerun was still in progress at wrap-up with no failures so far. |
 | `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs` | 7 passed |
 | `pnpm --filter @ardia/linux test:host` | 329 passed after rebasing on #62, #63 and #68, 13 of them new in `hostImport.test.mjs` |
 | `pnpm --filter @ardia/linux typecheck`, `build`, `test:graph` | Pass (graph: 3 tests). The graph test now requires `state/import/apply.ts` to be loaded only by `importApply.ts`. |
