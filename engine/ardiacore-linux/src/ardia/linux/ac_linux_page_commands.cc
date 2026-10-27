@@ -263,6 +263,17 @@ std::optional<base::DictValue> LinuxPageCommands::DevTools(
       !existing->GetDevToolsWebContents()) {
     return Error("ERR_PAGE_UNAVAILABLE", "DevTools frontend is unavailable");
   }
+  const auto native_action = action == "inspect" ? LinuxDevToolsAction::kInspect
+                             : action == "console"
+                                 ? LinuxDevToolsAction::kConsole
+                             : action == "toggle" ? LinuxDevToolsAction::kToggle
+                                                  : LinuxDevToolsAction::kShow;
+  return RunDevTools(native_action);
+}
+
+std::optional<base::DictValue> LinuxPageCommands::RunDevTools(
+    LinuxDevToolsAction native_action) {
+  auto* contents = contents_.get();
   auto weak = weak_factory_.GetWeakPtr();
   auto lease = std::make_shared<LinuxDevToolsLease>(
       contents, base::BindRepeating(
@@ -271,11 +282,6 @@ std::optional<base::DictValue> LinuxPageCommands::DevTools(
                     },
                     weak));
   auto previous = std::exchange(devtools_lease_, lease);
-  const auto native_action = action == "inspect" ? LinuxDevToolsAction::kInspect
-                             : action == "console"
-                                 ? LinuxDevToolsAction::kConsole
-                             : action == "toggle" ? LinuxDevToolsAction::kToggle
-                                                  : LinuxDevToolsAction::kShow;
   const bool dispatched = DispatchLinuxDevTools(
       contents, native_action, lease,
       base::BindOnce(&LinuxPageCommands::RefreshDevTools, weak));
@@ -294,6 +300,19 @@ std::optional<base::DictValue> LinuxPageCommands::DevTools(
   if (previous)
     previous->Revoke();
   return std::nullopt;
+}
+
+bool LinuxPageCommands::AdoptDevTools() {
+  if (!IsCurrent() || !allow_native_ui_ || !devtools_presentation_ ||
+      !HasLinuxDevToolsDispatcher()) {
+    return false;
+  }
+  auto* contents = contents_.get();
+  if (!DevToolsWindow::GetInstanceForInspectedWebContents(contents) ||
+      !DevToolsWindow::AllowDevToolsFor(service_profile_, contents)) {
+    return false;
+  }
+  return !RunDevTools(LinuxDevToolsAction::kAdopt);
 }
 
 void LinuxPageCommands::RefreshDevTools() {

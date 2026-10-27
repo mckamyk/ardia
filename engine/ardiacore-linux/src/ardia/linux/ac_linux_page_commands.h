@@ -18,6 +18,7 @@ namespace ardiacore {
 
 class LinuxFind;
 class LinuxDevToolsLease;
+enum class LinuxDevToolsAction;
 
 class LinuxPageCommands : public content::WebContentsObserver {
  public:
@@ -38,6 +39,7 @@ class LinuxPageCommands : public content::WebContentsObserver {
   static bool Handles(std::string_view command);
   std::optional<base::DictValue> Dispatch(std::string_view command,
                                           const base::ListValue& args);
+  bool AdoptDevTools();
   void Reset();
 
  private:
@@ -47,6 +49,7 @@ class LinuxPageCommands : public content::WebContentsObserver {
   std::optional<base::DictValue> Print(bool system);
   std::optional<base::DictValue> Save();
   std::optional<base::DictValue> DevTools(std::string_view action);
+  std::optional<base::DictValue> RunDevTools(LinuxDevToolsAction action);
 
   base::WeakPtr<content::WebContents> contents_;
   raw_ptr<Profile> service_profile_;

@@ -98,6 +98,7 @@ class DevToolsWindow {
   static void RegisterLinuxDevToolsLifecycle();
   void BindLinuxDevToolsLease(std::shared_ptr<ardiacore::LinuxDevToolsLease>, bool);
   void RevokeLinuxDevToolsLease(uint64_t);
+  void SettleRevokedLinuxLoad();
   void ScheduleShow(const DevToolsToggleAction&);
   void Show(const DevToolsToggleAction&);
   void LoadCompleted();
@@ -148,6 +149,7 @@ class DevToolsWindow {
   DevToolsClosedByAction closed_by_ = DevToolsClosedByAction::kUnknown;
   DevToolsToggleAction action_on_load_ = DevToolsToggleAction::NoOp();
   base::OnceClosure load_completed_callback_;
+  base::OnceClosure linux_load_completed_callback_;
   DevToolsContentsResizingStrategy contents_resizing_strategy_;
   std::unique_ptr<OwnedMainWebContents> owned_main_web_contents_;
   base::WeakPtrFactory<DevToolsWindow> weak_factory_{this};

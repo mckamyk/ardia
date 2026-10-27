@@ -14,7 +14,7 @@ class WebContents;
 
 namespace ardiacore {
 
-enum class LinuxDevToolsAction { kShow, kToggle, kInspect, kConsole };
+enum class LinuxDevToolsAction { kShow, kToggle, kInspect, kConsole, kAdopt };
 
 class LinuxDevToolsLease {
  public:
@@ -51,6 +51,7 @@ class LinuxDevToolsState {
   bool IsCurrent() const;
   bool IsCurrent(const LinuxDevToolsTicket& ticket) const;
   bool OwnsFrontend(uint64_t epoch) const;
+  bool Quarantined() const;
   bool BeginClose();
   LinuxDevToolsCloseDecision FinishClose(bool proceed);
   bool managed() const { return managed_; }

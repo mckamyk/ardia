@@ -69,6 +69,10 @@ bool LinuxDevToolsState::OwnsFrontend(uint64_t epoch) const {
   return owns_frontend_ && current_.epoch == epoch;
 }
 
+bool LinuxDevToolsState::Quarantined() const {
+  return owns_frontend_ && !IsCurrent();
+}
+
 bool LinuxDevToolsState::BeginClose() {
   if (!owns_frontend_ && !IsCurrent())
     Begin(nullptr, false);

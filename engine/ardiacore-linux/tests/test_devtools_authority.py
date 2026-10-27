@@ -23,6 +23,7 @@ METHODS = [
     'void DevToolsWindow::RegisterLinuxDevToolsLifecycle()',
     'void DevToolsWindow::BindLinuxDevToolsLease(',
     'void DevToolsWindow::RevokeLinuxDevToolsLease(',
+    'void DevToolsWindow::SettleRevokedLinuxLoad()',
     'void DevToolsWindow::ToggleDevToolsWindow(\n    content::WebContents*',
     'void DevToolsWindow::ScheduleShow(',
     'void DevToolsWindow::Show(',
@@ -229,6 +230,116 @@ int main(int argc, char** argv) {
     f.Open("toggle");
     window->BeforeUnloadFired(window->main_web_contents_, true, &proceed);
     assert(proceed && window->bindings_->detached == 1);
+  } else if (mode == "toggle-after-quarantine") {
+    Fixture f;
+    f.Open(); f.Load(); f.Drain();
+    auto* window = f.tools();
+    auto frontend = window->main_web_contents_->GetWeakPtr();
+    frontend->controller.entry.url = "console://state";
+    f.Reset();
+    assert(frontend->view.hides == 1 && !frontend->view.IsVisible());
+    assert(!DevToolsWindow::GetInTabWebContents(&f.b, nullptr));
+    f.current = true; f.commands = f.Make();
+    f.Open("toggle");
+    assert(frontend->beforeunloads == 0 && window->life_stage_ == DevToolsWindow::kLoadCompleted);
+    assert(window->linux_devtools_state_.IsCurrent() && frontend->view.IsVisible());
+    assert(DevToolsWindow::GetInTabWebContents(&f.b, nullptr) == frontend.get());
+    f.Drain();
+    assert(f.presented == 2);
+    f.Open("toggle");
+    assert(frontend->beforeunloads == 1);
+    assert(frontend && frontend->controller.entry.url == "console://state");
+    Fixture g;
+    DevToolsWindow::OpenDevToolsWindow(&g.b, DevToolsToggleAction::Show(), DevToolsOpenedByAction::kUnknown);
+    g.Load(); g.Drain();
+    g.Reset();
+    g.current = true; g.commands = g.Make();
+    g.Open("toggle");
+    assert(g.tools()->main_web_contents_->beforeunloads == 1);
+  } else if (mode == "adopt") {
+    Fixture f;
+    f.b.can_dock = false;
+    f.Open(); f.Load(false); f.Drain();
+    auto* window = f.tools();
+    auto frontend = window->main_web_contents_->GetWeakPtr();
+    const int focuses = frontend->focuses;
+    f.Reset();
+    assert(window->undocked_browser_.window.hides == 1 && !frontend->view.IsVisible());
+    f.current = true; f.commands = f.Make();
+    assert(f.commands->AdoptDevTools());
+    assert(window->undocked_browser_.window.inactive_shows == 1);
+    assert(window->undocked_browser_.window.activates == 0 && frontend->focuses == focuses);
+    assert(window->linux_devtools_state_.IsCurrent() && frontend->view.IsVisible());
+    assert(frontend->beforeunloads == 0);
+    assert(!f.commands->AdoptDevTools());
+    Fixture g;
+    g.Open(); g.Load(); g.Drain();
+    int updates = 0;
+    const int activations = g.browser.strip.activations;
+    const int activates = g.browser.window.activates;
+    DevtoolsUIController::on_update = [&updates] { updates++; };
+    g.Reset();
+    g.current = true; g.commands = g.Make();
+    assert(g.commands->AdoptDevTools());
+    assert(updates == 1 && DevToolsWindow::GetInTabWebContents(&g.b, nullptr));
+    g.Drain();
+    assert(g.browser.window.activates == activates && g.browser.strip.activations == activations);
+    DevtoolsUIController::on_update = nullptr;
+    Fixture h;
+    assert(!h.commands->AdoptDevTools());
+    DevToolsWindow::OpenDevToolsWindow(&h.b, DevToolsToggleAction::Show(), DevToolsOpenedByAction::kUnknown);
+    h.Load(); h.Drain();
+    h.Reset();
+    h.current = true; h.commands = h.Make();
+    assert(!h.commands->AdoptDevTools());
+    assert(h.tools()->main_web_contents_->view.hides == 0);
+  } else if (mode == "close-reshow-page-close") {
+    Fixture f;
+    f.Open(); f.Load(); f.Drain(); f.Open("toggle");
+    auto* window = f.tools();
+    assert(window->life_stage_ == DevToolsWindow::kClosing);
+    f.Open();
+    assert(window->life_stage_ == DevToolsWindow::kLoadCompleted);
+    assert(DevToolsWindow::InterceptPageBeforeUnload(&f.b));
+    bool proceed = true;
+    window->BeforeUnloadFired(window->main_web_contents_, true, &proceed);
+    assert(!proceed && f.b.delegate.cancellations == 0 && f.b.beforeunloads == 1);
+    assert(window->bindings_->detached == 0 && !window->linux_devtools_state_.has_pending_close());
+    window->InspectedContentsClosing();
+    assert(!f.tools());
+    Fixture g;
+    g.Open(); g.Load(); g.Drain(); g.Open("toggle");
+    auto* vetoed = g.tools();
+    g.Open();
+    assert(DevToolsWindow::InterceptPageBeforeUnload(&g.b));
+    vetoed->BeforeUnloadFired(vetoed->main_web_contents_, false, &proceed);
+    assert(!proceed && g.b.delegate.cancellations == 1 && g.b.beforeunloads == 0);
+    assert(vetoed->bindings_->detached == 0 && vetoed->life_stage_ == DevToolsWindow::kLoadCompleted);
+  } else if (mode == "chrome-load-callback") {
+    int chrome = 0;
+    {
+      Fixture f;
+      f.Open();
+      f.tools()->SetLoadCompletedCallback([&chrome] { chrome++; });
+      f.Load(); f.Drain();
+      assert(chrome == 1 && f.presented == 1);
+    }
+    {
+      Fixture f;
+      DevToolsWindow::OpenDevToolsWindow(&f.b, DevToolsToggleAction::Show(), DevToolsOpenedByAction::kUnknown);
+      f.tools()->SetLoadCompletedCallback([&chrome] { chrome++; });
+      f.Open();
+      f.Load(); f.Drain();
+      assert(chrome == 2 && f.presented == 1);
+    }
+    {
+      Fixture f;
+      f.Open();
+      f.tools()->SetLoadCompletedCallback([&chrome] { chrome++; });
+      f.Reset();
+      f.Load(); f.Drain();
+      assert(chrome == 3 && f.presented == 0);
+    }
   } else if (mode == "reentrant") {
     Fixture f;
     f.Open();
@@ -371,9 +482,13 @@ int main(int argc, char** argv) {
     assert(DevToolsWindow::InterceptPageBeforeUnload(&f.b));
     assert(!DevToolsWindow::NeedsToInterceptBeforeUnload(&f.b));
     bool proceed = true;
-    window->BeforeUnloadFired(frontend.get(), mode.find("allow") != std::string::npos, &proceed);
-    assert(!proceed && f.b.delegate.cancellations == 1);
-    assert(!window->intercepted_page_beforeunload_ && f.b.beforeunloads == 0);
+    const bool allow = mode.find("allow") != std::string::npos;
+    window->BeforeUnloadFired(frontend.get(), allow, &proceed);
+    assert(!proceed && f.b.delegate.cancellations == (allow ? 0 : 1));
+    assert(f.b.beforeunloads == (allow ? 1 : 0));
+    assert(window->intercepted_page_beforeunload_ == allow);
+    if (allow) f.b.delegate.BeforeUnloadFired(&f.b, false, &proceed);
+    assert(!window->intercepted_page_beforeunload_ && f.b.delegate.cancellations == 1);
     assert(!window->linux_devtools_state_.has_pending_close());
     assert(DevToolsWindow::NeedsToInterceptBeforeUnload(&f.b));
     f.Drain();
@@ -408,7 +523,7 @@ int main(int argc, char** argv) {
       window->CloseWindow();
     };
     bool proceed = true;
-    window->BeforeUnloadFired(frontend.get(), true, &proceed);
+    window->BeforeUnloadFired(frontend.get(), false, &proceed);
     assert(!proceed && f.b.delegate.cancellations == 1);
     assert(!window->intercepted_page_beforeunload_ && f.b.beforeunloads == 0);
     assert(window->linux_devtools_state_.has_pending_close());
@@ -555,7 +670,7 @@ class DevToolsAuthorityTests(unittest.TestCase):
 struct DevToolsManagerDelegate { struct DevToolsOptions { std::optional<std::string> panel_id; }; };
 struct ChildProcessHost { static constexpr int kInvalidUniqueID = -1; };
 class WebContents;''')
-        fixture = fixture.replace('class WebContents {\n public:', '''struct FixtureRenderView { void Hide() { hides++; auto callback = on_hide; if (callback) callback(); } int hides = 0; std::function<void()> on_hide; };
+        fixture = fixture.replace('class WebContents {\n public:', '''struct FixtureRenderView { void Hide() { hides++; visible = false; auto callback = on_hide; if (callback) callback(); } void Show() { shows++; visible = true; } bool IsVisible() const { return visible; } int hides = 0; int shows = 0; bool visible = true; std::function<void()> on_hide; };
 struct FixtureDelegate {
   void ActivateContents(WebContents*) {}
   void BeforeUnloadFired(WebContents*, bool proceed, bool* fire_unload) {
@@ -592,11 +707,12 @@ class WebContents {
         fixture = fixture.replace('class TabStripModel {\n public:', 'class TabStripModel {\n public:\n  TabStripModel(std::initializer_list<content::WebContents*> initial = {}) : tabs(initial) {}')
         fixture = fixture.replace('class BrowserWindowInterface {', '''namespace ui { struct BaseWindow {
   void Show() { shows++; }
+  void ShowInactive() { inactive_shows++; }
   void Hide() { hides++; }
   void Activate() { activates++; }
   void Close() { closes++; }
   bool IsActive() { return false; }
-  int shows = 0, hides = 0, activates = 0, closes = 0;
+  int shows = 0, inactive_shows = 0, hides = 0, activates = 0, closes = 0;
 }; }
 class BrowserWindowInterface {''')
         fixture = fixture.replace('  Profile* profile;\n  Type type', '  ui::BaseWindow* GetWindow() { return &window; }\n  Profile* profile;\n  Type type')
@@ -648,6 +764,10 @@ class BrowserWindowInterface {''')
     def test_undocked_quarantine_reveal_and_no_automatic_close(self): self.run_case('undocked')
     def test_old_close_cannot_cancel_or_destroy_new_close_and_veto_preserves_edits(self): self.run_case('close-overlap')
     def test_native_update_reentrancy_revokes_remaining_show_and_focus(self): self.run_case('reentrant')
+    def test_toggle_readopts_a_quarantined_frontend_instead_of_closing_it(self): self.run_case('toggle-after-quarantine')
+    def test_reclaim_readopts_quarantined_frontends_without_focus(self): self.run_case('adopt')
+    def test_stale_close_reply_cannot_veto_an_inspected_page_close(self): self.run_case('close-reshow-page-close')
+    def test_chrome_load_completed_callback_is_preserved(self): self.run_case('chrome-load-callback')
     def test_frontend_and_helper_and_contents_destruction_cancel_callbacks(self): self.run_case('destroy')
     def test_scope_consumption_and_reentrant_creation_takeover(self): self.run_case('scope')
     def test_presentation_callback_can_destroy_its_helper(self): self.run_case('callback-destroy')
