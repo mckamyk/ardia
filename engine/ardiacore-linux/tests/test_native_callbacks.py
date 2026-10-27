@@ -22,10 +22,11 @@ class NativeCallbackTests(unittest.TestCase):
                 end += 1
             return source[start:end]
 
-        methods = '\n'.join(method(name) for name in ['Rebind', 'MoveTo', 'DidOpenRequestedURL', 'WebContentsDestroyed'])
+        methods = '\n'.join(method(name) for name in ['RemoveViewports', 'Rebind', 'MoveTo', 'DidOpenRequestedURL', 'WebContentsDestroyed'])
         prelude = r'''
         #include <cassert>
         #include <map>
+        #include <memory>
         #include <string>
         #include <string_view>
         #include <utility>
@@ -65,6 +66,7 @@ class NativeCallbackTests(unittest.TestCase):
           content::WebContents* contents = nullptr;
           int detachments = 0;
           bool GetVisible() { return visible; }
+          void SetVisible(bool value) { visible = value; }
           void SetWebContents(content::WebContents* value) { contents = value; if (!value) ++detachments; }
         };
         }
@@ -77,6 +79,8 @@ class NativeCallbackTests(unittest.TestCase):
         struct ShellHostView {
           std::vector<std::pair<int, base::DictValue>> events;
           int removed_views = 0;
+          int layouts = 0;
+          void LayoutPane(TabBinding*) { ++layouts; }
           void OfferTab(content::WebContents*) {}
           void ReportTab(int id, base::DictValue event) { events.emplace_back(id, std::move(event)); }
           void RemoveChildViewT(views::WebView*) { ++removed_views; }
@@ -90,9 +94,15 @@ class NativeCallbackTests(unittest.TestCase):
           bool presentation_departed = false;
           int cancelled_auto_pip_until = 0;
           int requested_auto_pip_until = 0;
+          bool pane_visible = false;
+          bool devtools_had_focus = false;
+          std::unique_ptr<int> devtools_watch;
+          int resets = 0;
           void RememberPendingAutoPictureInPicture() {}
-          TabBinding(ShellHostView* owner, content::WebContents* contents, views::WebView* viewport = nullptr)
-              : owner_(owner), contents_(contents), viewport_(viewport) { Observe(contents); }
+          void ResetPageCommands() { ++resets; }
+          void RemoveViewports();
+          TabBinding(ShellHostView* owner, content::WebContents* contents, views::WebView* viewport = nullptr, views::WebView* devtools = nullptr)
+              : owner_(owner), contents_(contents), viewport_(viewport), devtools_viewport_(devtools) { Observe(contents); }
           ~TabBinding() { Observe(nullptr); }
           void Observe(content::WebContents* value) {
             if (observed_ && observed_->observer == this) observed_->observer = nullptr;
@@ -106,6 +116,7 @@ class NativeCallbackTests(unittest.TestCase):
           raw_ptr<ShellHostView> owner_;
           raw_ptr<content::WebContents> contents_;
           raw_ptr<views::WebView> viewport_;
+          raw_ptr<views::WebView> devtools_viewport_;
           content::WebContents* observed_ = nullptr;
         };
         void content::WebContents::Destroy() { if (observer) observer->WebContentsDestroyed(); }
@@ -155,24 +166,31 @@ class NativeCallbackTests(unittest.TestCase):
           content::WebContents original{20, &profile};
           content::WebContents replacement{20, &profile};
           views::WebView viewport;
-          TabBinding binding(&first, &original, &viewport);
+          views::WebView tools;
+          tools.contents = &original;
+          TabBinding binding(&first, &original, &viewport, &tools);
           binding.Rebind(&replacement);
+          assert(binding.resets == 1 && !tools.visible && !tools.contents);
           original.Destroy();
           assert(first.events.empty());
           binding.presented = true;
           binding.presentation_applied = true;
           binding.presentation_attached = true;
           binding.presentation_departed = true;
+          binding.pane_visible = true;
           binding.MoveTo(&second);
+          assert(binding.resets == 2 && !binding.pane_visible);
+          assert(!binding.devtools_viewport_.get());
           assert(!binding.presented);
           assert(!binding.presentation_applied);
           assert(!binding.presentation_attached);
           assert(!binding.presentation_departed);
           assert(first.events.empty());
           assert(second.events.empty());
-          assert(first.removed_views == 1);
+          assert(first.removed_views == 2);
           assert(binding.viewport_.get() == nullptr);
           replacement.Destroy();
+          assert(binding.resets == 3);
           assert(first.events.empty());
           assert(second.events.size() == 1);
           assert(second.events.front().first == 20);
@@ -183,8 +201,10 @@ class NativeCallbackTests(unittest.TestCase):
           content::WebContents direct{30, &profile};
           views::WebView direct_view;
           TabBinding direct_binding(&first, &direct, &direct_view);
+          direct_binding.devtools_watch = std::make_unique<int>(1);
           direct.Destroy();
           assert(direct_view.detachments == 1);
+          assert(!direct_binding.devtools_watch && first.layouts == 1);
           assert(first.events.size() == 1);
           assert(first.events.front().second.strings.at("type") == "windowClose");
         }

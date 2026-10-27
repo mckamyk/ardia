@@ -21,6 +21,7 @@
 #include "ardia/linux/ac_linux_downloads.h"
 #include "ardia/linux/ac_linux_files.h"
 #include "ardia/linux/ac_linux_launch_config.h"
+#include "ardia/linux/ac_linux_page_commands.h"
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/linux/ac_linux_window_lifecycle.h"
@@ -61,6 +62,8 @@
 #include "base/values.h"
 #include "chrome/browser/ardia/public/ac_engine.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/devtools/devtools_contents_resizing_strategy.h"
+#include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
@@ -78,6 +81,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/contents_container_view.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/search_engines/template_url.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -154,6 +158,9 @@ extern bool (*g_ardia_keeps_window_without_tabs)(
 extern bool g_ardia_auto_picture_in_picture_off;
 extern int (*g_ardia_linux_tab_shown)(content::WebContents*);
 extern void (*g_ardia_linux_auto_pip_requested)(content::WebContents*);
+extern void (*g_ardia_devtools_dock_changed)(BrowserWindowInterface* browser,
+                                             content::WebContents* inspected,
+                                             content::WebContents* devtools);
 
 namespace ardia {
 namespace {
@@ -605,6 +612,19 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
   return contents;
 }
 
+class DevToolsFrontendWatch : public content::WebContentsObserver {
+ public:
+  DevToolsFrontendWatch(content::WebContents* frontend, base::OnceClosure destroyed)
+      : content::WebContentsObserver(frontend), destroyed_(std::move(destroyed)) {}
+
+ private:
+  void WebContentsDestroyed() override {
+    Observe(nullptr);
+    if (destroyed_) std::move(destroyed_).Run();
+  }
+  base::OnceClosure destroyed_;
+};
+
 class TabBinding : public content::WebContentsObserver {
  public:
   TabBinding(ShellHostView* owner, content::WebContents* contents,
@@ -622,6 +642,17 @@ class TabBinding : public content::WebContentsObserver {
   void MoveTo(ShellHostView* owner);
   void Rebind(content::WebContents* contents);
   void SetViewport(views::WebView* view) { viewport_ = view; }
+  views::WebView* devtools_viewport() const { return devtools_viewport_; }
+  void SetDevToolsViewport(views::WebView* view) { devtools_viewport_ = view; }
+  void RemoveViewports();
+  void ResetPageCommands();
+  std::unique_ptr<ardiacore::LinuxPageCommands> page_commands;
+  std::unique_ptr<DevToolsFrontendWatch> devtools_watch;
+  bool devtools_had_focus = false;
+  gfx::Rect pane_bounds;
+  std::vector<gfx::Rect> pane_shape;
+  std::vector<gfx::Rect> pane_input_shape;
+  bool pane_visible = false;
   bool presented = false;
   void FocusFromHost();
   bool presentation_applied = false;
@@ -663,6 +694,7 @@ class TabBinding : public content::WebContentsObserver {
   raw_ptr<ShellHostView> owner_;
   raw_ptr<content::WebContents> contents_;
   raw_ptr<views::WebView> viewport_ = nullptr;
+  raw_ptr<views::WebView> devtools_viewport_ = nullptr;
   std::string key_;
   bool host_focusing_ = false;
 };
@@ -756,6 +788,7 @@ class ShellHostView : public views::View,
     renderer_document_ = content::WeakDocumentPtr();
     std::vector<int> temporary;
     for (auto& [id, binding] : bindings_) {
+      binding->ResetPageCommands();
       binding->claim.clear();
       binding->renderer_generation = 0;
       binding->transferable = false;
@@ -778,6 +811,8 @@ class ShellHostView : public views::View,
   }
   void Event(std::string_view module, std::string_view event,
              base::Value payload);
+  void PresentDevTools(content::WebContents* inspected);
+  void LayoutPane(TabBinding* binding);
   void QueueTransaction(std::optional<int> command);
   void EngineEvent(std::string_view topic, const base::DictValue& payload);
   void Invoke(std::string method, const base::DictValue& args,
@@ -827,6 +862,23 @@ class ShellHostView : public views::View,
   friend class HostMessageHandler;
   TabBinding* Binding(int id);
   TabBinding* ClaimedBinding(const base::DictValue& args);
+  struct PageCommandAuthority {
+    base::WeakPtr<ShellHostView> host;
+    base::WeakPtr<HostMessageHandler> handler;
+    content::WeakDocumentPtr document;
+    base::WeakPtr<content::WebContents> contents;
+    int id = 0;
+    std::string claim;
+    uint64_t generation = 0;
+  };
+  static TabBinding* PageCommandBinding(const PageCommandAuthority& authority);
+  static void EmitPageCommandEvent(const PageCommandAuthority& authority,
+                                   base::DictValue event);
+  ardiacore::LinuxPageCommands* EnsurePageCommands(TabBinding* binding);
+  void PageCommand(TabBinding* binding, const std::string& command,
+                   const base::ListValue& values,
+                   base::OnceCallback<void(bool, base::Value)> done);
+  void AdoptDevTools(TabBinding* binding);
   bool CloseTab(TabBinding* binding);
   bool DisposeTemporary(TabBinding* binding);
   void ClaimLaunchTab(const base::ListValue& values, base::OnceCallback<void(bool, base::Value)> done);
@@ -1358,9 +1410,12 @@ void ShellHostView::Initialize() {
 
 void ShellHostView::DetachViewports() {
   for (auto& [id, binding] : bindings_) {
-    if (!binding->viewport()) continue;
-    binding->viewport()->SetVisible(false);
-    binding->viewport()->SetWebContents(nullptr);
+    binding->pane_visible = false;
+    for (views::WebView* view : {binding->viewport(), binding->devtools_viewport()}) {
+      if (!view) continue;
+      view->SetVisible(false);
+      view->SetWebContents(nullptr);
+    }
   }
 }
 
@@ -2372,6 +2427,162 @@ void ShellHostView::ReportTab(int id, base::DictValue event) {
   Event("ArdiaWebView", base::NumberToString(id), base::Value(std::move(event)));
 }
 
+TabBinding* ShellHostView::PageCommandBinding(const PageCommandAuthority& authority) {
+  ShellHostView* host = authority.host.get();
+  HostMessageHandler* handler = authority.handler.get();
+  content::WebContents* contents = authority.contents.get();
+  if (!host || !handler || !contents || host->is_utility() || !host->browser_ ||
+      authority.claim.empty() || !authority.generation) return nullptr;
+  auto* document = authority.document.AsRenderFrameHostIfValid();
+  if (!document || document != host->shell()->GetPrimaryMainFrame() ||
+      !host->OwnsHandler(handler, authority.generation) || !handler->Authorized()) return nullptr;
+  TabBinding* binding = host->Binding(authority.id);
+  if (!binding || binding->contents() != contents || binding->claim != authority.claim ||
+      binding->renderer_generation != authority.generation) return nullptr;
+  if (host->browser_->GetTabStripModel()->GetIndexOfWebContents(contents) == TabStripModel::kNoTab)
+    return nullptr;
+  return binding;
+}
+
+void ShellHostView::EmitPageCommandEvent(const PageCommandAuthority& authority,
+                                         base::DictValue event) {
+  if (!PageCommandBinding(authority)) return;
+  authority.handler->SendEvent("ArdiaWebView", base::NumberToString(authority.id),
+                               base::Value(std::move(event)));
+}
+
+ardiacore::LinuxPageCommands* ShellHostView::EnsurePageCommands(TabBinding* binding) {
+  if (binding->page_commands) return binding->page_commands.get();
+  if (!handler_ || !binding->contents()) return nullptr;
+  PageCommandAuthority authority{GetWeakPtr(), handler_->GetWeakPtr(), renderer_document_,
+                                 binding->contents()->GetWeakPtr(), TabId(binding->contents()),
+                                 binding->claim, binding->renderer_generation};
+  if (PageCommandBinding(authority) != binding) return nullptr;
+  binding->page_commands = std::make_unique<ardiacore::LinuxPageCommands>(
+      binding->contents(), profile(),
+      base::BindRepeating([](const PageCommandAuthority& authority) -> BrowserWindowInterface* {
+        return PageCommandBinding(authority) ? authority.host->browser() : nullptr;
+      }, authority),
+      base::BindRepeating(&ShellHostView::EmitPageCommandEvent, authority),
+      !ardiacore::BackgroundInstance(),
+      base::BindRepeating([](const PageCommandAuthority& authority) {
+        if (PageCommandBinding(authority)) authority.host->PresentDevTools(authority.contents.get());
+      }, authority));
+  return binding->page_commands.get();
+}
+
+void ShellHostView::PageCommand(TabBinding* binding, const std::string& command,
+                                const base::ListValue& values,
+                                base::OnceCallback<void(bool, base::Value)> done) {
+  ardiacore::LinuxPageCommands* commands = EnsurePageCommands(binding);
+  if (!commands) {
+    return std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_PAGE_STALE_TARGET").Set("message", "Page claim is no longer current")));
+  }
+  auto error = commands->Dispatch(command, values);
+  if (error) return std::move(done).Run(false, base::Value(std::move(*error)));
+  std::move(done).Run(true, base::Value());
+}
+
+void ShellHostView::AdoptDevTools(TabBinding* binding) {
+  if (!binding->contents() || !DevToolsWindow::GetInstanceForInspectedWebContents(binding->contents()))
+    return;
+  if (ardiacore::LinuxPageCommands* commands = EnsurePageCommands(binding)) commands->AdoptDevTools();
+}
+
+void ShellHostView::PresentDevTools(content::WebContents* inspected) {
+  if (!inspected) return;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+          [](base::WeakPtr<ShellHostView> host, base::WeakPtr<content::WebContents> contents) {
+            if (!host || !contents) return;
+            TabBinding* binding = host->Binding(TabId(contents.get()));
+            if (binding && binding->contents() == contents.get()) host->LayoutPane(binding);
+          }, GetWeakPtr(), inspected->GetWeakPtr()));
+}
+
+void ShellHostView::LayoutPane(TabBinding* binding) {
+  views::WebView* page = binding->viewport();
+  if (!page || !browser_view_) return;
+  content::WebContents* contents = binding->contents();
+  const bool visible = binding->pane_visible && contents;
+  DevToolsContentsResizingStrategy strategy;
+  content::WebContents* devtools =
+      visible && handler_ && !binding->claim.empty() && binding->renderer_generation == renderer_generation_
+          ? DevToolsWindow::GetInTabWebContents(contents, &strategy) : nullptr;
+  const gfx::Rect pane(binding->pane_bounds.size());
+  gfx::Rect tools_bounds;
+  gfx::Rect page_bounds = pane;
+  if (devtools) ApplyDevToolsContentsResizingStrategy(strategy, pane, &tools_bounds, &page_bounds);
+  const auto clip = [](const std::vector<gfx::Rect>& shape, const gfx::Rect& area) {
+    std::vector<gfx::Rect> clipped;
+    for (gfx::Rect part : shape) {
+      part.Intersect(area);
+      part.Offset(-area.x(), -area.y());
+      if (!part.IsEmpty()) clipped.push_back(part);
+    }
+    return clipped;
+  };
+  const gfx::Vector2d origin = binding->pane_bounds.OffsetFromOrigin();
+  page->SetBoundsRect(page_bounds + origin);
+  static_cast<ViewportView*>(page)->SetShape(clip(binding->pane_shape, page_bounds),
+                                             clip(binding->pane_input_shape, page_bounds));
+  page->SetVisible(visible);
+  if (visible) {
+    browser_view_->contents_web_view()->SetWebContents(nullptr);
+    page->SetWebContents(contents);
+    page->holder()->SetNativeViewCornerRadii(gfx::RoundedCornersF(12.0f));
+  } else {
+    page->SetWebContents(nullptr);
+  }
+  views::WebView* tools = binding->devtools_viewport();
+  if (!devtools) {
+    if (!tools) return;
+    views::FocusManager* focus = GetFocusManager();
+    const bool focused = focus && tools->Contains(focus->GetFocusedView());
+    if (tools->GetVisible()) binding->devtools_had_focus = focused && !visible;
+    tools->SetVisible(false);
+    tools->SetWebContents(nullptr);
+    if (focused && visible) binding->FocusFromHost();
+    return;
+  }
+  if (auto* container = browser_view_->GetContentsContainerViewFor(contents)) {
+    if (container->devtools_web_view()->web_contents() == devtools) {
+      container->devtools_web_view()->SetWebContents(nullptr);
+      container->devtools_web_view()->SetVisible(false);
+    }
+  }
+  if (!tools) {
+    tools = AddChildView(std::make_unique<ViewportView>(profile()));
+    binding->SetDevToolsViewport(tools);
+  }
+  const bool fresh = !binding->devtools_watch || binding->devtools_watch->web_contents() != devtools;
+  const bool restore_focus = !fresh && !tools->GetVisible() && binding->devtools_had_focus;
+  binding->devtools_had_focus = false;
+  if (fresh) {
+    binding->devtools_watch = std::make_unique<DevToolsFrontendWatch>(devtools, base::BindOnce(
+        [](base::WeakPtr<content::WebContents> inspected) {
+          if (!inspected) return;
+          for (const auto& [id, host] : Hosts()) host->PresentDevTools(inspected.get());
+        }, contents->GetWeakPtr()));
+  }
+  tools->SetBoundsRect(tools_bounds + origin);
+  static_cast<ViewportView*>(tools)->SetShape(clip(binding->pane_shape, tools_bounds),
+                                              clip(binding->pane_input_shape, tools_bounds));
+  tools->SetVisible(true);
+  tools->SetWebContents(devtools);
+  if (auto* native = devtools->GetNativeView(); native && !native->IsVisible()) native->Show();
+  tools->holder()->SetNativeViewCornerRadii(gfx::RoundedCornersF(12.0f));
+  const size_t page_index = GetIndexOf(page).value();
+  const size_t tools_index = GetIndexOf(tools).value();
+  if (strategy.hide_inspected_contents() ? tools_index < page_index : tools_index > page_index)
+    ReorderChildView(tools, page_index);
+  if (fresh || restore_focus) {
+    tools->RequestFocus();
+    devtools->Focus();
+  }
+}
+
 base::DictValue ShellHostView::Strip() const {
   base::ListValue tabs;
   if (browser_) {
@@ -2470,6 +2681,7 @@ void ShellHostView::ReattachViewports() {
         binding->contents()) {
       binding->viewport()->SetWebContents(nullptr);
       binding->viewport()->SetWebContents(binding->contents());
+      if (binding->devtools_viewport()) LayoutPane(binding.get());
     }
   }
 }
@@ -2479,6 +2691,13 @@ void ShellHostView::OnTabStripModelChanged(
     const TabStripSelectionChange&) {
   if (!browser_) return;
   TabStripModel* model = browser_->GetTabStripModel();
+  for (auto& [id, binding] : bindings_) {
+    if (binding->page_commands && (!binding->contents() ||
+        model->GetIndexOfWebContents(binding->contents()) == TabStripModel::kNoTab)) {
+      binding->ResetPageCommands();
+      LayoutPane(binding.get());
+    }
+  }
   for (int index = 0; index < model->count(); ++index) {
     content::WebContents* contents = model->GetWebContentsAt(index);
     TabBinding* binding = Binding(TabId(contents));
@@ -2652,10 +2871,12 @@ void ShellHostView::CreateTab(
     binding = bindings_[id].get();
     app_operation_ = false;
   }
+  binding->ResetPageCommands();
   binding->temporary = args.FindBool("temporary").value_or(false);
   binding->claim = claim;
   binding->renderer_generation = renderer_generation_;
   binding->transferable = false;
+  AdoptDevTools(binding);
   const int id = TabId(binding->contents());
   base::DictValue result = base::DictValue()
       .Set("browserId", id).Set("chromeTabId", id).Set("state", binding->Navigation());
@@ -2672,13 +2893,20 @@ void ShellHostView::TabCommand(
     const base::DictValue& args,
     base::OnceCallback<void(bool, base::Value)> done) {
   TabBinding* binding = ClaimedBinding(args);
+  const std::string command = String(args, "command");
   if (!browser_ || !binding) {
+    if (ardiacore::LinuxPageCommands::Handles(command)) {
+      return std::move(done).Run(false, base::Value(base::DictValue()
+          .Set("code", "ERR_PAGE_STALE_TARGET").Set("message", "No such live tab")));
+    }
     return std::move(done).Run(false, base::Value("No such live tab"));
+  }
+  const base::ListValue& values = Arguments(args);
+  if (ardiacore::LinuxPageCommands::Handles(command)) {
+    return PageCommand(binding, command, values, std::move(done));
   }
   content::WebContents* contents = binding->contents();
   auto& controller = contents->GetController();
-  const std::string command = String(args, "command");
-  const base::ListValue& values = Arguments(args);
   if (command == "captureViewport") {
     auto* view = contents->GetRenderWidgetHostView();
     if (!view || !view->IsSurfaceAvailableForCopy()) {
@@ -2827,18 +3055,11 @@ void ShellHostView::SetViewport(
   if (!binding->viewport()) {
     binding->SetViewport(AddChildView(std::make_unique<ViewportView>(profile())));
   }
-  views::WebView* view = binding->viewport();
-  const bool visible = args.FindBool("visible").value_or(false) && !bounds.IsEmpty();
-  view->SetBoundsRect(bounds);
-  static_cast<ViewportView*>(view)->SetShape(std::move(shape), std::move(input_shape));
-  view->SetVisible(visible);
-  if (visible) {
-    browser_view_->contents_web_view()->SetWebContents(nullptr);
-    view->SetWebContents(binding->contents());
-    view->holder()->SetNativeViewCornerRadii(gfx::RoundedCornersF(12.0f));
-  } else {
-    view->SetWebContents(nullptr);
-  }
+  binding->pane_bounds = bounds;
+  binding->pane_shape = std::move(shape);
+  binding->pane_input_shape = std::move(input_shape);
+  binding->pane_visible = args.FindBool("visible").value_or(false) && !bounds.IsEmpty();
+  LayoutPane(binding);
   std::move(done).Run(true, base::Value());
 }
 
@@ -3103,6 +3324,7 @@ void ShellHostView::Invoke(
   if (method == "tab.release") {
     TabBinding* binding = ClaimedBinding(args);
     if (!binding) return std::move(done).Run(false, base::Value("No owned live tab"));
+    binding->ResetPageCommands();
     if (binding->temporary) {
       const bool disposed = DisposeTemporary(binding);
       return std::move(done).Run(disposed, disposed ? base::Value() : base::Value("The temporary surface is no longer owned by this window"));
@@ -3118,9 +3340,11 @@ void ShellHostView::Invoke(
         helper->OnTabBecameActive();
       }
     }
-    if (binding->viewport()) {
-      binding->viewport()->SetVisible(false);
-      binding->viewport()->SetWebContents(nullptr);
+    binding->pane_visible = false;
+    for (views::WebView* view : {binding->viewport(), binding->devtools_viewport()}) {
+      if (!view) continue;
+      view->SetVisible(false);
+      view->SetWebContents(nullptr);
     }
     return std::move(done).Run(true, base::Value());
   }
@@ -3455,15 +3679,36 @@ TabBinding::TabBinding(ShellHostView* owner, content::WebContents* contents,
       key_(std::move(key)) {}
 
 TabBinding::~TabBinding() {
-  if (viewport_) {
-    views::WebView* view = viewport_.get();
-    viewport_ = nullptr;
+  ResetPageCommands();
+  RemoveViewports();
+}
+
+void TabBinding::RemoveViewports() {
+  for (auto* slot : {&viewport_, &devtools_viewport_}) {
+    if (!*slot) continue;
+    views::WebView* view = slot->get();
+    *slot = nullptr;
     view->SetWebContents(nullptr);
     owner_->RemoveChildViewT(view);
   }
 }
 
+void TabBinding::ResetPageCommands() {
+  auto commands = std::move(page_commands);
+  if (!commands) return;
+  commands->Reset();
+  if (base::SequencedTaskRunner::HasCurrentDefault())
+    base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(commands));
+}
+
 void TabBinding::Rebind(content::WebContents* contents) {
+  ResetPageCommands();
+  devtools_watch.reset();
+  devtools_had_focus = false;
+  if (devtools_viewport_) {
+    devtools_viewport_->SetVisible(false);
+    devtools_viewport_->SetWebContents(nullptr);
+  }
   cancelled_auto_pip_until = {};
   requested_auto_pip_until = {};
   Observe(contents);
@@ -3472,17 +3717,14 @@ void TabBinding::Rebind(content::WebContents* contents) {
 }
 
 void TabBinding::MoveTo(ShellHostView* owner) {
+  ResetPageCommands();
   RememberPendingAutoPictureInPicture();
   presented = false;
   presentation_applied = false;
   presentation_attached = false;
   presentation_departed = false;
-  if (viewport_) {
-    views::WebView* view = viewport_.get();
-    viewport_ = nullptr;
-    view->SetWebContents(nullptr);
-    owner_->RemoveChildViewT(view);
-  }
+  pane_visible = false;
+  RemoveViewports();
   owner_ = owner;
 }
 
@@ -3571,9 +3813,16 @@ void TabBinding::DidUpdateFaviconURL(
       .Set("candidates", std::move(urls)));
 }
 void TabBinding::WebContentsDestroyed() {
+  ResetPageCommands();
   const int id = contents_ ? TabId(contents_) : 0;
   contents_ = nullptr;
+  devtools_watch.reset();
   if (viewport_) viewport_->SetWebContents(nullptr);
+  if (devtools_viewport_) {
+    devtools_viewport_->SetVisible(false);
+    devtools_viewport_->SetWebContents(nullptr);
+  }
+  owner_->LayoutPane(this);
   if (id > 0) {
     owner_->ReportTab(id, base::DictValue().Set("type", "windowClose"));
   }
@@ -3743,6 +3992,14 @@ void StartLinuxHost() {
   g_ardia_linux_auto_pip_requested = [](content::WebContents* contents) {
     for (const auto& [id, host] : Hosts()) host->NoteAutoPictureInPictureRequested(contents);
   };
+  g_ardia_devtools_dock_changed = [](BrowserWindowInterface* browser, content::WebContents* inspected,
+                                     content::WebContents*) {
+    if (!browser || !inspected) return;
+    const auto found = Hosts().find(browser->GetSessionID().id());
+    if (found == Hosts().end() || found->second->browser() != browser) return;
+    found->second->PresentDevTools(inspected);
+  };
+  DevToolsWindow::RegisterLinuxDevToolsLifecycle();
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(std::make_unique<ShellConfig>());
   g_ardia_keeps_window_without_tabs = [](const BrowserWindowInterface* browser) {
     return browser && Hosts().contains(browser->GetSessionID().id());

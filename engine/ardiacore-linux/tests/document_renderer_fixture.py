@@ -53,6 +53,8 @@ struct HostMessageHandler {
 };
 struct FocusManager { void set_shortcut_handling_suspended(bool) {} };
 struct TabBinding {
+  int page_command_resets = 0;
+  void ResetPageCommands() { ++page_command_resets; }
   bool temporary = false;
   bool live = true;
   bool transferable = false;

@@ -100,6 +100,7 @@ int main(int argc, char** argv) {
   assert(host.OwnsHandler(&a, a_generation));
   if (std::string(argv[1]) == "replacement") {
     host.CommitHandler(&b);
+    assert(host.Binding(7)->page_command_resets == 1 && host.Binding(8)->page_command_resets == 1);
     assert(!host.ClearHandler(&a));
     assert(!host.OwnsHandler(&a, a_generation));
     assert(!host.OwnsHandler(&a, host.renderer_generation_));
