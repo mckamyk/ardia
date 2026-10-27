@@ -85,7 +85,7 @@ Without a grant the reply is `{"password": null}`, so the pane never shows a sta
 
 1. `host.invoke("ArdiaPasswords.export", [profile])`. The renderer can't supply a path.
 2. Native checks availability and runs the reauthentication probe. It then shows Chromium's `SelectFileDialog` (save-as, `.csv`), honouring the `AllowFileSelectionDialogs` policy through `ChromeSelectFilePolicy`. Cancel returns `{status: "cancelled"}`.
-3. It records whether the file already existed, then calls `ac_passwords_export {path}`. That asks for authentication with zero validity, then Chromium's `PasswordManagerExporter` writes the CSV with mode `0600`.
+3. It records whether the file already existed, then calls `ac_passwords_export {path}`. That asks for authentication with zero validity, then Chromium's `PasswordManagerExporter` writes the CSV with the default mode (the process umask applies) and only afterwards changes it to `0600`. That `chmod` follows symlinks, so the file is briefly readable under the umask, and a symlinked destination gets its target's mode changed. This is Chromium behaviour, and the same on macOS.
 4. **Cleanup.** On `writeFailed`, `cancelled` or `reauthFailed`, a file that didn't exist before the export and is now a regular file (never a symlink) is deleted. Chromium's exporter already deletes on write failure; this guards the rest. A file the user chose to overwrite is never deleted by Ardia.
 5. The reply carries `status` and, only on success, `path`.
 
@@ -121,7 +121,8 @@ Without a grant the reply is `{"password": null}`, so the pane never shows a sta
 - **Chromium's own buffers.** These aren't ours to wipe:
   - the WebUI IPC message carrying a typed request;
   - the `base::Value` passed to `CallJavascriptFunction`;
-  - the engine's reply `std::string` (shared `ardia::Reply::Send`).
+  - the engine's reply `std::string` (shared `ardia::Reply::Send`);
+  - the JSON text that `HostMessageHandler::Resolve` builds with `base::WriteJson` for every generic `engine.call` reply. Typed secret replies don't take that path (they go to `Reply` as a value), but any reply resolved there leaves an unwiped serialized copy.
 
   The engine reply is the same on macOS. Wiping it through `c_str()` would be undefined behaviour, so it is left to follow-up #103 (a cleansing secret reply in the shared engine).
 

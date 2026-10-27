@@ -170,7 +170,7 @@ I couldn't build or run Chromium 156 here, so none of this has run as a browser.
 - **Manual.** These are listed in the scenario and in [acceptance-suite.md](acceptance-suite.md):
   - polkit grant, deny, dismiss and timeout with the policy installed and an agent running;
   - the five-minute window;
-  - the export dialog and the CSV mode `0600`;
+  - the export dialog and the CSV ending at mode `0600` (written under the umask, then changed);
   - a locked Secret Service;
   - a private window's own renderer (private names and isolated-profile separation are automated).
 - **First real build.** Confirm that the new GN deps resolve and that `SelectFileDialog` uses the portal or GTK under Ardia's host. Confirm too that polkit accepts the `system-bus-name` subject from the shared system bus.

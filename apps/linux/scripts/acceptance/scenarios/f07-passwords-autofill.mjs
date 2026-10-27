@@ -11,9 +11,9 @@ async function expectOk(promise, label) {
   return reply.value;
 }
 
-async function expectCode(promise, code, label) {
+export async function expectCode(promise, code, label) {
   const reply = await promise;
-  if (reply.ok || reply.code !== code) throw new Error(`${label}: expected ${code}, got ${JSON.stringify(reply)}`);
+  if (reply.ok || reply.code !== code) throw new Error(`${label}: expected ${code}, got ${reply.ok ? "success" : String(reply.code)}`);
   return { code: reply.code };
 }
 
@@ -29,7 +29,7 @@ export default {
   title: "Passwords and autofill management, secret gating and storage at rest",
   deadline: 300000,
   manual: [
-    { name: "System authentication gates reveal, edit, export and card numbers", steps: ["Install share/polkit-1/actions/dev.ardia.linux.policy into /usr/share/polkit-1/actions and run a polkit agent (hyprpolkitagent, polkit-gnome or the desktop's own).", "Settings › Passwords › Unlock: the agent asks for your password; entering it lists saved passwords.", "Open a saved password within five minutes: it shows without a second prompt; after five minutes it prompts again.", "Export CSV…: the save dialog appears, then the agent always prompts; the CSV is written with mode 0600.", "Settings › Autofill › a card › Show number: the agent always prompts."], reason: "needs a desktop session, the installed polkit policy and a person at the agent prompt" },
+    { name: "System authentication gates reveal, edit, export and card numbers", steps: ["Install share/polkit-1/actions/dev.ardia.linux.policy into /usr/share/polkit-1/actions and run a polkit agent (hyprpolkitagent, polkit-gnome or the desktop's own).", "Settings › Passwords › Unlock: the agent asks for your password; entering it lists saved passwords.", "Open a saved password within five minutes: it shows without a second prompt; after five minutes it prompts again.", "Export CSV…: the save dialog appears, then the agent always prompts; the CSV ends at mode 0600 (Chromium writes it under the umask, then changes the mode).", "Settings › Autofill › a card › Show number: the agent always prompts."], reason: "needs a desktop session, the installed polkit policy and a person at the agent prompt" },
     { name: "Denied, dismissed and timed-out prompts never reveal", steps: ["Deny the agent prompt (wrong password three times), dismiss it, and leave it open for two minutes.", "Each time the password stays hidden, Edit does not save, Export reports nothing written and no file appears, and the card number stays masked."], reason: "needs a person at the agent prompt" },
     { name: "A locked keyring is reported as unavailable", steps: ["Start Ardia with --password-store=gnome-libsecret and a locked or absent Secret Service.", "Settings › Passwords shows 'Passwords are unavailable' with the keyring reason instead of an empty vault, and Unlock does not show 'No saved passwords'."], reason: "needs a real Secret Service session" },
     { name: "Private windows refuse credential management", steps: ["Open a private window (Ctrl+Shift+N) and, from its sidebar, try Passwords and Autofill (for example through the command palette or a settings link).", "The private window's renderer gets ERR_PROFILE_PRIVATE for every passwords.* and autofill.* call and never shows the regular profile's data."], reason: "driving a private window's own renderer through Settings needs the visible UI" },
@@ -133,7 +133,8 @@ export default {
       cardId = (await expectOk(shell.invoke("ArdiaAutofill.saveCard", { args: ["", { name: "Ada", expMonth: 4, expYear: 2031 }, card] }), "saveCard")).id;
       const listed = await expectOk(shell.call("autofill.cards"), "autofill.cards");
       const entry = listed.cards.find((c) => c.id === cardId);
-      if (!entry || entry.last4 !== "1111" || JSON.stringify(listed).includes(card)) throw new Error(JSON.stringify(listed));
+      if (JSON.stringify(listed).includes(card)) throw new Error("the card list carried the full number");
+      if (!entry || entry.last4 !== "1111") throw new Error(JSON.stringify(listed));
       await expectCode(shell.invoke("ArdiaAutofill.cardNumber", { args: ["", cardId] }), "ERR_REAUTH_UNAVAILABLE", "card number");
       return { cardId, network: entry.network };
     });

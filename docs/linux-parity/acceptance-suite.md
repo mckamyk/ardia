@@ -124,7 +124,7 @@ The JSON lists each manual item with these steps. They are kept here so they can
 
 **#17 F07**
 
-- **System authentication.** Install `share/polkit-1/actions/dev.ardia.linux.policy` into `/usr/share/polkit-1/actions` and run a polkit agent. Unlock asks for your password and lists the passwords. Opening one within five minutes shows it without a second prompt; after five minutes it prompts again. Export CSV… shows the save dialog, then always prompts, and writes the file with mode 0600. Showing a card number always prompts.
+- **System authentication.** Install `share/polkit-1/actions/dev.ardia.linux.policy` into `/usr/share/polkit-1/actions` and run a polkit agent. Unlock asks for your password and lists the passwords. Opening one within five minutes shows it without a second prompt; after five minutes it prompts again. Export CSV… shows the save dialog, then always prompts, and leaves the file at mode 0600 (Chromium writes it under the umask, then changes the mode). Showing a card number always prompts.
 - **Refusals.** Deny the prompt, dismiss it, and leave it open for two minutes. Each time the password stays hidden, Edit doesn't save, Export writes nothing, and the card number stays masked.
 - **Locked keyring.** With `--password-store=gnome-libsecret` and a locked or absent Secret Service, the Passwords pane shows "Passwords are unavailable" with the keyring reason, not an empty vault.
 - **Private windows.** A private window's own renderer gets `ERR_PROFILE_PRIVATE` for every passwords and autofill call and never shows the regular profile's data.
