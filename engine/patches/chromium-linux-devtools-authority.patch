@@ -1,3 +1,17 @@
+--- a/chrome/browser/devtools/BUILD.gn
++++ b/chrome/browser/devtools/BUILD.gn
+@@ -517,6 +517,11 @@
+   if (!is_android) {
+     deps += [ "//chrome/browser/ui:browser_tab_strip_tracker" ]
+   }
++
++  if (is_linux) {
++    public_deps += [ "//ardia/linux:devtools_authority" ]
++    deps += [ "//ui/aura" ]
++  }
+ }
+ 
+ static_library("test_support") {
 --- a/chrome/browser/devtools/devtools_window.h
 +++ b/chrome/browser/devtools/devtools_window.h
 @@ -14,6 +14,9 @@

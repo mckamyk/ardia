@@ -14,6 +14,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 PATCH = ROOT.parent / 'patches/chromium-linux-devtools-authority.patch'
 PINNED = pathlib.Path(os.environ.get('ARDIA_F01_PINNED_SOURCE', '/tmp/ardia-f01-156'))
 HASHES = {
+    'BUILD.gn': 'a89ff36525038ac327d7dafe4cec60b1129debcd90bc995ba0fa35e70bd7cf45',
     'devtools_window.h': 'dd27c6895da41d0856345de92e0fc3cdaf0d177128c7abdc550dd5f6e1fb8843',
     'devtools_window.cc': '55d2fdbcd1036f3a0e59448bfde41526277d2fe518d1745d8398da6ef4df154d',
     'devtools_window_views.cc': 'a8d8b8f7d7db9f98c693f93da351d25222e3efa8a18cbeb5e80ffed06c5579f1',
@@ -519,7 +520,7 @@ class DevToolsAuthorityTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory(prefix='ardia-f01-lifecycle-test-')
         cls.addClassCleanup(cls.temp.cleanup)
         cls.root = pathlib.Path(cls.temp.name)
-        for name in ['devtools_window.h', 'devtools_window.cc', 'devtools_window_views.cc']:
+        for name in HASHES:
             path = pathlib.Path('chrome/browser/devtools') / name
             (cls.root / path).parent.mkdir(parents=True, exist_ok=True)
             if hashlib.sha256((PINNED / path).read_bytes()).hexdigest() != HASHES[name]:
@@ -681,14 +682,19 @@ class BrowserWindowInterface {''')
         self.run_case('page-cancel-destroy-page')
 
     def test_zero_fuzz_patch_and_guard_placement(self):
-        self.assertEqual(self.patch_output.count('patching file'), 3)
+        self.assertEqual(self.patch_output.count('patching file'), 4)
         load = method(self.patched, 'void DevToolsWindow::LoadCompleted()')
         self.assertLess(load.index('IsCurrent()'), load.index('Show(action_on_load_)'))
         show = method(self.patched, 'void DevToolsWindow::Show(')
         posted = show[show.index('base::SequencedTaskRunner'):]
         self.assertLess(posted.index('IsCurrent(ticket)'), posted.index('window->ActivateInspectedTab()'))
         self.assertIn('IS_LINUX', self.header)
+        build = (self.root / 'chrome/browser/devtools/BUILD.gn').read_text()
+        linux_build = '\n  if (is_linux) {\n    public_deps += [ "//ardia/linux:devtools_authority" ]\n    deps += [ "//ui/aura" ]\n  }\n'
+        self.assertEqual(build.count(linux_build), 1)
+        self.assertEqual(build.replace(linux_build, ''), (PINNED / 'chrome/browser/devtools/BUILD.gn').read_text())
         for name in HASHES:
+            if name == 'BUILD.gn': continue
             original = (PINNED / 'chrome/browser/devtools' / name).read_text()
             if name == 'devtools_window.h': patched = self.header
             elif name == 'devtools_window.cc': patched = self.patched
