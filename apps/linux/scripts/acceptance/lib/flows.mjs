@@ -2,13 +2,13 @@ import { readFile } from "node:fs/promises";
 import { sessionPath, sessionSeed, writeChromePreferences, writeProfileSeed } from "./seed.mjs";
 import { until } from "./util.mjs";
 
-export async function startBrowser(t, { name = "profile", scratch, seed = true, session, onboardingComplete = true, preferences, background = true, extraArgs, env, ozone, label } = {}) {
+export async function startBrowser(t, { name = "profile", scratch, seed = true, session, onboardingComplete = true, preferences, background = true, extensions, extraArgs, env, ozone, label } = {}) {
   const dir = scratch ?? (await t.scratch(name));
   if (!scratch) {
     await writeProfileSeed(dir, { session: seed ? (session ?? sessionSeed()) : undefined, onboardingComplete });
     if (preferences) await writeChromePreferences(dir, preferences);
   }
-  const app = await t.launch({ scratch: dir, background, extraArgs, env, ozone, label: label ?? name });
+  const app = await t.launch({ scratch: dir, background, extensions, extraArgs, env, ozone, label: label ?? name });
   const shell = await app.mainShell();
   return { app, shell, scratch: dir };
 }

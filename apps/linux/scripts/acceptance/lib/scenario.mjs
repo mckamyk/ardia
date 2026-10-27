@@ -27,7 +27,7 @@ export function createContext({ scenario, options, fixtures, resultsDir, scratch
       scratches.push(dir);
       return dir;
     },
-    async launch({ scratch, label = "ardia", background = true, extraArgs = [], env = {}, ozone, startTimeout } = {}) {
+    async launch({ scratch, label = "ardia", background = true, extensions = false, extraArgs = [], env = {}, ozone, startTimeout } = {}) {
       if (!scratch) throw new Error("launch needs a scratch directory");
       const app = await launch({
         executable: options.executable,
@@ -35,6 +35,7 @@ export function createContext({ scenario, options, fixtures, resultsDir, scratch
         scratch,
         background,
         ozone,
+        extensions,
         env,
         label,
         startTimeout,

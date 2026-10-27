@@ -20,13 +20,13 @@ export function killAllAppsNow() {
   }
 }
 
-export function launchArguments({ scratch, uiDir, ozone = "headless", screen = "1920,1080", extraArgs = [] }) {
+export function launchArguments({ scratch, uiDir, ozone = "headless", screen = "1920,1080", extensions = false, extraArgs = [] }) {
   const args = [
     `--user-data-dir=${scratch}`,
     "--no-first-run",
     "--no-default-browser-check",
     "--password-store=basic",
-    "--disable-extensions",
+    ...(extensions ? [] : ["--disable-extensions"]),
     "--disable-background-networking",
     "--disable-component-update",
     "--disable-sync",
@@ -54,11 +54,11 @@ export function launchEnvironment({ scratch, background = true, base = process.e
   return result;
 }
 
-export async function launchArdia({ executable, uiDir, scratch, background = true, ozone = "headless", extraArgs = [], env = {}, label = "ardia", startTimeout = 45000, spawnImpl = spawn }) {
+export async function launchArdia({ executable, uiDir, scratch, background = true, ozone = "headless", extensions = false, extraArgs = [], env = {}, label = "ardia", startTimeout = 45000, spawnImpl = spawn }) {
   await rm(join(scratch, "DevToolsActivePort"), { force: true });
   await mkdir(join(scratch, "home"), { recursive: true });
   const logPath = join(scratch, `${label}-${Date.now()}.log`);
-  const args = launchArguments({ scratch, uiDir, ozone, extraArgs });
+  const args = launchArguments({ scratch, uiDir, ozone, extensions, extraArgs });
   const environment = launchEnvironment({ scratch, background, env });
   await writeFile(join(scratch, `${label}-command.json`), JSON.stringify({ executable, args, env: Object.fromEntries(Object.entries(env)) }, null, 2));
   const log = openSync(logPath, "w");
