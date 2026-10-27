@@ -107,6 +107,7 @@ int main(int argc, char** argv) {
     assert(host.OwnsHandler(&b, host.renderer_generation_));
     assert(!host.ClaimedBinding(args));
     assert(host.Binding(7)->claim.empty());
+    assert(host.Binding(7)->retired_pages == 1 && host.Binding(7)->claim_at_retirement == "a");
     assert(host.Binding(7)->live);
     assert(!host.Binding(8)->live);
     host.Binding(7)->claim = "b";

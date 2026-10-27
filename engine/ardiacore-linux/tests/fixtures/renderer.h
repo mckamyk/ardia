@@ -102,6 +102,9 @@ struct TabBinding {
   bool transferable = true;
   std::string claim;
   uint64_t renderer_generation = 0;
+  int retired_pages = 0;
+  std::string claim_at_retirement = "unretired";
+  void RetirePage() { ++retired_pages; claim_at_retirement = claim; }
   TabBinding* contents() { return live ? this : nullptr; }
 };
 struct ShellHostView {
