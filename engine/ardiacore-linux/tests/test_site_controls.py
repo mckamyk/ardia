@@ -122,6 +122,27 @@ class SiteControlsWiringTests(unittest.TestCase):
         self.assertIn(f'kExtensionId = "{predicate.group(1)}"', helper)
         self.assertNotRegex(hunk, r'\n\+[^\n]*//(?! nogncheck)')
 
+    def test_the_hook_runs_before_every_process_type_and_guards_renderer_script_access(self):
+        chromium = pathlib.Path.home() / 'ardia-linux-build-156/chromium_git/chromium/src'
+        runner = chromium / 'content/app/content_main_runner_impl.cc'
+        permissions = chromium / 'extensions/common/permissions/permissions_data.cc'
+        injection = chromium / 'extensions/renderer/extension_injection_host.cc'
+        if not all(path.exists() for path in [runner, permissions, injection]):
+            self.skipTest('Chromium 156 source is unavailable')
+        source = runner.read_text()
+        initialize = body(source, 'int ContentMainRunnerImpl::Initialize(ContentMainParams params) {')
+        self.assertIn('delegate_->BasicStartupComplete()', initialize)
+        run = body(source, 'NO_STACK_PROTECTOR int ContentMainRunnerImpl::Run() {')
+        self.assertIn('RunOtherNamedProcessTypeMain(process_type', run)
+        self.assertLess(source.index('delegate_->BasicStartupComplete()'), source.index('NO_STACK_PROTECTOR int ContentMainRunnerImpl::Run() {'))
+        self.assertIn('return RunZygote(delegate);', body(source, 'NO_STACK_PROTECTOR int RunOtherNamedProcessTypeMain('))
+        data = permissions.read_text()
+        restricted = body(data, 'bool PermissionsData::IsRestrictedUrl(const GURL& document_url,')
+        self.assertIn('g_ardia_restricted_component_extension(extension_id_)', restricted)
+        self.assertIn('if (IsRestrictedUrl(document_url, error))', body(data, 'PermissionsData::PageAccess PermissionsData::CanRunOnPage('))
+        self.assertIn('return CanRunOnPage(', body(data, 'PermissionsData::PageAccess PermissionsData::GetContentScriptAccess('))
+        self.assertIn('permissions_data()->GetContentScriptAccess(', injection.read_text())
+
     def test_the_component_stays_out_of_the_user_extension_list(self):
         helper = (LINUX / 'ac_linux_site_controls.h').read_text()
         ours = re.search(r'kExtensionId = "([a-p]{32})"', helper).group(1)
