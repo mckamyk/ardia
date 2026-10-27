@@ -31,9 +31,10 @@ Lane F, branch `t3/linux-window-lifecycle`, based on `linux` at `4b3d21e0`. This
 | Request | Result |
 | --- | --- |
 | New window | Shown active only when focus is requested and allowed, otherwise `ShowInactive`. |
-| Existing or still-pending window, from another renderer | Activates when the intent asks for focus. |
+| Existing or still-pending window, from another renderer | Activates when the intent asks for focus. Its `frame` is ignored: frames apply only at creation, as in `WindowManager.open` on macOS. Every renderer's first sync re-opens every window with its stored frame, and `BrowserView::SetBounds` exits fullscreen. |
 | A window's own renderer asking for its own window | Never activates: it is the launch echo of `windowSync`'s first sync, and a reload would otherwise steal focus. Utility windows are the exception. |
 | `focusWindow` | Always activates when allowed. |
+| `focusWindow`, or Settings/Import reopened, in a background instance | `ShowInactive()` (shows or unminimizes without activating), as before this lane. |
 
 **Activation mechanism.** Activation is `Show()` + `Activate()`. On Wayland, Chromium 156 turns this into an `xdg_activation_v1` request: it uses `XDG_ACTIVATION_TOKEN` if present, otherwise a token requested from the focused surface, and holds the token until the surface is configured. The compositor may still refuse.
 
@@ -42,7 +43,9 @@ Lane F, branch `t3/linux-window-lifecycle`, based on `linux` at `4b3d21e0`. This
 - its own-window `openWindow`, which `startNativeSync` sends right after `windows.listen()`;
 - `ArdiaShell.utilityReady`.
 
-This covers compositors that drop activation for unconfigured surfaces, without stealing focus after the user moved on.
+This covers compositors that drop activation for unconfigured surfaces, without stealing focus after the user moved on. A mouse or touch press in any Ardia window between the request and readiness also cancels the retry. Key presses deliberately don't: typing right after Ctrl+N is exactly when the retry is wanted.
+
+**Activation seeding.** A window already active when its host attaches (activation delivered before the posted `Attach` ran) is recorded in the ledger at `Initialize`, and its focus event is sent.
 
 **Observed activation.** Each transition to active sends `onWindowEvent {type:"focus", id}` to every regular renderer. Utility windows send nothing.
 
@@ -55,20 +58,17 @@ This covers compositors that drop activation for unconfigured surfaces, without 
 
 **Fullscreen.** `{type:"fullScreen", on}` is sent on widget show-state transitions.
 
-**Replay.** When a renderer becomes ready, it receives every regular window's current frame and fullscreen state, then the active window's focus.
+**Replay.** When a renderer becomes ready, its own window's frame and fullscreen state are broadcast to every regular renderer, so windows the WM never moves are still known everywhere. The ready renderer also receives every other window's state, and the active window's focus arrives last.
 
-**Page focus.** `{type:"pageFocus"}` is reported for the tab whose presented, visible page gains focus. The existing `HostWebView` mapping routes it to `onPageFocus` → `activateFocusedPane`.
+**Wayland frames.** `ArdiaShell.windowFrame` replies `null`. No frame events are sent, and `openWindow` frames apply size only, so the store never holds invented positions.
+
+**Page focus.** `{type:"pageFocus"}` is reported for the tab whose presented, visible page gains focus. The existing `HostWebView` mapping routes it to `onPageFocus` → `activateFocusedPane`. Focus the app requests itself (the webview `focus` command, `TabBinding::FocusFromHost`) is not reported, matching `host_focusing_` in `ac_tab_bridge.mm` and the macOS `page-focus` acceptance check.
 
 ## Tests run
 
-All runs were on this branch, except where marked as `linux`.
+`test_window_lifecycle.py` compiles the production host fragments against fakes and runs each scenario in its own process: the free activation helpers and `WindowPointerHandler`, the `windowFrame`/`focusWindow`/`utilityReady` and `openWindow` branches of `Invoke`, the widget observers, `RendererReady`/`SeedWindowActivation`/`WindowState`, `BroadcastWindowEvent`, and `TabBinding::FocusFromHost`/`OnWebContentsFocused`. One test feeds the production `windowFrame` replies into the real shared `state/drag/windowDrop.ts` through node. For every review finding, reverting just that fix in a scratch copy makes exactly its test fail; see the PR body for names.
 
-- `python3 -m unittest engine/ardiacore-linux/tests/test_window_lifecycle.py`: 11 passed. Before the change it failed with 9 failures and 2 errors.
-- `python3 -m unittest discover -s engine/ardiacore-linux/tests`: see the PR body for counts. Failures that also occur on a pristine `linux` export are pre-existing and listed there.
-- `pnpm --filter @ardia/linux test:host`, including the new `src/windowLifecycle.test.mjs` (6 tests): see the PR body.
-- `pnpm --filter @ardia/linux typecheck`: passed.
-- `pnpm --filter @ardia/linux build`: passed.
-- `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs`: see the PR body.
+Commands and counts are in the PR body.
 
 ## Needs native runtime acceptance (not done)
 
