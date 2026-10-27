@@ -3,7 +3,7 @@ import { emitCommand as emitWebCommand, confirm as webConfirm, prompt as webProm
 import { provideNativeModuleProvider } from "./expo-modules-core";
 import { linuxHostDialogs } from "../hostDialogs";
 import { ardiaHost, hostModuleMethod, reportHostError } from "../host";
-import { departLinuxWindow, flushLinuxSession, isLinuxUtility, keepLinuxWindow } from "../session";
+import { flushLinuxSession, isLinuxUtility, linuxWindowDeparture } from "../session";
 import { createWindowCloseBarrier, type WindowCloseRequest } from "../utilityClose";
 import { quiesceLinuxSession, resumeLinuxSession } from "../sessionClose";
 import { quiesceLinuxDocuments, resumeLinuxDocuments, flushLinuxDocuments } from "../documentFlush";
@@ -31,7 +31,10 @@ const ownWindowId = ardiaHost?.bootstrap.windowId ?? "";
 const closeBarrier = createWindowCloseBarrier({
   quiesce: (request) => { quiesceLinuxSession(closeToken(request)); quiesceLinuxDocuments(closeToken(request)); },
   drain: async () => { await flushLinuxSession(); return flushLinuxDocuments(); },
-  acknowledge: (request, watermark) => hostModuleMethod("ArdiaShell", "acknowledgeWindowClose")({ ...request, watermark }) as Promise<void>,
+  acknowledge: (request, watermark) => {
+    const departure = closeCoordinator.departs(request) ? linuxWindowDeparture(request.windowId) : undefined;
+    return hostModuleMethod("ArdiaShell", "acknowledgeWindowClose")({ ...request, watermark, ...(departure ? { departure } : {}) }) as Promise<void>;
+  },
   reject: (request) => hostModuleMethod("ArdiaShell", "rejectWindowClose")(request) as Promise<void>,
   resume: (request) => {
     closeCoordinator.producersResumed(request);
@@ -51,8 +54,6 @@ const closeCoordinator = createWindowCloseCoordinator({
   flush: flushLinuxSession,
   request: (id) => hostModuleMethod("ArdiaShell", "requestWindowClose")(id) as Promise<WindowCloseRequest>,
   beginDrain: (request) => hostModuleMethod("ArdiaShell", "beginWindowCloseDrain")(request) as Promise<DrainReply>,
-  depart: (request) => departLinuxWindow(closeToken(request), request.windowId),
-  stay: (request) => keepLinuxWindow(closeToken(request)),
   reject: (request) => hostModuleMethod("ArdiaShell", "rejectWindowClose")(request) as Promise<void>,
   barrier: closeBarrier,
   cancelled: closeBarrier.cancelled,

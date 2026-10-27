@@ -28,8 +28,7 @@ let flushSession: (() => Promise<void>) | undefined;
 export const setSessionFlush = (flush: () => Promise<void>) => void (flushSession = flush);
 export const flushLinuxSession = () => flushSession ? flushSession() : Promise.reject(new Error("Session persistence is not ready"));
 
-type SessionDeparture = { depart(token: string, windowId: string): void; stay(token: string): void };
-let departure: SessionDeparture | undefined;
-export const setSessionDeparture = (next: SessionDeparture) => void (departure = next);
-export const departLinuxWindow = (token: string, windowId: string) => departure?.depart(token, windowId);
-export const keepLinuxWindow = (token: string) => departure?.stay(token);
+export type WindowDeparture = { base: HydrateData; session: HydrateData };
+let departure: { departure(windowId: string): WindowDeparture } | undefined;
+export const setSessionDeparture = (next: { departure(windowId: string): WindowDeparture }) => void (departure = next);
+export const linuxWindowDeparture = (windowId: string) => departure?.departure(windowId);

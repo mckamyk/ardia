@@ -20,7 +20,7 @@ def values():
 
 def host_methods():
     source = (ROOT / 'src/ardia/linux/ac_linux_host.cc').read_text()
-    signatures = ['LinuxDocumentClient ShellHostView::DocumentClient', 'bool ShellHostView::EnsureDocumentClient', 'bool ShellHostView::RetireDocuments', 'void ShellHostView::DocumentCall', 'std::optional<ShellHostView::StorageTicket> ShellHostView::BeginStorageIntent', 'void ShellHostView::CompleteStorageIntent', 'bool ShellHostView::TrackStorageWrite', 'void ShellHostView::CloseNativeWindow', 'void ShellHostView::ArmWindowClose', 'base::DictValue ShellHostView::RequestWindowClose', 'void ShellHostView::BeginWindowCloseDrain', 'bool ShellHostView::AwaitingChromeHandoff', 'bool ShellHostView::ClosingEndsSession', 'std::string ShellHostView::DialogProfile', 'std::optional<LinuxDialogClient> ShellHostView::DialogClient', 'void ShellHostView::DialogInvoke', 'void ShellHostView::SuspendDialogsForClose', 'void ShellHostView::ResumeDialogsForClose', 'void ShellHostView::RequestUtilityClose', 'bool ShellHostView::ReadyForChromeClose', 'LinuxCloseAdmission ShellHostView::AdmitChromeTeardown', 'void ShellHostView::ReplyChromeClose', 'void ShellHostView::FinishChromePreparations', 'bool ShellHostView::DeferChromeClose', 'void ShellHostView::ChromeCloseCancelled', 'void ShellHostView::CancelWindowClose', 'void ShellHostView::CancelDocumentSeal', 'void ShellHostView::AcknowledgeWindowClose', 'void ShellHostView::OnWidgetClosing', 'void ShellHostView::OnWidgetDestroying']
+    signatures = ['LinuxDocumentClient ShellHostView::DocumentClient', 'bool ShellHostView::EnsureDocumentClient', 'bool ShellHostView::RetireDocuments', 'void ShellHostView::DocumentCall', 'std::optional<ShellHostView::StorageTicket> ShellHostView::BeginStorageIntent', 'void ShellHostView::CompleteStorageIntent', 'bool ShellHostView::TrackStorageWrite', 'void ShellHostView::CloseNativeWindow', 'void ShellHostView::ArmWindowClose', 'base::DictValue ShellHostView::RequestWindowClose', 'void ShellHostView::BeginWindowCloseDrain', 'bool ShellHostView::AwaitingChromeHandoff', 'bool ShellHostView::ClosingEndsSession', 'std::string ShellHostView::DialogProfile', 'std::optional<LinuxDialogClient> ShellHostView::DialogClient', 'void ShellHostView::DialogInvoke', 'void ShellHostView::SuspendDialogsForClose', 'void ShellHostView::CommitWindowDeparture', 'void ShellHostView::ResumeDialogsForClose', 'void ShellHostView::RequestUtilityClose', 'bool ShellHostView::ReadyForChromeClose', 'LinuxCloseAdmission ShellHostView::AdmitChromeTeardown', 'void ShellHostView::ReplyChromeClose', 'void ShellHostView::FinishChromePreparations', 'bool ShellHostView::DeferChromeClose', 'void ShellHostView::ChromeCloseCancelled', 'void ShellHostView::CancelWindowClose', 'void ShellHostView::CancelDocumentSeal', 'void ShellHostView::AcknowledgeWindowClose', 'void ShellHostView::OnWidgetClosing', 'void ShellHostView::OnWidgetDestroying']
     return '\n'.join(method(source, signature) for signature in signatures)
 
 
@@ -295,6 +295,12 @@ struct ShellHostView {
   LinuxClose close_;
   std::unique_ptr<LinuxWindowDialogs> dialogs_ = std::make_unique<LinuxWindowDialogs>();
   std::map<std::string, LinuxDialogSuspension> close_dialogs_;
+  std::optional<std::pair<std::string, base::DictValue>> close_departure_;
+  static inline std::vector<std::pair<std::string, base::DictValue>> departures;
+  static void PersistWindowDeparture(Profile*, std::string source_window, base::DictValue departure) {
+    departures.emplace_back(std::move(source_window), std::move(departure));
+  }
+  void CommitWindowDeparture(const std::string&);
   bool OwnsHandler(Handler* owner, uint64_t generation) const { return owner && owner == handler_ && generation == renderer_generation_; }
   std::optional<base::UnguessableToken> chrome_close_token_;
   LinuxDocumentClient close_client_;

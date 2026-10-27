@@ -304,6 +304,78 @@ int main(int argc, char** argv) {
       Drain();
     }
   }
+  if (mode.starts_with("departure-")) {
+    ShellHostView::departures.clear();
+    ShellHostView host; Watch(host); host.ArmWindowClose();
+    hosts.clear(); hosts[1] = &host;
+    auto departure = [] {
+      base::DictValue value;
+      value.Set("base", base::DictValue().Set("windowOrder", base::Value(base::ListValue().Append(base::Value("settings")))));
+      value.Set("session", base::DictValue().Set("windowOrder", base::Value(base::ListValue())));
+      return value;
+    };
+    auto sealed = [&](bool with_departure) {
+      assert(host.DeferChromeClose({}, LinuxCloseStage::kPrepare, [](bool) {}));
+      const auto token = *host.chrome_close_token_;
+      const auto request = host.RequestWindowClose();
+      assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()))->ok);
+      auto ack = Ack(request, 0);
+      if (with_departure) ack.Set("departure", departure());
+      host.AcknowledgeWindowClose(ack, Ignore);
+      Drain();
+      assert(host.close_.phase() == LinuxClose::Phase::kSealed);
+      return token;
+    };
+    if (mode == "departure-completed") {
+      const auto token = sealed(true);
+      assert(host.close_departure_ && ShellHostView::departures.empty());
+      assert(!host.DeferChromeClose(token, LinuxCloseStage::kBeginTeardown, [](bool) {}));
+      assert(host.close_.Irreversible() && !host.close_departure_);
+      assert(ShellHostView::departures.size() == 1 && ShellHostView::departures[0].first == host.window_id_);
+      assert(ShellHostView::departures[0].second.FindDict("base") && ShellHostView::departures[0].second.FindDict("session"));
+      assert(!host.DeferChromeClose(token, LinuxCloseStage::kDestroy, [](bool) {}));
+      host.Replace(); Drain();
+      assert(ShellHostView::departures.size() == 1);
+    }
+    if (mode == "departure-renderer-death-after-seal") {
+      sealed(true);
+      host.Replace(); Drain();
+      assert(host.close_.phase() == LinuxClose::Phase::kCancelled && !host.close_departure_);
+      assert(ShellHostView::departures.empty());
+      const auto next = sealed(false);
+      assert(!host.DeferChromeClose(next, LinuxCloseStage::kBeginTeardown, [](bool) {}));
+      assert(host.close_.Irreversible() && ShellHostView::departures.empty());
+    }
+    if (mode == "departure-renderer-death-before-seal") {
+      const auto request = host.RequestWindowClose();
+      assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()))->ok);
+      host.Replace(); Drain();
+      assert(!host.close_departure_ && ShellHostView::departures.empty());
+    }
+    if (mode == "departure-confirmed-cancel") {
+      sealed(true);
+      bool cancelled = false;
+      host.CancelWindowClose(host.close_.identity(), [&](bool ok, auto) { cancelled = ok; });
+      Drain();
+      assert(cancelled && host.close_.phase() == LinuxClose::Phase::kCancelled && !host.close_departure_);
+      const auto next = sealed(false);
+      assert(!host.DeferChromeClose(next, LinuxCloseStage::kBeginTeardown, [](bool) {}));
+      assert(host.close_.Irreversible() && ShellHostView::departures.empty());
+    }
+    if (mode == "departure-malformed") {
+      const auto request = host.RequestWindowClose();
+      assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()))->ok);
+      auto missing = Ack(request, 0); missing.Set("departure", base::DictValue().Set("base", base::DictValue()));
+      auto extra = Ack(request, 0); auto bloated = departure(); bloated.Set("more", base::DictValue()); extra.Set("departure", std::move(bloated));
+      auto wrong = Ack(request, 0); wrong.Set("departure", base::Value("session"));
+      for (auto* ack : {&missing, &extra, &wrong}) {
+        bool refused = false;
+        host.AcknowledgeWindowClose(*ack, [&](bool ok, auto) { refused = !ok; });
+        assert(refused && host.close_.phase() == LinuxClose::Phase::kDraining && !host.close_departure_);
+      }
+    }
+    hosts.clear();
+  }
   if (mode == "decision-cancel") {
     ShellHostView host; Watch(host); host.ArmWindowClose();
     hosts[1] = &host;
@@ -390,6 +462,21 @@ class CloseDeliberationTests(unittest.TestCase):
 
     def test_simultaneous_last_two_window_closes_keep_one_for_restore(self):
         self.run_mode('drain', 'two-window-ends-session')
+
+    def test_departure_is_written_once_only_when_teardown_commits(self):
+        self.run_mode('drain', 'departure-completed')
+
+    def test_renderer_death_after_seal_discards_the_departure(self):
+        self.run_mode('drain', 'departure-renderer-death-after-seal')
+
+    def test_renderer_death_before_seal_records_no_departure(self):
+        self.run_mode('drain', 'departure-renderer-death-before-seal')
+
+    def test_confirmed_cancellation_discards_the_departure(self):
+        self.run_mode('drain', 'departure-confirmed-cancel')
+
+    def test_malformed_departure_is_refused_before_seal(self):
+        self.run_mode('drain', 'departure-malformed')
 
     def test_cancel_decision_rejects_the_pending_attempt_through_chrome(self):
         self.run_mode('drain', 'decision-cancel')
