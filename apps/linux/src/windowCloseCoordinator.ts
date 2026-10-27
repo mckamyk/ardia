@@ -41,6 +41,7 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     suspension?: DialogSuspension;
     dialogsResumed: boolean;
     departed: boolean;
+    undecided: boolean;
     promise?: Promise<void>;
   };
   const attempts = new Map<string, Attempt>();
@@ -82,7 +83,17 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
   };
 
   const run = async (attempt: Attempt, key: string) => {
-    const { decision: choice, suppressWarning } = await settleOnAbort(attempt, decision(attempt));
+    let decided: CloseDecision;
+    try {
+      decided = await settleOnAbort(attempt, decision(attempt));
+    } catch (error) {
+      if (!attempt.cancelled) {
+        attempt.undecided = true;
+        await rejectAttempt(attempt).catch((rejection) => hooks.report?.(rejection));
+      }
+      throw error;
+    }
+    const { decision: choice, suppressWarning } = decided;
     if (!current(attempt, key)) throw attempt.cancelled ? cancelledClose() : staleClose();
     if (suppressWarning) hooks.suppress(attempt.reason);
     if (choice === "cancel") {
@@ -133,6 +144,10 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     if (!validCloseRequest(request)) return Promise.reject(staleClose());
     const key = closeIdentity(request);
     const existing = attempts.get(key);
+    if (existing?.undecided && !existing.cancelled) {
+      existing.promise = rejectAttempt(existing).then(() => { throw cancelledClose(); });
+      return existing.promise;
+    }
     if (existing) return existing.promise!;
     evict();
     const attempt: Attempt = {
@@ -142,6 +157,7 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
       cancelled: false,
       dialogsResumed: false,
       departed: false,
+      undecided: false,
     };
     nextReason = undefined;
     attempts.set(key, attempt);
