@@ -14,6 +14,7 @@ import { decideLastTabClose, decideWindowClose } from "../../browser/src/state/w
 import { ardiaHost, invokeHost } from "./host";
 import { startHostPersistence } from "./hostSession";
 import { startHostData } from "./hostData";
+import { startHostDownloads } from "./hostDownloads";
 import { startHostTabLifecycle } from "./hostTabLifecycle";
 import { setHostOverlayCheck } from "./hostViewport";
 import { MenuHost } from "./menus";
@@ -57,6 +58,7 @@ async function start() {
     await persistence.flush();
     startTabPages();
     startNativeSync();
+    startHostDownloads(ardiaHost, useBrowser);
   }
   createRoot(document.getElementById("root")!, { onUncaughtError: (error) => console.error("[ardia linux] crashed", error) }).render(
     <div className={`ardia-desktop host ardia-linux${utility ? " utility" : ""}`} data-ardia-linux-window={windowId}>
