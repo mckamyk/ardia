@@ -262,7 +262,9 @@ ARDIA_DIALOGS
 struct ShellHostView {
   Browser native;
   std::string page_profile_;
-  std::string opener_;
+  int reach_id_ = 0;
+  int opener_host_ = 0;
+  uint64_t opener_generation_ = 0;
   Browser* browser_ = &native;
   void* browser_view_ = this;
   Handler handler;
@@ -336,7 +338,10 @@ struct ShellHostView {
   }
   ~ShellHostView() { *alive = false; }
   const std::string& window_id() const { return window_id_; }
-  ardiacore::linux_profiles::WindowAccess access() const { return {window_id_, page_profile_, opener_}; }
+  ardiacore::linux_profiles::WindowAccess access() const { return {window_id_, page_profile_, reach_id_, opener_host_, opener_generation_}; }
+  bool Reaches(const ShellHostView* target) const {
+    return target && ardiacore::linux_profiles::WindowReachableBy(target->access(), {reach_id_, renderer_generation_});
+  }
   void GenericInvoke(std::string, const base::DictValue&, base::OnceCallback<void(bool, base::Value)>);
   void CloseInvoke(std::string, const base::DictValue&, base::OnceCallback<void(bool, base::Value)>);
   Browser* browser() { return browser_; }
@@ -379,6 +384,7 @@ struct ShellHostView {
 };
 std::map<int, ShellHostView*> hosts;
 auto& Hosts() { return hosts; }
+void ForgetOpenerHost(int) {}
 std::string String(const base::DictValue& request, const char* key) {
   const auto* value = request.FindString(key);
   return value ? *value : "";

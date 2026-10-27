@@ -91,8 +91,10 @@ int main() {
   stranger.window_id_ = "w-new";
   opener.window_id_ = "main";
   target.window_id_ = "w-p1";
+  stranger.reach_id_ = 1; opener.reach_id_ = 2; target.reach_id_ = 3;
   target.page_profile_ = "incognito:w-p1@";
-  target.opener_ = "main";
+  target.opener_host_ = 2;
+  target.opener_generation_ = opener.renderer_generation_;
   for (ShellHostView* host : {&stranger, &opener, &target}) host->native_profile.regular = true;
   for (ShellHostView* host : {&stranger, &target}) host->shared_profile = &opener.native_profile;
   hosts[1] = &stranger; hosts[2] = &opener; hosts[3] = &target;
@@ -105,6 +107,13 @@ int main() {
   };
   assert(!request(stranger, "w-p1"));
   assert(target.events.empty());
+  stranger.window_id_ = "main";
+  assert(!request(stranger, "w-p1"));
+  assert(target.events.empty());
+  opener.renderer_generation_ += 1;
+  assert(!request(opener, "w-p1"));
+  assert(target.events.empty());
+  opener.renderer_generation_ -= 1;
   assert(request(opener, "w-p1"));
   assert(target.events.size() == 1);
   target.page_profile_ = "";

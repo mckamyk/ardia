@@ -20,13 +20,14 @@ class ProfileHostTests(unittest.TestCase):
     def setUp(self):
         self.source = HOST.read_text()
 
-    def test_refused_window_is_reported_closed_to_every_renderer_before_chrome_closes_it(self):
+    def test_refused_windows_are_dropped_without_closed_history_and_private_ones_stay_with_their_opener(self):
         compiler = shutil.which('clang++') or shutil.which('c++')
         if compiler is None:
             self.skipTest('C++ compiler is unavailable')
-        broadcast = method(self.source, 'void BroadcastWindowClosed(')
-        refuse = method(self.source, 'void RefuseRequestedWindow(')
+        functions = '\n'.join(method(self.source, signature) for signature in (
+            'bool PrivateProfileId(', 'void NotifyOpener(', 'void NotifyWindowRefused(', 'void RefuseRequestedWindow('))
         code = r'''
+#include "ardia/linux/ac_linux_profiles.h"
 #include <cassert>
 #include <map>
 #include <string>
@@ -38,11 +39,15 @@ namespace base {
 struct DictValue {
   std::map<std::string, std::string> values;
   DictValue&& Set(const char* key, std::string value) && { values[key] = std::move(value); return std::move(*this); }
+  DictValue Clone() const { return *this; }
 };
 struct Value {
   DictValue dict;
   explicit Value(DictValue value) : dict(std::move(value)) {}
 };
+}
+namespace ardiacore {
+void ReleaseLinuxProfile(std::string_view id) { log.push_back("release:" + std::string(id)); }
 }
 struct Host {
   std::string name;
@@ -52,7 +57,7 @@ struct Host {
   }
 };
 std::map<int, Host*>& Hosts() { static std::map<int, Host*> hosts; return hosts; }
-struct RequestedWindow { std::string id; };
+struct RequestedWindow { std::string id; std::string page_profile; int opener_host = 0; };
 std::map<int, RequestedWindow>& RequestedWindows() { static std::map<int, RequestedWindow> windows; return windows; }
 struct Window { void Close() { log.push_back("chrome:close"); } };
 struct BrowserWindowInterface {
@@ -65,42 +70,65 @@ int main() {
   Host other{"other"};
   Hosts()[1] = &opener;
   Hosts()[2] = &other;
-  RequestedWindows()[7] = {"w-private"};
-  RequestedWindows()[8] = {"w-kept"};
+  RequestedWindows()[7] = {"w-work", "p-work", 1};
+  RequestedWindows()[8] = {"w-kept", "", 1};
+  RequestedWindows()[9] = {"w-private", "incognito:w-private@", 1};
   BrowserWindowInterface browser;
   RefuseRequestedWindow(&browser, RequestedWindows().find(7));
   assert(!RequestedWindows().contains(7) && RequestedWindows().contains(8));
   assert((log == std::vector<std::string>{
-      "opener:ArdiaShell.onWindowEvent:close:w-private",
-      "other:ArdiaShell.onWindowEvent:close:w-private",
+      "opener:ArdiaShell.onWindowEvent:refused:w-work",
+      "other:ArdiaShell.onWindowEvent:refused:w-work",
       "chrome:close"}));
+  log.clear();
+  RefuseRequestedWindow(&browser, RequestedWindows().find(9));
+  assert((log == std::vector<std::string>{
+      "release:incognito:w-private@",
+      "opener:ArdiaShell.onWindowEvent:refused:w-private",
+      "chrome:close"}));
+  log.clear();
+  NotifyOpener(42, base::DictValue().Set("type", "attached").Set("id", "gone"));
+  assert(log.empty());
 }
 '''
         with tempfile.TemporaryDirectory(prefix='ardia-profile-host-') as scratch:
             cpp = Path(scratch) / 'refuse.cc'
             binary = Path(scratch) / 'refuse'
-            cpp.write_text(code.replace('ARDIA_NATIVE', broadcast + '\n' + refuse))
-            result = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', str(cpp), '-o', str(binary)], capture_output=True, text=True)
+            cpp.write_text(code.replace('ARDIA_NATIVE', functions))
+            result = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-I', str(ROOT / 'src'),
+                                     str(ROOT / 'src/ardia/linux/ac_linux_profiles.cc'), str(cpp), '-o', str(binary)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_attach_refusal_and_private_close_use_the_broadcast(self):
+    def test_attach_reports_to_the_opener_and_private_close_is_released_natively(self):
         attach = method(self.source, '  void Attach(base::WeakPtr<BrowserWindowInterface> browser, bool startup) {')
         self.assertIn('return RefuseRequestedWindow(browser.get(), requested);', attach)
         self.assertNotIn('->Close()', attach)
+        self.assertIn('if (opener) NotifyOpener(*opener, base::DictValue().Set("type", "attached").Set("id", shell->window_id()));', attach)
         closed = method(self.source, '  void OnBrowserClosed(BrowserWindowInterface* browser) override {')
-        self.assertIn('if (private_window) BroadcastWindowClosed(closed_window);', closed)
+        self.assertIn('ardiacore::ReleaseLinuxProfile(closed_profile->id);', closed)
+        self.assertIn('NotifyOpener(opener, base::DictValue().Set("type", "close").Set("id", closed_window));', closed)
+        self.assertNotIn('BroadcastWindowClosed', self.source)
 
-    def test_private_windows_are_hidden_from_and_protected_against_other_renderers(self):
-        ids = branch(self.source, '  if (method == "ArdiaShell.windowIds") {')
-        self.assertIn('WindowVisibleTo(host->access(), window_id_)', ids)
-        request = branch(self.source, '  if (method == "ArdiaShell.requestWindowClose") {')
-        self.assertIn('WindowClosableBy(target->access(), window_id_)', request)
-        direct = branch(self.source, '    } else if (method == "ArdiaShell.focusWindow") {')
-        self.assertIn('WindowClosableBy(target->access(), window_id_)', self.source[self.source.index(direct):self.source.index(direct) + len(direct) + 400])
-        open_window = branch(self.source, '  if (method == "ArdiaShell.openWindow") {')
-        self.assertIn('opening.opener = window_id_;', open_window)
+    def test_private_windows_are_reachable_only_by_themselves_and_their_current_opener(self):
+        self.assertIn('ardiacore::linux_profiles::WindowReachableBy(target->access(), requester())', self.source)
+        self.assertIn('return {window_id_, page_profile_, id_, opener_host_, opener_generation_};', self.source)
+        ids = method(self.source, '  if (method == "ArdiaShell.windowIds") {')
+        self.assertIn('if (Reaches(host)) ids.Append(host->window_id());', ids)
+        request = method(self.source, '  if (method == "ArdiaShell.requestWindowClose") {')
+        self.assertIn('!Reaches(target)) continue;', request)
+        operations = method(self.source, '  if (method == "ArdiaShell.windowFrame" || method == "ArdiaShell.closeWindow"')
+        self.assertIn('if (host->window_id() == ArgumentString(values, 0) && Reaches(host)) target = host;', operations)
+        open_window = method(self.source, '  if (method == "ArdiaShell.openWindow") {')
+        self.assertIn('if (!Reaches(host)) return std::move(done).Run(false, base::Value("No such native window"));', open_window)
+        self.assertIn('request.opener_host != id_ || request.opener_generation != renderer_generation_', open_window)
+        self.assertIn('opening.opener_host = id_;', open_window)
+        self.assertIn('opening.opener_generation = renderer_generation_;', open_window)
+        for gone in ('void ShellHostView::DetachBrowser() {', 'ShellHostView::~ShellHostView() {'):
+            self.assertIn('ForgetOpenerHost(id_);', method(self.source, gone))
+        opening = method(self.source, 'void OpenNativeWindow(')
+        self.assertIn('FinishWindowOpening(id, generation, true, base::Value(base::DictValue().Set("pending", true)));', opening)
 
     def test_downloads_and_files_use_the_window_page_profile_and_refuse_private_windows(self):
         request = method(self.source, '  void Request(const base::ListValue& arguments) {')
@@ -124,7 +152,11 @@ int main() {
         self.assertIn('OpeningWindows().Begin(id, profile_name->id, reply)', open_window)
         self.assertIn('OpeningAdmission::kMismatch', open_window)
         self.assertIn('request.page_profile != profile_name->id', open_window)
-        self.assertIn('base::BindOnce(&ExpireWindowOpening, id, ticket.generation), kWindowOpeningLimit', open_window)
+        self.assertIn('OpeningWindows().Begin(id, profile_name->id, reply)', open_window)
+        self.assertIn('return BeginWindowOpening(std::move(opening), ticket.generation, utility ? profile() : nullptr);', open_window)
+        begin = method(self.source, 'void BeginWindowOpening(')
+        self.assertIn('base::BindOnce(&ExpireWindowOpening, opening.id, generation), kWindowOpeningLimit', begin)
+        self.assertIn('ardiacore::ResolveLinuxProfile(page_profile,', begin)
         opening = method(self.source, 'void OpenNativeWindow(')
         self.assertTrue(opening.split('{', 1)[1].lstrip().startswith('if (!OpeningWindows().Current(opening.id, generation)) return;'))
         self.assertNotIn('std::set<std::string>& OpeningWindows()', self.source)
@@ -135,13 +167,16 @@ class ProfileServiceTests(unittest.TestCase):
         self.source = Path(os.environ.get('ARDIA_PROFILE_SERVICE_SOURCE', ROOT / 'src/ardia/linux/ac_linux_profile_service.cc')).read_text()
 
     def test_dying_profiles_are_never_observed_and_private_creation_waits_for_them(self):
-        watch = method(self.source, '  bool Watch(Profile* profile) {')
+        watch = method(self.source, '  bool Watch(Profile* profile) override {')
         self.assertIn('if (!profile || profile->ShutdownStarted()) return false;', watch)
         existing = method(self.source, '  Profile* ExistingOffTheRecord(Profile* original) override {')
         self.assertIn('GetPrimaryOTRProfile(false)', existing)
-        self.assertNotIn('Watch(', existing)
         create = method(self.source, '  Profile* CreateOffTheRecord(Profile* original) override {')
-        self.assertIn('return Watch(otr) ? otr : nullptr;', create)
+        self.assertIn('GetPrimaryOTRProfile(true)', create)
+        registry = (ROOT / 'src/ardia/linux/ac_linux_profiles.h').read_text()
+        self.assertIn('if (existing && (!backend_.Usable(existing) || !backend_.Watch(existing))) {', registry)
+        self.assertIn('!backend_.Watch(otr)) {', registry)
+        self.assertIn('if (!backend_.Watch(profile)) return false;', registry)
         later = method(self.source, '  void Later(std::function<void()> task) override {')
         self.assertIn('PostDelayedTask', later)
         self.assertNotIn('OffTheRecord(Profile* original) override {\n    if (!Usable(original) || original->IsOffTheRecord()) return nullptr;\n    Profile* otr = original->GetPrimaryOTRProfile(true);\n    if (otr) Watch(otr);', self.source)

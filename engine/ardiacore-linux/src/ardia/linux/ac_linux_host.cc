@@ -255,7 +255,8 @@ struct RequestedWindow {
   std::string page_profile;
   base::WeakPtr<Profile> app_profile;
   base::DictValue private_window;
-  std::string opener;
+  int opener_host = 0;
+  uint64_t opener_generation = 0;
 };
 std::map<int, RequestedWindow>& RequestedWindows();
 
@@ -764,7 +765,8 @@ class ShellHostView : public views::View,
     utility_ = std::move(request.utility);
     page_profile_ = std::move(request.page_profile);
     private_window_ = std::move(request.private_window);
-    opener_ = std::move(request.opener);
+    opener_host_ = request.opener_host;
+    opener_generation_ = request.opener_generation;
   }
   void NavigateUtility(base::DictValue utility) {
     utility_ = std::move(utility);
@@ -777,7 +779,19 @@ class ShellHostView : public views::View,
   Profile* profile() const { return browser_ ? app_profile_.get() : nullptr; }
   Profile* page_profile() const { return browser_ ? browser_->GetProfile() : nullptr; }
   const std::string& page_profile_id() const { return page_profile_; }
-  ardiacore::linux_profiles::WindowAccess access() const { return {window_id_, page_profile_, opener_}; }
+  ardiacore::linux_profiles::WindowAccess access() const {
+    return {window_id_, page_profile_, id_, opener_host_, opener_generation_};
+  }
+  ardiacore::linux_profiles::WindowRequester requester() const { return {id_, renderer_generation_}; }
+  bool Reaches(const ShellHostView* target) const {
+    return target && ardiacore::linux_profiles::WindowReachableBy(target->access(), requester());
+  }
+  int opener_host() const { return opener_host_; }
+  void ForgetOpener(int host) {
+    if (opener_host_ != host) return;
+    opener_host_ = 0;
+    opener_generation_ = 0;
+  }
   bool HostsProfile(std::string_view id) const { return ardiacore::LinuxProfileHosts(id, page_profile()); }
   bool Trusted(content::WebUI* ui) const;
   bool DeferChromeClose(const base::UnguessableToken& token, LinuxCloseStage stage,
@@ -1007,7 +1021,8 @@ class ShellHostView : public views::View,
   base::WeakPtr<Profile> app_profile_;
   std::string page_profile_;
   base::DictValue private_window_;
-  std::string opener_;
+  int opener_host_ = 0;
+  uint64_t opener_generation_ = 0;
   raw_ptr<LinuxShellWebView> shell_ = nullptr;
   raw_ptr<HostMessageHandler> handler_ = nullptr;
   uint64_t renderer_generation_ = 0;
@@ -1439,7 +1454,17 @@ ShellHostView::ShellHostView(BrowserWindowInterface* browser, BrowserView* paren
   browser->GetTabStripModel()->AddObserver(this);
 }
 
+void ForgetOpenerHost(int host) {
+  for (const auto& [id, other] : Hosts()) other->ForgetOpener(host);
+  for (auto& [id, request] : RequestedWindows()) {
+    if (request.opener_host != host) continue;
+    request.opener_host = 0;
+    request.opener_generation = 0;
+  }
+}
+
 ShellHostView::~ShellHostView() {
+  ForgetOpenerHost(id_);
   WindowFocus().Forget(id_);
   weak_factory_.InvalidateWeakPtrs();
   handler_ = nullptr;
@@ -1504,6 +1529,7 @@ void ShellHostView::DetachBrowser() {
   browser_ = nullptr;
   browser_view_ = nullptr;
   Hosts().erase(id_);
+  ForgetOpenerHost(id_);
 }
 
 bool ShellHostView::Trusted(content::WebUI* ui) const {
@@ -3248,18 +3274,31 @@ void ShellHostView::StripCommand(
           }, GetWeakPtr(), std::move(transaction)));
 }
 
-void BroadcastWindowClosed(const std::string& window_id) {
-  for (const auto& [id, host] : Hosts()) {
-    host->Event("ArdiaShell", "onWindowEvent", base::Value(base::DictValue()
-        .Set("type", "close").Set("id", window_id)));
+bool PrivateProfileId(std::string_view profile) {
+  const auto name = ardiacore::linux_profiles::ParseProfileName(profile);
+  return !name || name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate;
+}
+
+void NotifyOpener(int opener_host, const base::DictValue& event) {
+  const auto found = Hosts().find(opener_host);
+  if (found != Hosts().end()) found->second->Event("ArdiaShell", "onWindowEvent", base::Value(event.Clone()));
+}
+
+void NotifyWindowRefused(const RequestedWindow& request) {
+  const auto event = base::DictValue().Set("type", "refused").Set("id", request.id);
+  if (!PrivateProfileId(request.page_profile)) {
+    for (const auto& [id, host] : Hosts()) host->Event("ArdiaShell", "onWindowEvent", base::Value(event.Clone()));
+    return;
   }
+  ardiacore::ReleaseLinuxProfile(request.page_profile);
+  NotifyOpener(request.opener_host, event);
 }
 
 void RefuseRequestedWindow(BrowserWindowInterface* browser,
                            std::map<int, RequestedWindow>::iterator request) {
-  const std::string window_id = request->second.id;
+  RequestedWindow refused = std::move(request->second);
   RequestedWindows().erase(request);
-  BroadcastWindowClosed(window_id);
+  NotifyWindowRefused(refused);
   browser->GetWindow()->Close();
 }
 
@@ -3268,7 +3307,8 @@ struct WindowOpening {
   std::string kind;
   std::string title;
   std::string page_profile;
-  std::string opener;
+  int opener_host = 0;
+  uint64_t opener_generation = 0;
   std::optional<linux_window::Requested> requested;
   linux_window::OpenIntent intent;
   std::optional<base::DictValue> utility;
@@ -3356,10 +3396,26 @@ void OpenNativeWindow(WindowOpening opening, uint64_t generation, Profile* page,
   request.page_profile = opening.page_profile;
   request.app_profile = opening.app_profile;
   request.private_window = std::move(opening.private_window);
-  request.opener = opening.opener;
+  request.opener_host = opening.opener_host;
+  request.opener_generation = opening.opener_generation;
   RequestedWindows()[created->GetSessionID().id()] = std::move(request);
   ShowNativeWindow(created, WindowFocus().Create(created->GetSessionID().id(), opening.intent));
-  FinishWindowOpening(id, generation, true, base::Value());
+  FinishWindowOpening(id, generation, true, base::Value(base::DictValue().Set("pending", true)));
+}
+
+void BeginWindowOpening(WindowOpening opening, uint64_t generation, Profile* utility_profile) {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(&ExpireWindowOpening, opening.id, generation), kWindowOpeningLimit);
+  if (utility_profile) {
+    return OpenNativeWindow(std::move(opening), generation, utility_profile,
+                            ardiacore::linux_profiles::ProfileError::kNone);
+  }
+  const std::string page_profile = opening.page_profile;
+  ardiacore::ResolveLinuxProfile(page_profile, base::BindOnce(
+      [](WindowOpening opening, uint64_t generation,
+         Profile* page, ardiacore::linux_profiles::ProfileError error) {
+        OpenNativeWindow(std::move(opening), generation, page, error);
+      }, std::move(opening), generation));
 }
 
 void ShellHostView::Invoke(
@@ -3415,7 +3471,7 @@ void ShellHostView::Invoke(
       return std::move(done).Run(false, base::Value("Window identity required"));
     for (const auto& [id, target] : Hosts()) {
       if (target->window_id() != values[0].GetString() || target->profile() != profile() ||
-          !ardiacore::linux_profiles::WindowClosableBy(target->access(), window_id_)) continue;
+          !Reaches(target)) continue;
       auto request = target->RequestWindowClose();
       if (request.empty()) return std::move(done).Run(false, base::Value(base::DictValue()
           .Set("code", "ERR_WINDOW_CLOSE_UNAVAILABLE").Set("message", "Target renderer unavailable")));
@@ -3755,7 +3811,7 @@ void ShellHostView::Invoke(
   if (method == "ArdiaShell.windowIds") {
     base::ListValue ids;
     for (const auto& [id, host] : Hosts()) {
-      if (ardiacore::linux_profiles::WindowVisibleTo(host->access(), window_id_)) ids.Append(host->window_id());
+      if (Reaches(host)) ids.Append(host->window_id());
     }
     return std::move(done).Run(true, base::Value(std::move(ids)));
   }
@@ -3766,7 +3822,7 @@ void ShellHostView::Invoke(
       method == "ArdiaShell.setWindowTitle") {
     ShellHostView* target = nullptr;
     for (const auto& [id, host] : Hosts()) {
-      if (host->window_id() == ArgumentString(values, 0)) target = host;
+      if (host->window_id() == ArgumentString(values, 0) && Reaches(host)) target = host;
     }
     if (!target) return std::move(done).Run(false, base::Value("No such native window"));
     if (method == "ArdiaShell.utilityReady") {
@@ -3802,9 +3858,6 @@ void ShellHostView::Invoke(
     } else if (method == "ArdiaShell.focusWindow") {
       ActivateNativeWindow(target->browser(), WindowFocus().Focus(target->id()));
     } else {
-      if (!ardiacore::linux_profiles::WindowClosableBy(target->access(), window_id_)) {
-        return std::move(done).Run(false, base::Value("No such native window"));
-      }
       auto request = target->RequestWindowClose();
       if (request.empty()) return std::move(done).Run(false, base::Value("Target renderer unavailable"));
       return std::move(done).Run(true, base::Value(std::move(request)));
@@ -3854,6 +3907,7 @@ void ShellHostView::Invoke(
     }
     for (const auto& [native_id, host] : Hosts()) {
       if (host->window_id() != id) continue;
+      if (!Reaches(host)) return std::move(done).Run(false, base::Value("No such native window"));
       if (utility_navigation && host->is_utility()) host->NavigateUtility(utility_navigation->Clone());
       ActivateNativeWindow(host->browser(), WindowFocus().Reuse(native_id, intent, host == this));
       if (host == this) host->RendererReady();
@@ -3861,6 +3915,10 @@ void ShellHostView::Invoke(
     }
     for (auto& [native_id, request] : RequestedWindows()) {
       if (request.id != id || !request.browser) continue;
+      if (PrivateProfileId(request.page_profile) &&
+          (request.opener_host != id_ || request.opener_generation != renderer_generation_)) {
+        return std::move(done).Run(false, base::Value("No such native window"));
+      }
       if (!utility && request.page_profile != profile_name->id) {
         return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kWindowMismatch));
       }
@@ -3875,8 +3933,6 @@ void ShellHostView::Invoke(
       return std::move(reply).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kWindowMismatch));
     }
     if (ticket.admission == ardiacore::linux_profiles::OpeningAdmission::kJoined) return;
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, base::BindOnce(&ExpireWindowOpening, id, ticket.generation), kWindowOpeningLimit);
     WindowOpening opening;
     opening.id = id;
     opening.kind = utility ? kind : "";
@@ -3887,14 +3943,9 @@ void ShellHostView::Invoke(
     opening.utility = std::move(utility_navigation);
     if (private_window) opening.private_window = private_window->Clone();
     opening.app_profile = profile()->GetWeakPtr();
-    opening.opener = window_id_;
-    if (utility) return OpenNativeWindow(std::move(opening), ticket.generation, profile(), ardiacore::linux_profiles::ProfileError::kNone);
-    ardiacore::ResolveLinuxProfile(profile_name->id, base::BindOnce(
-        [](WindowOpening opening, uint64_t generation,
-           Profile* page, ardiacore::linux_profiles::ProfileError error) {
-          OpenNativeWindow(std::move(opening), generation, page, error);
-        }, std::move(opening), ticket.generation));
-    return;
+    opening.opener_host = id_;
+    opening.opener_generation = renderer_generation_;
+    return BeginWindowOpening(std::move(opening), ticket.generation, utility ? profile() : nullptr);
   }
   if (method == "ArdiaShell.isDarkAppearance") {
     return std::move(done).Run(true, base::Value(
@@ -4190,13 +4241,16 @@ class HostRegistry : public BrowserCollectionObserver,
     }
     auto overlay = std::make_unique<ShellHostView>(browser.get(), view, startup, app_profile);
     auto* shell = overlay.get();
+    std::optional<int> opener;
     if (const auto found = RequestedWindows().find(shell->id());
         found != RequestedWindows().end()) {
+      opener = found->second.opener_host;
       shell->ConfigureWindow(std::move(found->second));
       RequestedWindows().erase(found);
     }
     view->AddChildView(std::move(overlay));
     shell->Initialize();
+    if (opener) NotifyOpener(*opener, base::DictValue().Set("type", "attached").Set("id", shell->window_id()));
   }
   void OnBrowserCreated(BrowserWindowInterface* browser) override {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -4218,8 +4272,12 @@ class HostRegistry : public BrowserCollectionObserver,
     const std::string closed_window = found->second->window_id();
     const auto closed_profile = ardiacore::linux_profiles::ParseProfileName(found->second->page_profile_id());
     const bool private_window = closed_profile && closed_profile->kind == ardiacore::linux_profiles::ProfileKind::kPrivate;
+    const int opener = found->second->opener_host();
     found->second->DetachBrowser();
-    if (private_window) BroadcastWindowClosed(closed_window);
+    if (private_window) {
+      ardiacore::ReleaseLinuxProfile(closed_profile->id);
+      NotifyOpener(opener, base::DictValue().Set("type", "close").Set("id", closed_window));
+    }
     base::DictValue tx = base::DictValue()
         .Set("rev", ++Revision()).Set("cmd", base::Value())
         .Set("strips", base::ListValue().Append(std::move(strip)));

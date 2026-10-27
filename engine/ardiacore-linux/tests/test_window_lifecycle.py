@@ -223,6 +223,7 @@ PRELUDE = r'''#include <algorithm>
 #include <string_view>
 #include <vector>
 #include "base/values.h"
+#include "ardia/linux/ac_linux_profiles.h"
 #include "ardia/linux/ac_linux_window_lifecycle.h"
 
 #define FROM_HERE 0
@@ -380,6 +381,7 @@ struct WebContents {
 struct Profile {
   int prefs = 0;
   int* GetPrefs() { return &prefs; }
+  base::WeakPtr<Profile> GetWeakPtr() { return base::WeakPtr<Profile>(this); }
 };
 struct SessionID {
   int value;
@@ -387,6 +389,7 @@ struct SessionID {
 };
 struct BrowserWindowInterface {
   enum Type { TYPE_NORMAL, TYPE_APP };
+  enum class CreationStatus { kOk };
   explicit BrowserWindowInterface(int value = 0) : session(value) {}
   int session = 0;
   ui::BaseWindow window;
@@ -432,6 +435,11 @@ struct RequestedWindow {
   std::string title;
   base::DictValue utility;
   base::WeakPtr<BrowserWindowInterface> browser;
+  std::string page_profile;
+  base::WeakPtr<Profile> app_profile;
+  base::DictValue private_window;
+  int opener_host = 0;
+  uint64_t opener_generation = 0;
 };
 std::map<int, RequestedWindow>& RequestedWindows() { static std::map<int, RequestedWindow> windows; return windows; }
 struct Done {
@@ -463,6 +471,14 @@ struct ShellHostView {
   bool is_utility() const { return !kind_.empty(); }
   BrowserWindowInterface* browser() const { return browser_; }
   Profile* profile() { return &profile_; }
+  std::string page_profile_;
+  int opener_host_ = 0;
+  uint64_t opener_generation_ = 0;
+  uint64_t renderer_generation_ = 1;
+  ardiacore::linux_profiles::WindowAccess access() const { return {window_id_, page_profile_, id_, opener_host_, opener_generation_}; }
+  bool Reaches(const ShellHostView* target) const {
+    return target && ardiacore::linux_profiles::WindowReachableBy(target->access(), {id_, renderer_generation_});
+  }
   views::Widget* GetWidget() { return &widget; }
   const views::Widget* GetWidget() const { return &widget; }
   void Event(std::string_view module, std::string_view event, base::Value payload) {
@@ -749,6 +765,41 @@ console.log(JSON.stringify({ under, overPoint: [screen[0] - over[0], over[1] + o
 '''
 
 
+def profile_openings():
+    glue = r'''
+namespace base {
+inline std::optional<std::string> WriteJson(const DictValue&) { return std::string("{}"); }
+}
+namespace ardiacore {
+inline bool LinuxProfileHosts(std::string_view, const Profile*) { return true; }
+}
+namespace browser_shutdown {
+inline bool IsTryingToQuit() { return false; }
+}
+inline BrowserWindowInterface::CreationStatus GetBrowserWindowCreationStatusForProfile(Profile&) {
+  return BrowserWindowInterface::CreationStatus::kOk;
+}
+using WindowReply = Done;
+'''
+    real = '\n'.join([
+        extract(HOST, 'base::Value ProfileFailure('),
+        between('constexpr size_t kPrivateWindowLimit', '\n'),
+        extract(HOST, 'bool PrivateProfileId('),
+        extract(HOST, 'struct WindowOpening {') + ';',
+        extract(HOST, 'ardiacore::linux_profiles::OpeningLedger<WindowReply>& OpeningWindows() {'),
+        extract(HOST, 'void FinishWindowOpening('),
+        extract(HOST, 'void OpenNativeWindow('),
+    ])
+    begin = r'''
+void BeginWindowOpening(WindowOpening opening, uint64_t generation, Profile* utility_profile) {
+  static Profile page;
+  OpenNativeWindow(std::move(opening), generation, utility_profile ? utility_profile : &page,
+                   ardiacore::linux_profiles::ProfileError::kNone);
+}
+'''
+    return glue + real + begin
+
+
 def host_harness():
     free = between('namespace linux_window = ardia::linux_window;', 'class WindowPointerHandler', False)
     pointer = between('class WindowPointerHandler', '\n};\n')
@@ -768,7 +819,7 @@ def host_harness():
     hosts = 'struct ShellHostView;\nstd::map<int, ShellHostView*>& Hosts() { static std::map<int, ShellHostView*> hosts; return hosts; }\n'
     invoke = ('void ShellHostView::WindowInvoke(const std::string& method, const base::ListValue& values, Done done) {\n'
               + window_branch + '\n' + open_branch + '\n  std::move(done).Run(false, base::Value("unsupported"));\n}\n')
-    return PRELUDE + hosts + free + pointer + HOST_FAKE + broadcast + '\n' + invoke + members + SCENARIOS
+    return PRELUDE + hosts + free + pointer + HOST_FAKE + broadcast + '\n' + profile_openings() + invoke + members + SCENARIOS
 
 
 class WindowLifecycleHostTests(unittest.TestCase):
@@ -785,7 +836,7 @@ class WindowLifecycleHostTests(unittest.TestCase):
         cls.binary = root / 'host'
         result = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
                                  '-I', str(root), '-I', str(SOURCE), str(root / 'host.cc'),
-                                 str(LINUX / 'ac_linux_window_lifecycle.cc'), '-o', str(cls.binary)],
+                                 str(LINUX / 'ac_linux_window_lifecycle.cc'), str(LINUX / 'ac_linux_profiles.cc'), '-o', str(cls.binary)],
                                 capture_output=True, text=True)
         if result.returncode != 0:
             cls.scratch.cleanup()
