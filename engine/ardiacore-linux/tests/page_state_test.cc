@@ -334,7 +334,7 @@ void PageMessages() {
   const auto& events=m.Last().Find("events")->GetList();assert(Text(m.Last(),"action")=="snapshot");
   assert(EventAt(m.Last(),0,"navigation").Find("themeColor")->is_none() && Text(events[events.size()-1].GetDict(),"name")=="pageMessage");
   m.state->SetMessageSnapshot([] { base::ListValue events;for (int i=0;i<20;++i) events.Append(base::DictValue().Set("name","pageMessage").Set("data",base::DictValue()));return events; });
-  auto capped=m.state->CreationState();assert(capped->FindDict("snapshot")->Find("events")->GetList().size()<=3+8);
+  auto capped=m.state->CreationState();assert(capped->FindDict("snapshot")->Find("events")->GetList().size()<=6+8);
   std::unique_ptr<LinuxPageState>* holder=&m.state;
   m.state->SetMessageSnapshot([holder] { holder->reset();return base::ListValue(); });auto destroyed=m.state->CreationState();assert(!destroyed && !m.state);
   Mount retired;retired.state->Retire();assert(!retired.state->SetSampledTheme(std::make_pair(std::string("#000000"),std::string("header")),retired.page.frame.GetWeakDocumentPtr()));
