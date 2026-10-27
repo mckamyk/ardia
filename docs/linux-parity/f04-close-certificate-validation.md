@@ -1,0 +1,13 @@
+# Required close admission certificates and bounded history
+
+This follow-up is based on `df75411f628ff4427c99d61763f7ba428bfe9a48`. That commit received scoped independent source acceptance for the three reported corrections and prior five regressions. Its independent reviewer also reported unbounded cancelled-token history. The native integrator separately found that a missing final preflight validator permitted first destroy admission.
+
+First hosted begin or destroy admission now rejects an absent validator before calling native commitment. A deliberate forced shutdown supplies a validator checking its still-current weak manager/browser and the explicit Chromium ignore-unload policy. Ordinary closing continues to require its RFH-backed preflight certificate. Already-begun same-attempt admission and null-hook behavior retain their existing contracts.
+
+Cancelled tokens remain retained for replay rejection. After 1,024 cancellations on one registration, new attempt binding fails closed instead of growing the set or evicting old tokens. Existing same-attempt cancellation remains idempotent; already-begun attempts retain their lease. This limit intentionally refuses further new preparations on that registration; it does not silently recreate authority or report successful closure.
+
+Two new regression groups fail before correction: missing begin/destroy certificates can invoke native commitment, and a fresh token can still bind after 1,024 cancellations. Both groups pass afterward, along with all previous close cases. The complete focused suite passes 49 tests under ASan/UBSan. Four source-selection/materialization checks also pass after restoring the patch's original context width. The platform suite passes 19 tests. Logs are `/tmp/ardia-close-certificate-{before,after,source,platform}.log`.
+
+The close patch applies without fuzz or offsets against its pinned prerequisites. The earlier independent review reported an offset of minus five for a later thaw hunk in the reduced fixture; this follow-up does not establish offset-free materialization of the complete Chromium series. The previous broad native result remains 92 of 93 with a missing-React fixture failure, rather than a passing full suite.
+
+The public two-pointer hook ABI and original four helpers are unchanged. Native wiring must still use the approved admission helper at both first irreversible call sites, with weak exact identity and clean-ledger checks, retry-to-preflight handling, and no task gap after commitment. Independent review of this follow-up and the joined host remains pending. Full Chromium 156 compilation, linked runtime and physical unload/storage/compositor qualification remain outstanding. Issues 14, 21 and 24 remain open; F04 is unpublished.
