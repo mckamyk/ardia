@@ -25,6 +25,8 @@ class PrivateDownloadHostTests(unittest.TestCase):
         self.assertIn('if (!LinuxDownloadOwned(page, *download))', branch)
         self.assertIn('page->GetOriginalProfile()->GetPath().value()', branch)
         self.assertIn('return LinuxDownloadsCall(page, name, input,', branch)
+        self.assertIn('linux_downloads::DownloadControlService(name)', branch)
+        self.assertNotIn('FindRoute', branch)
         self.assertNotIn('kPrivateService', branch)
 
     def test_controls_no_longer_reach_the_engine_through_the_profile_registry_route(self):

@@ -188,9 +188,16 @@ DownloadRoute RouteDownloads(ardiacore::linux_profiles::ProfileKind requested, b
   return {ProfileError::kNone, false};
 }
 
+std::string_view DownloadControlService(std::string_view name) {
+  if (name == "downloads.cancel") return "ac_downloads_cancel";
+  if (name == "downloads.pause") return "ac_downloads_pause";
+  if (name == "downloads.resume") return "ac_downloads_resume";
+  if (name == "downloads.keep") return "ac_downloads_keep";
+  return {};
+}
+
 bool IsDownloadControl(std::string_view name) {
-  return name == "downloads.cancel" || name == "downloads.pause" || name == "downloads.resume" ||
-         name == "downloads.keep";
+  return !DownloadControlService(name).empty();
 }
 
 std::vector<std::string> KeptIds(const base::DictValue& input) {

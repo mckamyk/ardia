@@ -156,6 +156,11 @@ void Routes() {
   assert(IsDownloadControl("downloads.cancel") && IsDownloadControl("downloads.pause") &&
          IsDownloadControl("downloads.resume") && IsDownloadControl("downloads.keep"));
   assert(!IsDownloadControl("downloads.list") && !IsDownloadControl("downloads.settings") && !IsDownloadControl("downloads.remove"));
+  assert(DownloadControlService("downloads.cancel") == "ac_downloads_cancel");
+  assert(DownloadControlService("downloads.pause") == "ac_downloads_pause");
+  assert(DownloadControlService("downloads.resume") == "ac_downloads_resume");
+  assert(DownloadControlService("downloads.keep") == "ac_downloads_keep");
+  assert(DownloadControlService("downloads.remove").empty() && DownloadControlService("history.query").empty());
 }
 
 void Clears() {

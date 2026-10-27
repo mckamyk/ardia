@@ -1446,9 +1446,7 @@ class HostMessageHandler : public content::WebUIMessageHandler,
           const std::string* download = input.FindString("id");
           if (!download) return Fail(id, "ERR_DOWNLOAD_REQUEST", "A valid download id is required");
           if (!LinuxDownloadOwned(page, *download)) return Fail(id, "ERR_ENGINE", "no such download");
-          const auto* control = ardiacore::linux_contract::FindRoute(name);
-          if (!control) return Fail(id, "ERR_UNKNOWN_CALL", "This call is unavailable on Linux");
-          const std::string service(control->service);
+          const std::string service(linux_downloads::DownloadControlService(name));
           const std::string path = page->GetOriginalProfile()->GetPath().value();
           ac_engine_call(service.c_str(), path.c_str(), json.c_str(), Replied,
                          new EngineReply{name, weak_factory_.GetWeakPtr(), id});
