@@ -49,6 +49,9 @@ test("production graph uses current Linux adapters and one canonical shared stat
     ["components/sidebar/AddressBar.tsx", "SidebarAddressBar.tsx", ["SidebarAddressRow", "SidebarHeaderTools"]],
     ["components/sidebar/TileFace.tsx", "TileFace.tsx", ["FolderDropRing", "RestingTile", "TILE_RADIUS", "TileFace", "useSlotPosition"]],
     ["state/settings/settingsWindows.ts", "settingsWindows.ts", ["goToSettingsPane", "openImport", "openSettings", "useSettingsNav"]],
+    ["components/settings/settingsIndex.ts", "settingsIndex.ts", ["PANES", "SETTINGS_INDEX", "findSetting", "setting", "settingUnavailable"]],
+    ["components/settings/Form.tsx", "settingsForm.tsx", ["Anchor", "Group", "Row", "SectionHeader", "SettingsPaneContext"]],
+    ["state/engines/engines.ts", "hostEngines.ts", ["canSwitchEngine", "chosenEngine", "defaultEngine", "tabEngine", "siteOf"]],
   ];
   for (const [shared, adapter, names] of replacements) {
     const id = `${linux}${adapter}`;
@@ -61,6 +64,10 @@ test("production graph uses current Linux adapters and one canonical shared stat
     assert.deepEqual(graph.get(original)?.importers, [id], `${shared} is only loaded by its adapter`);
     assert.ok(graph.get(id).importedIds.includes(original));
   }
+
+  const coreSuggestFetcher = `${repo}packages/core/src/suggestFetcher.ts`;
+  assert.deepEqual(graph.get(coreSuggestFetcher)?.importers, [`${linux}suggestFetcher.ts`]);
+  assert.ok(graph.get(`${linux}suggestFetcher.ts`).importedIds.includes(`${linux}hostSuggestions.ts`));
 
   const lazyModules = [
     ["settings/UtilityWindow", ["UtilityWindow"]],
