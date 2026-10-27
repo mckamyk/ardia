@@ -27,3 +27,9 @@ export function createUtilitySessionSnapshot(initial: BrowserState, saved: Hydra
 let flushSession: (() => Promise<void>) | undefined;
 export const setSessionFlush = (flush: () => Promise<void>) => void (flushSession = flush);
 export const flushLinuxSession = () => flushSession ? flushSession() : Promise.reject(new Error("Session persistence is not ready"));
+
+type SessionDeparture = { depart(token: string, windowId: string): void; stay(token: string): void };
+let departure: SessionDeparture | undefined;
+export const setSessionDeparture = (next: SessionDeparture) => void (departure = next);
+export const departLinuxWindow = (token: string, windowId: string) => departure?.depart(token, windowId);
+export const keepLinuxWindow = (token: string) => departure?.stay(token);

@@ -116,7 +116,9 @@ function harness(options = {}) {
     suppress: (reason) => log.push(["suppress", reason]),
     flush: options.flush ?? (async () => { log.push(["flush"]); }),
     request: options.request ?? (async () => main),
-    beginDrain: options.beginDrain ?? (async (value) => { log.push(["begin", value.closeGeneration]); return { accepted: true }; }),
+    beginDrain: options.beginDrain ?? (async (value) => { log.push(["begin", value.closeGeneration]); return { accepted: true, endsSession: options.endsSession ?? true }; }),
+    depart: (value) => log.push(["depart", value.closeGeneration]),
+    stay: (value) => log.push(["stay", value.closeGeneration]),
     reject: options.reject ?? (async (value) => { log.push(["reject", value.closeGeneration]); }),
     barrier,
     cancelled: barrier.cancelled,
@@ -135,7 +137,7 @@ test("the warning is answered before producers quiesce, and allow drains, seals 
   assert.deepEqual(steps(log), ["decide", "ask"]);
   asks[0].answer.resolve({ confirmed: true, suppressed: true });
   await closing;
-  assert.deepEqual(steps(log), ["decide", "ask", "suppress", "flush", "begin", "quiesce", "drain", "acknowledge"]);
+  assert.deepEqual(steps(log), ["decide", "ask", "suppress", "begin", "flush", "quiesce", "drain", "acknowledge"]);
   assert.deepEqual(log.at(-1), ["acknowledge", "1", 3]);
 });
 
@@ -293,4 +295,44 @@ test("a managed last-tab close carries its reason even when the native event arr
   asks[1].answer.resolve({ confirmed: true, suppressed: false });
   await next;
   assert.equal(coordinator.accept({ ...main, windowId: "other" }) instanceof Promise, true);
+});
+
+test("a closing window departs the session only after the drain starts and only when the close does not end the session", async () => {
+  const leaving = harness({ endsSession: false });
+  const closing = leaving.coordinator.accept(main);
+  await tick();
+  leaving.asks[0].answer.resolve({ confirmed: true, suppressed: false });
+  await closing;
+  assert.deepEqual(steps(leaving.log), ["decide", "ask", "begin", "depart", "flush", "quiesce", "drain", "acknowledge"]);
+  const ending = harness({ endsSession: true });
+  const quitting = ending.coordinator.accept(main);
+  await tick();
+  ending.asks[0].answer.resolve({ confirmed: true, suppressed: false });
+  await quitting;
+  assert.equal(steps(ending.log).includes("depart"), false);
+  const utility = harness({ endsSession: false, utility: true });
+  await utility.coordinator.accept(main);
+  assert.equal(steps(utility.log).includes("depart"), false);
+});
+
+test("a departed window stays recorded until cancellation is confirmed, then is restored exactly once", async () => {
+  const ack = deferred();
+  const vetoed = harness({ endsSession: false, acknowledge: () => ack.promise, barrierReject: async () => { throw new Error("rejection timed out"); } });
+  const closing = vetoed.coordinator.accept(main);
+  await tick();
+  vetoed.asks[0].answer.resolve({ confirmed: true, suppressed: false });
+  await tick(); await tick();
+  ack.reject(new Error("transport timeout"));
+  await assert.rejects(closing, /rejection timed out/);
+  assert.equal(steps(vetoed.log).includes("stay"), false);
+  vetoed.coordinator.cancelled(main);
+  vetoed.coordinator.cancelled(main);
+  vetoed.coordinator.producersResumed(main);
+  assert.deepEqual(vetoed.log.filter(([step]) => step === "stay"), [["stay", "1"]]);
+  const failing = harness({ endsSession: false, flush: async () => { throw new Error("Save rejected"); } });
+  const failed = failing.coordinator.accept(main);
+  await tick();
+  failing.asks[0].answer.resolve({ confirmed: true, suppressed: false });
+  await assert.rejects(failed, /Save rejected/);
+  assert.deepEqual(steps(failing.log), ["decide", "ask", "begin", "depart", "reject", "stay"]);
 });
