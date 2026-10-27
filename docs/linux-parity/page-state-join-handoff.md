@@ -1,6 +1,6 @@
 # Linux page-state host join (lane A)
 
-Branch `t3/linux-page-state-join`, rebased onto `linux` at `bb9c745e` (after #67 and #61). It carries the first-slice helpers (`page-state-first-slice-handoff.md`, cherry-picked unchanged except as noted below) and joins them into the native host, BUILD.gn and the Linux WebView. It is the source-level join for #33 F23 and #13 F03, fixes #84 and #69 (discard), and provides the lease, reset and snapshot substrate that #27 F17 and #35 F25 producers build on.
+Branch `t3/linux-page-state-join`, rebased onto `linux` at `2376f370` (after #67, #61, #64, #90 and #65). It carries the first-slice helpers (`page-state-first-slice-handoff.md`, cherry-picked unchanged except as noted below) and joins them into the native host, BUILD.gn and the Linux WebView. It is the source-level join for #33 F23 and #13 F03, fixes #84 and #69 (discard), and provides the lease, reset and snapshot substrate that #27 F17 and #35 F25 producers build on.
 
 No Chromium 156 compile, GN check, link or runtime run was possible in this lane. Everything below is source-level and fixture-level evidence only.
 
@@ -15,7 +15,10 @@ No Chromium 156 compile, GN check, link or runtime run was possible in this lane
 - Snapshots also resend the page's current favicon candidates (`favicon {url, urls}`) when it has any.
 - `ac_linux_host.cc`:
   - `TabBinding` owns `std::unique_ptr<LinuxPageState> page_` plus a contents generation. `RetirePage()` runs before release, reclaim (`CreateTab`), transfer (`MoveTo`), renderer retirement (`RetireRenderer`), contents destruction and binding destruction, always before the claim changes. `TabBinding` observes its contents before the page state's observers attach, so its `WebContentsDestroyed` sends `windowClose` while the lease is still live.
-  - Contents replacement (`ReplaceTabContents`). Urgent discard is on by default in 156 and swaps the tab through `TabStripModel::DiscardWebContents`. The replacement gets a new `SessionID` (`SessionTabHelper` mints `SessionID::NewUnique`, and `TabModel::DiscardContents` adopts it), so the old id-keyed lookup never matched. The binding then sent `windowClose` when the old contents died, and the shared UI closed the tab. `kReplaced` changes are now resolved by the old contents pointer. The binding re-observes the new contents, is re-keyed to the new tab id and keeps `replaced_id`, so commands already sent with the old id still resolve (the claim must still match). A claimed binding mounts a fresh page state and sends a `rebind` notice through the old lease. Helium does not change urgent discard.
+  - Contents replacement (`ReplaceTabContents`). Urgent discard is on by default in 156 and swaps the tab through `TabStripModel::DiscardWebContents`. The replacement gets a new `SessionID` (`SessionTabHelper` mints `SessionID::NewUnique`, and `TabModel::DiscardContents` adopts it), so the old id-keyed lookup never matched. The binding then sent `windowClose` when the old contents died, and the shared UI closed the tab. `kReplaced` changes are now resolved by the old contents pointer. The binding re-observes the new contents, is re-keyed to the new tab id and keeps `replaced_id`, so commands already sent with the old id still resolve (the claim must still match). A claimed binding mounts a fresh page state and sends a `rebind` notice through the old lease. Helium does not change urgent discard. The binding remembers its last four pre-replacement ids (`replaced_ids`); `ClaimedBinding` accepts them only with the current claim, and `SetPresentations` applies the bindings it validated rather than looking them up again. If the replacement cannot be mounted, the claim is cleared and the old lease sends `windowClose`, so the UI drops the tab rather than freezing.
+  - Discards normally avoid replacement altogether. Like macOS (`ardiacore_engine.mm`), the Linux main delegate (`chromium-linux-auto-pip.patch`, `BasicStartupComplete`) now enables `WebContentsDiscard`, so Chromium discards in place with the same contents and tab id. The rebind path is the fallback for any replacement that still happens.
+  - Page commands (#65): `Rebind` resets `LinuxPageCommands`, the captured Find request and the DevTools pane state. The next command rebuilds them for the new contents and tab id. DevTools inspecting the discarded contents closes with it.
+  - Find (#65): a `find` command captures the binding's page request when it arrives, or is refused with `ERR_PAGE_STALE_TARGET` when there is no current document. Each `LinuxFind` result goes out as the `find` page event via `EmitLinuxPageEvent` with that request, so results after a document change, provisional navigation, reclaim or reset are dropped.
   - Page focus from #61 (`OnWebContentsFocused`, with the `host_focusing_` guard and the presented/visible-viewport conditions unchanged) is sent as the package's `focus` page event through `ReportPresentation`.
   - `ShellHostView::MountPage` mints a new binding generation from a process-wide counter for every attachment. The sink is bound to the weak host plus the captured handler identity and renderer generation, and re-checks `OwnsHandler` before `Event()`.
   - `tab.create` keeps `browserId`, `chromeTabId` and `state`, and merges `{lease, snapshot}`. If no creation state is available, the claim is cleared and the call fails. The posted ID-only `ReportNavigation` is removed, along with `ShellHostView::ReportTab`.
@@ -40,7 +43,7 @@ No Chromium 156 compile, GN check, link or runtime run was possible in this lane
 
 `LinuxPageState::SnapshotEvents` is the one place snapshots are built. A producer that wants its state to survive an aborted navigation, a rebind or a renderer reattach must append its current value there as an ordinary page event (`fullscreen {fullscreen}`, `status {text}`, `crashed {...}`, `unresponsive {}`/`responsive {}`, `popupBlocked` per popup, `contentBlocked {count, url}`, and so on). A restore snapshot replaces exactly the kinds it contains: list every popup, because the popup list is cleared once when any `popupBlocked` is present; send `status {text: ""}` to clear. Omitting a kind keeps the UI's current value. Document and rebind snapshots start from a full reset, so producers must include everything that is still true. `apps/linux/src/hostPageLifecycle.ts` (`RESTORED`) maps event names to the page-store fields they replace; add new kinds there.
 
-## Contract for lane B (find and other async page events)
+## Contract for asynchronous page events (find and later producers)
 
 ```cpp
 #include "ardia/linux/ac_linux_page_state.h"
@@ -63,14 +66,17 @@ For events that must keep flowing during a provisional navigation, `binding->Rep
 
 | Command | Result |
 | --- | --- |
-| `python3 -m unittest discover -s engine/ardiacore-linux/tests` | 244 passed, including `test_page_state.py` 20 (ASan/UBSan, halt on error), `test_page_host_join.py` 4, `test_window_lifecycle.py` from #61 and the close fixtures from #67 |
+| `ARDIA_F01_PINNED_SOURCE=/tmp/ardia-f01-156 python3 -m unittest discover -s engine/ardiacore-linux/tests` | 318 passed, 0 skipped, including `test_page_state.py` 20 (ASan/UBSan), `test_page_host_join.py` 7, `test_linux_features.py` 1, and #65's `test_page_commands.py` (with the new `migration` and `envelope` cases), `test_devtools_authority.py`, `test_pane_layout.py`, plus `test_window_lifecycle.py` and `test_downloads.py` |
 | `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs` | 7 passed |
 | `pnpm --filter @ardia/linux typecheck` | passed |
-| `pnpm --filter @ardia/linux test:host` | 231 passed, including `hostPageEvents.test.mjs` 17 and `hostTabPage.test.mjs` 8 |
-| `pnpm --filter @ardia/linux test:graph` | 3 passed (module graph plus 2 SiteConnection graph/SSR cases) |
+| `pnpm --filter @ardia/linux test:host` | 257 passed, including `hostPageEvents.test.mjs` 17, `hostTabPage.test.mjs` 8 and `hostPageCommands.test.mjs` 4 |
+| `pnpm --filter @ardia/linux test:graph` | 3 passed |
+| `pnpm --filter @ardia/linux acceptance:self-test` | 46 passed |
 | `pnpm --filter @ardia/linux build` | passed |
 
-`test_page_host_join.py` compiles the real page-state helpers together with `TabBinding` and `ShellHostView` methods extracted from `ac_linux_host.cc`. It covers: binding-before-lease observer order, so `windowClose` uses the live lease; a discard swap that re-keys the binding to the new id, mounts a new lease and sends the rebind notice; old-id commands resolving only with the current claim; no `windowClose` when the old contents dies; a swap during a pending navigation, which sends a cleared snapshot; and unclaimed, renderer-retired and id-colliding swaps.
+The F03 and F23 acceptance scenarios (#90) read the site panel text, `s.tabs[].zoom` and `sites.zoomLevels` factors. None of those contracts changed.
+
+`test_page_host_join.py` compiles the real page-state helpers together with `TabBinding` and `ShellHostView` methods extracted from `ac_linux_host.cc`. It covers: binding-before-lease observer order, so `windowClose` uses the live lease; a discard swap that re-keys the binding to the new id, mounts a new lease and sends the rebind notice; old-id commands resolving only with the current claim; no `windowClose` when the old contents dies; a swap during a pending navigation, which sends a cleared snapshot; and unclaimed, renderer-retired and id-colliding swaps; `SetPresentations` with the pre-discard id (this crashed before the fix); two successive discards; and a failed remount.
 
 The helper cases cover:
 - the create response and its ordered snapshot, including favicons;
