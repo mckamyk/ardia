@@ -83,7 +83,8 @@ class LinuxPageLease : public content::WebContentsObserver {
   bool EmitPresentation(const LinuxPageRequest& request, std::string name, base::Value data);
   bool EmitClosed();
   bool EmitRebind(base::DictValue creation);
-  bool EmitSnapshot(const LinuxPageRequest& request, base::ListValue events);
+  bool EmitSnapshot(const LinuxPageRequest& request, base::ListValue events,
+                    std::string reason);
   std::optional<base::DictValue> CreationState(const LinuxPageRequest& request,
                                              base::ListValue events);
   void CancelDocumentWork();

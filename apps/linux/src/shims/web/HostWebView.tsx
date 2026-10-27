@@ -24,7 +24,7 @@ export const HostWebView = forwardRef<WebViewHandle, WebViewProps>(function Host
     ready.current = true;
   };
   const page: HostPageFactory = (claim, nativeId, rebound) => new HostPageEvents(claim, nativeId, () => latest.current,
-    (reason) => { const tabId = latest.current.tabId; if (tabId) resetHostPageState(tabId, reason); },
+    (reason, replaced) => { const tabId = latest.current.tabId; if (tabId) resetHostPageState(tabId, reason, replaced); },
     (state) => { const tabId = latest.current.tabId; if (tabId) applyHostPageThemeState(tabId, state); }, rebound);
 
   useEffect(() => {

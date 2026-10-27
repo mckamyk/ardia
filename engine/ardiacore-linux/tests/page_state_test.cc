@@ -125,12 +125,12 @@ void Transport() {
   auto request=h.lease->Capture();assert(h.lease->Emit(*request,"security",base::Value()));
   auto& message=h.deliveries.back();assert(Text(message,"claim")=="claim" && Text(message,"rendererGeneration")=="2" && Text(message,"bindingGeneration")=="3");
   assert(Number(message,"sequence")==2);h.Boundary();assert(Number(h.deliveries.back(),"sequence")==3 && Text(h.deliveries.back(),"documentEpoch")=="2");
-  assert(h.lease->EmitSnapshot(*h.lease->Capture(),base::ListValue()));assert(Number(h.deliveries.back(),"sequence")==4);
+  assert(h.lease->EmitSnapshot(*h.lease->Capture(),base::ListValue(),"document"));assert(Number(h.deliveries.back(),"sequence")==4);
   assert(!h.lease->Emit(*request,"security",base::Value()));
-  assert(!h.lease->EmitSnapshot(*request,base::ListValue()));
+  assert(!h.lease->EmitSnapshot(*request,base::ListValue(),"restore"));
   Harness overflow;LinuxPageLeaseTestPeer::Sequence(*overflow.lease,9007199254740990ULL);auto last=overflow.lease->Capture();assert(overflow.lease->Emit(*last,"focus",base::Value()));assert(Number(overflow.deliveries.back(),"sequence")==9007199254740991.0);assert(!overflow.lease->Emit(*last,"focus",base::Value()) && !last->Valid());
   Harness epoch_overflow;LinuxPageLeaseTestPeer::Epoch(*epoch_overflow.lease,std::numeric_limits<uint64_t>::max());epoch_overflow.Boundary();assert(!epoch_overflow.lease->Capture());
-  h.lease->Reset();assert(!h.lease->EmitSnapshot(*request,base::ListValue()));
+  h.lease->Reset();assert(!h.lease->EmitSnapshot(*request,base::ListValue(),"restore"));
 }
 
 void Security() {
@@ -292,6 +292,7 @@ void Boundaries() {
   assert(m.deliveries.size()==2);
   assert(Text(m.deliveries[0],"type")=="pageLifecycle" && Text(m.deliveries[0],"action")=="reset" && Text(m.deliveries[0],"reason")=="document" && Text(m.deliveries[0],"documentEpoch")=="2");
   assert(Text(m.deliveries[1],"action")=="snapshot" && Text(m.deliveries[1],"documentEpoch")=="2" && Number(m.deliveries[1],"sequence")>Number(m.deliveries[0],"sequence"));
+  assert(Text(m.deliveries[1],"reason")=="document" && m.deliveries[1].Find("events")->GetList().size()==3);
   assert(Text(EventAt(m.deliveries[1],1,"security"),"level")=="insecure" && Text(EventAt(m.deliveries[1],0,"navigation"),"url")=="http://plain.test/");
   assert(!old->Valid() && !EmitLinuxPageEvent(*old,"find",base::Value()) && m.deliveries.size()==2);
   auto current=m.state->Capture();assert(EmitLinuxPageEvent(*current,"find",base::Value(base::DictValue().Set("count",1))) && m.LastName()=="find" && Text(m.Last(),"documentEpoch")=="2");
@@ -303,8 +304,23 @@ void Boundaries() {
   assert(m.state->SecurityInfo().is_none());
   const auto restoring=m.deliveries.size();m.Finish(pending);assert(m.deliveries.size()==restoring+2);
   assert(Text(m.deliveries[restoring],"action")=="snapshot" && Text(m.deliveries[restoring],"documentEpoch")=="2" && m.LastName()=="zoom");
+  assert(Text(m.deliveries[restoring],"reason")=="restore");
   assert(!m.state->SecurityInfo().is_none() && Text(m.state->SecurityInfo().GetDict(),"level")=="insecure");
   double last=0;for(const auto& delivery:m.deliveries) { assert(Number(delivery,"sequence")>last);last=Number(delivery,"sequence"); }
+}
+
+void Favicons() {
+  Mount m;m.page.favicons.push_back(std::make_shared<blink::mojom::FaviconURL>(blink::mojom::FaviconURL{GURL("https://example.test/a.ico")}));
+  m.page.favicons.push_back(std::make_shared<blink::mojom::FaviconURL>(blink::mojom::FaviconURL{GURL("https://example.test/b.png")}));
+  auto created=m.state->CreationState();const auto& snapshot=*created->FindDict("snapshot");
+  const auto& favicon=EventAt(snapshot,3,"favicon");assert(Text(favicon,"url")=="https://example.test/a.ico");
+  assert(favicon.Find("urls")->GetList().size()==2 && favicon.Find("urls")->GetList()[1].GetString()=="https://example.test/b.png");
+  content::NavigationHandle pending;m.Start(pending);
+  assert(!m.state->EmitDocument("favicon",base::Value()));
+  m.Finish(pending);
+  bool resent=false;for(const auto& delivery:m.deliveries) if(Text(delivery,"type")=="pageLifecycle" && delivery.FindString("reason") && Text(delivery,"reason")=="restore") { EventAt(delivery,3,"favicon");resent=true; }
+  assert(resent);
+  Mount empty;assert(empty.state->CreationState()->FindDict("snapshot")->Find("events")->GetList().size()==3);
 }
 
 void Commands() {
@@ -355,5 +371,5 @@ void Rebinding() {
 
 int main(int argc,char** argv) {
   assert(argc==2);std::string mode=argv[1];
-  if(mode=="authority") Authority();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
+  if(mode=="authority") Authority();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
 }

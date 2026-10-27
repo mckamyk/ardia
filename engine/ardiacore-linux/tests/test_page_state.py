@@ -88,6 +88,9 @@ class PageStateTests(unittest.TestCase):
     def test_security_describes_the_committed_entry_not_a_pending_one(self):
         self.run_case('committed-security')
 
+    def test_snapshots_carry_reason_and_resend_current_favicons(self):
+        self.run_case('favicons')
+
 
 if __name__ == '__main__':
     unittest.main()

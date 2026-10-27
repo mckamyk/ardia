@@ -14,7 +14,7 @@ export type PageCreationState = { lease: PageLeaseMetadata; snapshot: { watermar
 export type PageRebinding = PageCreationState & { browserId: number; chromeTabId: number };
 export type PageLifecycle = PageLeaseMetadata & { type: "pageLifecycle"; sequence: number } & (
   { action: "reset"; reason: "document" | "provisional" } |
-  { action: "snapshot"; events: PageEvent[] } |
+  { action: "snapshot"; reason?: "document" | "restore"; events: PageEvent[] } |
   { action: "rebind"; creation: PageRebinding }
 );
 export type PageRebound = (identity: { browserId: number; chromeTabId: number }) => void;
@@ -38,7 +38,8 @@ function delivery(value: unknown): value is PageDelivery | PageLifecycle {
   if (value.type === "pageEvent") return event(value.event);
   if (value.type !== "pageLifecycle") return false;
   if (value.action === "rebind") return rebinding(value.creation);
-  return value.action === "reset" ? value.reason === "document" || value.reason === "provisional" : value.action === "snapshot" && events(value.events);
+  if (value.action === "snapshot") return events(value.events) && (value.reason === undefined || value.reason === "document" || value.reason === "restore");
+  return value.action === "reset" && (value.reason === "document" || value.reason === "provisional");
 }
 
 const leaseOf = (value: PageLeaseMetadata): PageLeaseMetadata =>
@@ -67,7 +68,7 @@ export class HostPageEvents {
   private claim: string;
   private nativeId: () => number | undefined;
   private props: () => WebViewProps;
-  private reset: (reason: PageResetReason) => void;
+  private reset: (reason: PageResetReason, replaced?: ReadonlySet<string>) => void;
   private applyTheme: (state: NavigationState) => void;
   private rebound: PageRebound | undefined;
 
@@ -75,7 +76,7 @@ export class HostPageEvents {
     claim: string,
     nativeId: () => number | undefined,
     props: () => WebViewProps,
-    reset: (reason: PageResetReason) => void,
+    reset: (reason: PageResetReason, replaced?: ReadonlySet<string>) => void,
     applyTheme: (state: NavigationState) => void,
     rebound?: PageRebound,
   ) {
@@ -164,6 +165,7 @@ export class HostPageEvents {
     try {
       if (value.type === "pageEvent") this.replay([value.event]);
       else if (value.action === "reset") this.reset(value.reason);
+      else if (value.reason === "restore") { this.reset("restore", new Set(value.events.map(({ name }) => name))); this.replay(value.events); }
       else { this.reset("snapshot"); this.replay(value.events); }
     } finally { this.applying = false; }
     return true;

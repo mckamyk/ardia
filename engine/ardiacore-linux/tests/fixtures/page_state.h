@@ -147,6 +147,7 @@ class GURL {
   bool SchemeIsHTTPOrHTTPS() const { return SchemeIs("http") || SchemeIs("https"); }
  private: std::string value_,scheme_,host_;
 };
+namespace blink::mojom { struct FaviconURL { GURL icon_url; }; using FaviconURLPtr=std::shared_ptr<FaviconURL>; }
 namespace url { struct Origin { GURL value; static Origin Create(GURL url) { return {url}; } std::string Serialize() const { return std::string(value.SchemeIs("https")?"https://":"http://")+std::string(value.host()); } }; }
 namespace ui { class BaseWindow {}; }
 namespace views { class Widget { public: base::WeakPtr<Widget> GetWeakPtr() { return weak_.GetWeakPtr(); } private: base::WeakPtrFactory<Widget> weak_{this}; }; }
@@ -252,6 +253,8 @@ class WebContents {
   GURL GetLastCommittedURL() const { return committed; }
   std::optional<uint32_t> GetThemeColor() { return theme; }
   RenderWidgetHostView* GetRenderWidgetHostView() { return &view; }
+  const std::vector<blink::mojom::FaviconURLPtr>& GetFaviconURLs() { return favicons; }
+  std::vector<blink::mojom::FaviconURLPtr> favicons;
   template<class F> void Notify(F fn) { auto copy=observers; for(auto* o:copy) if(std::find(observers.begin(),observers.end(),o)!=observers.end()) fn(o); }
   Profile* profile;
   RenderFrameHost frame;

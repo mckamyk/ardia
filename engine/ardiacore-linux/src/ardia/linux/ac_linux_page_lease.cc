@@ -180,11 +180,13 @@ bool LinuxPageLease::EmitClosed() {
   return true;
 }
 
-bool LinuxPageLease::EmitSnapshot(const LinuxPageRequest& request, base::ListValue events) {
+bool LinuxPageLease::EmitSnapshot(const LinuxPageRequest& request, base::ListValue events,
+                                  std::string reason) {
   if (!ValidPresentation(request)) return false;
   auto envelope = Envelope("pageLifecycle");
   if (!envelope) return false;
   envelope->Set("action", "snapshot");
+  envelope->Set("reason", std::move(reason));
   envelope->Set("events", std::move(events));
   Send(std::move(*envelope));
   return true;

@@ -78,14 +78,21 @@ std::optional<base::ListValue> LinuxPageState::SnapshotEvents() {
       .Append(PageEvent("security", base::Value(security_->Snapshot())));
   if (auto zoom = history_zoom_->Snapshot())
     events.Append(PageEvent("zoom", base::Value(std::move(*zoom))));
+  if (auto* contents = lease_->contents(); contents && !contents->GetFaviconURLs().empty()) {
+    const auto& candidates = contents->GetFaviconURLs();
+    base::ListValue urls;
+    for (const auto& candidate : candidates) urls.Append(candidate->icon_url.spec());
+    events.Append(PageEvent("favicon", base::Value(base::DictValue()
+        .Set("url", candidates.front()->icon_url.spec()).Set("urls", std::move(urls)))));
+  }
   return events;
 }
 
-void LinuxPageState::Snapshot(LinuxPageRequest request, std::string) {
+void LinuxPageState::Snapshot(LinuxPageRequest request, std::string reason) {
   const auto weak = weak_factory_.GetWeakPtr();
   auto events = SnapshotEvents();
   if (!events || !weak || !request.lease) return;
-  request.lease->EmitSnapshot(request, std::move(*events));
+  request.lease->EmitSnapshot(request, std::move(*events), std::move(reason));
 }
 
 std::optional<base::DictValue> LinuxPageState::CreationState() {

@@ -39,7 +39,7 @@ function setup() {
     onPageMessage: (...args) => calls.push(["pageMessage", ...args]),
     onFavicon: (...args) => calls.push(["favicon", ...args]),
   };
-  const receiver = new HostPageEvents("claim", () => 7, () => props, (reason) => { calls.push(["reset", reason]); resetHostPage(tab, reason); }, (state)=>applyHostPageTheme(tab,state));
+  const receiver = new HostPageEvents("claim", () => 7, () => props, (reason, replaced) => { calls.push(["reset", reason]); resetHostPage(tab, reason, replaced); }, (state)=>applyHostPageTheme(tab,state));
   const send = (value, id = "7", module = "ArdiaWebView") => receiver.receive(module, id, value);
   return { tab, calls, receiver, send, props };
 }
@@ -197,4 +197,39 @@ test("explicit native theme clear wins over shared same-URL launch-theme restora
   h.send(control(2));h.send(message(3,"navigation",{...navigation,isLoading:true},{documentEpoch:"2"}));
   assert.equal(useBrowser.getState().live[h.tab].themeColor,null);assert.equal(pageOf(h.tab).themeColorSource,null);
   docs.delete("launch-look.json");
+});
+
+test("an aborted navigation keeps page state the restore snapshot does not replace", () => {
+  const h = setup(); h.receiver.install(snapshot(1, [event("security", security)]));
+  const popup = { id: "kept", url: "https://popup.test", origin: "https://example.test" };
+  const prompt = { state: "save", origin: "https://example.test", username: "u", passwordLength: 3, federation: "", usernames: [] };
+  patchPage(h.tab, { popups: [popup], status: "https://hover.test", fullscreen: true, passwordPrompt: prompt, unresponsive: true });
+  setPopover(h.tab, "popups"); noteScroll(h.tab, { state: "down" });
+  const kept = () => {
+    assert.deepEqual(pageOf(h.tab).popups, [popup]); assert.equal(pageOf(h.tab).status, "https://hover.test");
+    assert.equal(pageOf(h.tab).fullscreen, true); assert.deepEqual(pageOf(h.tab).passwordPrompt, prompt);
+    assert.equal(pageOf(h.tab).unresponsive, true); assert.equal(popoverOf(h.tab), "popups");
+    assert.equal(useToolbarAutoHide.getState().scrolledDown[h.tab] !== undefined, true);
+  };
+  h.send(control(2, "1", { reason: "provisional" }));
+  assert.equal(pageOf(h.tab).security, null); kept();
+  const themed = { ...navigation, themeColor: "#123456", themeColorSource: "meta" };
+  h.send(control(3, "1", { action: "snapshot", reason: "restore", events: [event("navigation", themed), event("security", security), event("favicon", { url: "icon", urls: ["icon"] })] }));
+  assert.deepEqual(pageOf(h.tab).security, security); kept();
+  assert.equal(pageOf(h.tab).themeColorSource, "meta"); assert.equal(useBrowser.getState().live[h.tab].themeColor, "#123456");
+  assert.deepEqual(h.calls.at(-1), ["favicon", "icon", ["icon"]]);
+  const replacement = { id: "fresh", url: "https://other.test", origin: "https://example.test" };
+  h.send(control(4, "1", { action: "snapshot", reason: "restore", events: [event("popupBlocked", replacement), event("status", { text: "" })] }));
+  assert.deepEqual(pageOf(h.tab).popups, [replacement]); assert.equal(pageOf(h.tab).status, "");
+  assert.equal(pageOf(h.tab).fullscreen, true); assert.deepEqual(pageOf(h.tab).security, security);
+  h.send(control(5, "2"));
+  assert.deepEqual(pageOf(h.tab).popups, []); assert.equal(pageOf(h.tab).fullscreen, false); assert.equal(pageOf(h.tab).passwordPrompt, null);
+  assert.equal(popoverOf(h.tab), null); assert.equal(useToolbarAutoHide.getState().scrolledDown[h.tab], undefined);
+});
+
+test("snapshot reasons are validated", () => {
+  const h = setup(); h.receiver.install(snapshot());
+  assert.equal(h.send(control(2, "1", { action: "snapshot", reason: "other", events: [] })), false);
+  assert.equal(h.send(control(2, "1", { action: "snapshot", reason: "restore", events: [] })), true);
+  assert.equal(h.send(control(3, "1", { action: "snapshot", reason: "document", events: [] })), true);
 });
