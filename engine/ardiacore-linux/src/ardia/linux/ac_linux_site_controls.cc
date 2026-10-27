@@ -371,6 +371,70 @@ std::variant<BlockerRequest, Failure> PrepareBlockerCall(std::string_view name,
   return Failure{"ERR_UNKNOWN_CALL", "This call is unavailable on Linux"};
 }
 
+namespace {
+
+std::optional<std::vector<std::string>> StringList(const base::DictValue& dict, std::string_view key, size_t limit) {
+  const base::Value* value = dict.Find(key);
+  if (!value || !value->is_list() || value->GetList().size() > limit) return std::nullopt;
+  std::vector<std::string> items;
+  for (const base::Value& item : value->GetList()) {
+    if (!item.is_string()) return std::nullopt;
+    items.push_back(item.GetString());
+  }
+  return items;
+}
+
+bool ValidDirective(std::string_view directive) {
+  return !directive.empty() && directive.size() <= kMaxDirectiveBytes &&
+         directive.find_first_of(std::string_view("\n\r\0", 3)) == std::string_view::npos;
+}
+
+base::Value StringsValue(const std::vector<std::string>& items) {
+  base::ListValue list;
+  for (const std::string& item : items) list.Append(base::Value(item));
+  return base::Value(std::move(list));
+}
+
+}
+
+std::optional<BlockerSettings> ParseBlockerSettings(const base::Value& value) {
+  if (!value.is_dict()) return std::nullopt;
+  const base::DictValue& dict = value.GetDict();
+  std::optional<std::vector<std::string>> lists = StringList(dict, "lists", kMaxFollowedLists);
+  std::optional<std::vector<std::string>> whitelist = StringList(dict, "whitelist", kMaxFollowedDirectives);
+  const std::optional<bool> auto_update = Bool(dict, "autoUpdate");
+  if (!lists || !whitelist || !auto_update) return std::nullopt;
+  for (const std::string& id : *lists) {
+    if (!ValidListId(id)) return std::nullopt;
+  }
+  for (const std::string& directive : *whitelist) {
+    if (!ValidDirective(directive)) return std::nullopt;
+  }
+  return BlockerSettings{std::move(*lists), std::move(*whitelist), *auto_update};
+}
+
+base::DictValue BlockerSettingsValue(const BlockerSettings& settings) {
+  return base::DictValue()
+      .Set("lists", StringsValue(settings.lists))
+      .Set("whitelist", StringsValue(settings.whitelist))
+      .Set("autoUpdate", base::Value(settings.auto_update));
+}
+
+bool HoldsNavigationTo(std::string_view scheme) {
+  for (const std::string_view exempt : {"chrome-extension", "chrome", "chrome-untrusted", "devtools", "about"}) {
+    if (scheme == exempt) return false;
+  }
+  return true;
+}
+
+bool ShouldHoldNavigations(bool leader, bool new_profile) {
+  return !leader || new_profile;
+}
+
+int64_t InheritRetryDelayMs(int attempt) {
+  return int64_t{1000} << std::clamp(attempt, 0, kInheritAttempts);
+}
+
 bool Mutates(BlockerOp op) {
   return op == BlockerOp::kSetEnabled || op == BlockerOp::kSetList || op == BlockerOp::kSetAllowed;
 }
@@ -383,6 +447,8 @@ std::string_view BridgeOpName(BlockerOp op) {
     case BlockerOp::kIsAllowed: return "isAllowed";
     case BlockerOp::kSetAllowed: return "setAllowed";
     case BlockerOp::kFailNext: return "failNext";
+    case BlockerOp::kSettings: return "settings";
+    case BlockerOp::kFollow: return "follow";
   }
   return "state";
 }
@@ -458,6 +524,11 @@ std::variant<base::Value, Failure> CompleteBlockerCall(const BlockerRequest& req
     return base::Value(BlockerState(value->GetDict(), version));
   }
   if (error) return Failure{std::string(kUnavailableCode), *error};
+  if (request.op == BlockerOp::kSettings) {
+    std::optional<BlockerSettings> settings = value ? ParseBlockerSettings(*value) : std::nullopt;
+    if (!settings) return BadReply("The content blocker's settings can't be copied");
+    return base::Value(BlockerSettingsValue(*settings));
+  }
   if (request.op == BlockerOp::kIsAllowed) {
     if (!value || !value->is_bool()) return BadReply("The content blocker gave no answer");
     return base::Value(value->GetBool());
@@ -511,8 +582,10 @@ base::DictValue BridgeRequest(const PendingCall& call, int64_t now_ms) {
       args.Set("host", call.request.host);
       args.Set("allowed", base::Value(call.request.flag));
       break;
+    case BlockerOp::kFollow: args = BlockerSettingsValue(call.request.settings); break;
     case BlockerOp::kState:
-    case BlockerOp::kFailNext: break;
+    case BlockerOp::kFailNext:
+    case BlockerOp::kSettings: break;
   }
   const int64_t left = std::max<int64_t>(0, call.deadline_ms - now_ms);
   return base::DictValue()

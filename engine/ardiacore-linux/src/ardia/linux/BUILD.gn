@@ -138,6 +138,8 @@ source_set("linux") {
     "ac_linux_launch_steps.h",
     "ac_linux_media.cc",
     "ac_linux_media.h",
+    "ac_linux_navigation_hold.cc",
+    "ac_linux_navigation_hold.h",
     "ac_linux_page_commands.cc",
     "ac_linux_page_commands.h",
     "ac_linux_page_channel.cc",
