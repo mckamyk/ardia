@@ -36,17 +36,30 @@ test("a host that advertises a system backend is called through instead of being
 
 test("Linux capabilities come from the host contract, and WebKit is never offered", () => {
   assert.deepEqual(linuxCapabilities(fakeHost().host), {
-    defaultBrowser: false, launchAtLogin: false, thinScrollBars: false, webkit: false, performanceRecording: false, taskManager: true,
+    defaultBrowser: false, launchAtLogin: false, thinScrollBars: false, webkit: false, cliControl: false, externalLinks: false, performanceRecording: false, taskManager: true,
   });
-  const full = linuxCapabilities(fakeHost(["ArdiaSystem.isDefaultBrowser", "ArdiaSystem.setAsDefaultBrowser", "ArdiaSystem.launchAtLoginStatus", "ArdiaSystem.setLaunchAtLogin", "ArdiaSystem.setThinScrollBars", "engine.beginTracing", "engine.endTracing", "engine.isTracing"]).host);
-  assert.deepEqual(full, { defaultBrowser: true, launchAtLogin: true, thinScrollBars: true, webkit: false, performanceRecording: true, taskManager: true });
+  const full = linuxCapabilities(fakeHost(["ArdiaSystem.isDefaultBrowser", "ArdiaSystem.setAsDefaultBrowser", "ArdiaSystem.launchAtLoginStatus", "ArdiaSystem.setLaunchAtLogin", "ArdiaSystem.setThinScrollBars", "engine.beginTracing", "engine.endTracing", "engine.isTracing", "ArdiaApp.openExternalURL"]).host);
+  assert.deepEqual(full, { defaultBrowser: true, launchAtLogin: true, thinScrollBars: true, webkit: false, cliControl: false, externalLinks: true, performanceRecording: true, taskManager: true });
   assert.equal(linuxCapabilities(undefined).taskManager, false);
 });
 
 test("unavailable choices map to exact settings ids and the Engines pane", () => {
-  const ids = ["general.defaultBrowser", "general.openAtLogin", "general.warnBeforeQuitting", "appearance.pageScrollBars", "engines.defaultEngine", "engines.protectedVideo", "search.otherEngines"];
+  const ids = ["general.defaultBrowser", "general.openAtLogin", "general.warnBeforeQuitting", "appearance.pageScrollBars", "engines.defaultEngine", "engines.protectedVideo", "search.otherEngines", "advanced.cliControl", "advanced.cliInstall", "advanced.showFullUrl"];
   const none = linuxCapabilities(fakeHost().host);
-  assert.deepEqual([...unavailableSettingIds(none, ids)].sort(), ["appearance.pageScrollBars", "engines.defaultEngine", "engines.protectedVideo", "general.defaultBrowser", "general.openAtLogin"]);
+  assert.deepEqual([...unavailableSettingIds(none, ids)].sort(), ["advanced.cliControl", "advanced.cliInstall", "appearance.pageScrollBars", "engines.defaultEngine", "engines.protectedVideo", "general.defaultBrowser", "general.openAtLogin"]);
   assert.deepEqual([...unavailablePanes(none)], ["engines"]);
-  assert.deepEqual([...unavailableSettingIds({ ...none, defaultBrowser: true, launchAtLogin: true, thinScrollBars: true }, ids)].sort(), ["engines.defaultEngine", "engines.protectedVideo"]);
+  assert.deepEqual([...unavailableSettingIds({ ...none, defaultBrowser: true, launchAtLogin: true, thinScrollBars: true, cliControl: true }, ids)].sort(), ["engines.defaultEngine", "engines.protectedVideo"]);
+});
+
+test("onboarding music and external links answer locally when the host has no backend for them", async () => {
+  const { host, invoked } = fakeHost();
+  const app = (method) => resolveHostModule(host, "ArdiaApp", method);
+  assert.equal(await app("playIntroMusic")({}, false), undefined);
+  assert.equal(await app("setIntroMusicMuted")(true), undefined);
+  assert.equal(await app("stopIntroMusic")(0.6), undefined);
+  assert.equal(await app("openExternalURL")("mailto:someone@example.com"), false);
+  assert.deepEqual(invoked, []);
+  const advertised = fakeHost(["ArdiaApp.openExternalURL"]);
+  await assert.rejects(resolveHostModule(advertised.host, "ArdiaApp", "openExternalURL")("mailto:x"), /Unknown host method/);
+  assert.deepEqual(advertised.invoked, ["ArdiaApp.openExternalURL"]);
 });

@@ -1,6 +1,6 @@
-import { Children, isValidElement, type ComponentProps } from "react";
+import { Children, isValidElement, useContext, type ComponentProps } from "react";
 import * as shared from "../../browser/src/components/settings/Form.tsx";
-import { settingUnavailable } from "./settingsIndex.ts";
+import { sectionUnavailable, setting, settingUnavailable } from "./settingsIndex.ts";
 
 export * from "../../browser/src/components/settings/Form.tsx";
 
@@ -21,5 +21,8 @@ export function Row(props: ComponentProps<typeof shared.Row>) {
 }
 
 export function SectionHeader(props: ComponentProps<typeof shared.SectionHeader>) {
-  return settingUnavailable(props.anchor) ? null : <shared.SectionHeader {...props} />;
+  const pane = useContext(shared.SettingsPaneContext);
+  const entry = props.anchor ? setting(props.anchor) : undefined;
+  if (settingUnavailable(props.anchor) || sectionUnavailable(entry?.pane ?? pane, entry?.section ?? props.title)) return null;
+  return <shared.SectionHeader {...props} />;
 }

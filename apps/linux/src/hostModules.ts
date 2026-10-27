@@ -2,7 +2,7 @@ import { hostLaunchConfig } from "./hostLaunchConfig.ts";
 import type { ArdiaHost } from "./host";
 import { callHost, hostModuleMethod, hostSupports } from "./host.ts";
 import { linuxSystemMethod } from "./hostFiles.ts";
-import { linuxSystemMethod as linuxPlatformMethod } from "./hostSystem.ts";
+import { linuxModuleMethod } from "./hostSystem.ts";
 
 const optionalMethods: Record<string, string[]> = {
   ArdiaShell: ["setDragEscapeCapture", "saveKeyResponder", "restoreKeyResponder", "discardKeyResponder", "switcherPointerMoved", "pickFolder", "fetchBangList", "animateWindowClose", "restoreFullScreen", "watchLeftEdge", "dragPreviewBegin", "dragPreviewPage", "dragPreviewUpdate", "dragPreviewCancel", "raiseView", "dragPreviewPlaceholder", "windowFrame", "dragPreviewEnd"],
@@ -25,9 +25,9 @@ export function resolveHostModule(host: ArdiaHost, name: string, method: string)
   if (name === "ArdiaSystem") {
     const local = linuxSystemMethod(host, method);
     if (local !== undefined) return local;
-    const platform = linuxPlatformMethod(host, method);
-    if (platform) return platform;
   }
+  const platform = linuxModuleMethod(host, name, method);
+  if (platform) return platform;
   if (name === "ArdiaDocuments" && method === "call") {
     return (verb: string, profile: string, args: string) => {
       if (!["watch", "commit", "flush", "unwatch"].includes(verb)) return Promise.reject(Object.assign(new Error("Unknown document operation"), { code: "ERR_UNKNOWN_CALL" }));

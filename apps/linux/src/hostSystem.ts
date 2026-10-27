@@ -1,7 +1,17 @@
-import type { ArdiaHost } from "./host.ts";
+import { hostSupports, type ArdiaHost } from "./host.ts";
 import { linuxCapabilities, unavailableError } from "./hostCapabilities.ts";
 
-export function linuxSystemMethod(host: ArdiaHost, method: string): ((...args: unknown[]) => Promise<unknown>) | undefined {
+const INTRO_MUSIC = new Set(["playIntroMusic", "setIntroMusicMuted", "stopIntroMusic"]);
+
+export function linuxModuleMethod(host: ArdiaHost, name: string, method: string): ((...args: unknown[]) => Promise<unknown>) | undefined {
+  if (name === "ArdiaSystem") return linuxSystemMethod(host, method);
+  if (name !== "ArdiaApp" || hostSupports(`${name}.${method}`, host)) return undefined;
+  if (INTRO_MUSIC.has(method)) return () => Promise.resolve();
+  if (method === "openExternalURL") return () => Promise.resolve(false);
+  return undefined;
+}
+
+function linuxSystemMethod(host: ArdiaHost, method: string): ((...args: unknown[]) => Promise<unknown>) | undefined {
   const capabilities = linuxCapabilities(host);
   switch (method) {
     case "isDefaultBrowser":

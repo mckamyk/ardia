@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import * as sharedIndex from "../../browser/src/components/settings/settingsIndex.ts";
 import * as sharedForm from "../../browser/src/components/settings/Form.tsx";
 import * as sharedEngines from "../../browser/src/state/engines/engines.ts";
@@ -8,7 +9,7 @@ import * as index from "./settingsIndex.ts";
 import * as form from "./settingsForm.tsx";
 import * as engines from "./hostEngines.ts";
 
-const hidden = ["general.defaultBrowser", "general.openAtLogin", "appearance.pageScrollBars"];
+const hidden = ["general.defaultBrowser", "general.openAtLogin", "appearance.pageScrollBars", "advanced.cliControl", "advanced.cliInstall"];
 
 test("Settings navigation and search leave out the unavailable Engines pane and platform rows", () => {
   assert.ok(sharedIndex.PANES.some((pane) => pane.id === "engines"));
@@ -29,7 +30,13 @@ test("Settings navigation and search leave out the unavailable Engines pane and 
 test("Settings form primitives drop unavailable rows and keep available ones unchanged", () => {
   for (const anchor of hidden) assert.equal(form.Row({ anchor }), null, anchor);
   assert.equal(form.Anchor({ id: "general.defaultBrowser", children: null }), null);
-  assert.equal(form.SectionHeader({ anchor: "engines.websiteRules" }), null);
+  const header = (props, pane = null) => renderToStaticMarkup(createElement(sharedForm.SettingsPaneContext.Provider, { value: pane }, createElement(form.SectionHeader, props)));
+  assert.equal(header({ anchor: "engines.websiteRules" }), "");
+  assert.equal(header({ title: "Command line" }, "advanced"), "");
+  assert.equal(header({ title: "Default engine" }, "engines"), "");
+  assert.equal(index.sectionUnavailable("advanced", "Command line"), true);
+  assert.equal(index.sectionUnavailable("advanced", "Browsing"), false);
+  assert.equal(index.sectionUnavailable("general", "No such section"), false);
   assert.equal(form.Group({ of: "engines.websiteRules", children: null }), null);
   const kept = form.Row({ anchor: "general.warnBeforeQuitting" });
   assert.equal(kept.type, sharedForm.Row);
