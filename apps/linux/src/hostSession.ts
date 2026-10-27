@@ -1,3 +1,4 @@
+import { registerSessionCloseHooks } from "./sessionClose";
 import type { BrowserState, HydrateData } from "../../browser/src/state/browser/store";
 import type { BrowserWindow, Tab } from "../../browser/src/state/browser/types";
 import type { ArdiaHost } from "./host";
@@ -185,6 +186,8 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
   let last = canonicalSessionValue(initial)!;
   let lastSources: unknown[] = [];
   let closing = false;
+  const closeTokens = new Set<string>();
+  let frozen: HydrateData | undefined;
   let applying = false;
   const flush = () => {
     clearTimeout(timer);
@@ -192,7 +195,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
     void writer.flush().catch((error) => { if (!closing) reportHostError(error); });
   };
   const queue = (s: BrowserState) => {
-    if (closing || applying) return;
+    if (closing || applying || closeTokens.size) return;
     const sources = sessionSources(s);
     if (sources.every((source, index) => source === lastSources[index])) return;
     lastSources = sources;
@@ -206,7 +209,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
   const receive = (base: HydrateData, session: HydrateData) => {
     if (closing) return;
     const state = store.getState();
-    const local = snapshotOf(state);
+    const local = frozen ?? snapshotOf(state);
     canonical = session;
     const merged = mergeSession(base, local, session);
     const runtime = { ...merged, settings: { ...state.settings, ...merged.settings } };
@@ -219,16 +222,34 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
     }
     const current = store.getState();
     const snapshot = snapshotOf(current);
+    if (closeTokens.size) frozen = snapshot;
     const outstanding = !equalSessionValue(withoutFocus(snapshot), withoutFocus(session));
     lastSources = sessionSources(current);
     last = canonicalSessionValue(snapshot)!;
     writer.reconcile(snapshot, outstanding);
-    if (outstanding) timer ??= setTimeout(flush, 300);
+    if (outstanding && !closeTokens.size) timer ??= setTimeout(flush, 300);
     else {
       clearTimeout(timer);
       timer = undefined;
     }
   };
+  const stopCloseHooks = registerSessionCloseHooks({
+    quiesce: (token) => {
+      if (!closeTokens.size) {
+        queue(store.getState());
+        frozen = snapshotOf(store.getState());
+      }
+      closeTokens.add(token);
+      clearTimeout(timer);
+      timer = undefined;
+    },
+    resume: (token) => {
+      closeTokens.delete(token);
+      if (closeTokens.size) return;
+      frozen = undefined;
+      queue(store.getState());
+    },
+  });
   queue(store.getState());
   const stop = store.subscribe(queue);
   const stopEvents = host.onEvent((module, event, payload) => {
@@ -240,6 +261,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
   });
   const final = () => {
     if (closing) return;
+    if (closeTokens.size) { closing = true; clearTimeout(timer); timer = undefined; return; }
     queue(store.getState());
     closing = true;
     clearTimeout(timer);
@@ -251,6 +273,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
   if (!host.onBeforeClose) window.addEventListener("pagehide", final);
   document.addEventListener("visibilitychange", onVisibility);
   const dispose = () => {
+    stopCloseHooks();
     stop();
     stopEvents();
     if (!closing) flush();
