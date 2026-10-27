@@ -1646,9 +1646,9 @@ base::DictValue ShellHostView::Bootstrap() const {
     capabilities.Append(route);
   for (const char* capability : linux_credentials::kCapabilities) capabilities.Append(capability);
   for (const char* capability : linux_extensions::kSurfaceCapabilities) capabilities.Append(capability);
-  AppendLinuxSiteControlsCapabilities(capabilities);
   for (const char* route : ardiacore::kLinuxPageMessageRoutes)
     capabilities.Append(route);
+  AppendLinuxSiteControlsCapabilities(capabilities);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
