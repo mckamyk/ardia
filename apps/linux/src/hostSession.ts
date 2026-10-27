@@ -181,9 +181,7 @@ const sessionSources = (s: BrowserState) => [s.profiles, s.profileOrder, s.orpha
 
 export function startHostPersistence(host: ArdiaHost, store: SessionStore, initial: HydrateData = host.bootstrap.session ?? {}, snapshot: (state: BrowserState, canonical: HydrateData) => HydrateData = snapshotHostSession) {
   let canonical = initial;
-  let departure: { token: string; apply: (state: BrowserState) => BrowserState; released?: boolean } | undefined;
-  const liveSnapshotOf = (state: BrowserState) => snapshot(state, canonical);
-  const snapshotOf = (state: BrowserState) => snapshot(departure ? departure.apply(state) : state, canonical);
+  const snapshotOf = (state: BrowserState) => snapshot(state, canonical);
   const writer = createSessionWriter(host, initial, (base, session) => receive(base, session));
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last = canonicalSessionValue(initial)!;
@@ -213,10 +211,8 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
     if (closing) return;
     const state = store.getState();
     const local = frozen ?? snapshotOf(state);
-    const live = departure ? liveSnapshotOf(state) : undefined;
     canonical = session;
-    const written = mergeSession(base, local, session);
-    const merged = live ? mergeSession(local, live, written) : written;
+    const merged = mergeSession(base, local, session);
     const runtime = { ...merged, settings: { ...state.settings, ...merged.settings } };
     const patch = sessionStatePatch(state, snapshotHostSession(state), runtime);
     applying = true;
@@ -252,10 +248,6 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
       closeTokens.delete(token);
       if (closeTokens.size) return;
       frozen = undefined;
-      if (departure?.released) {
-        departure = undefined;
-        lastSources = [];
-      }
       queue(store.getState());
     },
   });
@@ -290,18 +282,9 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
     window.removeEventListener("pagehide", final);
     document.removeEventListener("visibilitychange", onVisibility);
   };
-  const depart = (token: string, windowId: string) => {
-    if (closing) return;
-    departure = { token, apply: createWindowDeparture(store.getState(), windowId) };
-    lastSources = [];
-    queue(store.getState());
+  const departure = (windowId: string) => {
+    const state = store.getState();
+    return { base: snapshotOf(state), session: snapshotOf(createWindowDeparture(state, windowId)(state)) };
   };
-  const stay = (token: string) => {
-    if (departure?.token !== token) return;
-    if (closeTokens.size) return void (departure.released = true);
-    departure = undefined;
-    lastSources = [];
-    queue(store.getState());
-  };
-  return Object.assign(dispose, { flush: () => { queue(store.getState()); clearTimeout(timer); timer = undefined; return writer.drain(); }, depart, stay });
+  return Object.assign(dispose, { flush: () => { queue(store.getState()); clearTimeout(timer); timer = undefined; return writer.drain(); }, departure });
 }

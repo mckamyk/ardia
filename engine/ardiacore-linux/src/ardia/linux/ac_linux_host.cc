@@ -831,6 +831,9 @@ class ShellHostView : public views::View,
   void DialogInvoke(const std::string& method, const base::ListValue& values,
                     base::OnceCallback<void(bool, base::Value)> done);
   void SuspendDialogsForClose(const std::string& close_generation);
+  void CommitWindowDeparture(const std::string& close_generation);
+  static void PersistWindowDeparture(Profile* profile, std::string source_window,
+                                     base::DictValue departure);
   void ResumeDialogsForClose(const std::string& close_generation);
   bool AwaitingChromeHandoff() const;
   bool ClosingEndsSession() const;
@@ -852,6 +855,7 @@ class ShellHostView : public views::View,
   uint64_t renderer_generation_ = 0;
   std::unique_ptr<LinuxWindowDialogs> dialogs_;
   std::map<std::string, LinuxDialogSuspension> close_dialogs_;
+  std::optional<std::pair<std::string, base::DictValue>> close_departure_;
   content::WeakDocumentPtr renderer_document_;
   std::shared_ptr<DocumentAuthority> documents_;
   const std::string document_window_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
@@ -908,6 +912,30 @@ class ShellHostView : public views::View,
 
 BEGIN_METADATA(ShellHostView)
 END_METADATA
+
+void ShellHostView::PersistWindowDeparture(Profile* profile, std::string source_window,
+                                           base::DictValue departure) {
+  const auto* base = departure.FindDict("base");
+  const auto* session = departure.FindDict("session");
+  if (!profile || !base || !session || !ValidLinuxSession(*base) || !ValidLinuxSession(*session)) return;
+  const base::FilePath profile_path = profile->GetPath();
+  FileRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&MergeAndWriteSession, DocumentDirectory(profile),
+                                base->Clone(), session->Clone()),
+      base::BindOnce(
+          [](base::FilePath profile_path, std::string source_window, SessionWriteResult result) {
+            if (!result.ok || result.previous == result.session) return;
+            for (const auto& [id, host] : Hosts()) {
+              Profile* peer = host->profile();
+              if (host->window_id() == source_window || !peer || peer->IsOffTheRecord() ||
+                  peer->GetPath() != profile_path) continue;
+              host->Event("ArdiaHost", "session", base::Value(base::DictValue()
+                  .Set("base", result.previous.Clone())
+                  .Set("session", result.session.Clone())
+                  .Set("sourceWindowId", source_window)));
+            }
+          }, profile_path, std::move(source_window)));
+}
 
 ShellHostView* HostFor(content::WebContents* contents) {
   for (const auto& [id, host] : Hosts()) {
@@ -1434,6 +1462,7 @@ bool ShellHostView::RetireDocuments() {
     }
   } else {
     close_.Retire();
+    close_departure_.reset();
     close_client_ = {};
     close_browser_.reset();
     close_widget_.reset();
@@ -1807,7 +1836,9 @@ LinuxCloseAdmission ShellHostView::AdmitChromeTeardown(
   if (!chrome_close_token_ || *chrome_close_token_ != token ||
       close_.Irreversible() || !ReadyForChromeClose(identity))
     return LinuxCloseAdmission::kRejected;
-  return CommitLinuxCloseTeardown(browser_, token, stage, base::BindOnce(
+  const auto weak = GetWeakPtr();
+  const auto close_generation = identity.close;
+  const auto admission = CommitLinuxCloseTeardown(browser_, token, stage, base::BindOnce(
       [](base::WeakPtr<ShellHostView> host,
          base::WeakPtr<BrowserWindowInterface> browser,
          LinuxClose::Identity identity, base::UnguessableToken token) {
@@ -1818,6 +1849,16 @@ LinuxCloseAdmission ShellHostView::AdmitChromeTeardown(
             !host->ReadyForChromeClose(identity)) return false;
         return host->close_.BeginTeardown(identity, host->renderer_generation_);
       }, GetWeakPtr(), close_browser_, std::move(identity), token));
+  if (admission == LinuxCloseAdmission::kCommitted && weak && weak->close_.Irreversible())
+    weak->CommitWindowDeparture(close_generation);
+  return admission;
+}
+
+void ShellHostView::CommitWindowDeparture(const std::string& close_generation) {
+  if (!close_departure_ || close_departure_->first != close_generation || !profile()) return;
+  auto departure = std::move(close_departure_->second);
+  close_departure_.reset();
+  PersistWindowDeparture(profile(), window_id_, std::move(departure));
 }
 
 void ShellHostView::ReplyChromeClose(
@@ -1962,6 +2003,7 @@ void ShellHostView::CancelDocumentSeal(LinuxClose::Identity identity, bool chrom
               return;
             }
             if (!host->close_.Cancelled(identity)) return;
+            host->close_departure_.reset();
             host->ResumeDialogsForClose(identity.close);
             host->chrome_close_token_.reset();
             host->close_client_ = {};
@@ -1999,8 +2041,11 @@ void ShellHostView::AcknowledgeWindowClose(
                                       String(request, "closeGeneration")};
   const auto watermark = request.FindInt("watermark");
   const auto phase = close_.phase();
-  if (!handler_ || !handler_->Authorized() ||
-      request.size() != 4 || String(request, "windowId") != window_id_ ||
+  const auto* departure = request.FindDict("departure");
+  const bool departure_valid = !departure || (departure->size() == 2 &&
+      departure->FindDict("base") && departure->FindDict("session"));
+  if (!handler_ || !handler_->Authorized() || !departure_valid ||
+      request.size() != (departure ? 5u : 4u) || String(request, "windowId") != window_id_ ||
       !watermark || !documents_ ||
       !close_.BeginSeal(identity, renderer_generation_, *watermark))
     return std::move(done).Run(false, base::Value(base::DictValue()
@@ -2013,6 +2058,8 @@ void ShellHostView::AcknowledgeWindowClose(
         .Set("code", "ERR_WINDOW_CLOSE_LIMIT").Set("message", "Too many close acknowledgments")));
   close_replies_.push_back(std::move(done));
   if (phase == LinuxClose::Phase::kSealing || close_.CanClose()) return;
+  if (departure) close_departure_.emplace(identity.close, departure->Clone());
+  else close_departure_.reset();
   documents_->service.AsyncCall(&LinuxDocumentService::Seal)
       .WithArgs(DocumentClient(), identity.close, *watermark, document_used_)
       .Then(base::BindOnce(

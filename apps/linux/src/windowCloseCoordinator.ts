@@ -21,8 +21,6 @@ export type WindowCloseCoordinatorHooks = {
   reject(request: WindowCloseRequest): Promise<void>;
   barrier(request: WindowCloseRequest): Promise<void>;
   cancelled(request: WindowCloseRequest): boolean;
-  depart?(request: WindowCloseRequest): void;
-  stay?(request: WindowCloseRequest): void;
   suspendDialogs?(request: WindowCloseRequest): DialogSuspension;
   resumeDialogs?(suspension: DialogSuspension): boolean;
   report?(error: unknown): void;
@@ -40,7 +38,7 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     cancelled: boolean;
     suspension?: DialogSuspension;
     dialogsResumed: boolean;
-    departed: boolean;
+    departing: boolean;
     undecided: boolean;
     promise?: Promise<void>;
   };
@@ -57,10 +55,6 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     if (!attempt.cancelled) {
       attempt.cancelled = true;
       attempt.controller.abort();
-    }
-    if (attempt.departed) {
-      attempt.departed = false;
-      hooks.stay?.(attempt.request);
     }
     resumeDialogs(attempt);
   };
@@ -110,11 +104,8 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
       throw error;
     }
     if (!current(attempt, key)) throw attempt.cancelled ? cancelledClose() : staleClose();
-    if (!hooks.utility && drain?.endsSession === false && hooks.depart) {
-      attempt.departed = true;
-      hooks.depart(attempt.request);
-    }
-    if (suppressWarning || attempt.departed) {
+    attempt.departing = !hooks.utility && drain?.endsSession === false;
+    if (suppressWarning) {
       try {
         await hooks.flush();
       } catch (error) {
@@ -156,7 +147,7 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
       controller: new AbortController(),
       cancelled: false,
       dialogsResumed: false,
-      departed: false,
+      departing: false,
       undecided: false,
     };
     nextReason = undefined;
@@ -197,5 +188,10 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     await accept(await hooks.request(id));
   };
 
-  return { accept, cancelled, producersResumed, close, closeWindow };
+  const departs = (request: WindowCloseRequest) => {
+    const attempt = validCloseRequest(request) ? attempts.get(closeIdentity(request)) : undefined;
+    return !!attempt?.departing && !attempt.cancelled;
+  };
+
+  return { accept, cancelled, producersResumed, close, closeWindow, departs };
 }
