@@ -113,6 +113,17 @@ class SiteControlsWiringTests(unittest.TestCase):
         self.assertIn(f'kExtensionId = "{predicate.group(1)}"', helper)
         self.assertNotRegex(hunk, r'\n\+[^\n]*//(?! nogncheck)')
 
+    def test_the_component_stays_out_of_the_user_extension_list(self):
+        helper = (LINUX / 'ac_linux_site_controls.h').read_text()
+        ours = re.search(r'kExtensionId = "([a-p]{32})"', helper).group(1)
+        self.assertNotEqual(ours, 'blockjmkbacgjkknlgpkjjiijinjdanf')
+        engine = (ROOT.parents[0] / 'chromium/src/chrome/browser/ardia/ac_extensions.cc').read_text()
+        listing = body(engine, '  void List(Reply reply) {')
+        self.assertIn('extensions::ExtensionInfoGenerator', listing)
+        self.assertNotIn(ours, engine)
+        for path in LINUX.glob('ac_linux_extension*'):
+            self.assertNotIn(ours, path.read_text(), path)
+
     def test_gn_lists_the_helper_and_its_extension_dependency(self):
         build = (LINUX / 'BUILD.gn').read_text()
         target = build[build.index('source_set("linux")'):]
