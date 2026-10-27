@@ -19,6 +19,8 @@ class LinuxWindowDialogs : public views::WidgetObserver {
                      bool background);
   ~LinuxWindowDialogs() override;
   LinuxDialogController& controller() { return *controller_; }
+  LinuxDialogSuspension Suspend();
+  bool Resume(const LinuxDialogSuspension& suspension);
   void OnWidgetDestroying(views::Widget* widget) override;
   void OnWidgetDestroyed(views::Widget* widget) override;
 

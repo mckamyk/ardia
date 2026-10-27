@@ -126,3 +126,28 @@ Independent review reproduced direct replacement reactivating its outgoing gener
 Retirement history is bounded at 1,024 tokens. Exhaustion cancels pending dialogs, removes active authority and refuses further begins or replacements; an owner must establish fresh native authentication before recreating the controller. This avoids either unbounded history or silently accepting an older identity. Regression fixtures reject direct, multiple-hop and explicit-retirement replay while preserving the active renderer and enforcing exhaustion.
 
 The new production-controller regression failed before the correction. Both corrected native sanitizer programs pass, all 38 native source fixtures pass, and all 22 dialog/consumer/module tests pass. No native public signature, JS identity protocol, host/GN/bootstrap registration or shared close-policy change is included.
+
+## Per-request abort and per-window close suspension
+
+The close-warning integration review needs two helper capabilities; both are helper-side only and leave public `confirm`/`prompt` signatures and results unchanged.
+
+Renderer adapter (`createHostDialogs`):
+
+| API | Semantics |
+| --- | --- |
+| `abortableConfirm(options, signal: AbortSignal)` / `abortablePrompt(options, signal)` | Same validation, queue bound and results as `confirm`/`prompt`. Abort removes only that entry, settles it once as cancel (`{confirmed:false,suppressed:false}` / `null`) and sends `cancelDialog` only for that `dialogId` if begin was dispatched. A late identity reply cannot begin it; a late `shell.dialogResolved` for it is ignored. An already-aborted signal settles as cancel with no native traffic. Never retires the adapter or touches other requests/windows. |
+| `suspend(): DialogSuspension` | Returns a fresh frozen token `{settled}`. Refuses new admissions (`ERR_DIALOG`, "Dialogs are suspended for this window") before any identity query. Every pending entry is cancelled once (native cancel only if begun) and its public promise is settled before `suspend` returns; `settled` resolves after those promises' registered continuations. The event listener and `onBeforeClose` hook stay installed. A later `suspend` supersedes the earlier token. |
+| `resume(token): boolean` | Releases only the current suspension by object identity; stale, foreign, forged or post-retirement tokens return false. |
+
+Native (`LinuxDialogController`, forwarded by `LinuxWindowDialogs`):
+
+| API | Semantics |
+| --- | --- |
+| `Suspend() -> LinuxDialogSuspension` | Opaque, process-unique token. Refuses `Begin` and `Identify` from then on, force-cancels the active surface and every queued entry synchronously with one completion each before returning, and prevents the queue pump from presenting anything. `Cancel` and presenter responses stay usable. Does not call `ParentDestroyed`, clear or retire the generation, or touch the 1,024-entry history. Suspension survives `ReplaceRenderer`. Token exhaustion fails closed: the window stays suspended and an empty token is returned. |
+| `Resume(const LinuxDialogSuspension&) -> bool` | Releases only the exact current suspension; stale, empty or other-window tokens return false. Resuming after parent destruction releases the token but admits nothing. |
+| `suspended() const -> bool` | Current state. |
+| `Identify(const LinuxDialogClient&, base::DictValue* identity) const -> bool` | Fills `{windowId,rendererGeneration}` only for an authorized, unsuspended client. The host's `ArdiaShell.windowIdentity` handler must reply from this so identity queries are refused while suspended. |
+
+Host hooks (reserved for the integrator): keep each window's `LinuxDialogSuspension` in its close attempt, call `Suspend()` when entering the frozen close phase and `Resume(token)` only with that attempt's token after an authenticated cancellation/veto; answer `windowIdentity` through `Identify`.
+
+Evidence: `/tmp/ardia-f05-suspend-*.log`. JS adapter tests went from 16 to 23 (7 new failed before the change); the native fixtures did not compile before `Suspend`/`Resume`/`Identify` existed and pass under ASan/UBSan after; removing the pump suspension guard fails `TwoWindowsSuspendIndependently`.
