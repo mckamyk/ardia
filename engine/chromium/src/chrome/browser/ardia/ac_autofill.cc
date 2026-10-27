@@ -85,6 +85,15 @@ base::DictValue CardEntry(const autofill::CreditCard& card) {
 
 using Ready = base::OnceCallback<void(PersonalDataManager*)>;
 
+std::u16string CardNumberPrompt() {
+#if BUILDFLAG(IS_LINUX)
+  return u"Show a saved card number";
+#else
+  return l10n_util::GetStringUTF16(
+      IDS_PAYMENTS_AUTOFILL_EDIT_CARD_MANDATORY_REAUTH_PROMPT);
+#endif
+}
+
 }
 
 std::string Digits(const std::string& text) {
@@ -226,10 +235,6 @@ AC_ENGINE_CALL(ac_autofill_cards) {
 
 AC_ENGINE_CALL(ac_autofill_card_number) {
   AC_AUTOFILL_CALL();
-#if BUILDFLAG(IS_LINUX)
-  return call.TakeReply().Error(
-      "OS authentication is unavailable on this platform");
-#else
   if (!ardia::ReauthAvailable()) {
     return call.TakeReply().Error(
         "OS authentication is unavailable on this platform");
@@ -244,8 +249,7 @@ AC_ENGINE_CALL(ac_autofill_card_number) {
             }
             ardia::Reauth(
                 profile, device_reauth::DeviceAuthSource::kAutofill,
-                l10n_util::GetStringUTF16(
-                    IDS_PAYMENTS_AUTOFILL_EDIT_CARD_MANDATORY_REAUTH_PROMPT),
+                ardia::autofill_internal::CardNumberPrompt(),
                 base::TimeDelta(),
                 base::BindOnce(
                     [](std::string id, base::WeakPtr<PersonalDataManager> pdm,
@@ -272,5 +276,4 @@ AC_ENGINE_CALL(ac_autofill_card_number) {
           },
           call.profile(), call.String("id")),
       call.TakeReply());
-#endif
 }
