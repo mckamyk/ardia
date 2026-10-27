@@ -17,6 +17,8 @@ bool EmitLinuxPageEvent(const LinuxPageRequest& request, std::string name, base:
 class LinuxPageState {
  public:
   using Navigation = base::RepeatingCallback<base::DictValue()>;
+  using MessageSnapshot = base::RepeatingCallback<base::ListValue()>;
+  static constexpr size_t kMessageSnapshotMax = 8;
   LinuxPageState(BrowserWindowInterface* browser, base::WeakPtr<views::Widget> window,
                  content::WebContents* contents, content::WebContents* shell,
                  LinuxPageIdentity identity, LinuxPageLease::Sink sink, Navigation navigation);
@@ -34,6 +36,8 @@ class LinuxPageState {
   base::Value SecurityInfo();
   bool GoToOffset(const base::ListValue& args);
   bool ZoomStep(const base::ListValue& args);
+  void SetMessageSnapshot(MessageSnapshot snapshot);
+  bool SetSampledTheme(std::optional<LinuxTheme::Sample> sample, content::WeakDocumentPtr document);
   void Retire();
 
  private:
@@ -41,6 +45,7 @@ class LinuxPageState {
   std::optional<base::ListValue> SnapshotEvents();
   void Snapshot(LinuxPageRequest request, std::string reason);
   Navigation navigation_;
+  MessageSnapshot message_snapshot_;
   std::unique_ptr<LinuxPageMountAuthority> authority_;
   std::unique_ptr<LinuxPageLease> lease_;
   std::unique_ptr<LinuxSecurity> security_;

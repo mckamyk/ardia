@@ -64,6 +64,12 @@ class PageStateTests(unittest.TestCase):
     def test_theme_meta_updates_nulls_and_provisional_clear(self):
         self.run_case('theme')
 
+    def test_sampled_header_theme_is_scoped_to_the_current_main_document(self):
+        self.run_case('sampled-theme')
+
+    def test_page_message_snapshot_and_sampled_theme_through_page_state(self):
+        self.run_case('page-messages')
+
     def test_reentrant_sink_and_snapshot_self_destruction(self):
         self.run_case('reentrant')
 
