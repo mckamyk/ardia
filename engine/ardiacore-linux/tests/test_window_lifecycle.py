@@ -484,7 +484,6 @@ struct ShellHostView {
   void Event(std::string_view module, std::string_view event, base::Value payload) {
     if (module == "ArdiaShell" && event == "onWindowEvent") events.push_back(payload.GetDict().Clone());
   }
-  void ReportTab(int id, base::DictValue event) { reports.emplace_back(id, *event.FindString("type")); }
   void NavigateUtility(base::DictValue) {}
   base::DictValue RequestWindowClose() { return {}; }
   void RequestUtilityClose() {}
@@ -507,8 +506,12 @@ struct TabBinding {
   bool host_focusing_ = false;
   void FocusFromHost();
   void OnWebContentsFocused(content::RenderWidgetHost*);
+  void ReportPresentation(std::string name, base::DictValue data);
 };
 int TabId(content::WebContents* contents) { return contents->id; }
+void TabBinding::ReportPresentation(std::string name, base::DictValue) {
+  owner_->reports.emplace_back(TabId(contents_), std::move(name));
+}
 '''
 
 SCENARIOS = r'''
@@ -678,7 +681,7 @@ static void PageFocus() {
   binding.FocusFromHost();
   assert(main.reports.empty());
   page.Focus();
-  assert(main.reports.size() == 1 && main.reports[0] == std::make_pair(42, std::string("pageFocus")));
+  assert(main.reports.size() == 1 && main.reports[0] == std::make_pair(42, std::string("focus")));
   viewport.visible = false;
   page.Focus();
   assert(main.reports.size() == 1);

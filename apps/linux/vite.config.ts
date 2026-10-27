@@ -16,6 +16,7 @@ const replacements = new Map([
   [here("../browser/src/components/profiles/ProfileIndicator.tsx"), here("./src/ProfileIndicator.tsx")],
   [here("../browser/src/components/sidebar/AddressBar.tsx"), here("./src/SidebarAddressBar.tsx")],
   [here("../browser/src/components/sidebar/TileFace.tsx"), here("./src/TileFace.tsx")],
+  [here("../browser/src/components/site/SiteConnection.tsx"), here("./src/SiteConnection.tsx")],
 ]);
 const adapters = new Set([...replacements.values(), rawBookmarkAdapter.replacement]);
 

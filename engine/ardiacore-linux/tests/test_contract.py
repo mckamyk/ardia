@@ -34,6 +34,8 @@ class ContractTests(unittest.TestCase):
 #include "ardia/linux/ac_linux_contract.h"
 #include <cassert>
 #include <map>
+#include <memory>
+#include <vector>
 #include <optional>
 #include <string>
 namespace base {
@@ -50,27 +52,29 @@ std::string String(const base::DictValue& args, const char* key) {
   auto it = args.strings.find(key);
   return it == args.strings.end() ? "" : it->second;
 }
+namespace base { template<class C, class V> bool Contains(const C& container, const V& value) { for (const auto& item : container) if (item == value) return true; return false; } }
 struct TabBinding {
   int* value;
   std::string claim;
   int renderer_generation = 1;
+  std::vector<int> replaced_ids;
   int* contents() { return value; }
 };
 struct ShellHostView {
   bool handler_ = true;
   int renderer_generation_ = 1;
-  std::map<int, TabBinding*> bindings;
-  TabBinding* Binding(int id) { auto it = bindings.find(id); return it == bindings.end() ? nullptr : it->second; }
+  std::map<int, std::unique_ptr<TabBinding>> bindings_;
+  TabBinding* Binding(int id) { auto it = bindings_.find(id); return it == bindings_.end() ? nullptr : it->second.get(); }
   TabBinding* ClaimedBinding(const base::DictValue&);
 };
 ARDIA_NATIVE_GUARD
 using namespace ardiacore::linux_contract;
 int main() {
   int contents = 7;
-  TabBinding binding{&contents, "current"};
   ShellHostView owner;
   ShellHostView other;
-  owner.bindings[7] = &binding;
+  owner.bindings_[7] = std::make_unique<TabBinding>(TabBinding{&contents, "current", 1, {}});
+  TabBinding& binding = *owner.bindings_[7];
   base::DictValue request;
   request.ints["id"] = 7;
   request.strings["claim"] = "current";
@@ -80,6 +84,18 @@ int main() {
   assert(!owner.ClaimedBinding(request));
   request.strings["claim"] = "replacement";
   assert(owner.ClaimedBinding(request) == &binding);
+  base::DictValue replaced;
+  replaced.ints["id"] = 5;
+  replaced.strings["claim"] = "replacement";
+  assert(!owner.ClaimedBinding(replaced));
+  binding.replaced_ids = {3, 5};
+  assert(owner.ClaimedBinding(replaced) == &binding);
+  replaced.strings["claim"] = "stale";
+  assert(!owner.ClaimedBinding(replaced));
+  replaced.ints["id"] = 0;
+  binding.replaced_ids.clear();
+  replaced.strings["claim"] = "replacement";
+  assert(!owner.ClaimedBinding(replaced));
   binding.claim.clear();
   assert(!owner.ClaimedBinding(request));
   binding.claim = "replacement";

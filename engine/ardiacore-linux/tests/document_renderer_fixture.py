@@ -60,6 +60,8 @@ struct TabBinding {
   bool transferable = false;
   std::string claim;
   uint64_t renderer_generation = 0;
+  int retired_pages = 0;
+  void RetirePage() { ++retired_pages; }
   TabBinding* contents() { return live ? this : nullptr; }
 };
 '''
