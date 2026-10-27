@@ -38,6 +38,7 @@
 #include "ardia/linux/ac_linux_tab_policy.h"
 #include "ardia/linux/ac_linux_launch_steps.h"
 #include "ardia/linux/ac_linux_page_state.h"
+#include "ardia/linux/ac_linux_private_services.h"
 #include "ardia/linux/ac_linux_profile_service.h"
 #include "ardia/linux/ac_linux_profiles.h"
 #include "ardia/core/ac_launch_switches.h"
@@ -1250,7 +1251,8 @@ class HostMessageHandler : public content::WebUIMessageHandler,
     if (!value) return reply->handler->Fail(reply->id, "ERR_BAD_REPLY", "The engine reply is not JSON");
     if (value->is_dict() && value->GetDict().Find("error")) {
       const auto& error = *value->GetDict().Find("error");
-      return reply->handler->Fail(reply->id, "ERR_ENGINE", error.is_string() ? error.GetString() : "Engine service failed");
+      const auto failure = ardiacore::linux_private_services::EngineFailure(error.is_string() ? error.GetString() : "");
+      return reply->handler->Fail(reply->id, failure.code, failure.message);
     }
     if (ardiacore::IsLinuxZoomDomainRoute(reply->name)) {
       auto completed = value->is_dict()
@@ -1448,15 +1450,23 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       }
       if (ardiacore::IsLinuxZoomDomainRoute(name)) {
         Profile* page = host_->page_profile();
-        if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
-        if (profile_name->kind != ardiacore::linux_profiles::ProfileKind::kDefault && !host_->HostsProfile(profile)) {
-          return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kWindowMismatch);
+        const bool private_session = profile_name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate;
+        if (private_session) {
+          const auto error = ardiacore::linux_private_services::RoutePrivateCall(name,
+              {page && page->IsOffTheRecord(), page && page->ShutdownStarted(), page && host_->HostsProfile(profile)});
+          if (error != ardiacore::linux_profiles::ProfileError::kNone) return ProfileFail(id, error);
+        } else {
+          if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
+          if (profile_name->kind != ardiacore::linux_profiles::ProfileKind::kDefault && !host_->HostsProfile(profile)) {
+            return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kWindowMismatch);
+          }
         }
         auto prepared = ardiacore::PrepareLinuxZoomDomain(name, input);
         if (!prepared) return Fail(id, "ERR_ENGINE", "Invalid site zoom request");
+        if (private_session) prepared->args.Set(ardiacore::linux_private_services::kOffTheRecordKey, true);
         const auto serialized = base::WriteJson(prepared->args);
         if (!serialized) return Fail(id, "ERR_BAD_REPLY", "Site zoom arguments are not JSON");
-        const std::string path = page->GetPath().value();
+        const std::string path = (private_session ? page->GetOriginalProfile() : page)->GetPath().value();
         ac_engine_call(prepared->service.c_str(), path.c_str(), serialized->c_str(), Replied,
                        new EngineReply{name, weak_factory_.GetWeakPtr(), id});
         return;

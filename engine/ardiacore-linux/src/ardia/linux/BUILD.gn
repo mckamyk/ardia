@@ -155,6 +155,7 @@ source_set("linux") {
     "ac_linux_policy.h",
     "ac_linux_power.cc",
     "ac_linux_power.h",
+    "ac_linux_private_services.h",
     "ac_linux_profile_service.cc",
     "ac_linux_profile_service.h",
     "ac_linux_profiles.cc",

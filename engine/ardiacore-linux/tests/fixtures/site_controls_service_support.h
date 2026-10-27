@@ -870,6 +870,8 @@ class Profile : public content::BrowserContext {
   bool IsOffTheRecord() const { return off_the_record_; }
   bool IsNewProfile() const { return new_profile; }
   bool new_profile = false;
+  bool ShutdownStarted() const { return shutdown_started; }
+  bool shutdown_started = false;
   Profile* GetOriginalProfile() { return original_; }
   const base::FilePath& GetPath() const { return path_; }
   void AddObserver(ProfileObserver* observer) { observers_.push_back(observer); }

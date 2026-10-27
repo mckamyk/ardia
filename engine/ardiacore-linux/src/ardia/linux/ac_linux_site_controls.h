@@ -18,7 +18,7 @@ struct Failure {
   std::string message;
 };
 
-enum class ProfileRoute { kApp, kRegistry };
+enum class ProfileRoute { kApp, kRegistry, kPrivate };
 
 bool Handles(std::string_view name);
 bool IsContentBlockerCall(std::string_view name);

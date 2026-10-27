@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ardia/linux/ac_linux_navigation_hold.h"
+#include "ardia/linux/ac_linux_private_services.h"
 #include "ardia/linux/ac_linux_profile_service.h"
 #include "ardia/linux/ac_linux_profiles.h"
 #include "ardia/linux/ac_linux_site_controls.h"
@@ -87,8 +88,8 @@ ContentBlockerChanged& Changed() {
 
 using ProfileChosen = base::OnceCallback<void(Profile*, std::optional<controls::Failure>)>;
 
-void SiteControlsProfile(Profile* app_profile, std::string_view name, const std::string& requested,
-                         ProfileChosen chosen) {
+void SiteControlsProfile(Profile* app_profile, Profile* page_profile, std::string_view name,
+                         const std::string& requested, ProfileChosen chosen) {
   if (!app_profile || app_profile->IsOffTheRecord()) {
     return std::move(chosen).Run(nullptr, controls::Failure{"ERR_PROFILE_UNAVAILABLE", "The window has no regular profile"});
   }
@@ -96,6 +97,18 @@ void SiteControlsProfile(Profile* app_profile, std::string_view name, const std:
   if (auto* failure = std::get_if<controls::Failure>(&route)) return std::move(chosen).Run(nullptr, *failure);
   if (std::get<controls::ProfileRoute>(route) == controls::ProfileRoute::kApp) {
     return std::move(chosen).Run(app_profile, std::nullopt);
+  }
+  if (std::get<controls::ProfileRoute>(route) == controls::ProfileRoute::kPrivate) {
+    const bool private_page = page_profile && page_profile->IsOffTheRecord();
+    const auto error = ardiacore::linux_private_services::RoutePrivateCall(name,
+        {private_page, private_page && page_profile->ShutdownStarted(),
+         private_page && ardiacore::LinuxProfileHosts(requested, page_profile)});
+    if (error != ardiacore::linux_profiles::ProfileError::kNone) {
+      return std::move(chosen).Run(nullptr, controls::Failure{
+          std::string(ardiacore::linux_profiles::ProfileErrorCode(error)),
+          std::string(ardiacore::linux_profiles::ProfileErrorMessage(error))});
+    }
+    return std::move(chosen).Run(page_profile, std::nullopt);
   }
   ardiacore::ResolveLinuxProfile(requested, base::BindOnce(
       [](ProfileChosen chosen, Profile* profile, ardiacore::linux_profiles::ProfileError error) {
@@ -617,9 +630,11 @@ void RunSiteControlsCall(const std::string& name, base::DictValue input, bool pa
   if (auto* invalid = std::get_if<controls::Failure>(&request))
     return Fail(std::move(done), invalid->code, invalid->message);
   auto& service = std::get<controls::ServiceRequest>(request);
+  const bool off_the_record = profile->IsOffTheRecord();
+  if (off_the_record) service.args.Set(ardiacore::linux_private_services::kOffTheRecordKey, base::Value(true));
   const std::optional<std::string> json = base::WriteJson(service.args);
   if (!json) return Fail(std::move(done), "ERR_ENGINE", "Engine arguments are not JSON");
-  const std::string path = profile->GetPath().value();
+  const std::string path = (off_the_record ? profile->GetOriginalProfile() : profile)->GetPath().value();
   ac_engine_call(service.service.c_str(), path.c_str(), json->c_str(), ServiceReplied,
                  new ServiceReply{name, std::move(done)});
 }
@@ -644,7 +659,7 @@ void LinuxSiteControlsCall(Profile* app_profile, Profile* page_profile, const st
   Profile* page_original = page_profile ? page_profile->GetOriginalProfile() : nullptr;
   const bool page_filtered = page_original && app_profile &&
                              (page_original == app_profile || LinuxContentBlocker::Find(page_original));
-  SiteControlsProfile(app_profile, name, requested_profile,
+  SiteControlsProfile(app_profile, page_profile, name, requested_profile,
                       base::BindOnce(&RunSiteControlsCall, name, std::move(*input), page_filtered, std::move(done)));
 }
 

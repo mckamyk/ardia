@@ -114,7 +114,9 @@ void HandlesAndProfiles() {
   assert(std::get<ProfileRoute>(route("sites.settings", "")) == ProfileRoute::kRegistry);
   assert(std::get<ProfileRoute>(route("sites.settings", "default")) == ProfileRoute::kRegistry);
   assert(std::get<ProfileRoute>(route("sites.origins", "work")) == ProfileRoute::kRegistry);
-  assert(std::get<Failure>(route("sites.settings", "incognito:w@default")).code == "ERR_PROFILE_PRIVATE");
+  for (const char* served : {"sites.settings", "sites.setSetting", "sites.origins", "sites.reset", "sites.clearData"}) {
+    assert(std::get<ProfileRoute>(route(served, "incognito:w@default")) == ProfileRoute::kPrivate);
+  }
   assert(std::get<Failure>(route("profiles.clearBrowsingData", "incognito:w@work")).code == "ERR_PROFILE_PRIVATE");
   assert(std::get<ProfileRoute>(route("contentBlocker.setAllowed", "incognito:w@default")) == ProfileRoute::kApp);
   assert(std::get<ProfileRoute>(route("contentBlocker.state", "work")) == ProfileRoute::kApp);
@@ -180,6 +182,10 @@ void ServiceValidation() {
 
   auto error = CompleteServiceCall("sites.settings", base::Value(base::DictValue().Set("error", "origin must be an http(s) origin")));
   assert(AsFailure(error)->code == "ERR_ENGINE" && AsFailure(error)->message == "origin must be an http(s) origin");
+  auto ending = CompleteServiceCall("sites.settings", base::Value(base::DictValue().Set("error", "no private session")));
+  assert(AsFailure(ending)->code == "ERR_PROFILE_ENDING");
+  auto refused = CompleteServiceCall("sites.origins", base::Value(base::DictValue().Set("error", "not for a private session")));
+  assert(AsFailure(refused)->code == "ERR_PROFILE_PRIVATE");
   assert(AsFailure(CompleteServiceCall("sites.settings", base::Value("x")))->code == "ERR_BAD_REPLY");
   assert(AsFailure(CompleteServiceCall("sites.settings", base::Value(base::DictValue())))->code == "ERR_BAD_REPLY");
   base::DictValue malformed;
