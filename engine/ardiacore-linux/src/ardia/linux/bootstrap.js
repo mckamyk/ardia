@@ -17,6 +17,19 @@
     ["ArdiaPasswords.update", 180000],
     ["ArdiaAutofill.cardNumber", 180000],
     ["ArdiaPasswords.export", 900000],
+    ["ArdiaSync.createPhrase", 180000],
+    ["ArdiaSync.enterPhrase", 180000],
+    ["ArdiaSync.unlock", 180000],
+    ["ArdiaSync.forget", 180000],
+    ["ArdiaSync.status", 180000],
+    ["ArdiaSync.read", 120000],
+    ["ArdiaSync.write", 120000],
+    ["ArdiaSync.deleteChain", 120000],
+    ["ArdiaSync.recoveryWords", 180000],
+    ["ArdiaSync.qrCode", 180000],
+    ["ArdiaSync.copyRecoveryPhrase", 180000],
+    ["ArdiaSync.chooseFolder", 900000],
+    ["ArdiaSync.saveRecoveryKit", 900000],
   ]);
 
   const request = (method, args, deadline = 30000) => {

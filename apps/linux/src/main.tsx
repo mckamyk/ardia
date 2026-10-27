@@ -40,8 +40,9 @@ import { startUtility } from "./utility";
 import { installProfileWindows } from "./hostWindowProfiles";
 import { focus } from "../../browser/src/state/browser/actions";
 import { announceTypeaheadReady } from "./typeahead";
+import { linuxSyncHooks, startLinuxSync } from "./syncEngine";
 
-Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle, sleepTab } } });
+Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle, sleepTab }, sync: linuxSyncHooks } });
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme });
 setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
 
@@ -67,6 +68,7 @@ async function start() {
     setSessionFlush(persistence.flush);
     startHostData();
     startAppCommands(windowId, linuxCapabilities(ardiaHost), undefined, UTILITY_APP_COMMANDS);
+    startLinuxSync({ host: ardiaHost, candidate: false });
     await startUtility(ardiaHost);
   } else {
     if (!ardiaHost.bootstrap.privateWindow) useBrowser.setState(adoptParkedPins(useBrowser.getState(), windowId, profileId));
@@ -91,6 +93,7 @@ async function start() {
     startHostDownloads(ardiaHost, useBrowser);
     startLinuxTabPolicies({ target: window, provide: provideNativeModuleProvider, startLifecycle: startTabLifecycle, startTrim: startMemoryTrim });
     watchInstallPromptCancellations(ardiaHost, useExtensions);
+    startLinuxSync({ host: ardiaHost, candidate: true, locks: navigator.locks });
     startLinuxAppServices({
       host: ardiaHost,
       windowId,
