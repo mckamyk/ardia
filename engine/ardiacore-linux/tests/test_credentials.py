@@ -1,0 +1,54 @@
+import json
+import pathlib
+import re
+import subprocess
+import tempfile
+import unittest
+
+from test_downloads import compile_and_run
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+LINUX = ROOT / 'src/ardia/linux'
+SECRETS = ['correct horse', 'battery', '4111 1111', '4111111111111111']
+
+
+class CredentialHelperTests(unittest.TestCase):
+    def test_plans_payloads_availability_errors_and_export_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix='ardia-credentials-') as directory:
+            output = compile_and_run(self, 'credentials', [
+                LINUX / 'ac_linux_credentials.cc', ROOT / 'tests/fixtures/credentials_scenarios.cc',
+            ], args=[directory])
+        self.assertIn('credentials scenarios passed', output)
+        for secret in SECRETS:
+            self.assertNotIn(secret, output)
+        native = re.findall(r'^capability (\S+)$', output, re.M)
+        script = "import('./src/hostCredentials.ts').then((m) => console.log(JSON.stringify(m.CREDENTIAL_CAPABILITIES)))"
+        result = subprocess.run(['node', '--experimental-strip-types', '--input-type=module', '-e', script],
+                                cwd=ROOT.parents[1] / 'apps/linux', capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(native), 9)
+        self.assertEqual(sorted(native), sorted(json.loads(result.stdout)))
+
+    def test_credential_sources_never_log_or_trace(self):
+        for name in ['ac_linux_credentials.cc', 'ac_linux_credentials.h', 'ac_linux_credential_service.cc',
+                     'ac_linux_credential_service.h']:
+            text = (LINUX / name).read_text()
+            for forbidden in ['LOG(', 'VLOG(', 'printf', 'std::cerr', 'std::cout', 'TRACE_EVENT', 'crash_keys',
+                              'SCOPED_CRASH_KEY', 'base::debug::', 'DumpWithoutCrashing']:
+                self.assertNotIn(forbidden, text, f'{name} uses {forbidden}')
+
+    def test_secret_payloads_use_hex_and_the_service_cleanses_parsed_replies(self):
+        service = (LINUX / 'ac_linux_credential_service.cc').read_text()
+        self.assertIn('Cleanse(', service)
+        self.assertNotIn('base::WriteJson', service)
+        host = (LINUX / 'ac_linux_host.cc').read_text()
+        self.assertIn('LinuxCredentialsHandles(name)', host)
+        self.assertIn('LinuxCredentialsInvokes(method)', host)
+        self.assertLess(host.index('LinuxCredentialsHandles(name)'), host.index('ardiacore::linux_contract::FindRoute(name)'))
+        contract = (LINUX / 'ac_linux_contract.h').read_text()
+        for name in ['passwords.', 'autofill.', 'ac_passwords', 'ac_autofill']:
+            self.assertNotIn(name, contract)
+
+
+if __name__ == '__main__':
+    unittest.main()

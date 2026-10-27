@@ -187,52 +187,6 @@ int main(int argc, char**) {
         header.write_text('#include "chrome/browser/ardia/public/ac_engine.h"\n_Static_assert(AC_ENGINE_ABI_VERSION == 2, "ABI2");\nac_engine_dispatch_t dispatch = ac_engine_call;\nac_engine_set_event_sink_t sink = ac_engine_set_event_sink;\n')
         checked(["clang", "-std=c11", "-Werror", "-fsyntax-only", "-I", str(ROOT.parents[2]), str(header)])
 
-    def test_real_linux_reauth_never_grants(self):
-        write(self.root, "base/time/time.h", "#pragma once\nnamespace base { struct TimeDelta {}; }\n")
-        write(self.root, "components/device_reauth/device_reauth_metrics_util.h", "#pragma once\nnamespace device_reauth { enum class DeviceAuthSource { kPasswordManager }; }\n")
-        write(self.root, "base/functional/callback_forward.h", "#pragma once\n#include <functional>\n#include <utility>\nnamespace base { template<typename T> class OnceCallback; template<> class OnceCallback<void(bool)> { public: explicit OnceCallback(std::function<void(bool)> fn) : fn_(std::move(fn)) {} void Run(bool value) { fn_(value); } private: std::function<void(bool)> fn_; }; }\n")
-        write(self.root, "base/functional/callback.h", '#pragma once\n#include "base/functional/callback_forward.h"\n')
-        write(self.root, "chrome/browser/ardia/ac_engine.h", '''#pragma once
-#include <string_view>
-class Profile {};
-namespace base {
-struct DictValue {
-  DictValue& Set(const char*, const std::u16string&) { return *this; }
-  DictValue& Set(const char*, bool) { return *this; }
-  DictValue& Set(const char*, const char*) { return *this; }
-};
-}
-namespace ardia { void Emit(std::string_view, Profile*, base::DictValue); }
-''')
-        main = self.root / "reauth_main.cc"
-        main.write_text('''#include "chrome/browser/ardia/ac_reauth.h"
-#include "chrome/browser/ardia/ac_engine.h"
-#include "content/public/browser/browser_thread.h"
-#include <cassert>
-int events = 0;
-namespace ardia {
-void Emit(std::string_view topic, Profile*, base::DictValue) {
-  assert(topic == "reauth.requested");
-  ++events;
-}
-}
-int main(int argc, char**) {
-  if (argc > 1) { content::BrowserThread::on_ui = false; }
-  assert(!ardia::ReauthAvailable());
-  bool called = false;
-  ardia::Reauth(nullptr, device_reauth::DeviceAuthSource::kPasswordManager,
-                u"secret", base::TimeDelta(),
-                base::OnceCallback<void(bool)>([&](bool granted) { assert(!granted); called = true; }));
-  assert(called);
-  assert(events == 1);
-}
-''')
-        executable = self.compile(ROOT / "ac_reauth_linux.cc", main)
-        env = dict(os.environ, ARDIA_BACKGROUND="1", ARDIA_TEST_REAUTH="granted")
-        checked([str(executable)], env=env)
-        denied = subprocess.run([str(executable), "wrong-thread"], capture_output=True, env=env)
-        self.assertLess(denied.returncode, 0)
-
 
 if __name__ == "__main__":
     unittest.main()

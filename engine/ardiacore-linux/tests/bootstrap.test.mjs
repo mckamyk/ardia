@@ -8,6 +8,7 @@ const source = readFileSync(new URL("../src/ardia/linux/bootstrap.js", import.me
 function fixture(options = {}) {
   const calls = [];
   const timers = new Map();
+  const delays = new Map();
   const handlers = new Map();
   let nextTimer = 0;
   const context = {
@@ -15,7 +16,7 @@ function fixture(options = {}) {
     chrome: { send: (...args) => calls.push(args) },
     crypto: { randomUUID: () => "request" },
     __ardiaBootstrap: { windowId: "window", profileId: "default" },
-    setTimeout: (fn) => { timers.set(++nextTimer, fn); return nextTimer; },
+    setTimeout: (fn, ms) => { timers.set(++nextTimer, fn); delays.set(nextTimer, ms); return nextTimer; },
     clearTimeout: (id) => timers.delete(id),
     addEventListener: (name, fn) => handlers.set(name, fn),
     console: { error() {} },
@@ -24,7 +25,7 @@ function fixture(options = {}) {
   context.window = context;
   context.top = options.top ?? context;
   runInNewContext(source, context);
-  return { context, host: context.__ardiaHost, calls, timers, handlers };
+  return { context, host: context.__ardiaHost, calls, timers, delays, handlers };
 }
 
 test("only the trusted top-level WebUI installs the bridge", () => {
@@ -122,4 +123,16 @@ test("malformed requests and excessive concurrency fail before transport", async
   assert.equal(calls.length, 256);
   handlers.get("pagehide")();
   await Promise.all(pending);
+});
+
+test("interactive credential requests get longer deadlines than ordinary requests", () => {
+  const f = fixture();
+  void f.host.invoke("ArdiaShell.windowIdentity", { args: [] });
+  void f.host.invoke("ArdiaPasswords.reveal", { args: ["", "https://a.test", "me"] });
+  void f.host.invoke("ArdiaPasswords.export", { args: [""] });
+  void f.host.invoke("ArdiaPasswords.unlock", { args: [""] });
+  void f.host.invoke("ArdiaAutofill.cardNumber", { args: ["", "card-1"] });
+  void f.host.invoke("ArdiaPasswords.save", { args: ["", "https://a.test", "me", "secret"] });
+  void f.host.call("passwords.reveal", "", "{}");
+  assert.deepEqual([...f.delays.values()], [30000, 180000, 900000, 180000, 180000, 30000, 30000]);
 });

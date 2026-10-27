@@ -40,6 +40,9 @@ def package(output, ui, destination):
         desktop = root / 'share/applications/ardia.desktop'
         desktop.parent.mkdir(parents=True)
         desktop.write_text('[Desktop Entry]\nType=Application\nName=Ardia\nExec=ardia %U\nIcon=ardia\nTerminal=false\nCategories=Network;WebBrowser;\nMimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;\nStartupWMClass=ardia\n')
+        policy = root / 'share/polkit-1/actions/dev.ardia.linux.policy'
+        policy.parent.mkdir(parents=True)
+        shutil.copyfile(pathlib.Path(__file__).resolve().parent / 'dev.ardia.linux.policy', policy)
         icon = pathlib.Path(__file__).resolve().parents[2] / 'engine/chromium/src/chrome/app/theme/chromium/product_logo_256.png'
         if icon.is_file():
             target = root / 'share/icons/hicolor/256x256/apps/ardia.png'

@@ -17,6 +17,9 @@ const replacements = new Map([
   [here("../browser/src/components/sidebar/AddressBar.tsx"), here("./src/SidebarAddressBar.tsx")],
   [here("../browser/src/components/sidebar/TileFace.tsx"), here("./src/TileFace.tsx")],
   [here("../browser/src/components/site/SiteConnection.tsx"), here("./src/SiteConnection.tsx")],
+  [here("../browser/src/state/settings/paneData.ts"), here("./src/credentialPaneData.ts")],
+  [here("../browser/src/components/settings/panes/Passwords.tsx"), here("./src/LinuxPasswordsPane.tsx")],
+  [here("../browser/src/components/settings/panes/Autofill.tsx"), here("./src/LinuxAutofillPane.tsx")],
 ]);
 const adapters = new Set([...replacements.values(), rawBookmarkAdapter.replacement]);
 
