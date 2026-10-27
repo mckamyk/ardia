@@ -70,7 +70,7 @@ The UI renderer is the trusted `chrome://ardia/` WebUI. The host accepts `ardiaR
    - checks store availability;
    - builds `{"origin","username"}`;
    - calls `ac_passwords_reveal`, which asks for authentication.
-3. The engine serializes the reply with `Reply::SendSecret` (#103): `SendSecretJson` reserves a buffer for the worst-case escaping (six bytes per input byte), so the JSON writer never reallocates and leaves no partial copy, runs the reply callback, then cleanses the buffer and the source value. The engine also wipes the `CredentialUIEntry`'s UTF-16 password. The Linux handler parses the JSON, copies only `password` (or `null`) into a fresh value, and `Cleanse`s the parsed tree.
+3. On Linux the engine converts the UTF-16 password with `SecretUTF8` into a buffer reserved for three bytes per unit, which never reallocates or shrinks, and serializes the reply with `Reply::SendSecret` (#103): `SendSecretJson` reserves a buffer for the worst-case escaping (six bytes per input byte), so the JSON writer never reallocates and leaves no partial copy, runs the reply callback, then cleanses the buffer and the source value. The engine also wipes the `CredentialUIEntry`'s UTF-16 password. The Linux handler parses the JSON, copies only `password` (or `null`) into a fresh value, and `Cleanse`s the parsed tree.
 4. The value goes back to the WebUI through `CallJavascriptFunction("__ardiaReply")`. The adapter turns it into `{"password":…}` text, because the shared `call()` contract parses JSON, and the pane shows it.
 
 Without a grant the reply is `{"password": null}`, so the pane never shows a stale or partial value.
@@ -97,7 +97,7 @@ Without a grant the reply is `{"password": null}`, so the pane never shows a sta
 ### Card numbers
 
 - **Saving.** `ArdiaAutofill.saveCard(profile, card, number)` validates 12–19 digits for a new card. It sends `numberHex` to `ac_autofill_save_card`, the same way as a password.
-- **Revealing.** `revealCardNumber` → `autofill.cardNumber` → the typed `ArdiaAutofill.cardNumber`. That calls `ac_autofill_card_number`, which always prompts. The engine wipes its UTF-16 and UTF-8 copies of the number and replies through `Reply::SendSecret`; the Linux handler extracts `number` and `authenticated` and cleanses the parse.
+- **Revealing.** `revealCardNumber` → `autofill.cardNumber` → the typed `ArdiaAutofill.cardNumber`. That calls `ac_autofill_card_number`, which always prompts. On Linux the engine converts the number with `SecretUTF8`, wipes its UTF-16 and UTF-8 copies and replies through `Reply::SendSecret`; the Linux handler extracts `number` and `authenticated` and cleanses the parse.
 - **Listing.** Lists come from `ac_autofill_cards` and carry `last4` only.
 
 ### Unlock (`unlockPasswords`)
@@ -129,7 +129,7 @@ Without a grant the reply is `{"password": null}`, so the pane never shows a sta
   - the JSON text that `HostMessageHandler::Resolve` builds with `base::WriteJson` for every generic `engine.call` reply. Typed secret replies don't take that path (they go to `Reply` as a value), but any reply resolved there leaves an unwiped serialized copy;
   - what the reply callback itself copies: on Linux, `JSONReader` builds a parsed tree that the handler cleanses, but the parser's internal buffers are Chromium's.
 
-  The engine's own reply buffer for reveal and card numbers is now wiped (#103), on macOS too. Other engine replies still use `Reply::Send`, which doesn't wipe; none of them carries a secret.
+  On Linux the engine's own reply buffer for reveal and card numbers is now wiped (#103). macOS keeps its original behaviour (the wipe is behind `BUILDFLAG(IS_LINUX)`) until the owner decides to enable it there. Other engine replies still use `Reply::Send`, which doesn't wipe; none of them carries a secret.
 
 ## Private windows and profiles
 

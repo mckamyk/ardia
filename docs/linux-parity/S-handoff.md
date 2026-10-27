@@ -14,18 +14,18 @@ The secret paths, one by one, are in [f07-security-notes.md](f07-security-notes.
 - **Contract.** `ArdiaPasswords.status` and `ArdiaAutofill.status` add:
   - `protection`: `keyring` | `portal` | `obfuscated` | `none` | `unknown`;
   - `protectionFallback`: true when `--password-store` isn't `basic` but new secrets still get the v10 key (Chromium's silent fallback);
-  - `storage`: a label such as "the Secret Service keyring", "KWallet" or "Chromium's built-in key, which only obfuscates".
+  - `storage`: a label such as "the Secret Service keyring", "KWallet" or "Chromium's built-in key, which only obfuscates". When the check times out or the tag is unrecognised, `protection` is `unknown` and the pane says Ardia couldn't check which key protects the secrets.
 - **Availability unchanged.** An obfuscated store still lists and reveals; it never looks like an empty vault.
 - **UI.** `CredentialNotice` (Linux, above both panes) now titles each case ("Passwords aren't encrypted with your keyring", "System authentication is unavailable", …), warns when the keyring didn't answer, and always shows a "Storage on this computer" row naming the key and that showing secrets asks for the system password (polkit). Helpers: `credentialNotice`, `credentialNoticeTitle` and `credentialStorage` in `hostCredentials.ts`.
 
-### #103 Wiping the engine's secret reply (shared engine, both platforms)
+### #103 Wiping the engine's secret reply (shared engine, Linux only)
 
 - **`Reply::SendSecret`** (`ac_engine.{h,cc}`) serializes through **`SendSecretJson`** (`ac_sensitive_args.{h,cc}`):
   - it reserves a buffer for the worst-case escaping (six bytes per input byte), so `JSONWriter` never reallocates and leaves no partial copy;
   - it runs the reply callback;
   - it then cleanses the buffer and the source value.
-- **Callers.** `ac_passwords_reveal` and `ac_autofill_card_number` reply through it. Reveal also wipes the `CredentialUIEntry`'s UTF-16 password; the card reply wipes its UTF-16 and UTF-8 temporaries, and `Digits` reserves up front.
-- **macOS.** The JSON a macOS caller receives is byte-for-byte the same. This touches shared engine code, so the next macOS build should confirm it compiles there; I couldn't build for macOS.
+- **Callers.** `ac_passwords_reveal` and `ac_autofill_card_number` reply through it. Both convert UTF-16 with `SecretUTF8`, which writes into a buffer reserved for three bytes per unit and never shrinks it: `base::UTF16ToUTF8` over-allocates and then `shrink_to_fit`s, freeing an unwiped copy of a non-ASCII password. Reveal also wipes the `CredentialUIEntry`'s UTF-16 password, and the card reply wipes its UTF-16 and UTF-8 temporaries.
+- **macOS unchanged.** All of this is behind `BUILDFLAG(IS_LINUX)`; the macOS branches are the original lines, untouched. It could be enabled on macOS later with the owner's OK. The next macOS build should still confirm the shared files compile.
 
 ### #104 Linux wording in the shared panes
 
@@ -36,8 +36,9 @@ The secret paths, one by one, are in [f07-security-notes.md](f07-security-notes.
 ### #105 Installing the polkit policy
 
 - **Installer.** `scripts/linux/install.sh` ships inside the package as `ardia/install.sh` (`package.py`).
-  - Options: `--prefix` (absolute; letters, digits and `._/+-` only; default `/usr`) and `--destdir`.
-  - It installs `lib/ardia`, an absolute `bin/ardia` launcher, the desktop entry and the icon under the prefix.
+  - Options: `--prefix` (absolute; letters, digits and `._/+-` only, no `..`; default `/usr`) and `--destdir`.
+  - Without `--destdir` it must run as root and refuses up front otherwise, so it never leaves a partial install.
+  - It installs `lib/ardia` (copied without preserving the unpacking user's ownership, and `chown -R 0:0` when run as root), an absolute `bin/ardia` launcher, the desktop entry and the icon under the prefix.
   - It always installs `dev.ardia.linux.policy`, mode 0644, at `DESTDIR/usr/share/polkit-1/actions`, the only directory polkit reads.
 - **Arch.** `scripts/linux/arch/PKGBUILD` (`ardia-bin`, depends on `polkit`) packages the release tarball through that installer.
 - **Fail closed.** The policy-missing message now names the directory and how to install it.
@@ -50,7 +51,7 @@ The secret paths, one by one, are in [f07-security-notes.md](f07-security-notes.
   - the app profile only when `IsNewProfile()` (first launch);
   - every isolated profile on its first load in a run.
 - **When it ends.** The hold ends:
-  - when uBlock answers through the bridge page (the bridge waits for `isReadyPromise`), or for an isolated profile, when its first settings copy finishes;
+  - when the profile's own uBlock answers through the bridge page (the bridge waits for `isReadyPromise`); a new isolated profile instead waits for its first copy of the default profile's settings, since it has none of its own yet;
   - when the blocker is missing or fails to load;
   - when the profile goes away;
   - after 10 s.
@@ -73,8 +74,8 @@ The secret paths, one by one, are in [f07-security-notes.md](f07-security-notes.
   - `settings` reads the selected lists, the full whitelist (site exceptions and the off directive) and auto-update;
   - `follow` applies them and writes only what differs.
 
-  Neither is reachable from a `contentBlocker.*` call. Copied settings are validated before they reach the page: list ids, no CR, LF or NUL in directives, at most 512 lists and 10,000 directives of 2 KiB.
-- **First load.** A follower copies the leader's settings, retrying up to six times with 1, 2, 4, 8 and 16 s backoff, and that first copy ends its hold.
+  Neither is reachable from a `contentBlocker.*` call. Copied settings are validated before they reach the page: list ids that aren't plain ids (such as URL lists imported in uBlock's dashboard) are skipped rather than failing the copy, directives may not contain CR, LF or NUL, and there are at most 512 lists and 10,000 directives of 2 KiB.
+- **First load.** A follower copies the leader's settings, retrying up to six times with 1, 2, 4, 8 and 16 s backoff. For a new isolated profile that first copy ends its hold.
 - **Mirroring.** After each successful mutation on the leader, its settings are copied to every loaded follower.
 - **Calls from isolated windows.** `contentBlocker.*` calls from an isolated window now act on the leader's settings, as on macOS, instead of answering "not available in this profile yet".
 
@@ -129,7 +130,7 @@ New scenarios are in `apps/linux/scripts/acceptance/scenarios/s10*.mjs`, with th
   - a working Secret Service or KWallet reported as `keyring`;
   - a root install with `pkaction` and the F07 polkit prompt checks;
   - the panes' layout.
-- **macOS.** The macOS build should compile the #103 engine change.
+- **macOS.** The macOS build should compile the shared engine files; the #103 behaviour itself is Linux-only.
 
 ## Issues
 
@@ -142,6 +143,7 @@ New scenarios are in `apps/linux/scripts/acceptance/scenarios/s10*.mjs`, with th
 
 ## Open risks
 
-- **The hold delays first pages.** It delays the first pages of a fresh profile and of each isolated profile's first window by up to uBlock's start time (capped at 10 s). Session-restored isolated windows are held too; macOS skips holds during launch.
+- **The hold delays first pages.** It delays the first pages of a fresh profile and of each isolated profile's first window by up to uBlock's start time (capped at 10 s); an existing isolated profile waits only for its own uBlock. Session-restored isolated windows are held too; macOS skips holds during launch.
+- **Imported URL lists.** Filter lists added by URL in uBlock's dashboard aren't copied to isolated profiles.
 - **Large settings copies.** A leader whose settings reply exceeds the bridge's 1 MiB reply cap (thousands of long exceptions) can't be copied. The follower retries and then logs a warning.
 - **Probe ciphertext.** The protection probe encrypts a constant on the UI thread whenever status runs. It's cheap AES, but a Helium patch that changed the provider tags would make status report `unknown`.
