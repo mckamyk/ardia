@@ -198,6 +198,7 @@ extern bool (*g_ardia_linux_renderer_unresponsive)(content::WebContents*,
                                                    const base::RepeatingClosure&);
 extern bool (*g_ardia_linux_renderer_responsive)(content::WebContents*,
                                                  content::RenderWidgetHost*);
+extern bool (*g_ardia_linux_off_the_record_navigation)(content::WebContents*, const GURL&);
 extern void (*g_ardia_devtools_dock_changed)(BrowserWindowInterface* browser,
                                              content::WebContents* inspected,
                                              content::WebContents* devtools);
@@ -954,6 +955,18 @@ class ShellHostView : public views::View,
       if (binding->contents() == contents) {
         return base::TimeTicks::Now() < binding->cancelled_auto_pip_until;
       }
+    }
+    return false;
+  }
+  bool OpenPrivateLink(content::WebContents* contents, const GURL& url) {
+    for (const auto& [id, binding] : bindings_) {
+      if (binding->contents() != contents || !binding->page()) continue;
+      Profile* page = page_profile();
+      const auto original = page ? ardiacore::LinuxProfileName(page->GetOriginalProfile()) : std::nullopt;
+      if (!original) return false;
+      binding->ReportPresentation("openWindow", base::DictValue()
+          .Set("url", url.spec()).Set("disposition", "incognito").Set("profile", *original));
+      return true;
     }
     return false;
   }
@@ -4955,6 +4968,13 @@ void StartLinuxHost() {
                                          content::RenderWidgetHost* widget) {
     for (const auto& [id, host] : Hosts()) {
       if (auto* status = host->PageStatus(contents)) return status->Responsive(widget);
+    }
+    return false;
+  };
+  g_ardia_linux_off_the_record_navigation = [](content::WebContents* contents, const GURL& url) {
+    if (!contents || !url.is_valid()) return false;
+    for (const auto& [id, host] : Hosts()) {
+      if (host->OpenPrivateLink(contents, url)) return true;
     }
     return false;
   };
