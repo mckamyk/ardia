@@ -7,34 +7,41 @@ Branch `t3/linux-ui-services`, based on `linux` at `4b3d21e0`. The changes are i
 **The lane brief proposed widening the CSP. That would crash the shell, so this lane uses the plan's native request path instead.** In Chromium 156, a WebUI frame with bindings gets only the WebUI URL loader factory. `chrome://ardia` is not in `ChromeWebUIControllerFactory::IsWebUIAllowedToMakeNetworkRequests`. An https fetch that passed CSP would reach `WebUIURLLoaderFactory`, which calls `ReportBadMessage("Incorrect scheme")` and kills the shell renderer. Also, none of the nine suggestion providers send `Access-Control-Allow-Origin` (checked with an `Origin` header on 2026-10-27). `connect-src 'none'` stays, and a test pins it.
 
 Contract:
-- Host method `ArdiaSearch.suggest`, args `[url]`, is listed in the bootstrap `capabilities`.
+- Host methods `ArdiaSearch.suggest` (args `[url, id]`) and `ArdiaSearch.cancelSuggest` (args `[id]`). Both are listed in the bootstrap `capabilities`.
   - Success reply: `{ body: string }`.
   - Refused request: `{code: "ERR_SUGGEST_REFUSED"}`.
-  - Network, status or format failure: `{code: "ERR_SUGGEST"}`.
-- `ac_linux_suggest_policy.h` (std-only) defines what passes:
+  - Network, status or format failure, or a superseded or cancelled request: `{code: "ERR_SUGGEST"}`.
+- `ac_linux_suggest_policy.h` (std-only, fixture-tested) defines what passes:
   - The URL must be `<endpoint>?<query>` for one of the nine `suggestUrl` endpoints in `packages/core` `BUILT_IN_ENGINES`. It must be printable ASCII with no `#` or `\`, and at most 2048 bytes. The check runs on both the raw URL and the GURL-canonical spec.
+  - The request id must be 1 to 64 characters of `[A-Za-z0-9_-]`.
   - The reply must be status 200, at most 64 KB, valid UTF-8 and a JSON array.
-  - At most 6 fetches may run at once.
 - `ac_linux_suggest.cc` makes the request:
-  - It uses `SimpleURLLoader` on the regular profile's browser-process factory.
-  - Credentials are omitted (no cookies), redirects are refused (`RedirectMode::kError`), the cache is disabled and the timeout is 5 s.
-  - A `ProfileObserver` ends the fetch when the profile is destroyed. Replies are posted and reach `HostMessageHandler::Reply` through its weak pointer.
+  - Each window's `ShellHostView` owns a `SuggestionClient`. A window keeps at most 4 fetches; a new request evicts the oldest instead of being refused, and a repeated id replaces its predecessor.
+  - Evicted, cancelled and finished fetches are destroyed, which cancels their `SimpleURLLoader`, and their replies are posted to the weak handler callback. Closing a window destroys all of its fetches.
+  - Requests use the regular profile's browser-process factory. Credentials are omitted (no cookies), redirects are refused (`RedirectMode::kError`), the cache is disabled and the timeout is 5 s. A `ProfileObserver` ends a fetch when the profile is destroyed.
+- Native gate for "suggestions off": the host records `settings.searchSuggestions`, per profile path, from every session the shell submits through `session.write`. This happens in a separate statement before the `session.write` branch, because native fixtures compile that branch on its own. A missing key means the shared default (on). Requests are refused while the setting is off or not yet known. The startup window always writes the session before it renders, so the value is known before the first request. Settings changes reach native through the normal debounced session write, so the JS check stays the primary gate.
+- The traffic annotation `ardia_linux_search_suggestions` declares `user_data: USER_CONTENT`, `internal.contacts.owners: "//ardia/linux/OWNERS"` and `last_reviewed`. That OWNERS file contains only `*`, because Ardia has no named owners. **Owner decision:** replace the contact with a real team address if you have one.
 - In the UI, a Vite replacement for `packages/core/src/suggestFetcher.ts` (`apps/linux/src/suggestFetcher.ts`) keeps the shared fetcher's debounce, cache and generation checks, and swaps only its transport for `hostSuggestFetch`.
-  - The transport refuses non-built-in URLs before reaching the host, so extension engines get no remote suggestions. It also refuses hosts that don't advertise the capability.
-  - It rejects on abort and turns malformed or oversized replies into an empty failed response.
-  - A JS abort does not cancel the native request; the in-flight cap bounds that.
-- `ac_linux_host.cc` changes: one include, one dispatch block in `ShellHostView::Invoke`, and one capability entry. `BUILD.gn` adds the sources and `//services/network/public/cpp`.
+  - The transport gives each request its own id. When the shared fetcher aborts a request still in flight, it sends `cancelSuggest` (only if the host advertises it).
+  - It refuses URLs that are not `<built-in endpoint>?…` before reaching the host, and refuses hosts without the capability.
+  - It turns malformed or oversized replies into an empty failed response.
+- Extension search engines: an extension engine whose `suggestionsUrl` starts with a built-in endpoint does pass, but only to that endpoint and still without cookies. Other extension suggestion URLs get no remote suggestions.
+- Client certificates: `credentials_mode = kOmit` drops cookies and HTTP auth, but Chromium may still offer a client certificate on the TLS handshake unless the `kOmitCorsClientCert` feature is enabled. It is off by default and this lane does not change it.
+- Private windows: the Linux host attaches only regular-profile windows today, and the gate refuses off-the-record profiles. A future private-window shell that runs on the regular profile would need its own native gating, because the request would be indistinguishable.
+- `ac_linux_host.cc` changes:
+  - includes;
+  - a `suggestions_` member;
+  - the `suggest` and `cancelSuggest` dispatch blocks;
+  - one `NoteSuggestionsSetting` line in the `session.write` reply;
+  - capability entries.
+
+  `BUILD.gn` adds the sources and `//services/network/public/cpp`.
 
 ## F26 platform settings ([#36](https://github.com/mckamyk/ardia/issues/36), partial)
 
-- `hostCapabilities.ts` derives the Linux capabilities from the methods the host advertises:
-  - default browser
-  - login item
-  - thin scrollbars
-  - tracing
-  - `openExternalURL`
-
-  WebKit and CLI control are fixed as unavailable. Task Manager is available whenever a host exists (`engine.openTaskManager` is in the native contract).
+- `hostCapabilities.ts` derives the Linux capabilities from what the host advertises: default browser, login item, thin scrollbars, `openExternalURL`, tracing and Task Manager. WebKit and CLI control are fixed as unavailable.
+  - The bootstrap now appends every `kRoutes` name from `ac_linux_contract.h` to `capabilities`, so the native call contract is the source of truth at runtime.
+  - Tracing needs `engine.beginTracing`, `engine.endTracing` and `engine.isTracing`, none of which the contract has yet. Task Manager needs `engine.openTaskManager`, which it has.
 - `resolveHostModule` (in `hostModules.ts`) now answers locally, without calling the host, when a method isn't advertised:
   - `isDefaultBrowser` and `setAsDefaultBrowser` reject with `ERR_UNAVAILABLE`.
   - `launchAtLoginStatus` returns `notFound`; `setLaunchAtLogin` rejects.
@@ -58,43 +65,57 @@ Service-authority contract (`appServices.ts`):
 | Scope | Services | Owner |
 | --- | --- | --- |
 | Renderer-local | The app commands addressed to the window's own `windowId`: `sendFeedback`, `copyDiagnostics`, `recordPerformanceIssue`, `showOnboarding`, `toolTour`, `videoTour`, `releaseNotes`, `taskManager`. Also `firstWindowCommitted`, once per renderer. | Every browser renderer. Utility renderers handle only `copyDiagnostics`, `taskManager` and `recordPerformanceIssue`. |
-| App-wide, once per launch | `trackAppVersion`, onboarding start or resume, release notes after an update, and the default-browser re-offer when the host supports it. | A `startup` window that wins the Web Lock `ardia.linux.app-launch` (`ifAvailable`, held for the document's life). A `sessionStorage` mark stops a reloaded owner from running these again. Without Web Locks, nothing runs. |
+| App-wide, once per process | These steps, in order: `version` (`trackAppVersion`, recording `versionUpdated`), `onboarding`, `releaseNotes` and `defaultBrowserOffer`. | Whichever browser window holds the Web Lock `ardia.linux.app-launch`. Every browser window queues for it in waiting mode. The native host records completed steps per process and profile (`ac_linux_launch_steps.h` via `ArdiaShell.launchSteps` / `ArdiaShell.completeLaunchStep`). The holder runs only unrecorded steps and records each before the next. When it releases the lock, by finishing or because its window closed, the next window continues the rest. Everyone after that finds every step done. Reloads are covered by the native record. A failed step releases the lock so the next window retries. Without Web Locks or the native record, nothing runs. |
 | Profile-wide writers | Session, documents, sync and memory policy. | Unchanged; F04, F13 and F18 own them. |
 
-- Linux keeps its session in `linux-session.json`, so the shared `session.json` probe would onboard every existing profile. Instead:
-  - An existing profile (a saved session read at startup) with no `onboarding.json` is marked complete.
-  - Onboarding targeted at another window is retargeted to the owner, which is the only renderer that draws it.
+- Fresh-profile evidence: a browser window whose profile has no saved session awaits `linux-fresh-profile.json` before its first session flush. The onboarding decision reads `onboarding.json` and that marker from disk (`ArdiaShell.readDocument`), not from the bootstrap snapshot:
+  - **Record present:** the shared flow (resume, or nothing if finished).
+  - **Record absent, marker present (or no saved session):** start onboarding.
+  - **Record absent, no marker, saved session:** a profile from before this change, so mark onboarding complete. This cannot overwrite anything, because the record is confirmed absent on disk.
+  - **Record on disk but missing from the snapshot (128-document / 8 MB cap), or any read failure:** do nothing, because the shared code would write over it.
+- Remaining edge: if the marker write itself fails while the first session flush succeeds and the onboarding write is lost, the next launch treats the profile as pre-existing.
+- Onboarding that `maybeStartOnboarding` targets at another window is retargeted to the lock holder, the only renderer that draws it.
+- A takeover window calls `trackAppVersion` again. The version is already saved, so this only restores the pending postcard in its own renderer. Release notes still due come from the recorded `versionUpdated` step.
 - Commands without a backend show a "Not available on Linux yet" toast: tracing, release-notes and video-tour URLs, and Task Manager failures. Send Feedback copies the report to the clipboard and says so.
 - Deliberately not started: AppleScript, Handoff, CLI control, watched user scripts, telemetry, kill switches (the build has no updater), translation, sync (F13) and memory trim (F18).
 - Still open:
   - Onboarding, tours, release notes and Send Feedback pressed in a utility window need a cross-renderer command route to a browser window.
-  - The release-notes postcard appears only in the owner renderer's window.
+  - The release-notes postcard appears only in the lock holder's window.
   - Linux `systemInfo` has no `releaseNotesURL`, `videoTourURL` or `feedbackURL`.
 
 ## Tests run
 
-- `pnpm --filter @ardia/linux test:host`: 230/230 pass. New files:
+Review round 2, after rebasing onto `origin/linux` `52d72e78`:
+- `pnpm --filter @ardia/linux test:host`: 243/243 pass. This lane's files:
   - `suggestionCsp` (3)
-  - `hostSuggestions` (7)
-  - `hostCapabilities` (5)
+  - `hostSuggestions` (11)
+  - `hostCapabilities` (7)
   - `settingsCapabilities` (3)
-  - `appServices` (10)
-- `typecheck`, `build`, `test:graph` (now asserts the four new replacements) and `test:symbols` (4/4) pass.
-- `pnpm --filter @ardia/linux fixture:csp:check` is a new headless runner for the existing fixture. It passes in `/usr/bin/chromium` with the policy parsed from `ac_linux_host.cc`, and checks:
+  - `appServices` (17)
+- `typecheck`, `build`, `test:graph` and `test:symbols` (4/4) pass.
+- `pnpm --filter @ardia/linux fixture:csp:check` passes in headless `/usr/bin/chromium` under the policy parsed from `ac_linux_host.cc`. It checks:
   - Trusted Types
   - 13 of 13 direct fetches blocked
   - one host-bridged suggestion delivered
-  - the startup window holds the launch lease
-  - a second claimant gets `heldElsewhere`
-
-  On `linux` this fixture could not start the UI: its mock was stale, and `setThinScrollBars` rejected at startup.
-- `python3 -m unittest discover -s engine/ardiacore-linux/tests`: 120 run. The new `test_suggest_policy` passes. There is 1 failure plus 4 `setUpClass` errors, all in the Chromium close-patch fixtures (`unload_controller` patch does not apply to the bundled 156 fixture). The same failure reproduces on the `linux` base `4b3d21e0`; this lane did not touch those files.
+  - all four launch steps recorded
+  - a second window gets `alreadyDone`
+- `python3 -m unittest discover -s engine/ardiacore-linux/tests`: 208/208 pass. This includes `test_suggest_policy`, `test_launch_steps`, and `test_session_merge` / `test_window_storage`, which compile the `session.write` branch.
 - `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs`: 7/7 pass.
 
 ## Needs native runtime acceptance on a Chromium 156 build
 
-**None of the native code in this lane has been compiled.** The shared 156 output was mid-build and had no generated C++ mojom headers, so even a syntax-only check could not run. Lane rules forbid building. Check these:
-- `ac_linux_suggest.cc` and the `ArdiaSearch.suggest` dispatch compile and pass `gn check`. The traffic annotation `ardia_linux_search_suggestions` may need to be registered if the auditor runs.
-- Typing a non-URL query in the packaged UI with suggestions on returns real suggestions. With suggestions off, no request is made. The request carries no cookies, and redirects fail.
-- Web Locks and `sessionStorage` work in `chrome://ardia`. On a fresh profile, onboarding starts once in the startup window. A restored second window and a renderer reload do not start it again. An existing profile is not onboarded.
-- Settings shows no Engines pane, default-browser banner, login item, page-scrollbar choice or command-line section. Startup logs no `ArdiaSystem` or `ArdiaApp` rejections.
+**None of the native code in this lane has been compiled.** The shared 156 output still has no generated C++ mojom headers, so even a syntax-only check could not run, and lane rules forbid building. Check these:
+- `ac_linux_suggest.{h,cc}`, `ac_linux_launch_steps.h` and the new host hunks compile and pass `gn check`. The traffic annotation `ardia_linux_search_suggestions` passes the auditor if it runs.
+- Suggestions in the packaged UI:
+  - Typing a non-URL query with suggestions on returns real suggestions.
+  - With suggestions off, no request is made, and the native gate refuses one forced through.
+  - Requests carry no cookies, and redirects fail.
+  - Fast typing on a throttled network always shows suggestions for the newest query, and a second window is not starved.
+- Launch services:
+  - Web Locks work in `chrome://ardia`.
+  - On a fresh profile, onboarding starts once.
+  - Closing the startup window mid-launch lets a restored window finish the remaining steps.
+  - A renderer reload or a later window runs nothing.
+  - A second launch after a killed first launch still onboards.
+  - A profile from before this change is not onboarded.
+- Settings shows no Engines pane, default-browser banner, login item, page-scrollbar choice or command-line section. Startup logs no `ArdiaSystem` or `ArdiaApp` rejections. Task Manager works.
