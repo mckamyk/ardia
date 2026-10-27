@@ -33,6 +33,13 @@ std::optional<std::string> Host(std::string_view host) {
 
 }
 
+bool IsLinuxZoomDomainRoute(std::string_view name) {
+  for (const char* route : kLinuxZoomDomainRoutes) {
+    if (name == route) return true;
+  }
+  return false;
+}
+
 std::optional<LinuxZoomDomainRequest> PrepareLinuxZoomDomain(
     std::string_view method, const base::DictValue& args) {
   if (args.Find("tab")) return std::nullopt;

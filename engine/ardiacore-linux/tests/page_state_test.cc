@@ -184,6 +184,10 @@ void HistoryBounds() {
 }
 
 void Domain() {
+  assert(std::size(kLinuxZoomDomainRoutes)==2);
+  for (const char* route:kLinuxZoomDomainRoutes) assert(IsLinuxZoomDomainRoute(route));
+  assert(!IsLinuxZoomDomainRoute("sites.settings") && !IsLinuxZoomDomainRoute("sites.zoom"));
+  assert(PrepareLinuxZoomDomain(kLinuxZoomDomainRoutes[0],base::DictValue()) && PrepareLinuxZoomDomain(kLinuxZoomDomainRoutes[1],base::DictValue().Set("host","a").Set("zoom",1.0)));
   auto request=PrepareLinuxZoomDomain("sites.zoomLevels",base::DictValue());assert(request && request->service=="ac_zoom_list" && request->args.empty());
   auto set=PrepareLinuxZoomDomain("sites.setZoom",base::DictValue().Set("host","EXAMPLE.TEST").Set("zoom",1.44));assert(set && Text(set->args,"host")=="example.test" && std::abs(Number(set->args,"level")-2)<1e-12 && !set->args.Find("zoom"));
   for(const auto* host:{"","https://test/","a/b","a@b","a b","a:123", "a:", "a\\b"}) assert(!PrepareLinuxZoomDomain("sites.setZoom",base::DictValue().Set("host",host).Set("zoom",1)));

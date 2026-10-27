@@ -8,6 +8,9 @@
 
 namespace ardiacore {
 
+inline constexpr const char* kLinuxZoomDomainRoutes[] = {"sites.zoomLevels", "sites.setZoom"};
+bool IsLinuxZoomDomainRoute(std::string_view name);
+
 struct LinuxZoomDomainRequest {
   std::string service;
   base::DictValue args;

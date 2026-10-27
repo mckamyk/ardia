@@ -1206,7 +1206,7 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       const auto& error = *value->GetDict().Find("error");
       return reply->handler->Fail(reply->id, "ERR_ENGINE", error.is_string() ? error.GetString() : "Engine service failed");
     }
-    if (reply->name == "sites.zoomLevels" || reply->name == "sites.setZoom") {
+    if (ardiacore::IsLinuxZoomDomainRoute(reply->name)) {
       auto completed = value->is_dict()
           ? ardiacore::CompleteLinuxZoomDomain(reply->name, value->GetDict()) : std::nullopt;
       if (!completed) return reply->handler->Fail(reply->id, "ERR_BAD_REPLY", "Malformed site zoom reply");
@@ -1358,7 +1358,7 @@ class HostMessageHandler : public content::WebUIMessageHandler,
               handler->Fail(id, code ? *code : "ERR_ENGINE", message ? *message : "Download request failed");
             }, weak_factory_.GetWeakPtr(), id));
       }
-      if (name == "sites.zoomLevels" || name == "sites.setZoom") {
+      if (ardiacore::IsLinuxZoomDomainRoute(name)) {
         auto prepared = ardiacore::PrepareLinuxZoomDomain(name, input);
         if (!prepared) return Fail(id, "ERR_ENGINE", "Invalid site zoom request");
         const auto serialized = base::WriteJson(prepared->args);
@@ -1603,6 +1603,8 @@ base::DictValue ShellHostView::Bootstrap() const {
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
   for (const auto& route : ardiacore::linux_contract::kRoutes)
     capabilities.Append(route.name);
+  for (const char* route : ardiacore::kLinuxZoomDomainRoutes)
+    capabilities.Append(route);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
