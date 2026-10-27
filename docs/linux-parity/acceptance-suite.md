@@ -237,6 +237,7 @@ The JSON lists each manual item with these steps. They are kept here so they can
 - **Battery.** On a laptop with UPower, set Battery Saver to When unplugged. Unplugging reports `onBattery` and shows the Battery Saver toast; plugging in turns it off.
 - **Power profile.** Switching power-profiles-daemon to power-saver turns `lowPowerMode` on within 30 s and Battery Saver activates.
 - **Memory pressure.** With MemAvailable under 10% of RAM, `memoryPressure` reports `warning` (under 5%, `critical`) and idle background tabs sleep on the next sweep.
+
 **#71, #72, #89, #99 and #101 (private-window follow-ups)**
 
 - **#71 Open link in incognito.** In a regular window, right-click a link and choose Open Link in Incognito Window. An Ardia private window opens on that URL and no plain Chrome window appears. From an isolated profile's window, the private window belongs to that profile.
