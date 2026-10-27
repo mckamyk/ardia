@@ -38,13 +38,17 @@ import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setS
 import { startUtility } from "./utility";
 import { installProfileWindows } from "./hostWindowProfiles";
 import { focus } from "../../browser/src/state/browser/actions";
+import { announceTypeaheadReady } from "./typeahead";
 
 Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle, sleepTab } } });
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme });
 setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
 
-function FirstWindowCommitted() {
-  useEffect(() => firstWindowCommitted(), []);
+function FirstWindowCommitted({ typeahead }: { typeahead: boolean }) {
+  useEffect(() => {
+    firstWindowCommitted();
+    if (typeahead && ardiaHost) announceTypeaheadReady(ardiaHost);
+  }, [typeahead]);
   return null;
 }
 
@@ -101,7 +105,7 @@ async function start() {
         <TrafficLights windowId={windowId} />
       </div>
       <MenuHost />
-      <FirstWindowCommitted />
+      <FirstWindowCommitted typeahead={!utility} />
     </div>,
   );
 }

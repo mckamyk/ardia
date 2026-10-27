@@ -27,6 +27,7 @@ class KeyboardInputTests(unittest.TestCase):
 #include <iostream>
 #include <set>
 #include <string>
+#include "ardia/linux/ac_linux_typeahead.h"
 #define LOG(level) std::cerr
 namespace base {
 struct CommandLine {
@@ -85,6 +86,7 @@ struct ShellHostView {
   int dispatches = 0;
   std::string window_id_ = "main";
   std::set<ui::Accelerator> shortcuts_;
+  ardia::linux_window::Typeahead<ui::KeyEvent> typeahead_;
   bool CanHandleAccelerators() const { return ready; }
   bool OwnsKeyboardEvent(const ui::KeyEvent&) const { return !modal; }
   bool AcceleratorPressed(const ui::Accelerator& accelerator) {
@@ -130,13 +132,37 @@ int main() {
   host.focus_manager_ = nullptr;
   host.OnKeyEvent(&event);
   assert(!event.stopped && host.dispatches == 2);
+  host.focus_manager_ = &host.focus;
+  host.consume = true;
+  host.typeahead_.Start();
+  host.ready = false;
+  event.stopped = false;
+  host.OnKeyEvent(&event);
+  assert(event.stopped && host.dispatches == 2);
+  event.stopped = false;
+  event.event_type = ui::EventType::kKeyReleased;
+  host.OnKeyEvent(&event);
+  assert(event.stopped);
+  event.event_type = ui::EventType::kKeyPressed;
+  event.stopped = false;
+  host.modal = true;
+  host.OnKeyEvent(&event);
+  assert(!event.stopped && host.dispatches == 2);
+  host.modal = false;
+  host.ready = true;
+  auto held = host.typeahead_.Release();
+  assert(held.size() == 2 && held[0].type() == ui::EventType::kKeyPressed && held[1].type() == ui::EventType::kKeyReleased);
+  event.stopped = false;
+  host.OnKeyEvent(&event);
+  assert(event.stopped && host.dispatches == 3);
 }
 '''
         with tempfile.TemporaryDirectory(prefix='ardia-keyboard-input-') as scratch:
             cpp = Path(scratch) / 'keyboard.cc'
             cpp.write_text(prelude + method + checks)
             binary = Path(scratch) / 'keyboard'
-            subprocess.run([compiler, '-std=c++20', '-Wall', '-Werror', str(cpp), '-o', str(binary)], check=True, capture_output=True)
+            built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Werror', '-I', str(Path(__file__).resolve().parents[1] / 'src'), str(cpp), '-o', str(binary)], capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stderr)
             subprocess.run([str(binary)], check=True)
 
 

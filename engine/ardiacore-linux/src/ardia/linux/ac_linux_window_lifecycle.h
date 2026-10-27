@@ -32,6 +32,7 @@ class FocusLedger {
 
   bool pending(int window) const { return pending_.contains(window); }
   int active() const { return active_; }
+  uint64_t epoch() const { return epoch_; }
 
  private:
   bool Wants(const OpenIntent& intent) const;
