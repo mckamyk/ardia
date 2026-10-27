@@ -1,0 +1,147 @@
+import { mkdir, mkdtemp, readdir, rm, rmdir, stat, unlink } from "node:fs/promises";
+import { join } from "node:path";
+import { startBrowser } from "../lib/flows.mjs";
+import { js, until } from "../lib/util.mjs";
+
+const DEVTOOLS = (t) => t.url.startsWith("devtools://") || t.url.startsWith("chrome-devtools://");
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function finishedDownload(shell, filename) {
+  return until(async () => (await shell.state("return s.downloads ?? [];")).find((d) => d.state === "finished" && d.path?.endsWith(filename)) ?? false,
+    { timeout: 25000, label: `download ${filename} to finish` });
+}
+
+async function separateVolume(scratch) {
+  const [here, there] = await Promise.all([stat(scratch), stat("/dev/shm").catch(() => null)]);
+  return there && there.dev !== here.dev ? "/dev/shm" : null;
+}
+
+export const w74 = {
+  id: "W74",
+  issue: 74,
+  title: "The download folder picker returns a validated folder or nothing",
+  deadline: 120000,
+  manual: [
+    { name: "Choosing and cancelling the download folder", steps: ["Settings › General › Downloads › Change…: the desktop's folder dialog opens (portal, GTK or KDE) at the current folder.", "Pick a writable folder: the row shows it and the next download lands there.", "Open it again and Cancel: the folder stays the same.", "Pick a folder you can't write to: Ardia explains why and offers to choose another; the setting is unchanged."], reason: "needs the desktop's folder dialog" },
+  ],
+  async run(t) {
+    const { shell } = await startBrowser(t, { name: "picker" });
+    await t.check("the host advertises the picker", async () => {
+      const advertised = await shell.eval("__ardiaHost.bootstrap.capabilities.includes('ArdiaShell.pickFolder')");
+      if (!advertised) throw new Error("ArdiaShell.pickFolder is not advertised");
+      return true;
+    }, { critical: true });
+    await t.check("a background instance logs the request and returns no folder instead of showing a dialog", async () => {
+      const reply = await shell.invoke("ArdiaShell.pickFolder", { args: ["/tmp", "Use Folder"] });
+      if (!reply.ok || reply.value !== null) throw new Error(`pickFolder answered ${JSON.stringify(reply)}`);
+      return reply;
+    });
+    await t.check("malformed requests are refused", async () => {
+      const reply = await shell.invoke("ArdiaShell.pickFolder", { args: [42] });
+      if (reply.ok || reply.code !== "ERR_FOLDER_REQUEST") throw new Error(`pickFolder answered ${JSON.stringify(reply)}`);
+      return reply;
+    });
+  },
+};
+
+export const w75 = {
+  id: "W75",
+  issue: 75,
+  title: "Downloads: per-volume trash and reveal failures that are reported",
+  deadline: 240000,
+  manual: [
+    { name: "A finished download never flashes as missing", steps: ["Download a file and watch its row in the downloads popover and in Ctrl+J as it finishes.", "The row goes straight from progress to the finished file; it never shows 'Missing' first."], reason: "a frame-level check of the rendered row" },
+    { name: "Show in Folder through the desktop", steps: ["In a desktop session, Show in Folder on a finished download opens the file manager with the file selected.", "On a session with no portal, FileManager1 or folder handler, Show in Folder shows 'Couldn't Show the File' instead of doing nothing."], reason: "needs a desktop session bus and a file manager" },
+  ],
+  async run(t) {
+    const scratch = await t.scratch("volume");
+    const bin = join(scratch, "empty-bin");
+    await mkdir(bin, { recursive: true });
+    const volume = await separateVolume(scratch);
+    const downloads = volume ? await mkdtemp(join(volume, "ardia-acceptance-")) : join(scratch, "downloads");
+    await mkdir(downloads, { recursive: true });
+    const trash = volume ? join(volume, `.Trash-${process.getuid()}`) : null;
+    const trashExisted = trash ? await stat(trash).then(() => true, () => false) : true;
+    try {
+      const { shell } = await startBrowser(t, {
+        name: "files",
+        preferences: { downloads },
+        extraArgs: [`--ardia-downloads-dir=${downloads}`],
+        env: { PATH: bin },
+      });
+      const tabId = await shell.state("const w = s.windows[windowId]; return w.activeTabIds[w.profileId];");
+      await shell.navigate(tabId, t.fixtures.url.download("volume.bin"));
+      const download = await finishedDownload(shell, "volume.bin");
+      await t.check("Show in Folder without any desktop handler reports why", async () => {
+        const reply = await shell.invoke("ArdiaSystem.revealFile", { args: [download.path] });
+        if (reply.ok || reply.code !== "ERR_REVEAL_UNAVAILABLE") throw new Error(`revealFile answered ${JSON.stringify(reply)}`);
+        return reply;
+      });
+      if (!volume) {
+        t.manual("Move to Trash on another file system", ["Download a file to a USB drive or another partition and choose Move to Trash.", "The file moves to that volume's .Trash-<uid>/files (or .Trash/<uid> when .Trash is a sticky folder) with a relative .trashinfo record."], "/dev/shm is not a separate mount here");
+        return;
+      }
+      await t.check("Move to Trash uses the download's own volume trash", async () => {
+        const reply = await shell.invoke("ArdiaSystem.moveToTrash", { args: [download.path] });
+        if (!reply.ok) throw new Error(`moveToTrash failed: ${reply.code} ${reply.message}`);
+        const files = await readdir(join(trash, "files"));
+        const name = files.find((f) => f.startsWith("volume"));
+        if (!name) throw new Error(`nothing in ${trash}/files: ${JSON.stringify(files)}`);
+        const gone = await stat(download.path).then(() => false, () => true);
+        if (!gone) throw new Error("the original file is still there");
+        await unlink(join(trash, "files", name));
+        await unlink(join(trash, "info", `${name}.trashinfo`));
+        return { trash, name };
+      });
+    } finally {
+      if (volume) {
+        if (!trashExisted) {
+          for (const part of ["files", "info", ""]) await rmdir(join(trash, part)).catch(() => {});
+        }
+        await rm(downloads, { recursive: true, force: true });
+      }
+    }
+  },
+};
+
+export const w76 = {
+  id: "W76",
+  issue: 76,
+  title: "Docked DevTools asked for before a pane's first viewport opens once the viewport arrives",
+  deadline: 180000,
+  manual: [
+    { name: "DevTools on a fresh tab", steps: ["Press Ctrl+T, type a URL and press Enter, then press Ctrl+Alt+I immediately.", "DevTools appears docked in that tab's pane as soon as the page shows, with keyboard focus; nothing appears behind Ardia's window.", "The panel keeps the page's 12 pt corner (no Dia measurement exists to compare)."], reason: "the frame-by-frame placement needs a person" },
+  ],
+  async run(t) {
+    const { app, shell } = await startBrowser(t, { name: "devtools", background: false });
+    await t.check("DevTools requested on a tab created in the same task opens and inspects it", async () => {
+      const url = t.fixtures.url.page(3, "w76");
+      await shell.eval(`(() => { const s = ardiaLinux.store.getState(); const id = s.newTab(${js(shell.windowId)}, { url: ${js(url)} }); s.activate(id); ardiaLinux.emitCommand({ command: "devTools", windowId: ${js(shell.windowId)} }); return id; })()`);
+      const frontend = await until(async () => (await app.browserTargets()).find(DEVTOOLS) ?? false, { timeout: 20000, label: "the DevTools frontend" });
+      const page = await app.pageTarget((target) => target.url === url, { timeout: 20000, label: "the inspected page" });
+      const attached = await until(async () => (await app.browserTargets()).find((target) => target.targetId === page.id)?.attached || false, { timeout: 10000, label: "the page to be inspected" });
+      await delay(1000);
+      await t.screenshot(shell, "w76-devtools").catch(() => {});
+      return { frontend: frontend.url, attached };
+    });
+  },
+};
+
+export const w137 = {
+  id: "W137",
+  issue: 137,
+  title: "An extension install prompt ends with the tab that asked for it",
+  deadline: 60000,
+  manual: [
+    { name: "Closing the Web Store tab dismisses its prompt", steps: ["Open chromewebstore.google.com and choose Add to Ardia on any extension.", "While Ardia's dialog is open, close the Web Store tab (Ctrl+W from the sidebar).", "The dialog disappears and nothing is installed; the store's own Add flow reports it was cancelled."], reason: "needs network access to the Chrome Web Store" },
+    { name: "A prompt with no tab stays until answered", steps: ["Install a packed CRX from Settings › Extensions › Install from file.", "The dialog stays open until Add or Cancel, whatever tabs close meanwhile."], reason: "needs a signed CRX" },
+  ],
+  async run(t) {
+    const { shell } = await startBrowser(t, { name: "prompt" });
+    await t.check("the extension service answers in this window", async () => {
+      const reply = await shell.call("extensions.list", {});
+      if (!reply.ok) throw new Error(`extensions.list failed: ${reply.code} ${reply.message}`);
+      return { count: reply.value.length };
+    });
+  },
+};
