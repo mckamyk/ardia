@@ -117,7 +117,17 @@ int main() {
 
   ardia::LinuxExtensionWindow private_window = work;
   private_window.profile = &incognito;
-  assert(Resolve(private_window, "extensions.actionStates", "").code == "ERR_PROFILE_PRIVATE");
+  for (const char* call : {"extensions.actionStates", "extensions.sidePanelUrl"}) {
+    const Outcome outcome = Resolve(private_window, call, "");
+    assert(outcome.profile == &incognito && outcome.code.empty());
+  }
+  assert(Resolve(private_window, "extensions.resolveInstallPrompt", "").code == "ERR_PROFILE_PRIVATE");
+  assert(Resolve(private_window, "extensions.list", "incognito:w1@").code == "ERR_PROFILE_PRIVATE");
+  assert(Resolve(private_window, "extensions.setEnabled", "incognito:w1@").code == "ERR_PROFILE_PRIVATE");
+  assert(Resolve(private_window, "extensions.list", "").profile == &regular);
+  incognito.shutdown_started = true;
+  assert(Resolve(private_window, "extensions.actionStates", "").code == "ERR_PROFILE_ENDING");
+  incognito.shutdown_started = false;
   ardia::LinuxExtensionWindow closed = work;
   closed.profile = nullptr;
   assert(Resolve(closed, "extensions.sidePanelUrl", "").code == "ERR_WINDOW_CLOSED");

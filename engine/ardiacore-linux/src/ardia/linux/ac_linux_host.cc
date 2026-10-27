@@ -5060,7 +5060,10 @@ void StartLinuxHost() {
   });
   extensions.broadcast = base::BindRepeating([](Profile* profile, std::string_view name, base::DictValue data) {
     for (const auto& [id, host] : Hosts()) {
-      if (host->page_profile() == profile) host->ExtensionEvent(name, data.Clone());
+      Profile* page = host->page_profile();
+      if (page && !page->ShutdownStarted() && page->GetOriginalProfile() == profile) {
+        host->ExtensionEvent(name, data.Clone());
+      }
     }
   });
   StartLinuxExtensions(std::move(extensions));
