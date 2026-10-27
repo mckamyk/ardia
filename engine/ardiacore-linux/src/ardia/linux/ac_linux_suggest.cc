@@ -48,15 +48,18 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
         policy_exception_justification: "Not implemented."
       })");
 
+int g_in_flight = 0;
+
 class SuggestionFetch : public ProfileObserver {
  public:
   SuggestionFetch(Profile* profile, SuggestionReply reply)
       : reply_(std::move(reply)) {
+    ++g_in_flight;
     observation_.Observe(profile);
   }
   SuggestionFetch(const SuggestionFetch&) = delete;
   SuggestionFetch& operator=(const SuggestionFetch&) = delete;
-  ~SuggestionFetch() override = default;
+  ~SuggestionFetch() override { --g_in_flight; }
 
   void Load(Profile* profile, const GURL& url) {
     auto request = std::make_unique<network::ResourceRequest>();
@@ -105,7 +108,8 @@ class SuggestionFetch : public ProfileObserver {
 }
 
 bool CanFetchSuggestions(Profile* profile, const std::string& url) {
-  if (!profile || profile->IsOffTheRecord() || !policy::RequestAllowed(url)) {
+  if (!profile || profile->IsOffTheRecord() ||
+      !policy::HasCapacity(g_in_flight) || !policy::RequestAllowed(url)) {
     return false;
   }
   const GURL target(url);

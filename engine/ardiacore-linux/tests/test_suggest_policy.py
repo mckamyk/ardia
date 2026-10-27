@@ -51,6 +51,10 @@ int main() {
   assert(!ReplyAcceptable(200, "[\"\xed\xa0\x80\"]"));
   assert(!ReplyAcceptable(200, "[\"\xc0\xaf\"]"));
   assert(!ReplyAcceptable(200, "[" + std::string(kMaxReplyBytes, ' ')));
+  assert(HasCapacity(0));
+  assert(HasCapacity(kMaxInFlight - 1));
+  assert(!HasCapacity(kMaxInFlight));
+  assert(!HasCapacity(-1));
   assert(ValidUtf8("\xf0\x9f\x98\x80"));
   assert(!ValidUtf8("\xf0\x9f\x98"));
   assert(!ValidUtf8("\xf4\x90\x80\x80"));

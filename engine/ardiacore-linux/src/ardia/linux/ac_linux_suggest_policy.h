@@ -21,6 +21,11 @@ inline constexpr std::string_view kEndpoints[] = {
 inline constexpr size_t kMaxRequestLength = 2048;
 inline constexpr size_t kMaxReplyBytes = 64 * 1024;
 inline constexpr int kTimeoutSeconds = 5;
+inline constexpr int kMaxInFlight = 6;
+
+inline bool HasCapacity(int in_flight) {
+  return in_flight >= 0 && in_flight < kMaxInFlight;
+}
 
 inline bool RequestAllowed(std::string_view url) {
   if (url.empty() || url.size() > kMaxRequestLength) {
