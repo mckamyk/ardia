@@ -1782,7 +1782,8 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Append("ArdiaSearch.suggest").Append("ArdiaSearch.cancelSuggest")
       .Append("ArdiaShell.launchSteps")
       .Append("ArdiaShell.completeLaunchStep")
-      .Append("ArdiaShell.typeaheadReady");
+      .Append("ArdiaShell.typeaheadReady")
+      .Append("ArdiaShell.restoreFullScreen");
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
   for (const auto& route : ardiacore::linux_contract::kRoutes)
     capabilities.Append(route.name);
