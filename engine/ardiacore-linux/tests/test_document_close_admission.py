@@ -55,7 +55,7 @@ struct JoinedWindow {
   ~JoinedWindow() { host.RetireDocuments(); Drain(); seam_hosts.erase(&browser); }
 };
 void AckNow(ShellHostView& host, int watermark = 0) {
-  host.AcknowledgeWindowClose(Ack(host.RequestWindowClose(), watermark), Ignore);
+  host.AcknowledgeWindowClose(Ack(Drained(host, host.RequestWindowClose()), watermark), Ignore);
 }
 
 void HandlerChanged(content::RenderFrameHostImpl& frame, bool present) {

@@ -814,6 +814,8 @@ class ShellHostView : public views::View,
   bool EnsureDocumentClient();
   void CancelWindowClose(LinuxClose::Identity identity,
                          base::OnceCallback<void(bool, base::Value)> done);
+  void BeginWindowCloseDrain(const base::DictValue& request,
+                             base::OnceCallback<void(bool, base::Value)> done);
   void AcknowledgeWindowClose(const base::DictValue& request,
                               base::OnceCallback<void(bool, base::Value)> done);
   void OnWidgetClosing(views::Widget* widget) override;
@@ -1627,17 +1629,34 @@ base::DictValue ShellHostView::RequestWindowClose() {
     close_widget_ = GetWidget()->GetWeakPtr();
     close_window_ = window_id_;
     close_error_.reset();
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, base::BindOnce(
-            [](base::WeakPtr<ShellHostView> host, LinuxClose::Identity identity) {
-              if (!host || !host->close_.Matches(identity, host->renderer_generation_)) return;
-              host->CancelWindowClose(identity, base::BindOnce([](bool, base::Value) {}));
-            }, GetWeakPtr(), *identity), base::Seconds(30));
   }
   if (close_.phase() == LinuxClose::Phase::kRequested)
     Event("ArdiaShell", "shell", base::Value(base::DictValue()
         .Set("name", "shell.closeRequested").Set("data", request.Clone())));
   return request;
+}
+
+void ShellHostView::BeginWindowCloseDrain(
+    const base::DictValue& request,
+    base::OnceCallback<void(bool, base::Value)> done) {
+  const LinuxClose::Identity identity{String(request, "rendererGeneration"),
+                                      String(request, "closeGeneration")};
+  const bool deciding = close_.phase() == LinuxClose::Phase::kRequested;
+  if (!handler_ || !handler_->Authorized() || request.size() != 3 ||
+      String(request, "windowId") != window_id_ || !documents_ ||
+      !close_.BeginDrain(identity, renderer_generation_))
+    return std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_WINDOW_CLOSE_STALE").Set("message", "Invalid close drain")));
+  if (deciding)
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce(
+            [](base::WeakPtr<ShellHostView> host, LinuxClose::Identity identity) {
+              if (!host || !host->close_.Matches(identity, host->renderer_generation_) ||
+                  (host->close_.phase() != LinuxClose::Phase::kDraining &&
+                   host->close_.phase() != LinuxClose::Phase::kSealing)) return;
+              host->CancelWindowClose(identity, base::BindOnce([](bool, base::Value) {}));
+            }, GetWeakPtr(), identity), base::Seconds(30));
+  std::move(done).Run(true, base::Value(base::DictValue().Set("accepted", base::Value(true))));
 }
 
 void ShellHostView::RequestUtilityClose() {
@@ -2619,6 +2638,11 @@ void ShellHostView::Invoke(
       return std::move(done).Run(true, base::Value(std::move(request)));
     }
     return std::move(done).Run(false, base::Value("No such native window"));
+  }
+  if (method == "ArdiaShell.beginWindowCloseDrain") {
+    if (values.size() != 1 || !values[0].is_dict())
+      return std::move(done).Run(false, base::Value("Close identity required"));
+    return BeginWindowCloseDrain(values[0].GetDict(), std::move(done));
   }
   if (method == "ArdiaShell.acknowledgeWindowClose" || method == "ArdiaShell.rejectWindowClose") {
     if (values.size() != 1 || !values[0].is_dict())

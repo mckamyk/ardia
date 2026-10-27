@@ -50,7 +50,7 @@ CASES = r'''
     const auto old = ExhaustCloseHistory(window, retained ? 1023 : 1024);
     if (retained) {
       content::WebContents tab; tab.needs_unload = true; HandlerChanged(tab.frame, true); b.tabs.tabs = {&tab};
-      auto request = h.RequestWindowClose(); h.AcknowledgeWindowClose(Ack(request, 0), Ignore); Drain();
+      auto request = Drained(h, h.RequestWindowClose()); h.AcknowledgeWindowClose(Ack(request, 0), Ignore); Drain();
       assert(h.chrome_close_token_ && !h.close_.Irreversible() && tab.dispatches == 1);
       tab.Ack(true); Drain(); assert(h.close_.Irreversible() && tab.close_pages == 1);
       const auto token = *h.chrome_close_token_; const auto identity = h.close_.identity();
@@ -70,18 +70,18 @@ CASES = r'''
       h.documents_->fail = true;
       h.DocumentCall("commit", CommitRequest(h.DocumentClient(), 1), [](auto result) { assert(result.code == "ERR_DOCUMENT_STORAGE"); }); Drain();
       h.documents_->fail = false;
-      h.AcknowledgeWindowClose(Ack(h.RequestWindowClose(), 0), [](bool ok, auto value) {
+      h.AcknowledgeWindowClose(Ack(Drained(h, h.RequestWindowClose()), 0), [](bool ok, auto value) {
         assert(!ok && *value.GetDict().FindString("code") == "ERR_DOCUMENT_STORAGE");
       }); Drain();
       h.CancelWindowClose(h.close_.identity(), Ignore); Drain();
       assert(h.storage_failures_.contains(kLinuxLiveEnvelope));
       h.DocumentCall("commit", CommitRequest(h.DocumentClient(), 1), [](auto result) { assert(result.ok()); }); Drain();
       assert(h.storage_failures_.empty());
-      h.AcknowledgeWindowClose(Ack(h.RequestWindowClose(), 1), Ignore); Drain();
+      h.AcknowledgeWindowClose(Ack(Drained(h, h.RequestWindowClose()), 1), Ignore); Drain();
       assert(!h.close_.BlocksWrites() && !b.destroyed);
       h.DocumentCall("commit", CommitRequest(h.DocumentClient(), 2), [](auto result) { assert(result.ok()); }); Drain();
     } else {
-      const auto request = h.RequestWindowClose(); const auto identity = h.close_.identity();
+      const auto request = Drained(h, h.RequestWindowClose()); const auto identity = h.close_.identity();
       int rejected = 0;
       auto reply = [&](bool ok, auto value) {
         assert(!ok && *value.GetDict().FindString("code") == "ERR_WINDOW_CLOSE_CANCELLED"); ++rejected;
@@ -135,7 +135,7 @@ CASES = r'''
   if (mode.starts_with("guard-")) {
     JoinedWindow window;
     auto& h = window.host; auto& b = window.browser;
-    const auto request = h.RequestWindowClose(); const auto identity = h.close_.identity();
+    const auto request = Drained(h, h.RequestWindowClose()); const auto identity = h.close_.identity();
     h.AcknowledgeWindowClose(Ack(request, 0), Ignore); files.Drain();
     auto ui = base::SingleThreadTaskRunner::GetCurrentDefault(); ui->One();
     assert(h.close_.phase() == LinuxClose::Phase::kSealed && !h.chrome_close_token_);
