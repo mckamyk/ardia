@@ -28,7 +28,7 @@ The final rebase review also found duplicate Helium flag-header hunks in the sha
 - `helium-pins.ini` pins Chromium 155.0.8059.84, shared Helium 0.19.4, and Helium Linux 0.19.4.1 at `cf878d4aaff58d063beada276c437ae756a142aa`. That Linux revision references the same shared Helium commit as the Mac build.
 - Every patch-series command understands platform selection. Shared lifetime changes remain on both platforms; Cocoa, Apple Safe Storage, Metal and other Mac changes stay on Mac.
 - The Linux layer copies its own sources plus the shared hook declarations. It does not apply the Mac ArdiaCore startup or window-host scripts.
-- Engine services have platform-selected implementations. Linux has protocol allowance operations, Aura input tracking and PiP placement/fade adapters. Linux OS reauthentication and the token-authenticated CLI explicitly report unavailable.
+- Engine services have platform-selected implementations. Linux has protocol allowance operations, Aura input tracking and PiP placement/fade adapters. Linux OS reauthentication asks polkit (`dev.ardia.linux.reauthenticate`, `auth_self`) and reports unavailable in background instances or when polkit, the policy or an agent is missing; the token-authenticated CLI reports unavailable. See [F07 security notes](linux-parity/f07-security-notes.md).
 - The additive `ac_engine_call(name, profile_dir, args_json, reply, context)` dispatcher routes only generated known service names. Existing individually exported calls and ABI version 2 remain compatible.
 - Web host mode uses a privileged browser UI, native tab calls/events, persisted documents and sessions. Plain browser demo mode keeps its seeded tabs and iframe implementation.
 - The native host attaches Ardia UI and real-tab WebViews to Chromium's existing BrowserView. Chromium retains BrowserWindow and TabStripModel ownership and its normal browser delegates.
@@ -171,7 +171,7 @@ The real preparation uncovered and fixed these issues:
 - Helium's Linux default-browser message contained a `helium.desktop` placeholder example. Linux branding now replaces it with `ardia.desktop` before the naming check.
 - Reapplying overlapping scheduler patches failed because later patches changed the earlier reverse-check context. Linux application now recognizes files that exactly match the fully materialized final series; unexplained differences still follow the existing apply path.
 - The native host needed Chromium 155 metadata declarations, public access restored after the metadata macro, an explicit URL path string conversion, its inherited accelerator interface and Chromium's native tab-observer registration and cleanup.
-- Linux autofill no longer references a platform-unavailable authentication prompt string. Card-number access keeps returning the existing OS-authentication-unavailable error on Linux; the non-Linux implementation is preserved.
+- Linux autofill no longer references a platform-unavailable authentication prompt string. Card-number access goes through the same OS reauthentication as passwords, with a Linux-only purpose string; the non-Linux implementation is preserved.
 
 All 32 production Ardia host and service objects compiled. The subsequent full `chrome` invocation completed 44,510 build steps in `5h1m02.02s`, including the final native executable link, with `BUILD_EXIT=0`:
 
@@ -338,7 +338,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s engine/ardiacore-linux
 node --test engine/ardiacore-linux/tests/bootstrap.test.mjs
 ```
 
-The tooling tests exercise platform selection, independent bases, repeat application, materialization, drift detection, shared lifetime retention and package layout. Engine fixtures compile the real dispatcher against test services, compile the C header, and verify Linux reauthentication never grants a test bypass. Browser fixtures verify host UI events, viewport hiding and session restoration, but use a simulated native host.
+The tooling tests exercise platform selection, independent bases, repeat application, materialization, drift detection, shared lifetime retention and package layout. Engine fixtures compile the real dispatcher against test services, compile the C header, and verify Linux reauthentication grants only an authorized, non-challenge polkit reply and never a test bypass. Browser fixtures verify host UI events, viewport hiding and session restoration, but use a simulated native host.
 
 A scratch audit applied all selected Linux patch sections strictly against exact Chromium 155 source files after the relevant pinned Helium changes and domain substitution. This proves patch contexts, not GN dependency correctness, compilation, linking or runtime behavior.
 

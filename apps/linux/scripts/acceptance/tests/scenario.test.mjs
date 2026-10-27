@@ -140,7 +140,7 @@ describe("report", () => {
 
 describe("scenario catalogue", () => {
   it("covers every issue #81 names, once each", () => {
-    assert.deepEqual(SCENARIOS.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 18, 20, 30, 32, 33, 36, 37]);
+    assert.deepEqual(SCENARIOS.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 17, 18, 20, 30, 32, 33, 36, 37]);
     assert.equal(new Set(SCENARIOS.map((s) => s.id)).size, SCENARIOS.length);
     for (const s of SCENARIOS) {
       assert.equal(typeof s.run, "function", s.id);
