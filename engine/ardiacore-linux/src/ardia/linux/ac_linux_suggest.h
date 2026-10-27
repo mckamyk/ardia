@@ -22,6 +22,9 @@ class SuggestionFetch;
 void NoteSuggestionsSetting(const base::FilePath& profile_path,
                             const base::DictValue& session);
 
+base::OnceCallback<void(bool, base::Value)> NoteSuggestionsOnWrite(
+    base::FilePath profile_path, base::OnceCallback<void(bool, base::Value)> done);
+
 bool CanFetchSuggestions(Profile* profile, const std::string& url);
 
 class SuggestionClient {

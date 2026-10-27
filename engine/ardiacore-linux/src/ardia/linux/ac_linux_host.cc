@@ -1,6 +1,9 @@
 #include "ardia/linux/ac_linux_host.h"
 
+#include <sys/stat.h>
+
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <map>
@@ -402,6 +405,22 @@ std::optional<std::string> ReadDocument(const base::FilePath& directory,
   return base::ReadFileToStringWithMaxSize(file, &contents, kDocumentLimit)
              ? std::make_optional(std::move(contents))
              : std::nullopt;
+}
+
+struct StoredDocument {
+  linux_policy::StoredRead outcome = linux_policy::StoredRead::kFailed;
+  std::string contents;
+};
+
+StoredDocument ReadStoredDocument(const base::FilePath& directory,
+                                  const std::string& name) {
+  struct stat info;
+  const int error =
+      lstat(directory.AppendASCII(name).value().c_str(), &info) == 0 ? 0 : errno;
+  std::optional<std::string> contents =
+      error ? std::nullopt : ReadDocument(directory, name);
+  return {linux_policy::ClassifyStoredRead(error, contents.has_value()),
+          contents.value_or(std::string())};
 }
 
 bool WriteDocument(const base::FilePath& directory,
@@ -3388,9 +3407,8 @@ void ShellHostView::Invoke(
             }, std::move(done)));
     return;
   }
-  if (const base::DictValue* proposed = args.FindDict("session");
-      method == "session.write" && proposed && profile()) {
-    ardia::linux_suggest::NoteSuggestionsSetting(profile()->GetPath(), *proposed);
+  if (method == "session.write" && profile()) {
+    done = ardia::linux_suggest::NoteSuggestionsOnWrite(profile()->GetOriginalProfile()->GetPath(), std::move(done));
   }
   if (method == "session.write") {
     const base::DictValue* base = args.FindDict("base");
@@ -3443,11 +3461,17 @@ void ShellHostView::Invoke(
       return std::move(done).Run(false, base::Value("Invalid or reserved document name"));
     }
     FileRunner()->PostTaskAndReplyWithResult(
-        FROM_HERE, base::BindOnce(&ReadDocument, DocumentDirectory(profile()), name),
+        FROM_HERE, base::BindOnce(&ReadStoredDocument, DocumentDirectory(profile()), name),
         base::BindOnce(
             [](base::OnceCallback<void(bool, base::Value)> done,
-               std::optional<std::string> contents) {
-              std::move(done).Run(true, contents ? base::Value(*contents) : base::Value());
+               StoredDocument stored) {
+              if (stored.outcome == linux_policy::StoredRead::kFailed) {
+                return std::move(done).Run(false, base::Value(base::DictValue()
+                    .Set("code", "ERR_DOCUMENT_READ").Set("message", "The document could not be read")));
+              }
+              std::move(done).Run(true, stored.outcome == linux_policy::StoredRead::kFound
+                                            ? base::Value(std::move(stored.contents))
+                                            : base::Value());
             }, std::move(done)));
     return;
   }

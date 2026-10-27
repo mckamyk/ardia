@@ -130,11 +130,22 @@ void NoteSuggestionsSetting(const base::FilePath& profile_path,
       settings ? settings->FindBool("searchSuggestions") : std::nullopt);
 }
 
+base::OnceCallback<void(bool, base::Value)> NoteSuggestionsOnWrite(
+    base::FilePath profile_path, base::OnceCallback<void(bool, base::Value)> done) {
+  return base::BindOnce(
+      [](base::FilePath path, base::OnceCallback<void(bool, base::Value)> done,
+         bool ok, base::Value reply) {
+        if (ok && reply.is_dict()) NoteSuggestionsSetting(path, reply.GetDict());
+        std::move(done).Run(ok, std::move(reply));
+      },
+      std::move(profile_path), std::move(done));
+}
+
 bool CanFetchSuggestions(Profile* profile, const std::string& url) {
-  if (!profile || profile->IsOffTheRecord() || !policy::RequestAllowed(url)) {
+  if (!profile || !policy::RequestAllowed(url)) {
     return false;
   }
-  const auto setting = Settings().find(profile->GetPath());
+  const auto setting = Settings().find(profile->GetOriginalProfile()->GetPath());
   if (setting == Settings().end() || !policy::Allowed(setting->second)) {
     return false;
   }

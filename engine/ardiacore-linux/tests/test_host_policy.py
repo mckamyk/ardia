@@ -50,5 +50,31 @@ int main() {
             subprocess.run([str(binary)], check=True)
 
 
+    def test_stored_document_reads_distinguish_missing_from_failed(self):
+        compiler = shutil.which('clang++') or shutil.which('c++')
+        if compiler is None:
+            self.skipTest('C++ compiler is unavailable')
+        code = r'''#include <cassert>
+#include <cerrno>
+#include "ardia/linux/ac_linux_policy.h"
+int main() {
+  using namespace ardia::linux_policy;
+  assert(ClassifyStoredRead(ENOENT, false) == StoredRead::kMissing);
+  assert(ClassifyStoredRead(0, true) == StoredRead::kFound);
+  assert(ClassifyStoredRead(0, false) == StoredRead::kFailed);
+  assert(ClassifyStoredRead(EACCES, false) == StoredRead::kFailed);
+  assert(ClassifyStoredRead(EIO, false) == StoredRead::kFailed);
+  assert(ClassifyStoredRead(ENOTDIR, false) == StoredRead::kFailed);
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='ardia-stored-read-test-') as scratch:
+            scratch = pathlib.Path(scratch)
+            cpp = scratch / 'stored.cc'
+            cpp.write_text(code)
+            binary = scratch / 'stored'
+            subprocess.run([compiler, '-std=c++20', '-Wall', '-Werror', '-I', str(SOURCE), str(cpp), '-o', str(binary)], check=True, capture_output=True)
+            subprocess.run([str(binary)], check=True)
+
+
 if __name__ == '__main__':
     unittest.main()

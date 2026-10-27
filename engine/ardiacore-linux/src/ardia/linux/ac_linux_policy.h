@@ -1,6 +1,7 @@
 #ifndef ARDIA_LINUX_AC_LINUX_POLICY_H_
 #define ARDIA_LINUX_AC_LINUX_POLICY_H_
 
+#include <cerrno>
 #include <string_view>
 
 namespace ardia::linux_policy {
@@ -34,6 +35,19 @@ inline bool ValidAssetPath(std::string_view path) {
     path.remove_prefix(slash + 1);
   }
   return false;
+}
+
+
+enum class StoredRead { kFound, kMissing, kFailed };
+
+inline StoredRead ClassifyStoredRead(int lstat_error, bool read_ok) {
+  if (lstat_error == ENOENT) {
+    return StoredRead::kMissing;
+  }
+  if (lstat_error != 0 || !read_ok) {
+    return StoredRead::kFailed;
+  }
+  return StoredRead::kFound;
 }
 
 }
