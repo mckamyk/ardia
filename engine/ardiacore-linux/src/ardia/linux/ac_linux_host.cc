@@ -923,16 +923,16 @@ void ShellHostView::PersistWindowDeparture(Profile* profile, std::string source_
       FROM_HERE, base::BindOnce(&MergeAndWriteSession, DocumentDirectory(profile),
                                 base->Clone(), session->Clone()),
       base::BindOnce(
-          [](base::FilePath profile_path, std::string source_window, SessionWriteResult result) {
+          [](base::FilePath departed_profile, std::string departed_window, SessionWriteResult result) {
             if (!result.ok || result.previous == result.session) return;
             for (const auto& [id, host] : Hosts()) {
               Profile* peer = host->profile();
-              if (host->window_id() == source_window || !peer || peer->IsOffTheRecord() ||
-                  peer->GetPath() != profile_path) continue;
+              if (host->window_id() == departed_window || !peer || peer->IsOffTheRecord() ||
+                  peer->GetPath() != departed_profile) continue;
               host->Event("ArdiaHost", "session", base::Value(base::DictValue()
                   .Set("base", result.previous.Clone())
                   .Set("session", result.session.Clone())
-                  .Set("sourceWindowId", source_window)));
+                  .Set("sourceWindowId", departed_window)));
             }
           }, profile_path, std::move(source_window)));
 }
