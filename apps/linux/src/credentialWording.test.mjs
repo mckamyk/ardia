@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { CREDENTIAL_WORDING, rewordCredentials } from "../credentialWording.ts";
+import { CREDENTIAL_WORDING, credentialWording, rewordCredentials } from "../credentialWording.ts";
 
 const shared = (path) => fileURLToPath(new URL(`../../browser/src/${path}`, import.meta.url));
 const MACOS = /\bMac\b|macOS|Keychain|Touch ID|Applications folder/;
@@ -37,4 +37,21 @@ test("the Linux Vite config runs the wording transform", () => {
   const config = readFileSync(fileURLToPath(new URL("../vite.config.ts", import.meta.url)), "utf8");
   assert.match(config, /import \{ credentialWording \} from "\.\/credentialWording";/);
   assert.match(config, /plugins: \[[^\]]*credentialWording\(\)/);
+});
+
+test("a production build fails when a listed file was never reworded", () => {
+  const context = { error(message) { throw new Error(message); } };
+  const run = (command, files) => {
+    const plugin = credentialWording();
+    plugin.configResolved({ command });
+    for (const file of files) plugin.transform.call(context, readFileSync(shared(file), "utf8"), shared(file));
+    return () => plugin.buildEnd.call(context);
+  };
+  const all = CREDENTIAL_WORDING.map((entry) => entry.file);
+  assert.doesNotThrow(run("build", all));
+  assert.throws(run("build", all.filter((file) => !file.endsWith("Autofill.tsx"))), /panes\/Autofill\.tsx/);
+  assert.doesNotThrow(run("serve", []));
+  const failed = credentialWording();
+  failed.configResolved({ command: "build" });
+  assert.doesNotThrow(() => failed.buildEnd.call(context, new Error("earlier failure")));
 });

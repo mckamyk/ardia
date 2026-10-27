@@ -53,12 +53,24 @@ export function rewordCredentials(id: string, code: string): string | null {
 }
 
 export function credentialWording(): Plugin {
+  const applied = new Set<string>();
+  let building = false;
   return {
     name: "ardia-linux:credential-wording",
     enforce: "pre",
+    configResolved(config) {
+      building = config.command === "build";
+    },
     transform(code, id) {
       const reworded = rewordCredentials(id, code);
-      return reworded === null ? null : { code: reworded, map: null };
+      if (reworded === null) return null;
+      applied.add(id.slice(id.indexOf(marker) + marker.length).split("?")[0]);
+      return { code: reworded, map: null };
+    },
+    buildEnd(error) {
+      if (!building || error) return;
+      const missing = CREDENTIAL_WORDING.map((entry) => entry.file).filter((file) => !applied.has(file));
+      if (missing.length) this.error(`credentialWording.ts never reworded ${missing.join(", ")}; update apps/linux/credentialWording.ts`);
     },
   };
 }
