@@ -1,14 +1,14 @@
 import type { CommandEvent } from "@ardia-real/shell";
 import { emitCommand as emitWebCommand } from "./shellBase";
 import { ardiaHost, hostModuleMethod, reportHostError } from "../host";
-import { flushLinuxSession, isLinuxUtility } from "../session";
+import { departLinuxWindow, flushLinuxSession, isLinuxUtility, keepLinuxWindow } from "../session";
 import { createWindowCloseBarrier, type WindowCloseRequest } from "../utilityClose";
 import { quiesceLinuxSession, resumeLinuxSession } from "../sessionClose";
 import { quiesceLinuxDocuments, resumeLinuxDocuments, flushLinuxDocuments } from "../documentFlush";
 import { linuxMenuShortcuts } from "../shortcuts";
 import { useBrowser } from "../../../browser/src/state/browser/store";
 import { setManagedWindowClose } from "../../../browser/src/platform/windowClose";
-import { createWindowCloseCoordinator, type DecideClose } from "../windowCloseCoordinator";
+import { createWindowCloseCoordinator, type DecideClose, type DrainReply } from "../windowCloseCoordinator";
 
 export * from "./shellBase";
 export { menuShown, showMenu, watchMenus } from "../menus";
@@ -28,9 +28,9 @@ const closeBarrier = createWindowCloseBarrier({
   acknowledge: (request, watermark) => hostModuleMethod("ArdiaShell", "acknowledgeWindowClose")({ ...request, watermark }) as Promise<void>,
   reject: (request) => hostModuleMethod("ArdiaShell", "rejectWindowClose")(request) as Promise<void>,
   resume: (request) => {
+    closeCoordinator.producersResumed(request);
     resumeLinuxSession(closeToken(request));
     resumeLinuxDocuments(closeToken(request));
-    closeCoordinator.producersResumed(request);
   },
 });
 let provideDecider: (decide: DecideClose) => void = () => {};
@@ -44,7 +44,9 @@ const closeCoordinator = createWindowCloseCoordinator({
   suppress: (reason) => useBrowser.getState().updateSettings(reason === "lastTab" ? { warnBeforeClosingLastTab: false } : { warnBeforeClosingWindow: false }),
   flush: flushLinuxSession,
   request: (id) => hostModuleMethod("ArdiaShell", "requestWindowClose")(id) as Promise<WindowCloseRequest>,
-  beginDrain: (request) => hostModuleMethod("ArdiaShell", "beginWindowCloseDrain")(request),
+  beginDrain: (request) => hostModuleMethod("ArdiaShell", "beginWindowCloseDrain")(request) as Promise<DrainReply>,
+  depart: (request) => departLinuxWindow(closeToken(request), request.windowId),
+  stay: (request) => keepLinuxWindow(closeToken(request)),
   reject: (request) => hostModuleMethod("ArdiaShell", "rejectWindowClose")(request) as Promise<void>,
   barrier: closeBarrier,
   cancelled: closeBarrier.cancelled,
@@ -65,8 +67,4 @@ if (ardiaHost && !isLinuxUtility(ownWindowId)) setManagedWindowClose((windowId, 
   void closeCoordinator.close(reason).catch(reportClose);
   return true;
 });
-export const closeWindow = async (id: string): Promise<void> => {
-  if (ardiaHost && id === ownWindowId) return closeCoordinator.close("window");
-  const request = await hostModuleMethod("ArdiaShell", "requestWindowClose")(id) as WindowCloseRequest;
-  await closeCoordinator.accept(request);
-};
+export const closeWindow = (id: string): Promise<void> => closeCoordinator.closeWindow(id);

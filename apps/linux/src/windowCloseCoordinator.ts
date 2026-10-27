@@ -5,6 +5,7 @@ export type CloseReason = "window" | "lastTab";
 export type CloseAnswer = { confirmed: boolean; suppressed: boolean };
 export type CloseDecision = { decision: "allow" | "cancel"; suppressWarning: boolean };
 export type AbortableAsk = (options: ConfirmOptions, signal: AbortSignal) => Promise<CloseAnswer>;
+export type DrainReply = { accepted?: boolean; endsSession?: boolean } | null | undefined;
 export type DecideClose = (windowId: string, reason: CloseReason, ask?: (options: ConfirmOptions) => Promise<CloseAnswer>) => Promise<CloseDecision>;
 
 export type WindowCloseCoordinatorHooks = {
@@ -15,10 +16,12 @@ export type WindowCloseCoordinatorHooks = {
   suppress(reason: CloseReason): void;
   flush(): Promise<void>;
   request(windowId: string): Promise<WindowCloseRequest>;
-  beginDrain(request: WindowCloseRequest): Promise<unknown>;
+  beginDrain(request: WindowCloseRequest): Promise<DrainReply>;
   reject(request: WindowCloseRequest): Promise<void>;
   barrier(request: WindowCloseRequest): Promise<void>;
   cancelled(request: WindowCloseRequest): boolean;
+  depart?(request: WindowCloseRequest): void;
+  stay?(request: WindowCloseRequest): void;
   suspendDialogs?(request: WindowCloseRequest): { settled: Promise<void> };
   resumeDialogs?(request: WindowCloseRequest): boolean;
   report?(error: unknown): void;
@@ -36,6 +39,7 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     cancelled: boolean;
     suspended: boolean;
     dialogsResumed: boolean;
+    departed: boolean;
     promise?: Promise<void>;
   };
   const attempts = new Map<string, Attempt>();
@@ -46,6 +50,21 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     if (!attempt.suspended || attempt.dialogsResumed) return;
     attempt.dialogsResumed = true;
     hooks.resumeDialogs?.(attempt.request);
+  };
+  const confirmCancelled = (attempt: Attempt) => {
+    if (!attempt.cancelled) {
+      attempt.cancelled = true;
+      attempt.controller.abort();
+    }
+    if (attempt.departed) {
+      attempt.departed = false;
+      hooks.stay?.(attempt.request);
+    }
+    resumeDialogs(attempt);
+  };
+  const rejectAttempt = async (attempt: Attempt) => {
+    await hooks.reject(attempt.request);
+    confirmCancelled(attempt);
   };
   const current = (attempt: Attempt, key: string) => !attempt.cancelled && latest === key && attempt.request.windowId === hooks.windowId;
   const settleOnAbort = <T,>(attempt: Attempt, work: Promise<T>) => new Promise<T>((resolve, reject) => {
@@ -66,33 +85,37 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     if (!current(attempt, key)) throw attempt.cancelled ? cancelledClose() : staleClose();
     if (suppressWarning) hooks.suppress(attempt.reason);
     if (choice === "cancel") {
-      const rejected = hooks.reject(attempt.request);
+      const rejected = rejectAttempt(attempt);
       if (suppressWarning) await hooks.flush().catch((error) => hooks.report?.(error));
       await rejected;
-      attempt.cancelled = true;
       throw cancelledClose();
     }
-    if (suppressWarning) {
+    let drain: DrainReply;
+    try {
+      drain = await hooks.beginDrain(attempt.request);
+    } catch (error) {
+      if (!attempt.cancelled) await rejectAttempt(attempt).catch((rejection) => hooks.report?.(rejection));
+      throw error;
+    }
+    if (!current(attempt, key)) throw attempt.cancelled ? cancelledClose() : staleClose();
+    if (!hooks.utility && drain?.endsSession === false && hooks.depart) {
+      attempt.departed = true;
+      hooks.depart(attempt.request);
+    }
+    if (suppressWarning || attempt.departed) {
       try {
         await hooks.flush();
       } catch (error) {
-        if (current(attempt, key)) await hooks.reject(attempt.request);
+        if (current(attempt, key)) await rejectAttempt(attempt);
         throw error;
       }
-    }
-    if (!current(attempt, key)) throw attempt.cancelled ? cancelledClose() : staleClose();
-    try {
-      await hooks.beginDrain(attempt.request);
-    } catch (error) {
-      if (!attempt.cancelled) await hooks.reject(attempt.request).catch((rejection) => hooks.report?.(rejection));
-      throw error;
     }
     if (!current(attempt, key)) throw attempt.cancelled ? cancelledClose() : staleClose();
     const suspension = hooks.suspendDialogs?.(attempt.request);
     attempt.suspended = !!suspension;
     if (suspension) await suspension.settled;
     if (attempt.cancelled) {
-      resumeDialogs(attempt);
+      confirmCancelled(attempt);
       throw cancelledClose();
     }
     await hooks.barrier(attempt.request);
@@ -119,6 +142,7 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
       cancelled: false,
       suspended: false,
       dialogsResumed: false,
+      departed: false,
     };
     nextReason = undefined;
     attempts.set(key, attempt);
@@ -135,15 +159,13 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
       attempt.controller.abort();
     }
     const resumed = hooks.cancelled(request);
-    if (attempt) resumeDialogs(attempt);
+    if (attempt) confirmCancelled(attempt);
     return resumed || !!attempt;
   };
 
   const producersResumed = (request: WindowCloseRequest) => {
     const attempt = validCloseRequest(request) ? attempts.get(closeIdentity(request)) : undefined;
-    if (!attempt) return;
-    attempt.cancelled = true;
-    resumeDialogs(attempt);
+    if (attempt) confirmCancelled(attempt);
   };
 
   const close = async (reason: CloseReason) => {
@@ -155,5 +177,10 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     }
   };
 
-  return { accept, cancelled, producersResumed, close };
+  const closeWindow = async (id: string) => {
+    if (id === hooks.windowId) return close("window");
+    await accept(await hooks.request(id));
+  };
+
+  return { accept, cancelled, producersResumed, close, closeWindow };
 }
