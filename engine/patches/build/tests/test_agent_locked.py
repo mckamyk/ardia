@@ -85,6 +85,18 @@ class LinuxLockedTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), 'nested')
         self.assertIn('already held by an enclosing call', result.stderr)
 
+    def test_interrupt_keeps_others_out_until_the_command_exits(self):
+        holder = self.background('chromium', '--', 'sh', '-c', 'trap "" INT; sleep 4; echo done')
+        self.assertTrue(self.wait_for(lambda: (self.root / 'ac-chromium.holder').exists()))
+        os.killpg(holder.pid, signal.SIGINT)
+        time.sleep(0.5)
+        busy = self.locked('chromium', '--wait', '1', '--', 'true')
+        self.assertEqual(busy.returncode, 75, busy.stderr)
+        holder.wait(timeout=15)
+        self.assertNotEqual(holder.returncode, 0)
+        free = self.locked('chromium', '--wait', '5', '--', 'true')
+        self.assertEqual(free.returncode, 0, free.stderr)
+
     def test_take_renew_describe_and_release(self):
         taken = self.locked('perflab', '--take', 'lane', '--ttl', '5')
         self.assertEqual(taken.returncode, 0, taken.stderr)
@@ -129,6 +141,65 @@ class LinuxLockedTests(unittest.TestCase):
         result = self.locked('pod', '--wait', '5', '--', 'sh', '-c', 'flock -n -s "$AC_LOCK_ROOT/ac-pods.rw" true; echo $?')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), '1')
+
+
+
+@unittest.skipUnless(platform.system() == 'Linux' and shutil.which('flock'), 'Linux flock path')
+class LinuxBuildLockTests(unittest.TestCase):
+    def setUp(self):
+        self.root = pathlib.Path(tempfile.mkdtemp(prefix='ac-build-lock-'))
+        tree = self.root / 'tree'
+        (tree / 'scripts/linux').mkdir(parents=True)
+        (tree / 'scripts/agent').mkdir(parents=True)
+        build = tree / 'engine/patches/build'
+        build.mkdir(parents=True)
+        shutil.copy2(REPO / 'scripts/linux/build.sh', tree / 'scripts/linux/build.sh')
+        shutil.copy2(LOCKED, tree / 'scripts/agent/locked')
+        (build / 'env.sh').write_text('export CB="$AC_CHROMIUM_BUILD"\n')
+        (build / 'pathguard.py').write_text('import sys\nsys.exit(0)\n')
+        for step in ('02-gn-args.sh', '04-series.sh', '05-build.sh'):
+            path = build / step
+            path.write_text(f'#!/bin/bash\ntest -s "$AC_LOCK_ROOT/ac-chromium.holder" && echo "{step} held" >> "$CB/ran" || echo "{step} unheld" >> "$CB/ran"\n')
+            path.chmod(0o755)
+        self.build = tree / 'scripts/linux/build.sh'
+        self.locked = tree / 'scripts/agent/locked'
+        self.cb = self.root / 'cb'
+        self.cb.mkdir()
+        (self.root / 'locks').mkdir()
+        self.env = dict(os.environ, AC_LOCK_ROOT=str(self.root / 'locks'), AC_CHROMIUM_BUILD=str(self.cb), AC_LOCK_WAIT='2')
+        for key in ('AC_LOCKED_HELD', 'AC_LOCKED_AS', 'AC_LOCKED_INNER', 'AC_LOCKED_DEADLINE'):
+            self.env.pop(key, None)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def run_tool(self, *args, timeout=25):
+        return subprocess.run([*map(str, args)], env=self.env, text=True, capture_output=True, timeout=timeout)
+
+    def ran(self):
+        path = self.cb / 'ran'
+        return path.read_text().split('\n')[:-1] if path.exists() else []
+
+    def test_build_takes_the_chromium_lock_through_locked(self):
+        result = self.run_tool(self.build, '--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ran(), ['04-series.sh held', '05-build.sh held'])
+
+    def test_build_runs_inside_an_enclosing_chromium_hold(self):
+        result = self.run_tool(self.locked, 'chromium', '--wait', '5', '--', self.build, '--apply', '--generate')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ran(), ['04-series.sh held', '02-gn-args.sh held', '05-build.sh held'])
+        self.assertIn('already held by an enclosing call', result.stderr)
+
+    def test_another_agents_take_keeps_the_build_out(self):
+        taken = self.run_tool(self.locked, 'chromium', '--take', 'other', '--ttl', '5')
+        self.assertEqual(taken.returncode, 0, taken.stderr)
+        result = self.run_tool(self.build, '--apply')
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertEqual(self.ran(), [])
+        mine = self.run_tool(self.locked, 'chromium', '--as', 'other', '--', self.build, '--apply')
+        self.assertEqual(mine.returncode, 0, mine.stderr)
+        self.assertEqual(self.ran(), ['04-series.sh held', '05-build.sh held'])
 
 
 if __name__ == '__main__':

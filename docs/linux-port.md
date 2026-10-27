@@ -129,8 +129,8 @@ git clone --depth 1 --branch 0.19.4 https://github.com/imputnet/helium-chromium.
 git clone --depth 1 --branch 0.19.4.1 https://github.com/imputnet/helium-linux.git "$AC_CHROMIUM_BUILD/helium-linux"
 
 source engine/patches/build/env.sh
-flock -x -w 30 /tmp/ac-chromium.lockf engine/patches/build/01-sync.sh --apply
-flock -x -w 30 /tmp/ac-chromium.lockf python3 engine/patches/build/03-helium.py --platform linux --apply
+scripts/agent/locked chromium -- engine/patches/build/01-sync.sh --apply
+scripts/agent/locked chromium -- python3 engine/patches/build/03-helium.py --platform linux --apply
 scripts/linux/build.sh --apply --generate
 ```
 

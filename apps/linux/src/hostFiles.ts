@@ -102,7 +102,8 @@ export function createHostFiles(host: ArdiaHost, clock: Clock = realClock, notic
       currentNotice = next;
     },
     expect(path) {
-      if (!localPath(path) || !hostSupports(FILE_STATUS, host) || cache.has(path)) return;
+      if (!localPath(path) || !hostSupports(FILE_STATUS, host) || cache.get(path)?.exists) return;
+      cache.delete(path);
       cache.set(path, { exists: true, at: -Infinity });
       while (cache.size > FILE_STATUS_CACHE) cache.delete(cache.keys().next().value!);
       if (!inflight.has(path)) {

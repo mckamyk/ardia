@@ -951,7 +951,7 @@ class ShellHostView : public views::View,
   bool ExtensionsListening() const { return browser_ && handler_ && !is_utility(); }
   void ReleaseExtensions() {
     extension_surfaces_.reset();
-    LinuxExtensionsWindowRetired(id_);
+    LinuxExtensionsWindowClosing(id_);
   }
   void WatchSystemState();
   void OfferTab(content::WebContents* contents) {
@@ -1691,7 +1691,7 @@ ShellHostView::~ShellHostView() {
   RetireDocuments();
   UnregisterAccelerators();
   Hosts().erase(id_);
-  LinuxExtensionsWindowRetired(id_);
+  LinuxExtensionsWindowClosing(id_);
   bindings_.clear();
   TabStripModelObserver::StopObservingAll(this);
   view_observation_.Reset();

@@ -58,6 +58,7 @@ std::string LinuxExecuteExtensionAction(content::WebContents* contents, const ba
 
 void StartLinuxExtensions(LinuxExtensionsDelegate delegate);
 void LinuxExtensionsWindowRetired(int window);
+void LinuxExtensionsWindowClosing(int window);
 
 }
 

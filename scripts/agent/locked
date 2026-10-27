@@ -20,6 +20,8 @@
 # other agent then waited forever. Here:
 #   - everything runs under a kernel lock (lockf on macOS, flock on Linux) that dies with its holder, and a command's pid is
 #     recorded, so a holder that died is noticed and its lock removed;
+#     On Linux ^C also ends the flock process, so the kernel lock can be free before an interrupted command exits;
+#     the holder file and the old lock directory still keep every other caller waiting until it does;
 #   - --take records WHO and an expiry (default 60 min); --as WHO runs the taker's own commands (one
 #     at a time) and pushes the expiry back. An expired take counts as abandoned. Taking again what
 #     WHO already holds just renews it;

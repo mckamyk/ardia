@@ -171,6 +171,49 @@ int main() {
   assert(delivered.back() == "9 extensions.installPromptCancelled " + moved);
   assert(answers.back() == extensions::ExtensionInstallPromptClient::Result::ABORTED);
 
+  content::WebContents closing_tab;
+  closing_tab.context = &isolated;
+  content::WebContents* holder_tab = nullptr;
+  ardia::Delegate().window_for = base::RepeatingCallback<int(Profile*, content::WebContents*, int)>(
+      [&](Profile*, content::WebContents* contents, int excluded) { return contents && contents == holder_tab ? 9 : excluded == 8 ? 7 : 8; });
+  ardia::Delegate().tab_key = base::RepeatingCallback<std::string(int, content::WebContents*)>(
+      [&](int window, content::WebContents* contents) { return window == 9 && contents && contents == holder_tab ? std::string("moved-tab") : std::string(); });
+  delivered.clear();
+  const std::string bound = PromptFor(&closing_tab, &isolated, 7, store_weak);
+  const std::string loose = Prompt(&isolated, 7, isolated_weak);
+  const size_t answered_before_close = answers.size();
+  ardia::LinuxExtensionsWindowClosing(7);
+  assert(ardia::Prompts().Find(bound) && ardia::Prompts().Find(bound)->window == 7);
+  assert(ardia::Prompts().Find(loose) && ardia::Prompts().Find(loose)->window == 8);
+  assert(delivered == std::vector<std::string>{"8 extensions.installPrompt " + loose});
+  closing_tab.Destroy();
+  base::RunPostedTasks();
+  base::RunPostedTasks();
+  assert(!ardia::Prompts().Find(bound));
+  assert(answers.size() == answered_before_close + 1 && answers.back() == extensions::ExtensionInstallPromptClient::Result::ABORTED);
+  assert(delivered.back() == "7 extensions.installPromptCancelled " + bound);
+
+  content::WebContents travelling_tab;
+  travelling_tab.context = &isolated;
+  holder_tab = &travelling_tab;
+  delivered.clear();
+  const std::string travelled = PromptFor(&travelling_tab, &isolated, 7, store_weak);
+  ardia::LinuxExtensionsWindowClosing(7);
+  assert(ardia::Prompts().Find(travelled)->window == 9);
+  assert(delivered == std::vector<std::string>{"9 extensions.installPrompt " + travelled});
+  assert(ardia::Prompts().Find(travelled)->payload.FindString("tabId") && *ardia::Prompts().Find(travelled)->payload.FindString("tabId") == "moved-tab");
+
+  content::WebContents reload_tab;
+  reload_tab.context = &isolated;
+  delivered.clear();
+  const std::string reloaded = PromptFor(&reload_tab, &isolated, 7, store_weak);
+  ardia::LinuxExtensionsWindowRetired(7);
+  assert(ardia::Prompts().Find(reloaded)->window == 8);
+  assert(delivered.size() == 1 && delivered[0] == "8 extensions.installPrompt " + reloaded);
+  holder_tab = nullptr;
+  ardia::Prompts().TakeAll();
+  base::RunPostedTasks();
+
   ardia::LinuxExtensionWindow private_window = work;
   private_window.profile = &incognito;
   for (const char* call : {"extensions.actionStates", "extensions.sidePanelUrl"}) {

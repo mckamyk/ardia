@@ -480,11 +480,25 @@ std::optional<bool> ActionPopupHook(BrowserWindowInterface& browser, const exten
   return false;
 }
 
-void Retarget(int window) {
+void Retarget(int window, bool closing) {
   auto& delegate = Delegate();
   for (const auto& request : Prompts().OfWindow(window)) {
     const auto* entry = Prompts().Find(request);
     Profile* profile = entry ? entry->done.profile.get() : nullptr;
+    if (closing && entry && entry->done.parent) {
+      content::WebContents* tab = entry->done.parent->web_contents();
+      const int holder = tab && profile && delegate.window_for ? delegate.window_for.Run(profile, tab, window) : 0;
+      const std::string key = holder && delegate.tab_key ? delegate.tab_key.Run(holder, tab) : std::string();
+      if (key.empty() || !Prompts().Move(request, holder)) continue;
+      base::DictValue payload = Prompts().Find(request)->payload.Clone();
+      payload.Set("tabId", key);
+      if (delegate.deliver.Run(holder, "extensions.installPrompt", payload.Clone())) {
+        Prompts().SetPayload(request, std::move(payload));
+        continue;
+      }
+      if (auto pending = Prompts().Take(request)) Answer(std::move(*pending), InstallResult::USER_CANCELED);
+      continue;
+    }
     const int next = profile && delegate.window_for ? delegate.window_for.Run(profile, nullptr, window) : 0;
     if (next && Prompts().Move(request, next)) {
       base::DictValue payload = Prompts().Find(request)->payload.Clone();
@@ -626,7 +640,11 @@ void StartLinuxExtensions(LinuxExtensionsDelegate delegate) {
 }
 
 void LinuxExtensionsWindowRetired(int window) {
-  Retarget(window);
+  Retarget(window, false);
+}
+
+void LinuxExtensionsWindowClosing(int window) {
+  Retarget(window, true);
 }
 
 }

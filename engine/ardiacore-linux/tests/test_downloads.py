@@ -70,6 +70,21 @@ class DownloadServiceTests(unittest.TestCase):
 
 
 class DownloadWiringTests(unittest.TestCase):
+    def test_folder_picker_titles_itself_runs_one_at_a_time_and_survives_a_missing_dialog(self):
+        from test_renderer_contract import method
+        files = (LINUX / 'ac_linux_files.cc').read_text()
+        start = method(files, 'static void Start(gfx::NativeWindow window, const base::FilePath& current, const std::u16string& title, Done done) {')
+        self.assertIn('if (!picker->dialog_) {', start)
+        self.assertIn('ERR_FOLDER_PICKER_UNAVAILABLE', start)
+        self.assertIn('picker->Finish();', start)
+        pick = method(files, 'void LinuxPickFolder(gfx::NativeWindow window, const base::ListValue& values, Done done) {')
+        self.assertIn('ERR_FOLDER_PICKER_OPEN', pick)
+        self.assertLess(pick.index('ERR_FOLDER_PICKER_OPEN'), pick.index('DownloadFolderPicker::Start('))
+        self.assertIn('base::UTF8ToUTF16(prompt)', pick)
+        self.assertIn('u"Choose a Download Folder"', pick)
+        finish = method(files, '  void Finish() {')
+        self.assertIn('FolderPickerOpen() = false;', finish)
+
     def test_contract_routes_engine_controls_and_forwards_removals(self):
         code = r'''
 #include "ardia/linux/ac_linux_contract.h"

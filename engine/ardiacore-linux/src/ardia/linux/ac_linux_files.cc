@@ -21,6 +21,7 @@
 #include "base/logging.h"
 #include "base/process/launch.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
@@ -299,12 +300,23 @@ void Open(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, b
       }, std::move(done)));
 }
 
+bool& FolderPickerOpen() {
+  static bool open = false;
+  return open;
+}
+
 class DownloadFolderPicker : public ui::SelectFileDialog::Listener {
  public:
-  static void Start(gfx::NativeWindow window, const base::FilePath& current, Done done) {
+  static void Start(gfx::NativeWindow window, const base::FilePath& current, const std::u16string& title, Done done) {
+    FolderPickerOpen() = true;
     auto* picker = new DownloadFolderPicker(std::move(done));
     picker->dialog_ = ui::SelectFileDialog::Create(picker, nullptr);
-    picker->dialog_->SelectFile(ui::SelectFileDialog::SELECT_FOLDER, u"Choose a Download Folder", current,
+    if (!picker->dialog_) {
+      Done failed = std::move(picker->done_);
+      picker->Finish();
+      return Fail(std::move(failed), "ERR_FOLDER_PICKER_UNAVAILABLE", "No folder dialog is available on this desktop");
+    }
+    picker->dialog_->SelectFile(ui::SelectFileDialog::SELECT_FOLDER, title, current,
                                 nullptr, 0, base::FilePath::StringType(), window);
   }
 
@@ -335,6 +347,7 @@ class DownloadFolderPicker : public ui::SelectFileDialog::Listener {
   void Finish() {
     if (finished_) return;
     finished_ = true;
+    FolderPickerOpen() = false;
     if (dialog_) dialog_->ListenerDestroyed();
     base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
   }
@@ -354,12 +367,16 @@ void LinuxPickFolder(gfx::NativeWindow window, const base::ListValue& values, Do
     return Fail(std::move(done), "ERR_FOLDER_REQUEST", "A current folder and button title, or null, are expected");
   }
   const std::string current = !values.empty() && values[0].is_string() ? values[0].GetString() : std::string();
+  const std::string prompt = values.size() == 2 && values[1].is_string() ? values[1].GetString() : std::string();
   if (ardiacore::BackgroundInstance()) {
     LOG(INFO) << "Ardia background instance: folder picker requested";
     return std::move(done).Run(true, base::Value());
   }
+  if (FolderPickerOpen()) return Fail(std::move(done), "ERR_FOLDER_PICKER_OPEN", "A folder dialog is already open");
+  const std::u16string title = !prompt.empty() && prompt.size() <= 200 && base::IsStringUTF8(prompt)
+                                   ? base::UTF8ToUTF16(prompt) : std::u16string(u"Choose a Download Folder");
   DownloadFolderPicker::Start(window, downloads::ValidLocalPath(current) ? base::FilePath(current) : base::FilePath(),
-                              std::move(done));
+                              title, std::move(done));
 }
 
 LinuxShellWebView::LinuxShellWebView(content::BrowserContext* context) : views::WebView(context) {}

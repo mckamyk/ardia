@@ -157,7 +157,9 @@ test("a finished download expected by the downloads list reads as present until 
   assert.equal(files.fileExists("/d/gone.zip"), false);
   assert.equal(changes, 1);
   files.expect("/d/gone.zip");
-  assert.equal(files.fileExists("/d/gone.zip"), false, "a known answer is not overridden");
+  assert.equal(files.fileExists("/d/gone.zip"), true, "a new finished download at a missing path is expected again");
+  await f.flush();
+  assert.equal(files.fileExists("/d/gone.zip"), false, "and the immediate recheck corrects it");
   files.expect("relative");
   assert.equal(files.fileExists("relative"), false);
 });
@@ -189,4 +191,24 @@ test("failed open, reveal and trash are shown in the window, not only logged", a
   f.handlers.set("ArdiaSystem.revealFile", () => true);
   assert.equal(await files.revealFile("/d/a.zip"), true);
   assert.equal(notices.length, 3);
+});
+
+test("a file downloaded again to a path known to be missing reads as present at once", async () => {
+  const f = fixture();
+  const present = new Set();
+  f.handlers.set("ArdiaSystem.fileStatus", (paths) => paths.map((path) => present.has(path)));
+  f.handlers.set("ArdiaSystem.moveToTrash", () => true);
+  const files = createHostFiles(f.host, f.clock);
+  files.fileExists("/d/again.zip");
+  await f.flush();
+  assert.equal(files.fileExists("/d/again.zip"), false);
+  present.add("/d/again.zip");
+  files.expect("/d/again.zip");
+  assert.equal(files.fileExists("/d/again.zip"), true);
+  await f.flush();
+  assert.equal(files.fileExists("/d/again.zip"), true);
+  assert.equal(await files.moveToTrash("/d/again.zip"), true);
+  assert.equal(files.fileExists("/d/again.zip"), false);
+  files.expect("/d/again.zip");
+  assert.equal(files.fileExists("/d/again.zip"), true);
 });

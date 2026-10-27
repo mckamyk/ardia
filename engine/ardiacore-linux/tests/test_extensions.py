@@ -142,9 +142,12 @@ class ExtensionServiceTests(unittest.TestCase):
             method(service, 'ext::PromptLedger<PendingInstall>& Prompts() {'), method(service, 'void Answer(PendingInstall pending,'),
             method(service, 'LinuxExtensionsDelegate& Delegate() {'),
             method(service, 'void AbortPromptForDestroyedParent(std::string request) {'),
+            method(service, 'void Retarget(int window, bool closing) {'),
             method(service, 'std::string ProfileId(const Profile* profile) {'), method(service, 'void ResolvePrompt('),
             method(service, 'content::WebContents* ProfileTab('), method(service, 'void LinuxExtensionsProfile('),
             method(service, 'void CallProfile('),
+            method(service, 'void LinuxExtensionsWindowRetired(int window) {'),
+            method(service, 'void LinuxExtensionsWindowClosing(int window) {'),
             *[line for line in service.splitlines() if line.startswith('LinuxExtensionWindow') or line.startswith('LinuxExtensionsDelegate::')],
         ])
         with tempfile.TemporaryDirectory(prefix='ardia-extension-service-') as directory:
@@ -264,7 +267,9 @@ int main() {
         self.assertIn('LinuxExtensionsWindowRetired(id_);', detach)
         destructor = method(self.host, 'ShellHostView::~ShellHostView() {')
         self.assertIn('extension_surfaces_.reset();', destructor)
-        self.assertLess(destructor.index('Hosts().erase(id_);'), destructor.index('LinuxExtensionsWindowRetired(id_);'))
+        self.assertLess(destructor.index('Hosts().erase(id_);'), destructor.index('LinuxExtensionsWindowClosing(id_);'))
+        self.assertIn('LinuxExtensionsWindowClosing(id_);', method(self.host, '  void ReleaseExtensions() {'))
+        self.assertIn('LinuxExtensionsWindowRetired(id_);', method(self.host, 'void ShellHostView::DetachViewports() {'))
         closed = method(self.host, '  void OnBrowserClosed(BrowserWindowInterface* browser) override {')
         self.assertLess(closed.index('found->second->ReleaseExtensions();'), closed.index('found->second->DetachBrowser();'))
         self.assertIn('extension_surfaces_.reset();', method(self.host, '  void ReleaseExtensions() {'))
@@ -283,7 +288,7 @@ int main() {
         self.assertNotIn('ACCEPTED', hook)
         resolve = method(self.service, 'void ResolvePrompt(')
         self.assertIn('case ext::PromptResolve::kWrongWindow:', resolve)
-        retarget = method(self.service, 'void Retarget(int window) {')
+        retarget = method(self.service, 'void Retarget(int window, bool closing) {')
         self.assertIn('InstallResult::USER_CANCELED', retarget)
 
     def test_install_prompts_end_with_their_parent_tab(self):
