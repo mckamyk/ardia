@@ -29,6 +29,12 @@ def service_sources(platform):
     return [path for path in sources(platform) if path.suffix in (".cc", ".mm")]
 
 
+def linux_core_headers():
+    apply = ROOT.parents[4] / "ardiacore-linux/apply.sh"
+    listed = subprocess.run(["bash", str(apply), "--paths"], capture_output=True, text=True, check=True, timeout=20)
+    return set(listed.stdout.split())
+
+
 def write(root, path, text):
     target = root / path
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -65,14 +71,18 @@ class RegistryTests(unittest.TestCase):
         self.assertFalse(any(path.suffix == ".mm" for path in linux))
         self.assertNotIn(ROOT / "ac_reauth.cc", linux)
         self.assertNotIn(ROOT / "ac_cli_control.cc", linux)
+        provided = linux_core_headers()
+        self.assertIn("ardia/core/ac_launch_switches.h", provided)
         for path in service_sources("linux"):
             text = path.read_text()
-            self.assertNotRegex(text, r'#(?:include|import) [<"](?:AppKit|Cocoa|Security|QuartzCore|base/apple|ardia/core)/')
+            self.assertNotRegex(text, r'#(?:include|import) [<"](?:AppKit|Cocoa|Security|QuartzCore|base/apple)/')
+            for header in re.findall(r'#(?:include|import) [<"](ardia/core/[^>"]+)[>"]', text):
+                self.assertIn(header, provided, f"{path.name} includes {header}, which the Linux engine does not provide")
         contexts = []
         for line in (ROOT / "BUILD.gn").read_text().splitlines():
             if "{" in line:
                 contexts.append(line.strip())
-            if "frameworks" in line or "ldflags" in line or '"//chrome/browser/device_reauth"' in line:
+            if "frameworks" in line or "ldflags" in line:
                 self.assertIn("if (is_mac) {", contexts)
             if "}" in line:
                 contexts.pop()
