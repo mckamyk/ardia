@@ -1,0 +1,11 @@
+--- a/chrome/common/extensions/api/_manifest_features.json
++++ b/chrome/common/extensions/api/_manifest_features.json
+@@ -18,7 +18,7 @@
+   "chrome_settings_overrides": {
+     "channel": "stable",
+     "extension_types": ["extension"],
+-    "platforms": ["win", "mac"]
++    "platforms": ["win", "mac", "linux"]
+   },
+   "file_browser_handlers": {
+     "channel": "stable",
