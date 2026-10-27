@@ -76,7 +76,8 @@ class SiteControlsWiringTests(unittest.TestCase):
 
     def test_blocker_starts_with_each_window_and_broadcasts_changes_to_its_profile(self):
         self.assertIn('StartLinuxContentBlocker(profile());', body(HOST, 'void ShellHostView::Initialize() {'))
-        self.assertIn('  AppendLinuxSiteControlsCapabilities(capabilities);\n  auto bootstrap = base::DictValue()', HOST)
+        bootstrap = body(HOST, 'base::DictValue ShellHostView::Bootstrap() const {')
+        self.assertIn('  AppendLinuxSiteControlsCapabilities(capabilities);\n', bootstrap[:bootstrap.index('  auto bootstrap = base::DictValue()')])
         start = body(HOST, 'void StartLinuxHost() {')
         sink = start[start.index('StartLinuxSiteControls('):]
         self.assertIn('host->profile()->GetOriginalProfile() != profile', sink)

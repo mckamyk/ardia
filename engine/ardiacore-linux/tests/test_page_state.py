@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'src'
-FILES = [SOURCE / 'ardia/linux' / f'ac_linux_{name}.cc' for name in ['page_lease', 'security', 'history_zoom', 'theme', 'page_state']]
+FILES = [SOURCE / 'ardia/linux' / f'ac_linux_{name}.cc' for name in ['page_lease', 'security', 'history_zoom', 'theme', 'page_status', 'page_state']]
 FIXTURE = ROOT / 'tests/fixtures/page_state.h'
 
 
@@ -102,6 +102,15 @@ class PageStateTests(unittest.TestCase):
 
     def test_shell_in_the_app_profile_and_tabs_in_the_page_profile(self):
         self.run_case('split-profiles')
+
+    def test_fullscreen_status_and_crash_producers_and_snapshot_inclusion(self):
+        self.run_case('page-status')
+
+    def test_hung_renderer_wait_exit_and_stale_hosts(self):
+        self.run_case('hung')
+
+    def test_blocked_popups_review_open_and_stale_documents(self):
+        self.run_case('popups')
 
 
 if __name__ == '__main__':

@@ -41,6 +41,8 @@
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/linux/ac_linux_site_controls_service.h"
 #include "ardia/linux/ac_linux_window_lifecycle.h"
+#include "ardia/linux/ac_linux_favicons.h"
+#include "ardia/linux/ac_linux_page_status.h"
 #include "ardia/linux/ac_linux_suggest.h"
 #include "ardia/linux/host_bootstrap.h"
 #include "base/auto_reset.h"
@@ -93,6 +95,8 @@
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/browser_window_state.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+#include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
@@ -117,6 +121,7 @@
 #include "content/public/browser/page.h"
 #include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
@@ -177,6 +182,12 @@ extern bool g_ardia_auto_picture_in_picture_off;
 extern int (*g_ardia_linux_tab_shown)(content::WebContents*);
 extern void (*g_ardia_linux_auto_pip_requested)(content::WebContents*);
 extern void (*g_ardia_linux_page_host_binder)(content::RenderFrameHost&, blink::AssociatedInterfaceRegistry&);
+extern bool (*g_ardia_linux_target_url)(content::WebContents*, const GURL&);
+extern bool (*g_ardia_linux_renderer_unresponsive)(content::WebContents*,
+                                                   content::RenderWidgetHost*,
+                                                   const base::RepeatingClosure&);
+extern bool (*g_ardia_linux_renderer_responsive)(content::WebContents*,
+                                                 content::RenderWidgetHost*);
 extern void (*g_ardia_devtools_dock_changed)(BrowserWindowInterface* browser,
                                              content::WebContents* inspected,
                                              content::WebContents* devtools);
@@ -678,6 +689,7 @@ class TabBinding : public content::WebContentsObserver {
   std::unique_ptr<ardiacore::LinuxPageState> TakePage();
   std::vector<int> replaced_ids;
   void ReportPresentation(std::string name, base::DictValue data);
+  void ReportOpened(content::WebContents* opened, const GURL& url, std::string_view disposition);
   base::WeakPtr<TabBinding> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
   void MoveTo(ShellHostView* owner);
   void Rebind(content::WebContents* contents);
@@ -905,6 +917,16 @@ class ShellHostView : public views::View,
     }
     return -1;
   }
+  ardiacore::LinuxPageStatus* PageStatus(content::WebContents* contents) const {
+    for (const auto& [id, binding] : bindings_) {
+      if (binding->contents() == contents && binding->page()) return binding->page()->status();
+    }
+    return nullptr;
+  }
+  void FetchFavicon(const GURL& url, ardiacore::LinuxFaviconReply reply) {
+    ardiacore::FetchLinuxFavicon(page_profile(), url, std::move(reply));
+  }
+  bool WindowFullScreen() const;
   bool AutoPictureInPictureCancelled(content::WebContents* contents) const {
     for (const auto& [id, binding] : bindings_) {
       if (binding->contents() == contents) {
@@ -1384,6 +1406,19 @@ class HostMessageHandler : public content::WebUIMessageHandler,
               handler->Fail(id, code ? *code : "ERR_ENGINE", message ? *message : "Download request failed");
             }, weak_factory_.GetWeakPtr(), id));
       }
+      if (name == "favicons.fetch") {
+        Profile* page = host_->page_profile();
+        if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
+        if (profile_name->kind != ardiacore::linux_profiles::ProfileKind::kDefault && !host_->HostsProfile(profile)) {
+          return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kWindowMismatch);
+        }
+        const std::string* url = input.FindString("url");
+        if (!url || input.size() != 1) return Fail(id, "ERR_ENGINE", "favicons.fetch requires one icon URL");
+        return host_->FetchFavicon(GURL(*url), base::BindOnce(
+            [](base::WeakPtr<HostMessageHandler> handler, std::string id, base::Value image) {
+              if (handler) handler->Resolve(id, std::move(image));
+            }, weak_factory_.GetWeakPtr(), id));
+      }
       if (ardiacore::IsLinuxZoomDomainRoute(name)) {
         Profile* page = host_->page_profile();
         if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
@@ -1653,6 +1688,7 @@ base::DictValue ShellHostView::Bootstrap() const {
     capabilities.Append(route);
   AppendLinuxSiteControlsCapabilities(capabilities);
   for (const char* capability : linux_import::kImportCapabilities) capabilities.Append(capability);
+  capabilities.Append("favicons.fetch");
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
@@ -2459,11 +2495,21 @@ void ShellHostView::OnWidgetShowStateChanged(views::Widget*) {
   ReportWindowGeometry();
 }
 
+bool ShellHostView::WindowFullScreen() const {
+  const views::Widget* widget = GetWidget();
+  if (!widget || !browser_) return false;
+  ExclusiveAccessManager* access = ExclusiveAccessManager::From(browser());
+  const FullscreenController* controller = access ? access->fullscreen_controller() : nullptr;
+  return ardiacore::LinuxWindowFullScreen(
+      widget->IsFullscreen(), controller && controller->IsWindowFullscreenForTabOrPending(),
+      controller && controller->IsFullscreenCausedByTab());
+}
+
 void ShellHostView::ReportWindowGeometry() {
   views::Widget* widget = GetWidget();
   if (is_utility() || window_id_.empty() || !widget || !browser_) return;
   const bool fullscreen = widget->IsFullscreen();
-  if (const auto on = geometry_.FullScreen(fullscreen)) {
+  if (const auto on = geometry_.FullScreen(WindowFullScreen())) {
     BroadcastWindowEvent(base::DictValue().Set("type", "fullScreen").Set("id", window_id_).Set("on", *on));
   }
   if (const auto frame = geometry_.Frame(LifecycleRect(widget->GetWindowBoundsInScreen()), PrimaryScreenRect(),
@@ -2483,7 +2529,7 @@ std::vector<base::DictValue> ShellHostView::WindowState() const {
     state.push_back(base::DictValue().Set("type", "frame").Set("id", window_id_)
         .Set("frame", SharedFrameValue(widget->GetWindowBoundsInScreen())));
   }
-  if (fullscreen) state.push_back(base::DictValue().Set("type", "fullScreen").Set("id", window_id_).Set("on", true));
+  if (WindowFullScreen()) state.push_back(base::DictValue().Set("type", "fullScreen").Set("id", window_id_).Set("on", true));
   if (WindowFocus().active() == id_) state.push_back(base::DictValue().Set("type", "focus").Set("id", window_id_));
   return state;
 }
@@ -3308,6 +3354,44 @@ void ShellHostView::TabCommand(
           }
           std::move(done).Run(true, result && request.Valid() ? base::Value(std::move(*result)) : base::Value());
         }, std::move(*request), std::move(done)));
+  } else if (command == "resolveUnresponsive") {
+    auto* status = binding->page() ? binding->page()->status() : nullptr;
+    if (!status || !status->ResolveUnresponsive(values)) {
+      return std::move(done).Run(false, base::Value("resolveUnresponsive requires one boolean on a live page"));
+    }
+  } else if (command == "openBlockedPopup") {
+    auto* status = binding->page() ? binding->page()->status() : nullptr;
+    if (!status) return std::move(done).Run(false, base::Value("No live page document"));
+    std::set<content::WebContents*> before;
+    TabStripModel* model = browser_->GetTabStripModel();
+    for (int index = 0; index < model->count(); ++index) before.insert(model->GetWebContentsAt(index));
+    const auto weak = GetWeakPtr();
+    const auto opener = binding->GetWeakPtr();
+    if (!status->OpenBlockedPopup(values)) {
+      return std::move(done).Run(false, base::Value("The blocked pop-up is no longer available"));
+    }
+    if (!weak || !browser_ || !opener) return std::move(done).Run(true, base::Value());
+    model = browser_->GetTabStripModel();
+    for (int index = 0; index < model->count(); ++index) {
+      content::WebContents* opened = model->GetWebContentsAt(index);
+      if (before.contains(opened) || Binding(TabId(opened))) continue;
+      opener->ReportOpened(opened, opened->GetVisibleURL(), "foreground");
+      if (!weak || !opener) break;
+    }
+  } else if (command == "downloadFavicon") {
+    if (values.empty() || !values[0].is_string()) {
+      return std::move(done).Run(false, base::Value("downloadFavicon requires an icon URL"));
+    }
+    auto request = binding->page() ? binding->page()->Capture() : std::nullopt;
+    if (!request) return std::move(done).Run(true, base::Value());
+    ardiacore::DownloadLinuxFavicon(
+        contents, GURL(values[0].GetString()),
+        base::BindRepeating([](ardiacore::LinuxPageRequest request) { return request.Valid(); },
+                            *request),
+        base::BindOnce([](base::OnceCallback<void(bool, base::Value)> done, base::Value image) {
+          std::move(done).Run(true, std::move(image));
+        }, std::move(done)));
+    return;
   } else if (command == "getSecurityInfo") {
     if (!values.empty()) return std::move(done).Run(false, base::Value("getSecurityInfo takes no arguments"));
     return std::move(done).Run(true, binding->page() ? binding->page()->SecurityInfo() : base::Value());
@@ -4375,11 +4459,17 @@ void TabBinding::DidOpenRequestedURL(
     case WindowOpenDisposition::NEW_WINDOW: target = "window"; break;
     default: return;
   }
+  ReportOpened(opened, url, target);
+}
+
+void TabBinding::ReportOpened(content::WebContents* opened, const GURL& url,
+                              std::string_view disposition) {
+  if (!contents_ || !opened) return;
   const int id = TabId(opened);
   if (id <= 0 || opened->GetBrowserContext() != contents_->GetBrowserContext()) return;
   owner_->OfferTab(opened);
   ReportPresentation("openWindow", base::DictValue()
-      .Set("url", url.spec()).Set("disposition", target)
+      .Set("url", url.spec()).Set("disposition", disposition)
       .Set("adoptId", "tab:" + base::NumberToString(id)).Set("profile", ""));
 }
 
@@ -4645,6 +4735,28 @@ void StartLinuxHost() {
   g_ardia_linux_page_host_binder = &ardiacore::RegisterLinuxPageHostBinder;
   g_ardia_linux_auto_pip_requested = [](content::WebContents* contents) {
     for (const auto& [id, host] : Hosts()) host->NoteAutoPictureInPictureRequested(contents);
+  };
+  g_ardia_linux_target_url = [](content::WebContents* contents, const GURL& url) {
+    for (const auto& [id, host] : Hosts()) {
+      if (auto* status = host->PageStatus(contents)) return status->TargetURL(url);
+    }
+    return false;
+  };
+  g_ardia_linux_renderer_unresponsive = [](content::WebContents* contents,
+                                           content::RenderWidgetHost* widget,
+                                           const base::RepeatingClosure& restarter) {
+    if (!widget || (widget->GetView() && widget->GetView()->IsHTMLFormPopup())) return false;
+    for (const auto& [id, host] : Hosts()) {
+      if (auto* status = host->PageStatus(contents)) return status->Unresponsive(widget, restarter);
+    }
+    return false;
+  };
+  g_ardia_linux_renderer_responsive = [](content::WebContents* contents,
+                                         content::RenderWidgetHost* widget) {
+    for (const auto& [id, host] : Hosts()) {
+      if (auto* status = host->PageStatus(contents)) return status->Responsive(widget);
+    }
+    return false;
   };
   g_ardia_devtools_dock_changed = [](BrowserWindowInterface* browser, content::WebContents* inspected,
                                      content::WebContents*) {

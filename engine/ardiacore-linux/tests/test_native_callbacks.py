@@ -22,7 +22,7 @@ class NativeCallbackTests(unittest.TestCase):
                 end += 1
             return source[start:end]
 
-        methods = '\n'.join(method(name) for name in ['RemoveViewports', 'Rebind', 'MoveTo', 'DidOpenRequestedURL', 'WebContentsDestroyed'])
+        methods = '\n'.join(method(name) for name in ['RemoveViewports', 'Rebind', 'MoveTo', 'DidOpenRequestedURL', 'ReportOpened', 'WebContentsDestroyed'])
         prelude = r'''
         #include <cassert>
         #include <map>
@@ -125,6 +125,7 @@ class NativeCallbackTests(unittest.TestCase):
           void Rebind(content::WebContents*);
           void MoveTo(ShellHostView*);
           void DidOpenRequestedURL(content::WebContents*, content::RenderFrameHost*, const GURL&, const content::Referrer&, WindowOpenDisposition, ui::PageTransition, bool, bool);
+          void ReportOpened(content::WebContents* opened, const GURL& url, std::string_view disposition);
           void WebContentsDestroyed();
           raw_ptr<ShellHostView> owner_;
           raw_ptr<content::WebContents> contents_;
