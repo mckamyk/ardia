@@ -72,6 +72,7 @@ std::string TrashDirectory(const char* xdg_data_home, const char* home);
 TrashOutcome MoveToTrash(const std::string& path, const std::string& trash_directory,
                          std::time_t now);
 std::string MountTop(const std::string& path);
+std::string ResolvedFile(const std::string& path);
 
 struct FolderCheck {
   bool ok = false;

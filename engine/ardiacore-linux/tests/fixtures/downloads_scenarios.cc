@@ -2,6 +2,7 @@
 #include <unistd.h>
 
 #include <cassert>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -331,6 +332,18 @@ void VolumeTrash(const std::string& scratch) {
   auto redirected = MoveToTopdirTrash(planted + "/b.bin", planted, uid, when);
   assert(!redirected.ok && redirected.code == "ERR_TRASH_UNAVAILABLE");
   assert(Exists(planted + "/b.bin"));
+
+  const std::string alias = scratch + "/alias";
+  assert(symlink(shared.c_str(), alias.c_str()) == 0);
+  char real_shared[PATH_MAX];
+  assert(realpath(shared.c_str(), real_shared));
+  assert(ResolvedFile(alias + "/media/x.bin") == std::string(real_shared) + "/media/x.bin");
+  assert(ResolvedFile("relative/x").empty());
+  assert(ResolvedFile(scratch + "/missing-dir/x").empty());
+  Touch(shared + "/media/aliased.mp4", "aliased");
+  auto via_alias = MoveToTopdirTrash(ResolvedFile(alias + "/media/aliased.mp4"), real_shared, uid, when);
+  assert(via_alias.ok);
+  assert(Read(std::string(real_shared) + "/.Trash/" + user + "/info/aliased.mp4.trashinfo").find("Path=media/aliased.mp4\n") != std::string::npos);
 
   Touch(scratch + "/root-file", "r");
   assert(MoveToTopdirTrash(scratch + "/root-file", scratch + "/shared", uid, when).code == "ERR_FILE_PATH");

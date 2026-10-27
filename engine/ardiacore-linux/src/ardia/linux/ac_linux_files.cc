@@ -355,7 +355,7 @@ void LinuxPickFolder(gfx::NativeWindow window, const base::ListValue& values, Do
   }
   const std::string current = !values.empty() && values[0].is_string() ? values[0].GetString() : std::string();
   if (ardiacore::BackgroundInstance()) {
-    LOG(INFO) << "Ardia background instance: folder picker requested from " << current;
+    LOG(INFO) << "Ardia background instance: folder picker requested";
     return std::move(done).Run(true, base::Value());
   }
   DownloadFolderPicker::Start(window, downloads::ValidLocalPath(current) ? base::FilePath(current) : base::FilePath(),

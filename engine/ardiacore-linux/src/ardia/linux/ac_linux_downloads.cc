@@ -351,9 +351,10 @@ TrashOutcome MoveToTrash(const std::string& path, const std::string& trash_direc
   if (stat(files.c_str(), &target) != 0)
     return Failure("ERR_TRASH_UNAVAILABLE", "The desktop trash directory cannot be read");
   if (target.st_dev != source.st_dev) {
-    const std::string top = MountTop(path);
+    const std::string resolved = ResolvedFile(path);
+    const std::string top = resolved.empty() ? std::string() : MountTop(resolved);
     if (top.empty()) return Failure("ERR_TRASH_UNAVAILABLE", "The file's volume cannot be found");
-    return MoveToTopdirTrash(path, top, getuid(), now);
+    return MoveToTopdirTrash(resolved, top, getuid(), now);
   }
   return TrashInto(path, trash_directory, path, now);
 }
@@ -370,6 +371,15 @@ FolderCheck CheckDownloadFolder(const std::string& path) {
     return {false, "ERR_FOLDER_NOT_WRITABLE", "Ardia can't save downloads in that folder"};
   }
   return {true, {}, {}};
+}
+
+std::string ResolvedFile(const std::string& path) {
+  if (!ValidLocalPath(path)) return {};
+  const size_t slash = path.rfind('/');
+  char resolved[PATH_MAX];
+  if (!realpath(slash == 0 ? "/" : path.substr(0, slash).c_str(), resolved)) return {};
+  const std::string directory = resolved;
+  return (directory == "/" ? "" : directory) + path.substr(slash);
 }
 
 std::string MountTop(const std::string& path) {
