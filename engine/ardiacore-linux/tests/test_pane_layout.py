@@ -142,6 +142,29 @@ int main(int argc, char** argv) {
     assert(p.binding->resets == 1 && p.host.closes == std::vector<int>{7});
     return 0;
   }
+  if (mode == "before-viewport") {
+    Pane p;
+    p.binding->viewport_ = nullptr;
+    p.host.children.clear();
+    p.Dock();
+    auto& chrome = p.host.browser_view_storage.containers[&p.page].devtools;
+    chrome.SetWebContents(&p.frontend);
+    chrome.SetVisible(true);
+    p.host.LayoutPane(p.binding);
+    assert(!chrome.web_contents() && !chrome.GetVisible());
+    assert(!p.tools() && p.frontend.focuses == 0);
+    p.binding->claim.clear();
+    chrome.SetWebContents(&p.frontend);
+    p.host.LayoutPane(p.binding);
+    assert(chrome.web_contents() == &p.frontend);
+    p.binding->claim = "claim";
+    chrome.SetWebContents(nullptr);
+    p.binding->viewport_ = p.host.AddChildView(std::make_unique<ViewportView>(0));
+    p.host.Show(p.binding, true);
+    assert(p.tools() && p.tools()->GetVisible() && p.tools()->web_contents() == &p.frontend);
+    assert(views::focus_manager.focused == p.tools() && p.frontend.focuses == 1);
+    return 0;
+  }
   if (mode == "hidden-native") {
     Pane p;
     p.Dock();
@@ -203,6 +226,9 @@ class PaneLayoutTests(unittest.TestCase):
 
     def test_destroyed_inspected_contents_hides_the_panel(self):
         self.run_case('inspected-destroyed')
+
+    def test_devtools_opened_before_the_first_viewport_waits_for_it_without_chrome_hosting_it(self):
+        self.run_case('before-viewport')
 
     def test_presenting_reshows_a_hidden_native_frontend(self):
         self.run_case('hidden-native')

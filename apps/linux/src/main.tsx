@@ -27,6 +27,7 @@ import { startHostData } from "./hostData";
 import { startHostDownloads } from "./hostDownloads";
 import { startHostTabLifecycle } from "./hostTabLifecycle";
 import { startLinuxTabPolicies } from "./hostPolicies";
+import { watchInstallPromptCancellations } from "./extensionPrompts";
 import { provideNativeModuleProvider } from "./shims/expo-modules-core";
 import { setHostPageHooks } from "./hostPageHooks";
 import { applyHostPageTheme, resetHostPage } from "./hostPageLifecycle";
@@ -89,6 +90,7 @@ async function start() {
     startNativeSync();
     startHostDownloads(ardiaHost, useBrowser);
     startLinuxTabPolicies({ target: window, provide: provideNativeModuleProvider, startLifecycle: startTabLifecycle, startTrim: startMemoryTrim });
+    watchInstallPromptCancellations(ardiaHost, useExtensions);
     startLinuxAppServices({
       host: ardiaHost,
       windowId,

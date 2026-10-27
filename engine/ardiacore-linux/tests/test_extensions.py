@@ -137,12 +137,18 @@ class ExtensionServiceTests(unittest.TestCase):
     def test_window_calls_use_the_window_profile_and_prompts_resolve_once_in_their_window(self):
         service = (LINUX / 'ac_linux_extension_service.cc').read_text()
         extracted = '\n'.join([
-            method(service, 'void Fail(Done done,'), method(service, 'struct PendingInstall {') + ';',
+            method(service, 'void Fail(Done done,'), 'void AbortPromptForDestroyedParent(std::string request);',
+            method(service, 'class PromptParentWatch') + ';', method(service, 'struct PendingInstall {') + ';',
             method(service, 'ext::PromptLedger<PendingInstall>& Prompts() {'), method(service, 'void Answer(PendingInstall pending,'),
+            method(service, 'LinuxExtensionsDelegate& Delegate() {'),
+            method(service, 'void AbortPromptForDestroyedParent(std::string request) {'),
+            method(service, 'void Retarget(int window, bool closing) {'),
             method(service, 'std::string ProfileId(const Profile* profile) {'), method(service, 'void ResolvePrompt('),
             method(service, 'content::WebContents* ProfileTab('), method(service, 'void LinuxExtensionsProfile('),
             method(service, 'void CallProfile('),
-            *[line for line in service.splitlines() if line.startswith('LinuxExtensionWindow')],
+            method(service, 'void LinuxExtensionsWindowRetired(int window) {'),
+            method(service, 'void LinuxExtensionsWindowClosing(int window) {'),
+            *[line for line in service.splitlines() if line.startswith('LinuxExtensionWindow') or line.startswith('LinuxExtensionsDelegate::')],
         ])
         with tempfile.TemporaryDirectory(prefix='ardia-extension-service-') as directory:
             root = pathlib.Path(directory)
@@ -261,7 +267,9 @@ int main() {
         self.assertIn('LinuxExtensionsWindowRetired(id_);', detach)
         destructor = method(self.host, 'ShellHostView::~ShellHostView() {')
         self.assertIn('extension_surfaces_.reset();', destructor)
-        self.assertLess(destructor.index('Hosts().erase(id_);'), destructor.index('LinuxExtensionsWindowRetired(id_);'))
+        self.assertLess(destructor.index('Hosts().erase(id_);'), destructor.index('LinuxExtensionsWindowClosing(id_);'))
+        self.assertIn('LinuxExtensionsWindowClosing(id_);', method(self.host, '  void ReleaseExtensions() {'))
+        self.assertIn('LinuxExtensionsWindowRetired(id_);', method(self.host, 'void ShellHostView::DetachViewports() {'))
         closed = method(self.host, '  void OnBrowserClosed(BrowserWindowInterface* browser) override {')
         self.assertLess(closed.index('found->second->ReleaseExtensions();'), closed.index('found->second->DetachBrowser();'))
         self.assertIn('extension_surfaces_.reset();', method(self.host, '  void ReleaseExtensions() {'))
@@ -280,8 +288,24 @@ int main() {
         self.assertNotIn('ACCEPTED', hook)
         resolve = method(self.service, 'void ResolvePrompt(')
         self.assertIn('case ext::PromptResolve::kWrongWindow:', resolve)
-        retarget = method(self.service, 'void Retarget(int window) {')
+        retarget = method(self.service, 'void Retarget(int window, bool closing) {')
         self.assertIn('InstallResult::USER_CANCELED', retarget)
+
+    def test_install_prompts_end_with_their_parent_tab(self):
+        watch = self.service[self.service.index('class PromptParentWatch'):]
+        watch = watch[:watch.index('\n};\n')]
+        self.assertIn('public content::WebContentsObserver', watch)
+        destroyed = watch[watch.index('void WebContentsDestroyed() override'):]
+        self.assertLess(destroyed.index('Observe(nullptr);'), destroyed.index('PostTask('))
+        self.assertIn('&AbortPromptForDestroyedParent', destroyed)
+        abort = method(self.service, 'void AbortPromptForDestroyedParent(std::string request) {')
+        self.assertLess(abort.index('Prompts().Take('), abort.index('"extensions.installPromptCancelled"'))
+        self.assertIn('InstallResult::ABORTED', abort)
+        self.assertNotIn('USER_CANCELED', abort)
+        hook = method(self.service, 'bool InstallPromptHook(')
+        self.assertIn('parent ? std::make_unique<PromptParentWatch>(parent) : nullptr', hook)
+        self.assertLess(hook.index('Prompts().Add('), hook.index('->Track(*request)'))
+        self.assertIn('std::unique_ptr<PromptParentWatch> parent;', self.service[self.service.index('struct PendingInstall'):])
 
     def test_gn_lists_extension_helpers_and_their_dependencies(self):
         build = (LINUX / 'BUILD.gn').read_text()

@@ -128,6 +128,10 @@ S106, S107 and S108 need `ARDIA_ACCEPTANCE_CONTENT_BLOCKER` (or a package built 
 | F02-101 | #101 | Find counts matches in an isolated profile's window and in a private window (background instance); DevTools opens a frontend for a private window's page (native instance) | Print preview and Save Page in isolated and private windows |
 | F02-73 | #73 | Turning automatic PiP off writes `BLOCK` (2) into the default profile's and a later-loaded isolated profile's `Preferences`; turning it on writes `ALLOW` (1) into both | — |
 | F02-99 | #99 | With a split-mode fixture: without incognito access the private window gets no action state and `extensionView.create` is `ERR_EXTENSION_PRIVATE`; after `extensions.configure` grants it, the private renderer learns it, gets action state and opens the popup; `extensions.setEnabled` from the private window is `ERR_PROFILE_PRIVATE` | Toolbar, popup and side panel by hand; spanning-mode extensions stay hidden (shared toolbar rule) |
+| W74 | #74 | `ArdiaShell.pickFolder` is advertised; a background instance returns no folder instead of a dialog; malformed requests get `ERR_FOLDER_REQUEST` | The real folder dialog: pick, cancel, unwritable folder |
+| W75 | #75 | With `PATH` emptied and no session bus, Show in Folder fails with `ERR_REVEAL_UNAVAILABLE`; when `/dev/shm` is a separate mount, a download there moves to `/dev/shm/.Trash-<uid>` | A finished row never flashing as missing; Show in Folder through a portal or FileManager1 |
+| W76 | #76 | DevTools asked for in the same task that creates a tab opens a frontend and inspects that page (screenshot evidence) | Placement and focus on a fresh tab |
+| W137 | #137 | The extension service answers in the window | Closing the Web Store tab dismisses its install prompt; a CRX prompt stays until answered |
 
 ## Manual steps
 

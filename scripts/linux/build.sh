@@ -20,7 +20,7 @@ python3 "$root/engine/patches/build/pathguard.py" build-root "$CB" >/dev/null ||
 [[ "$build_root_status" -eq 0 || "$build_root_status" -eq 10 ]] || exit "$build_root_status"
 export AC_LOCK_ROOT="${AC_LOCK_ROOT:-/tmp}"
 mkdir -p "$AC_LOCK_ROOT"
-exec flock -x -w 30 "$AC_LOCK_ROOT/ac-chromium.lockf" bash -c '
+exec "$root/scripts/agent/locked" chromium --wait "${AC_LOCK_WAIT:-30}" -- bash -c '
   set -euo pipefail
   root=$1
   generate=$2

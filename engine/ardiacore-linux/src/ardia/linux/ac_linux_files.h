@@ -10,6 +10,7 @@
 #include "base/task/cancelable_task_tracker.h"
 #include "base/values.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/controls/webview/webview.h"
 
 class Profile;
@@ -40,6 +41,9 @@ bool LinuxDownloadsHandles(std::string_view name);
 bool LinuxDownloadOwned(Profile* profile, const std::string& id);
 void LinuxDownloadsCall(Profile* profile, const std::string& name, const base::DictValue& input,
                         base::OnceCallback<void(bool, base::Value)> done);
+
+void LinuxPickFolder(gfx::NativeWindow window, const base::ListValue& values,
+                     base::OnceCallback<void(bool, base::Value)> done);
 
 bool LinuxFilesHandles(std::string_view method);
 void LinuxFilesInvoke(Profile* profile, LinuxShellWebView* shell, const std::string& method,

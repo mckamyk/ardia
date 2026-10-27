@@ -9,10 +9,18 @@ const FILE_STATUS_CACHE = 512;
 const ICON = /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/;
 
 type Clock = { now(): number; schedule(run: () => void, ms: number): unknown };
+type Notice = (title: string, message: string) => void;
+const FAILURE_TITLES: Record<string, string> = {
+  openFile: "Couldn't Open the File",
+  revealFile: "Couldn't Show the File",
+  moveToTrash: "Couldn't Move the File to the Trash",
+};
 const realClock: Clock = { now: () => Date.now(), schedule: (run, ms) => setTimeout(run, ms) };
 
 export type HostFiles = {
   fileExists(path: string): boolean;
+  expect(path: string): void;
+  setNotice(notice: Notice): void;
   openFile(path: string): Promise<boolean>;
   revealFile(path: string): Promise<boolean>;
   moveToTrash(path: string): Promise<boolean>;
@@ -23,7 +31,8 @@ export type HostFiles = {
 
 const localPath = (path: unknown): path is string => typeof path === "string" && path.startsWith("/") && path.length <= 4096 && !path.includes("\0");
 
-export function createHostFiles(host: ArdiaHost, clock: Clock = realClock): HostFiles {
+export function createHostFiles(host: ArdiaHost, clock: Clock = realClock, notice: Notice = () => {}): HostFiles {
+  let currentNotice = notice;
   const cache = new Map<string, { exists: boolean; at: number }>();
   const queued = new Set<string>();
   const inflight = new Set<string>();
@@ -73,6 +82,8 @@ export function createHostFiles(host: ArdiaHost, clock: Clock = realClock): Host
     localPath(path)
       ? invokeHost<unknown>(`ArdiaSystem.${method}`, { args: [path] }, host).then((reply) => reply === true, (error) => {
           reportHostError(error);
+          const message = error instanceof Error && error.message ? error.message : "The desktop did not respond";
+          currentNotice(FAILURE_TITLES[method] ?? "Couldn't Use the File", message);
           return false;
         })
       : Promise.resolve(false);
@@ -86,6 +97,19 @@ export function createHostFiles(host: ArdiaHost, clock: Clock = realClock): Host
         schedule();
       }
       return entry?.exists ?? false;
+    },
+    setNotice(next) {
+      currentNotice = next;
+    },
+    expect(path) {
+      if (!localPath(path) || !hostSupports(FILE_STATUS, host) || cache.get(path)?.exists) return;
+      cache.delete(path);
+      cache.set(path, { exists: true, at: -Infinity });
+      while (cache.size > FILE_STATUS_CACHE) cache.delete(cache.keys().next().value!);
+      if (!inflight.has(path)) {
+        queued.add(path);
+        schedule();
+      }
     },
     openFile: (path) => action("openFile", path),
     revealFile: (path) => action("revealFile", path),

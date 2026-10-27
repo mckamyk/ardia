@@ -337,10 +337,14 @@ class WebContents {
   std::string title;
   bool loading = true;
   int focuses = 0;
+  void Destroy();
 };
 class WebContentsObserver {
  public:
+  WebContentsObserver() = default;
+  explicit WebContentsObserver(WebContents* contents) { Observe(contents); }
   virtual ~WebContentsObserver() { Observe(nullptr); }
+  virtual void WebContentsDestroyed() {}
   void Observe(WebContents* contents) {
     if (observed_) std::erase(observed_->observers, this);
     observed_ = contents;
@@ -355,6 +359,9 @@ class WebContentsObserver {
  private:
   WebContents* observed_ = nullptr;
 };
+inline void WebContents::Destroy() {
+  for (auto* observer : std::vector<WebContentsObserver*>(observers)) observer->WebContentsDestroyed();
+}
 }
 
 class Profile : public content::BrowserContext {

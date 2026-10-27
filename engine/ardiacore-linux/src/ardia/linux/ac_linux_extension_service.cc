@@ -36,6 +36,7 @@
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "extensions/browser/extension_action.h"
 #include "extensions/browser/extension_action_manager.h"
 #include "extensions/browser/extension_install_prompt_client.h"
@@ -104,9 +105,29 @@ LinuxExtensionsDelegate& Delegate() {
   return *delegate;
 }
 
+void AbortPromptForDestroyedParent(std::string request);
+
+class PromptParentWatch : public content::WebContentsObserver {
+ public:
+  explicit PromptParentWatch(content::WebContents* parent) : content::WebContentsObserver(parent) {}
+
+  void Track(std::string request) { request_ = std::move(request); }
+
+  void WebContentsDestroyed() override {
+    Observe(nullptr);
+    if (request_.empty()) return;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&AbortPromptForDestroyedParent, request_));
+  }
+
+ private:
+  std::string request_;
+};
+
 struct PendingInstall {
   InstallDone done;
   base::WeakPtr<Profile> profile;
+  std::unique_ptr<PromptParentWatch> parent;
 };
 
 ext::PromptLedger<PendingInstall>& Prompts() {
@@ -118,6 +139,19 @@ void Answer(PendingInstall pending, InstallResult result) {
   if (!pending.profile || pending.done.is_null()) return;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(pending.done), InstallPayload(result)));
+}
+
+void AbortPromptForDestroyedParent(std::string request) {
+  const auto* entry = Prompts().Find(request);
+  if (!entry) return;
+  const int window = entry->window;
+  auto pending = Prompts().Take(request);
+  if (!pending) return;
+  auto& delegate = Delegate();
+  if (delegate.deliver) {
+    delegate.deliver.Run(window, "extensions.installPromptCancelled", base::DictValue().Set("requestId", request));
+  }
+  Answer(std::move(*pending), InstallResult::ABORTED);
 }
 
 std::string ProfileId(const Profile* profile) {
@@ -395,12 +429,16 @@ bool InstallPromptHook(Profile* profile, content::WebContents* parent, const ext
       .Set("icon", icon)
       .Set("permissions", std::move(permissions))
       .Set("tabId", key.empty() ? base::Value() : base::Value(key));
-  auto request = Prompts().Add(ProfileId(profile), window, payload.Clone(), PendingInstall{std::move(*done), profile->GetWeakPtr()});
+  auto watch = parent ? std::make_unique<PromptParentWatch>(parent) : nullptr;
+  PromptParentWatch* parent_watch = watch.get();
+  auto request = Prompts().Add(ProfileId(profile), window, payload.Clone(),
+                               PendingInstall{std::move(*done), profile->GetWeakPtr(), std::move(watch)});
   if (!request) {
     LOG(WARNING) << "[ardia] extension install prompt for " << extension->id() << ": too many pending prompts";
     return false;
   }
   payload.Set("requestId", *request);
+  if (parent_watch) parent_watch->Track(*request);
   if (delegate.deliver.Run(window, "extensions.installPrompt", std::move(payload))) return true;
   auto pending = Prompts().Take(*request);
   if (pending) *done = std::move(pending->done);
@@ -442,11 +480,25 @@ std::optional<bool> ActionPopupHook(BrowserWindowInterface& browser, const exten
   return false;
 }
 
-void Retarget(int window) {
+void Retarget(int window, bool closing) {
   auto& delegate = Delegate();
   for (const auto& request : Prompts().OfWindow(window)) {
     const auto* entry = Prompts().Find(request);
     Profile* profile = entry ? entry->done.profile.get() : nullptr;
+    if (closing && entry && entry->done.parent) {
+      content::WebContents* tab = entry->done.parent->web_contents();
+      const int holder = tab && profile && delegate.window_for ? delegate.window_for.Run(profile, tab, window) : 0;
+      const std::string key = holder && delegate.tab_key ? delegate.tab_key.Run(holder, tab) : std::string();
+      if (key.empty() || !Prompts().Move(request, holder)) continue;
+      base::DictValue payload = Prompts().Find(request)->payload.Clone();
+      payload.Set("tabId", key);
+      if (delegate.deliver.Run(holder, "extensions.installPrompt", payload.Clone())) {
+        Prompts().SetPayload(request, std::move(payload));
+        continue;
+      }
+      if (auto pending = Prompts().Take(request)) Answer(std::move(*pending), InstallResult::USER_CANCELED);
+      continue;
+    }
     const int next = profile && delegate.window_for ? delegate.window_for.Run(profile, nullptr, window) : 0;
     if (next && Prompts().Move(request, next)) {
       base::DictValue payload = Prompts().Find(request)->payload.Clone();
@@ -588,7 +640,11 @@ void StartLinuxExtensions(LinuxExtensionsDelegate delegate) {
 }
 
 void LinuxExtensionsWindowRetired(int window) {
-  Retarget(window);
+  Retarget(window, false);
+}
+
+void LinuxExtensionsWindowClosing(int window) {
+  Retarget(window, true);
 }
 
 }

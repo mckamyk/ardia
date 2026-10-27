@@ -4,6 +4,8 @@ import { emitNativeEvent, provideNativeModule, provideNativeModuleProvider } fro
 import { NATIVE_CHANGE } from "./react-native";
 import { ardiaHost, hostModuleMethod, reportHostError } from "../host";
 import { hostLaunchConfig } from "../hostLaunchConfig";
+import { createFolderPicker } from "../hostFolders";
+import { linuxHostDialogs } from "../hostDialogs";
 import { createHostDocuments } from "../hostDocuments";
 import { createHostWindowOpener, dropRefusedWindow } from "../hostWindowProfiles";
 import { createLinuxWindowIds } from "../windowSweep";
@@ -86,7 +88,8 @@ const claimHostFocus = async (generation: number, tag: number) => {
   else await hostModuleMethod("ArdiaShell", "claimFocus")(generation, tag);
 };
 const openHostWindow = ardiaHost ? createHostWindowOpener(ardiaHost, () => useBrowser.getState(), (event) => emitWindowEvent(event), (id) => dropRefusedWindow(useBrowser, id)) : undefined;
-const hostShellLocals: Record<string, unknown> = { readDocument, writeDocument, saveDocument, removeDocument, claimFocus: claimHostFocus, openWindow: openHostWindow };
+const pickHostFolder = ardiaHost ? createFolderPicker(ardiaHost, (options) => linuxHostDialogs().confirm(options).then((answer) => answer.confirmed)) : undefined;
+const hostShellLocals: Record<string, unknown> = { readDocument, writeDocument, saveDocument, removeDocument, claimFocus: claimHostFocus, openWindow: openHostWindow, pickFolder: pickHostFolder };
 const hostAppLocals: Record<string, unknown> = { systemInfo, launchConfig };
 provideNativeModuleProvider((module, method) => ardiaHost ? (module === "ArdiaShell" ? hostShellLocals[method] : module === "ArdiaApp" ? hostAppLocals[method] : undefined) : undefined);
 
