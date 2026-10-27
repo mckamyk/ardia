@@ -1,6 +1,6 @@
 # Lane D handoff: Linux UI-side gaps (F10, F26, F27)
 
-Branch `t3/linux-ui-services`, rebased onto `linux` at `3ef048ba` (#61, #64 and #90 merged). The changes are in `apps/linux`, plus one Linux-only native helper (`engine/ardiacore-linux`) for F10. Nothing in `apps/browser`, `packages/*`, `apps/demo` or macOS changed.
+Branch `t3/linux-ui-services`, rebased onto `linux` at `2376f370` (#61, #64, #90 and #65 merged). The changes are in `apps/linux`, plus one Linux-only native helper (`engine/ardiacore-linux`) for F10. Nothing in `apps/browser`, `packages/*`, `apps/demo` or macOS changed.
 
 ## F10 search suggestions ([#20](https://github.com/mckamyk/ardia/issues/20))
 
@@ -88,8 +88,8 @@ Service-authority contract (`appServices.ts`):
 
 ## Tests run
 
-Review round 3, on `3ef048ba`:
-- `pnpm --filter @ardia/linux test:host`: 274/274 pass, including #61's and #64's host tests.
+Review round 3, on `2376f370`:
+- `pnpm --filter @ardia/linux test:host`: 278/278 pass, including the host tests from #61, #64 and #65.
 - `typecheck`, `build`, `test:graph`, `test:symbols` (4/4) and `acceptance:self-test` (47/47) pass.
 - `pnpm --filter @ardia/linux fixture:csp:check` passes in headless `/usr/bin/chromium` under the policy parsed from `ac_linux_host.cc`. It checks:
   - Trusted Types
@@ -97,7 +97,7 @@ Review round 3, on `3ef048ba`:
   - one host-bridged suggestion delivered
   - all four launch steps recorded
   - a second window gets `alreadyDone`
-- `python3 -m unittest discover -s engine/ardiacore-linux/tests`: see the PR for the final count. The suite includes:
+- `python3 -m unittest discover -s engine/ardiacore-linux/tests`: 291/291 pass. The suite includes:
   - this lane's `test_suggest_policy` and `test_launch_steps`;
   - `test_host_policy` (stored-read classification);
   - the fixtures that compile host branches: `test_document_host`, `test_session_merge`, `test_window_storage`, `test_window_lifecycle` and `test_downloads`.
