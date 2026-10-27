@@ -1,6 +1,6 @@
 # Lane D handoff: Linux UI-side gaps (F10, F26, F27)
 
-Branch `t3/linux-ui-services`, based on `linux` at `4b3d21e0`. The changes are in `apps/linux`, plus one Linux-only native helper (`engine/ardiacore-linux`) for F10. Nothing in `apps/browser`, `packages/*`, `apps/demo` or macOS changed.
+Branch `t3/linux-ui-services`, rebased onto `linux` at `52d72e78`. The changes are in `apps/linux`, plus one Linux-only native helper (`engine/ardiacore-linux`) for F10. Nothing in `apps/browser`, `packages/*`, `apps/demo` or macOS changed.
 
 ## F10 search suggestions ([#20](https://github.com/mckamyk/ardia/issues/20))
 
