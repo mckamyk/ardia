@@ -19,6 +19,7 @@ class PrivateLinkTests(unittest.TestCase):
         self.assertEqual(added.count('#if BUILDFLAG(IS_LINUX)'), 2)
         hook = added[added.index('if (params->disposition == WindowOpenDisposition::OFF_THE_RECORD &&'):]
         self.assertIn('!params->contents_to_insert && params->source_contents &&', hook)
+        self.assertIn('!params->is_renderer_initiated && params->user_gesture &&', hook)
         self.assertIn('return nullptr;', hook)
         hunks = re.split(r'^@@.*$', patch, flags=re.M)
         hunk = next(part for part in hunks if 'OFF_THE_RECORD' in part)

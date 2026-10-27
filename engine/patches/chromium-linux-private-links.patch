@@ -12,13 +12,14 @@
  namespace {
  
  struct AdditionalParams {
-@@ -781,6 +786,16 @@
+@@ -781,6 +786,17 @@
          params->browser->GetTabStripModel()->GetActiveWebContents();
    }
  
 +#if BUILDFLAG(IS_LINUX)
 +  if (params->disposition == WindowOpenDisposition::OFF_THE_RECORD &&
 +      !params->contents_to_insert && params->source_contents &&
++      !params->is_renderer_initiated && params->user_gesture &&
 +      g_ardia_linux_off_the_record_navigation &&
 +      g_ardia_linux_off_the_record_navigation(params->source_contents,
 +                                              params->url)) {
