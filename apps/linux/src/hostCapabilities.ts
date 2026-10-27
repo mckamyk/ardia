@@ -21,7 +21,7 @@ export function linuxCapabilities(host: ArdiaHost | undefined = ardiaHost): Linu
     cliControl: false,
     externalLinks: has("ArdiaApp.openExternalURL"),
     performanceRecording: has("engine.beginTracing", "engine.endTracing", "engine.isTracing"),
-    taskManager: !!host,
+    taskManager: has("engine.openTaskManager"),
   };
 }
 

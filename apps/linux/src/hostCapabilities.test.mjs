@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { resolveHostModule } from "./hostModules.ts";
 import { linuxCapabilities, unavailablePanes, unavailableSettingIds } from "./hostCapabilities.ts";
@@ -36,9 +37,9 @@ test("a host that advertises a system backend is called through instead of being
 
 test("Linux capabilities come from the host contract, and WebKit is never offered", () => {
   assert.deepEqual(linuxCapabilities(fakeHost().host), {
-    defaultBrowser: false, launchAtLogin: false, thinScrollBars: false, webkit: false, cliControl: false, externalLinks: false, performanceRecording: false, taskManager: true,
+    defaultBrowser: false, launchAtLogin: false, thinScrollBars: false, webkit: false, cliControl: false, externalLinks: false, performanceRecording: false, taskManager: false,
   });
-  const full = linuxCapabilities(fakeHost(["ArdiaSystem.isDefaultBrowser", "ArdiaSystem.setAsDefaultBrowser", "ArdiaSystem.launchAtLoginStatus", "ArdiaSystem.setLaunchAtLogin", "ArdiaSystem.setThinScrollBars", "engine.beginTracing", "engine.endTracing", "engine.isTracing", "ArdiaApp.openExternalURL"]).host);
+  const full = linuxCapabilities(fakeHost(["ArdiaSystem.isDefaultBrowser", "ArdiaSystem.setAsDefaultBrowser", "ArdiaSystem.launchAtLoginStatus", "ArdiaSystem.setLaunchAtLogin", "ArdiaSystem.setThinScrollBars", "engine.beginTracing", "engine.endTracing", "engine.isTracing", "engine.openTaskManager", "ArdiaApp.openExternalURL"]).host);
   assert.deepEqual(full, { defaultBrowser: true, launchAtLogin: true, thinScrollBars: true, webkit: false, cliControl: false, externalLinks: true, performanceRecording: true, taskManager: true });
   assert.equal(linuxCapabilities(undefined).taskManager, false);
 });
@@ -62,4 +63,28 @@ test("onboarding music and external links answer locally when the host has no ba
   const advertised = fakeHost(["ArdiaApp.openExternalURL"]);
   await assert.rejects(resolveHostModule(advertised.host, "ArdiaApp", "openExternalURL")("mailto:x"), /Unknown host method/);
   assert.deepEqual(advertised.invoked, ["ArdiaApp.openExternalURL"]);
+});
+
+const nativeSource = (path) => readFileSync(new URL(`../../../engine/ardiacore-linux/src/ardia/linux/${path}`, import.meta.url), "utf8");
+const contractRoutes = () => {
+  const source = nativeSource("ac_linux_contract.h");
+  const table = source.slice(source.indexOf("kRoutes[] = {"), source.indexOf("};", source.indexOf("kRoutes[] = {")));
+  return [...table.matchAll(/\{"([^"]+)",/g)].map((match) => match[1]);
+};
+
+test("the native bootstrap advertises every contract route, so engine capabilities can turn on", () => {
+  const host = nativeSource("ac_linux_host.cc");
+  const bootstrap = host.slice(host.indexOf("base::DictValue ShellHostView::Bootstrap() const {"), host.indexOf("void ShellHostView::LayoutOverlay()"));
+  assert.match(bootstrap, /for \(const auto& route : ardiacore::linux_contract::kRoutes\)\s*capabilities\.Append\(route\.name\);/);
+  const routes = contractRoutes();
+  assert.ok(routes.includes("engine.openTaskManager"));
+  const advertised = linuxCapabilities(fakeHost(routes).host);
+  assert.equal(advertised.taskManager, true);
+  assert.equal(advertised.performanceRecording, ["engine.beginTracing", "engine.endTracing", "engine.isTracing"].every((name) => routes.includes(name)));
+});
+
+test("Task Manager and tracing follow the advertised contract rather than the mere presence of a host", () => {
+  assert.equal(linuxCapabilities(fakeHost().host).taskManager, false);
+  assert.equal(linuxCapabilities(fakeHost(["engine.openTaskManager"]).host).taskManager, true);
+  assert.equal(linuxCapabilities(fakeHost(["engine.beginTracing", "engine.endTracing", "engine.isTracing"]).host).performanceRecording, true);
 });

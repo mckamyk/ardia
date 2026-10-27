@@ -1465,6 +1465,8 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain")
       .Append("ArdiaSearch.suggest");
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
+  for (const auto& route : ardiacore::linux_contract::kRoutes)
+    capabilities.Append(route.name);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
