@@ -1,5 +1,6 @@
 assert(is_linux)
 
+import("//mojo/public/tools/bindings/mojom.gni")
 import("//pdf/features.gni")
 import("//printing/buildflags/buildflags.gni")
 
@@ -12,6 +13,45 @@ action("bootstrap") {
     rebase_path(sources[0], root_build_dir),
     "--output",
     rebase_path(outputs[0], root_build_dir),
+  ]
+}
+
+action("page_script") {
+  script = "generate_page_script.py"
+  sources = [ "//ardia/core/page_script.js" ]
+  outputs = [ "$target_gen_dir/page_script.h" ]
+  args = [
+    "--input",
+    rebase_path(sources[0], root_build_dir),
+    "--output",
+    rebase_path(outputs[0], root_build_dir),
+  ]
+}
+
+mojom("page_mojom") {
+  sources = [ "mojom/page.mojom" ]
+  disable_variants = true
+}
+
+source_set("page_agent") {
+  sources = [
+    "renderer/ac_linux_page_agent.cc",
+    "renderer/ac_linux_page_agent.h",
+  ]
+  sources += get_target_outputs(":page_script")
+  deps = [
+    ":page_messages",
+    ":page_mojom",
+    ":page_script",
+    "//base",
+    "//chrome/common",
+    "//content/public/renderer",
+    "//gin",
+    "//mojo/public/cpp/bindings",
+    "//third_party/blink/public:blink",
+    "//third_party/blink/public/common",
+    "//url",
+    "//v8",
   ]
 }
 
@@ -32,6 +72,19 @@ source_set("devtools_authority") {
     "//base",
     "//content/public/browser",
   ]
+}
+
+source_set("page_messages") {
+  sources = [
+    "ac_linux_link_gesture.cc",
+    "ac_linux_link_gesture.h",
+    "ac_linux_page_evaluation.cc",
+    "ac_linux_page_evaluation.h",
+    "ac_linux_page_messages.cc",
+    "ac_linux_page_messages.h",
+    "ac_linux_page_operations.h",
+  ]
+  deps = [ "//base" ]
 }
 
 source_set("linux") {
@@ -76,6 +129,8 @@ source_set("linux") {
     "ac_linux_launch_steps.h",
     "ac_linux_page_commands.cc",
     "ac_linux_page_commands.h",
+    "ac_linux_page_channel.cc",
+    "ac_linux_page_channel.h",
     "ac_linux_page_lease.cc",
     "ac_linux_page_lease.h",
     "ac_linux_page_state.cc",
@@ -106,6 +161,8 @@ source_set("linux") {
     ":bootstrap",
     ":close_hooks",
     ":devtools_authority",
+    ":page_messages",
+    ":page_mojom",
     "//ardia/core:launch_switches",
     "//base",
     "//chrome/browser",
@@ -144,6 +201,7 @@ source_set("linux") {
     "//components/os_crypt/async/common",
     "//components/password_manager/core/browser",
     "//components/password_manager/core/common",
+    "//components/input",
     "//components/policy/core/common:common_constants",
     "//components/prefs",
     "//components/sessions",
@@ -156,8 +214,10 @@ source_set("linux") {
     "//components/web_modal",
     "//content/public/browser",
     "//content/public/common",
+    "//crypto",
     "//extensions/browser",
     "//extensions/common",
+    "//mojo/public/cpp/bindings",
     "//net",
     "//pdf:buildflags",
     "//printing/buildflags",

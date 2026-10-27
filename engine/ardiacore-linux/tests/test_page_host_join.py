@@ -47,6 +47,7 @@ std::string String(const base::DictValue& value, std::string_view key) { auto* t
 namespace ardiacore::linux_contract { inline bool OwnsClaim(const std::string& owner, const std::string& claim) { return !owner.empty() && owner == claim; } }
 class ShellHostView;
 struct HostMessageHandler {};
+namespace ardiacore { struct LinuxPageChannel { static LinuxPageChannel* FromWebContents(content::WebContents*) { return nullptr; } void Detach() {} }; }
 struct AutoPictureInPictureTabHelper {
   static AutoPictureInPictureTabHelper* FromWebContents(content::WebContents*) { return nullptr; }
   void OnTabActivatedChanged(bool) {}
@@ -78,6 +79,7 @@ class TabBinding : public content::WebContentsObserver {
   ardiacore::LinuxPageState* page() const { return page_.get(); }
   uint64_t contents_generation() const { return contents_generation_; }
   void AttachPage(std::unique_ptr<ardiacore::LinuxPageState> page);
+  void AttachPageChannel() {}
   void RetirePage();
   std::unique_ptr<ardiacore::LinuxPageState> TakePage();
   void ReportPresentation(std::string name, base::DictValue data);

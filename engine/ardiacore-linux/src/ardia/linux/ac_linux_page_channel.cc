@@ -1,0 +1,358 @@
+#include "ardia/linux/ac_linux_page_channel.h"
+
+#include <utility>
+
+#include "ardia/linux/ac_linux_page_evaluation.h"
+#include "base/functional/bind.h"
+#include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
+#include "base/no_destructor.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
+#include "chrome/common/chrome_isolated_world_ids.h"
+#include "content/public/browser/page.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
+#include "crypto/sha2.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
+#include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "url/gurl.h"
+#include "url/origin.h"
+
+namespace ardiacore {
+
+namespace {
+
+LinuxPageOptions& Options() {
+  static base::NoDestructor<LinuxPageOptions> options;
+  return *options;
+}
+
+LinuxLinkGestureGate& Gate() {
+  static base::NoDestructor<LinuxLinkGestureGate> gate;
+  return *gate;
+}
+
+std::set<LinuxPageChannel*>& Channels() {
+  static base::NoDestructor<std::set<LinuxPageChannel*>> channels;
+  return *channels;
+}
+
+double Now() {
+  return (base::TimeTicks::Now() - base::TimeTicks()).InSecondsF();
+}
+
+int LinkFlags(int modifiers) {
+  int flags = 0;
+  if (modifiers & blink::WebInputEvent::kAltKey) flags |= kLinuxLinkAlt;
+  if (modifiers & blink::WebInputEvent::kShiftKey) flags |= kLinuxLinkShift;
+  if (modifiers & blink::WebInputEvent::kControlKey) flags |= kLinuxLinkControl;
+  if (modifiers & blink::WebInputEvent::kMetaKey) flags |= kLinuxLinkMeta;
+  return flags;
+}
+
+bool Scriptable(content::RenderFrameHost* frame) {
+  const GURL& url = frame->GetLastCommittedURL();
+  return url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile();
+}
+
+std::string Json(const base::Value& value) {
+  std::string json;
+  base::JSONWriter::Write(value, &json);
+  return json;
+}
+
+std::string Sha256(std::string_view text) {
+  return base::HexEncodeLower(crypto::SHA256HashString(text));
+}
+
+std::optional<base::Value> ParseList(std::string_view json) {
+  auto value = base::JSONReader::Read(json, base::JSON_PARSE_RFC, 4);
+  if (!value || !value->is_list()) return std::nullopt;
+  return value;
+}
+
+const char* Disposition(LinuxLinkOutcome outcome) {
+  switch (outcome) {
+    case LinuxLinkOutcome::kPeek: return "peek";
+    case LinuxLinkOutcome::kSplit: return "split";
+    case LinuxLinkOutcome::kWindow: return "window";
+    case LinuxLinkOutcome::kBackground: return "background";
+    case LinuxLinkOutcome::kNone:
+    case LinuxLinkOutcome::kDownload: return nullptr;
+  }
+  return nullptr;
+}
+
+}
+
+LinuxPageChannel::LinuxPageChannel(content::WebContents* contents)
+    : content::WebContentsObserver(contents),
+      content::WebContentsUserData<LinuxPageChannel>(*contents),
+      receivers_(contents, this),
+      surface_(reinterpret_cast<uintptr_t>(contents)) {
+  Channels().insert(this);
+  contents->ForEachRenderFrameHost([this](content::RenderFrameHost* frame) { Watch(frame->GetRenderWidgetHost()); });
+}
+
+LinuxPageChannel::~LinuxPageChannel() {
+  Channels().erase(this);
+  Gate().Forget(surface_);
+  for (content::RenderWidgetHost* widget : widgets_) {
+    widget->RemoveInputEventObserver(this);
+    widget->RemoveObserver(this);
+  }
+}
+
+LinuxPageChannel* LinuxPageChannel::GetOrCreate(content::WebContents* contents) {
+  CreateForWebContents(contents);
+  return FromWebContents(contents);
+}
+
+void LinuxPageChannel::Bind(content::RenderFrameHost* frame,
+                            mojo::PendingAssociatedReceiver<ardia::linux_page::mojom::PageHost> receiver) {
+  receivers_.Bind(frame, std::move(receiver));
+}
+
+void LinuxPageChannel::Attach(LinuxPageChannelHooks hooks) {
+  hooks_ = std::move(hooks);
+  ForgetDocument();
+  PushOptions();
+}
+
+void LinuxPageChannel::Detach() {
+  hooks_.reset();
+  ForgetDocument();
+}
+
+void LinuxPageChannel::ForgetDocument() {
+  budget_.Reset();
+  scroll_.reset();
+  selection_ = base::Value();
+  message_document_ = content::WeakDocumentPtr();
+}
+
+bool LinuxPageChannel::CurrentMainDocument(const content::WeakDocumentPtr& document) {
+  content::RenderFrameHost* frame = document.AsRenderFrameHostIfValid();
+  return frame && frame == GetWebContents().GetPrimaryMainFrame();
+}
+
+base::ListValue LinuxPageChannel::SnapshotEvents() {
+  base::ListValue events;
+  if (!hooks_ || !CurrentMainDocument(message_document_)) return events;
+  auto event = [](const char* kind, base::Value data) {
+    return base::DictValue().Set("name", "pageMessage").Set("data", base::DictValue().Set("kind", kind).Set("data", std::move(data)));
+  };
+  if (scroll_) events.Append(event("scroll", base::Value(base::DictValue().Set("state", *scroll_))));
+  if (selection_.is_dict()) events.Append(event("selection", selection_.Clone()));
+  return events;
+}
+
+void LinuxPageChannel::Call(content::RenderFrameHost* frame, const std::string& kind, const std::string& json) {
+  if (!frame || !frame->IsRenderFrameLive() || !frame->IsActive() || !Scriptable(frame)) return;
+  mojo::AssociatedRemote<ardia::linux_page::mojom::PageAgent> agent;
+  frame->GetRemoteAssociatedInterfaces()->GetInterface(&agent);
+  agent->Call(kind, json);
+}
+
+void LinuxPageChannel::Greet(content::RenderFrameHost& frame) {
+  Call(&frame, "peekConfig", Json(base::Value(Options().PeekConfig())));
+  Call(&frame, "config", Json(base::Value(Options().PageConfig(frame.IsInPrimaryMainFrame()))));
+}
+
+void LinuxPageChannel::PushOptions() {
+  if (!hooks_) return;
+  const std::string peek = Json(base::Value(Options().PeekConfig()));
+  const std::string popover = Options().selection_popover ? "true" : "false";
+  GetWebContents().ForEachRenderFrameHost([&](content::RenderFrameHost* frame) {
+    if (!frame->GetPage().IsPrimary()) return;
+    Call(frame, "peekConfig", peek);
+    if (frame->IsInPrimaryMainFrame()) Call(frame, "selectionPopover", popover);
+  });
+}
+
+void LinuxPageChannel::Post(const std::string& kind, const std::string& json) {
+  content::RenderFrameHost& frame = receivers_.CurrentTargetFrame();
+  if (!hooks_ || !LinuxPageMessageEnvelopeFits(kind, json)) return;
+  const auto type = LinuxPageMessageKindOf(kind);
+  if (!type) return;
+  const LinuxPageSender sender{frame.IsInPrimaryMainFrame(), frame.GetPage().IsPrimary(),
+                               frame.IsActive() && frame.IsRenderFrameLive() && Scriptable(&frame)};
+  if (!LinuxPageSenderAccepted(*type, sender)) return;
+  if (!budget_.Admit(Now(), kind.size() + json.size())) return;
+  std::optional<base::Value> value = json == "null"
+      ? std::optional<base::Value>(base::Value())
+      : base::JSONReader::Read(json, base::JSON_PARSE_RFC, kLinuxPageMessageDepthMax + 1);
+  if (!value) return;
+  auto message = NormalizeLinuxPageMessage(*type, *value);
+  if (message) Accept(frame, std::move(*message));
+}
+
+void LinuxPageChannel::Accept(content::RenderFrameHost& frame, LinuxPageMessage message) {
+  switch (message.kind) {
+    case LinuxPageMessageKind::kHello:
+    case LinuxPageMessageKind::kPeekHello:
+      return Greet(frame);
+    case LinuxPageMessageKind::kPeekGone:
+      return;
+    case LinuxPageMessageKind::kPeek:
+      return Peek(frame, message.data.GetDict());
+    case LinuxPageMessageKind::kScroll:
+    case LinuxPageMessageKind::kSelection: {
+      const bool scroll = message.kind == LinuxPageMessageKind::kScroll;
+      if (!CurrentMainDocument(message_document_)) {
+        scroll_.reset();
+        selection_ = base::Value();
+      }
+      message_document_ = frame.GetWeakDocumentPtr();
+      if (scroll) scroll_ = *message.data.GetDict().FindString("state");
+      else selection_ = message.data.Clone();
+      auto emit = hooks_->emit;
+      emit.Run("pageMessage", base::Value(base::DictValue()
+          .Set("kind", scroll ? "scroll" : "selection").Set("data", std::move(message.data))));
+      return;
+    }
+    case LinuxPageMessageKind::kTheme: {
+      std::optional<LinuxTheme::Sample> sample;
+      if (const base::DictValue* dict = message.data.GetIfDict())
+        sample = LinuxTheme::Sample(*dict->FindString("color"), *dict->FindString("source"));
+      auto theme = hooks_->theme;
+      theme.Run(std::move(sample), frame.GetWeakDocumentPtr());
+      return;
+    }
+  }
+}
+
+void LinuxPageChannel::Peek(content::RenderFrameHost& frame, const base::DictValue& data) {
+  const GURL url(*data.FindString("url"));
+  if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) return;
+  LinuxLinkRequest request;
+  request.surface = surface_;
+  request.key = *data.FindString("key");
+  request.http = true;
+  request.visible = hooks_->visible && hooks_->visible.Run();
+  request.same_origin = url::Origin::Create(url).IsSameOriginWith(frame.GetLastCommittedOrigin());
+  request.now = Now();
+  if (!hooks_) return;
+  const LinuxLinkDecision decision = Gate().Decide(request, Options());
+  if (decision.outcome == LinuxLinkOutcome::kDownload) {
+    return Call(&frame, "peekRefused", Json(base::Value(base::DictValue()
+        .Set("url", url.spec()).Set("reason", decision.refused).Set("download", true))));
+  }
+  const char* disposition = Disposition(decision.outcome);
+  if (!disposition) return;
+  base::DictValue open = base::DictValue().Set("url", url.spec()).Set("disposition", disposition).Set("userGesture", true);
+  if (decision.point && hooks_->shell_point) {
+    if (auto point = hooks_->shell_point.Run(gfx::PointF(decision.point->x, decision.point->y)))
+      open.Set("point", base::DictValue().Set("x", point->x()).Set("y", point->y()));
+  }
+  if (!hooks_) return;
+  auto emit = hooks_->emit;
+  emit.Run("openWindow", base::Value(std::move(open)));
+}
+
+void LinuxPageChannel::Watch(content::RenderWidgetHost* widget) {
+  if (!widget || !widgets_.insert(widget).second) return;
+  widget->AddInputEventObserver(this);
+  widget->AddObserver(this);
+}
+
+void LinuxPageChannel::RenderFrameCreated(content::RenderFrameHost* frame) {
+  Watch(frame->GetRenderWidgetHost());
+}
+
+void LinuxPageChannel::RenderFrameHostChanged(content::RenderFrameHost* old_host, content::RenderFrameHost* new_host) {
+  if (new_host) Watch(new_host->GetRenderWidgetHost());
+}
+
+void LinuxPageChannel::PrimaryPageChanged(content::Page& page) {
+  ForgetDocument();
+  Watch(page.GetMainDocument().GetRenderWidgetHost());
+}
+
+void LinuxPageChannel::WebContentsDestroyed() {
+  hooks_.reset();
+  ForgetDocument();
+  Gate().Forget(surface_);
+}
+
+void LinuxPageChannel::OnInputEvent(const content::RenderWidgetHost& widget, const blink::WebInputEvent& event,
+                                    input::InputEventSource source) {
+  const auto type = event.GetType();
+  if (type != blink::WebInputEvent::Type::kMouseDown && type != blink::WebInputEvent::Type::kMouseUp) return;
+  const auto& mouse = static_cast<const blink::WebMouseEvent&>(event);
+  if (mouse.button != blink::WebPointerProperties::Button::kLeft) return;
+  if (type == blink::WebInputEvent::Type::kMouseDown) return Gate().NotePress(surface_);
+  std::optional<LinuxLinkPoint> point;
+  content::RenderFrameHost* main = GetWebContents().GetPrimaryMainFrame();
+  if (main && main->GetRenderWidgetHost() == &widget)
+    point = LinuxLinkPoint{mouse.PositionInWidget().x(), mouse.PositionInWidget().y()};
+  Gate().NoteRelease(surface_, LinkFlags(mouse.GetModifiers()), Now(), point);
+}
+
+void LinuxPageChannel::RenderWidgetHostDestroyed(content::RenderWidgetHost* widget) {
+  widget->RemoveInputEventObserver(this);
+  widget->RemoveObserver(this);
+  widgets_.erase(widget);
+}
+
+void BindLinuxPageHost(content::RenderFrameHost* frame,
+                       mojo::PendingAssociatedReceiver<ardia::linux_page::mojom::PageHost> receiver) {
+  content::WebContents* contents = content::WebContents::FromRenderFrameHost(frame);
+  if (contents) LinuxPageChannel::GetOrCreate(contents)->Bind(frame, std::move(receiver));
+}
+
+void RegisterLinuxPageHostBinder(content::RenderFrameHost& frame, blink::AssociatedInterfaceRegistry& registry) {
+  registry.AddInterface<ardia::linux_page::mojom::PageHost>(base::BindRepeating(&BindLinuxPageHost, &frame));
+}
+
+void WatchLinuxShellInput(content::WebContents* shell) {
+  if (shell) LinuxPageChannel::GetOrCreate(shell);
+}
+
+bool SetLinuxPageOption(const std::string& route, const base::DictValue& input, std::string* error) {
+  bool changed = false;
+  if (route == "webView.setSelectionPopover") {
+    const auto enabled = input.FindBool("enabled");
+    if (!enabled) return *error = "A boolean selection popover setting is required", false;
+    changed = Options().selection_popover != *enabled;
+    Options().selection_popover = *enabled;
+  } else {
+    const std::string* modifier = input.FindString("modifier");
+    if (!modifier || modifier->size() > 16) return *error = "A link modifier is required", false;
+    if (route == "webView.setPeekModifier") changed = Options().SetPeek(*modifier);
+    else if (route == "webView.setSplitLinkModifier") changed = Options().SetSplit(*modifier);
+    else return *error = "Unknown page option", false;
+  }
+  if (changed) {
+    for (LinuxPageChannel* channel : std::set<LinuxPageChannel*>(Channels())) {
+      if (Channels().contains(channel)) channel->PushOptions();
+    }
+  }
+  return true;
+}
+
+void RunLinuxPageEvaluation(content::RenderFrameHost* frame, const std::string& code,
+                            base::OnceCallback<void(bool refused, std::optional<std::string> result)> done) {
+  auto script = LinuxPageEvaluationScript(code, &Sha256, &ParseList);
+  if (!script) return std::move(done).Run(true, std::nullopt);
+  if (!frame || !frame->IsRenderFrameLive() || !frame->IsActive() || !Scriptable(frame))
+    return std::move(done).Run(false, std::nullopt);
+  frame->ExecuteJavaScriptInIsolatedWorld(
+      base::UTF8ToUTF16(*script),
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindOnce([](base::OnceCallback<void(bool, std::optional<std::string>)> done, base::Value value) {
+            std::move(done).Run(false, LinuxPageEvaluationResult(value));
+          }, std::move(done)),
+          base::Value()),
+      ISOLATED_WORLD_ID_ARDIA_PAGE);
+}
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(LinuxPageChannel);
+
+}
