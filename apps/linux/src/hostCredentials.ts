@@ -14,7 +14,15 @@ export const CREDENTIAL_CAPABILITIES = [
 ] as const;
 
 export type CredentialAvailability = { available: boolean; reason?: string; code?: string; message?: string };
-type ReauthStatus = { reauth: boolean; reauthReason?: string; reauthMessage?: string; backend: string };
+type ReauthStatus = {
+  reauth: boolean;
+  reauthReason?: string;
+  reauthMessage?: string;
+  backend: string;
+  protection?: "keyring" | "portal" | "obfuscated" | "none" | "unknown";
+  protectionFallback?: boolean;
+  storage?: string;
+};
 export type PasswordStatus = ReauthStatus & { passwords: CredentialAvailability };
 export type AutofillStatus = ReauthStatus & { addresses: CredentialAvailability; cards: CredentialAvailability };
 
@@ -126,11 +134,17 @@ export function autofillStatus(host: ArdiaHost, profile = ""): Promise<AutofillS
   return typed<AutofillStatus>(host, "ArdiaAutofill.status", [hostProfile(profile, host)]);
 }
 
-export function credentialNotice(status: PasswordStatus | AutofillStatus | null | undefined, kind: "passwords" | "autofill"): string | null {
+type CredentialKind = "passwords" | "autofill";
+
+function unavailableEntries(status: PasswordStatus | AutofillStatus, kind: CredentialKind): CredentialAvailability[] {
+  const entries = kind === "passwords" ? [(status as PasswordStatus).passwords] : [(status as AutofillStatus).addresses, (status as AutofillStatus).cards];
+  return entries.filter((entry): entry is CredentialAvailability => !!entry && !entry.available);
+}
+
+export function credentialNotice(status: PasswordStatus | AutofillStatus | null | undefined, kind: CredentialKind): string | null {
   if (!status) return null;
   const parts: string[] = [];
-  const entries = kind === "passwords" ? [(status as PasswordStatus).passwords] : [(status as AutofillStatus).addresses, (status as AutofillStatus).cards];
-  for (const entry of entries) if (entry && !entry.available && entry.message && !parts.includes(entry.message)) parts.push(entry.message);
+  for (const entry of unavailableEntries(status, kind)) if (entry.message && !parts.includes(entry.message)) parts.push(entry.message);
   if (!status.reauth) {
     parts.push(
       status.reauthMessage
@@ -140,6 +154,36 @@ export function credentialNotice(status: PasswordStatus | AutofillStatus | null 
           : "System authentication is unavailable, so card numbers can't be shown.",
     );
   }
+  if (status.protectionFallback) {
+    const secrets = kind === "passwords" ? "new passwords" : "new card numbers";
+    parts.push(
+      `Your keyring didn't answer, so Chromium only obfuscates ${secrets} with its built-in key instead of encrypting them. Unlock or start your keyring (Secret Service or KWallet) and restart Ardia.`,
+    );
+  }
   if (status.backend === "basic") parts.push("Chromium is using its basic password store, which only obfuscates secrets instead of encrypting them with your keyring.");
   return parts.length ? parts.join(" ") : null;
+}
+
+export function credentialNoticeTitle(status: PasswordStatus | AutofillStatus, kind: CredentialKind): string {
+  if (unavailableEntries(status, kind).length) return kind === "passwords" ? "Passwords are unavailable" : "Some autofill data is unavailable";
+  if (status.protectionFallback || status.backend === "basic") return kind === "passwords" ? "Passwords aren't encrypted with your keyring" : "Card numbers aren't encrypted with your keyring";
+  if (!status.reauth) return "System authentication is unavailable";
+  return kind === "passwords" ? "Passwords are unavailable" : "Some autofill data is unavailable";
+}
+
+export function credentialStorage(status: PasswordStatus | AutofillStatus | null | undefined, kind: CredentialKind): string | null {
+  if (!status?.protection || !status.storage) return null;
+  const auth = kind === "passwords" ? "Showing, changing or exporting them asks for your system password (polkit)." : "Showing one asks for your system password (polkit).";
+  const lead = kind === "passwords" ? "Saved separately for each profile and" : "Card numbers are";
+  switch (status.protection) {
+    case "keyring":
+    case "portal":
+      return `${lead} encrypted with a key from ${status.storage}. ${auth}`;
+    case "obfuscated":
+      return `${lead} protected only by ${status.storage}. ${auth}`;
+    case "none":
+      return `${kind === "passwords" ? "Saved passwords" : "Card numbers"} can't be protected: no encryption key is available.`;
+    default:
+      return `${lead} encrypted by Chromium with ${status.storage}. ${auth}`;
+  }
 }
