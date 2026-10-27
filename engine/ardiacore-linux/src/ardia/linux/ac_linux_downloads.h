@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ardia/linux/ac_linux_profiles.h"
 #include "base/values.h"
 
 namespace ardia::linux_downloads {
@@ -24,7 +25,16 @@ std::string ValidateRequest(std::string_view name, const base::DictValue& input)
 std::string FileUrl(std::string_view path);
 std::string BaseName(std::string_view path);
 
-std::optional<base::ListValue> FilterSnapshot(const base::Value& reply);
+std::optional<base::ListValue> FilterSnapshot(const base::Value& reply, bool off_the_record = false);
+
+struct DownloadRoute {
+  ardiacore::linux_profiles::ProfileError error = ardiacore::linux_profiles::ProfileError::kNone;
+  bool off_the_record = false;
+};
+
+DownloadRoute RouteDownloads(ardiacore::linux_profiles::ProfileKind requested, bool page_private,
+                             bool page_ending, bool hosts_requested);
+bool IsDownloadControl(std::string_view name);
 std::vector<std::string> KeptIds(const base::DictValue& input);
 double ClearCutoff(const base::DictValue& input);
 

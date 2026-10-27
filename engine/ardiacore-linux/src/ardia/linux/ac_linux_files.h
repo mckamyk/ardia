@@ -37,6 +37,7 @@ class LinuxShellWebView : public views::WebView {
 };
 
 bool LinuxDownloadsHandles(std::string_view name);
+bool LinuxDownloadOwned(Profile* profile, const std::string& id);
 void LinuxDownloadsCall(Profile* profile, const std::string& name, const base::DictValue& input,
                         base::OnceCallback<void(bool, base::Value)> done);
 

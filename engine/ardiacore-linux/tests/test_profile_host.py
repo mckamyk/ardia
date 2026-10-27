@@ -130,21 +130,17 @@ int main() {
         opening = method(self.source, 'void OpenNativeWindow(')
         self.assertIn('FinishWindowOpening(id, generation, true, base::Value(base::DictValue().Set("pending", true)));', opening)
 
-    def test_downloads_and_files_use_the_window_page_profile_and_refuse_private_windows(self):
+    def test_downloads_and_files_use_the_window_page_profile(self):
         request = method(self.source, '  void Request(const base::ListValue& arguments) {')
-        downloads = request[request.index('if (LinuxDownloadsHandles(name)) {'):]
+        downloads = request[request.index('if (LinuxDownloadsHandles(name) || linux_downloads::IsDownloadControl(name)) {'):]
         downloads = downloads[:downloads.index('return LinuxDownloadsCall(')]
         self.assertIn('Profile* page = host_->page_profile();', downloads)
-        self.assertIn('page->IsOffTheRecord()', downloads)
-        self.assertIn('ProfileError::kPrivateService', downloads)
-        self.assertIn('!host_->HostsProfile(profile)', downloads)
+        self.assertIn('host_->HostsProfile(profile)', downloads)
         self.assertIn('return LinuxDownloadsCall(page, name, input,', request)
         self.assertNotIn('LinuxDownloadsCall(host_->profile()', request)
         invoke = method(self.source, 'void ShellHostView::Invoke(')
         files = invoke[invoke.index('if (LinuxFilesHandles(method)) {'):]
         files = files[:files.index('\n  }\n') + 4]
-        self.assertIn('page_profile()->IsOffTheRecord()', files)
-        self.assertIn('ProfileError::kPrivateService', files)
         self.assertIn('LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done))', files)
 
     def test_site_zoom_uses_the_window_page_profile_and_routes_private_sessions_off_the_record(self):

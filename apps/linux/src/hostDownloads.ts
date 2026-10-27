@@ -12,10 +12,10 @@ export const nativeDownloadId = (id: unknown): id is string => typeof id === "st
 const text = (value: unknown) => typeof value === "string";
 const count = (value: unknown) => typeof value === "number" && Number.isFinite(value);
 
-export function snapshotDownload(value: unknown): Download | null {
+export function snapshotDownload(value: unknown, offTheRecord = false): Download | null {
   if (!value || typeof value !== "object") return null;
   const d = value as Record<string, unknown>;
-  if (!nativeDownloadId(d.id) || !STATES.has(d.state as string) || d.offTheRecord === true) return null;
+  if (!nativeDownloadId(d.id) || !STATES.has(d.state as string) || (d.offTheRecord === true) !== offTheRecord) return null;
   if (![d.url, d.filename, d.path, d.mimeType].every(text) || typeof d.paused !== "boolean") return null;
   if (![d.received, d.total, d.speed].every(count)) return null;
   return { ...(d as Download), profile: "" };
@@ -23,13 +23,13 @@ export function snapshotDownload(value: unknown): Download | null {
 
 const SNAPSHOT_PROFILE = "\u0000snapshot";
 
-export function planDownloadSnapshot(current: Download[], snapshot: unknown, excluded: ReadonlySet<string> = new Set(), limit = DOWNLOAD_LIMIT) {
+export function planDownloadSnapshot(current: Download[], snapshot: unknown, excluded: ReadonlySet<string> = new Set(), limit = DOWNLOAD_LIMIT, offTheRecord = false) {
   if (!Array.isArray(snapshot)) return { downloads: null, added: [] as Download[] };
   const known = new Set(current.map((d) => d.id));
   const seen = new Set<string>();
   const listed: Download[] = [];
   for (const entry of snapshot) {
-    const d = snapshotDownload(entry);
+    const d = snapshotDownload(entry, offTheRecord);
     if (!d || seen.has(d.id) || excluded.has(d.id)) continue;
     seen.add(d.id);
     listed.push(d);
@@ -55,9 +55,14 @@ export type DownloadStore = {
 
 const removable = (d: Download) => nativeDownloadId(d.id) && d.state !== "downloading";
 
+const privateOriginal = (pageProfile: string) =>
+  pageProfile.startsWith("incognito:") && pageProfile.includes("@") ? pageProfile.slice(pageProfile.indexOf("@") + 1) : null;
+
 export function startHostDownloads(host: ArdiaHost, store: DownloadStore) {
   const { removeDownload, clearDownloads } = store.getState();
   const pageProfile = host.bootstrap.pageProfile ?? "";
+  const original = privateOriginal(pageProfile);
+  const listedProfile = original ?? pageProfile;
   const call = (verb: string, args: object) => callHost(`downloads.${verb}`, "", JSON.stringify(args), host);
   const kept = () => store.getState().downloads.map((d) => d.id).filter(nativeDownloadId).slice(0, DOWNLOAD_LIMIT);
   const clearNative = () => void call("clear", { keep: kept(), before: Date.now() }).catch(reportHostError);
@@ -92,11 +97,11 @@ export function startHostDownloads(host: ArdiaHost, store: DownloadStore) {
   const stopFiles = hostFiles(host).onChange(() => store.setState({ downloads: [...store.getState().downloads] }));
   const ready = call("list", {})
     .then((reply) => {
-      const plan = planDownloadSnapshot(store.getState().downloads, JSON.parse(reply), removedWhileListing);
+      const plan = planDownloadSnapshot(store.getState().downloads, JSON.parse(reply), removedWhileListing, DOWNLOAD_LIMIT, original !== null);
       if (plan.downloads) {
         const fresh = new Set(plan.added.map((d) => d.id));
         store.setState({ downloads: plan.downloads.map((d) => (fresh.has(d.id) ? { ...d, profile: SNAPSHOT_PROFILE } : d)) });
-        store.setState({ downloads: plan.downloads.map((d) => (fresh.has(d.id) ? { ...d, profile: pageProfile } : d)) });
+        store.setState({ downloads: plan.downloads.map((d) => (fresh.has(d.id) ? { ...d, profile: listedProfile } : d)) });
       }
     })
     .catch(reportHostError)

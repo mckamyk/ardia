@@ -913,6 +913,7 @@ class ShellHostView : public views::View,
   void LayoutPane(TabBinding* binding);
   void QueueTransaction(std::optional<int> command);
   void EngineEvent(std::string_view topic, const base::DictValue& payload);
+  bool ReceivesPrivateDownload(const base::DictValue& download);
   void Invoke(std::string method, const base::DictValue& args,
               base::OnceCallback<void(bool, base::Value)> done);
   void ReportPictureInPicture(content::WebContents* contents, base::DictValue state);
@@ -1414,11 +1415,24 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       }
       if (const auto invalid = linux_downloads::ValidateRequest(name, input); !invalid.empty())
         return Fail(id, "ERR_DOWNLOAD_REQUEST", invalid);
-      if (LinuxDownloadsHandles(name)) {
+      if (LinuxDownloadsHandles(name) || linux_downloads::IsDownloadControl(name)) {
         Profile* page = host_->page_profile();
-        if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
-        if (profile_name->kind != ardiacore::linux_profiles::ProfileKind::kDefault && !host_->HostsProfile(profile)) {
-          return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kWindowMismatch);
+        if (!page) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kUnavailable);
+        const bool page_private = page->IsOffTheRecord();
+        const auto access = linux_downloads::RouteDownloads(profile_name->kind, page_private,
+            page_private && page->ShutdownStarted(), host_->HostsProfile(profile));
+        if (access.error != ardiacore::linux_profiles::ProfileError::kNone) return ProfileFail(id, access.error);
+        if (linux_downloads::IsDownloadControl(name)) {
+          const std::string* download = input.FindString("id");
+          if (!download) return Fail(id, "ERR_DOWNLOAD_REQUEST", "A valid download id is required");
+          if (!LinuxDownloadOwned(page, *download)) return Fail(id, "ERR_ENGINE", "no such download");
+          const auto* control = ardiacore::linux_contract::FindRoute(name);
+          if (!control) return Fail(id, "ERR_UNKNOWN_CALL", "This call is unavailable on Linux");
+          const std::string service(control->service);
+          const std::string path = page->GetOriginalProfile()->GetPath().value();
+          ac_engine_call(service.c_str(), path.c_str(), json.c_str(), Replied,
+                         new EngineReply{name, weak_factory_.GetWeakPtr(), id});
+          return;
         }
         return LinuxDownloadsCall(page, name, input,
             base::BindOnce([](base::WeakPtr<HostMessageHandler> handler, std::string id, bool ok, base::Value result) {
@@ -3013,6 +3027,12 @@ void ShellHostView::QueueTransaction(std::optional<int> command) {
           GetWeakPtr(), std::move(transaction)));
 }
 
+bool ShellHostView::ReceivesPrivateDownload(const base::DictValue& download) {
+  Profile* page = page_profile();
+  const std::string* id = download.FindString("id");
+  return page && page->IsOffTheRecord() && !page->ShutdownStarted() && id && LinuxDownloadOwned(page, *id);
+}
+
 void ShellHostView::EngineEvent(std::string_view topic,
                                 const base::DictValue& payload) {
   if (!profile()) return;
@@ -3024,7 +3044,8 @@ void ShellHostView::EngineEvent(std::string_view topic,
   translated.Set("profile", *engine_profile);
   if (topic == "downloads.changed") {
     const auto* download = translated.FindDict("download");
-    if (!download || download->FindBool("offTheRecord").value_or(false)) return;
+    if (!download) return;
+    if (download->FindBool("offTheRecord").value_or(false) && !ReceivesPrivateDownload(*download)) return;
     translated = download->Clone();
     translated.Set("profile", *engine_profile);
   }
@@ -3859,8 +3880,8 @@ void ShellHostView::Invoke(
   if (!browser_) return std::move(done).Run(false, base::Value("The native browser window has closed"));
   const base::ListValue& values = Arguments(args);
   if (LinuxFilesHandles(method)) {
-    if (!page_profile() || page_profile()->IsOffTheRecord()) {
-      return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kPrivateService));
+    if (!page_profile() || page_profile()->ShutdownStarted()) {
+      return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kUnavailable));
     }
     return LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done));
   }
