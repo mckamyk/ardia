@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { after, before, describe, it } from "node:test";
-import { PIXEL_PNG, startFixtures, SUGGEST_HOST, suggestionsFor } from "../lib/fixtures.mjs";
+import { MEDIA_TITLE, PIXEL_PNG, startFixtures, SUGGEST_HOST, suggestionsFor, toneWav } from "../lib/fixtures.mjs";
 import { generateTls } from "../lib/tls.mjs";
 
 const run = promisify(execFile);
@@ -56,6 +56,22 @@ describe("fixture servers and certificates", () => {
     const ad = await get(`http://news.ardia.test:${fixtures.ports.http}/ads/banners/r1x.png`);
     assert.equal(ad.headers["content-type"], "image/png");
     assert.ok(fixtures.requests.some((r) => r.host === "news.ardia.test" && r.path === "/ads/banners/r1x.png"));
+  });
+
+  it("serves the media page with its session script and a playable looping tone", async () => {
+    const page = await get(fixtures.url.media("m1"));
+    assert.equal(page.status, 200);
+    const text = page.body.toString();
+    for (const part of ['<audio id="tone" src="/tone.wav" loop>', '<input id="field"', JSON.stringify(MEDIA_TITLE), "setActionHandler", "window.startTone"]) assert.ok(text.includes(part), part);
+    const tone = await get(fixtures.url.http("media.ardia.test", "/tone.wav"));
+    assert.equal(tone.status, 200);
+    assert.equal(tone.headers["content-type"], "audio/wav");
+    assert.equal(tone.body.toString("ascii", 0, 4), "RIFF");
+    assert.equal(tone.body.toString("ascii", 8, 12), "WAVE");
+    assert.equal(tone.body.readUInt32LE(24), 8000);
+    assert.equal(tone.body.length, 44 + 8000 * 2);
+    assert.ok(Math.max(...Array.from({ length: 200 }, (_, i) => Math.abs(tone.body.readInt16LE(44 + i * 2)))) > 10000);
+    assert.equal(toneWav({ seconds: 0.5, rate: 4000 }).length, 44 + 2000 * 2);
   });
 
   it("hashes the trusted key the way Chromium's SPKI list expects", async () => {
