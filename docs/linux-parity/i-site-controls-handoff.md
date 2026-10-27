@@ -63,9 +63,9 @@ Before this lane, `sites.*` reached the engine through the generic route table w
 
 ## Tests run
 
-All runs are on this branch after the last change.
+All runs are on this branch after the rebase onto `4fd0946e`.
 
-- `python3 -m unittest discover -s engine/ardiacore-linux/tests`: 232 tests, OK. That includes 8 new tests in `test_site_controls.py`:
+- `python3 -m unittest discover -s engine/ardiacore-linux/tests`: 343 tests, OK. That includes 8 new tests in `test_site_controls.py`:
   - The pure helper fixture, under ASan and UBSan: profile decisions, origin edge cases, a permission grant/revoke/reset round trip against a fake settings map, scoped clears, blocker requests and states, the bridge scripts and the queue state machine.
   - The real service compiled against stub Chromium interfaces:
     - site-setting round trips through `ac_engine_call`;
@@ -83,12 +83,13 @@ All runs are on this branch after the last change.
     - profile destruction with 64 calls pending and before load.
   - The bridge under node against a simulated uBlock dashboard (8 cases).
   - Wiring checks on the host, GN and the restricted hook.
-- `pnpm --filter @ardia/linux test:host`: 236 passed, including 4 new in `hostSiteControls.test.mjs`. They drive the shared `@ardia/ardiacore` functions through the Linux module resolver and the real bootstrap transport.
+- `pnpm --filter @ardia/linux test:host`: 320 passed, including 4 new in `hostSiteControls.test.mjs`. They drive the shared `@ardia/ardiacore` functions through the Linux module resolver and the real bootstrap transport.
 - `pnpm --filter @ardia/linux typecheck` and `pnpm --filter @ardia/linux build`: pass.
-- `pnpm --filter @ardia/linux acceptance:self-test`: 50 passed. That includes the new stock-Chromium 155 test: the helper's exact send and poll scripts, read from `ac_linux_site_controls.cc`, drive the real bridge page from an isolated world, with an MV3 stand-in for uBlock's messaging.
+- `pnpm --filter @ardia/linux acceptance:self-test`: 51 passed. That includes the new stock-Chromium 155 test: the helper's exact send and poll scripts, read from `ac_linux_site_controls.cc`, drive the real bridge page from an isolated world, with an MV3 stand-in for uBlock's messaging.
 - `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs`: 7 passed.
 - `python3 -m unittest discover -s engine/patches/build/tests`: OK, including the new packaging test.
 - I also ran the shims on this machine: `fetch-ubo.sh` with its paths redirected to `/tmp` downloaded, verified and patched uBlock 1.75.0. I checked that build's `vapi-client.js`, its privileged-origin rule and the bundled EasyList rule the scenario relies on.
+- `python3 -m unittest discover -s engine/chromium/src/chrome/browser/ardia/tests`: 9 of 10 pass. The failure, `test_linux_excludes_apple_and_mac_host`, flags the `ardia/core` include in `ac_downloads.cc`. That file isn't touched here, and the test fails the same way on `linux`.
 - Nothing shared under `apps/browser` or `packages/` changed, so the browser suite wasn't rerun.
 
 ## Needs native runtime acceptance on a Chromium 156 build
