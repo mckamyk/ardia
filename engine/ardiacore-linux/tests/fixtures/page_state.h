@@ -38,6 +38,7 @@ class Value {
   bool is_int() const { return std::holds_alternative<int>(data_); }
   bool is_double() const { return std::holds_alternative<double>(data_); }
   bool is_none() const { return std::holds_alternative<std::monostate>(data_); }
+  bool is_string() const { return std::holds_alternative<std::string>(data_); }
   double GetDouble() const { return is_int() ? std::get<int>(data_) : std::get<double>(data_); }
   const std::string& GetString() const { return std::get<std::string>(data_); }
   bool GetBool() const { return std::get<bool>(data_); }
