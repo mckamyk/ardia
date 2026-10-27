@@ -1,0 +1,75 @@
+# Lane R handoff (1 of 2): window, session and profile follow-ups
+
+Branch `t3/linux-window-followups`, based on `linux`. Source-level fixes for [#92](https://github.com/mckamyk/ardia/issues/92), [#77](https://github.com/mckamyk/ardia/issues/77), [#79](https://github.com/mckamyk/ardia/issues/79), [#70](https://github.com/mckamyk/ardia/issues/70) and [#114](https://github.com/mckamyk/ardia/issues/114), tracked by [#140](https://github.com/mckamyk/ardia/issues/140). The downloads, DevTools, extension-prompt and tooling half is in [R-downloads-handoff.md](R-downloads-handoff.md).
+
+None of this has been compiled into Chromium 156 or run natively. The native hunks were checked with `clang -fsyntax-only` against the 156 tree's headers and its own `linux.ninja` flags (read only, nothing written into that tree). They add no errors; the host already has eight errors on `linux` that are tracked in [#157](https://github.com/mckamyk/ardia/issues/157).
+
+## #92: startup sweep closing live windows
+
+Every Linux window has its own renderer, and each one runs the shared `windowSync` sweep at startup, which closes native windows missing from that renderer's store. A bootstrap session can legitimately predate a live window: Little Ardia windows are never saved, and a window opened inside the 300 ms save delay isn't in the snapshot yet.
+
+**Contract.** On Linux a window's own renderer and its close path own its lifetime. The Linux `windowIds` adapter (`apps/linux/src/windowSweep.ts`) reports only the native windows this renderer's store knows, so the sweep retitles those and closes nothing it can't rule on. Native `ArdiaShell.windowIds` is unchanged. The shared `windowSync` is unchanged.
+
+## #77: fullscreen restore at launch
+
+`ArdiaShell.restoreFullScreen(ids, focus)` is implemented natively with a `FullScreenRestore` ledger (`ac_linux_fullscreen_restore.{h,cc}`, standard library only).
+
+- Only the launch window's renderer (`startup_`, not a utility) is heeded, and only its first request per process. Later renderers send the same call from `nativeSync` and get a no-op success.
+- Ids must be 1–128 characters with no `/`, `\` or NUL; at most 64; duplicates collapse. Malformed arguments are rejected.
+- A listed window enters browser fullscreen (`FullscreenController::ToggleBrowserFullscreenMode`) once it is attached, visible and not minimized: at the call, at `Initialize` and at `RendererReady`. A window already in browser fullscreen isn't toggled.
+- Entering is observed through `OnWidgetShowStateChanged` with `WindowFullScreen()` (window fullscreen, not page fullscreen, from #130).
+- After 10 s anything that hasn't arrived or entered is given up and a `fullScreen` off event is broadcast, so stores drop the stamp (as macOS does). A window closed meanwhile is dropped at once.
+- When everything settled and something was toggled, the saved focused window is activated through the focus ledger, only if an Ardia window is active, and never in background instances.
+- `restoreFullScreen` is an optional shell method; the Linux module resolver exposes optional methods only when the host advertises them, and the real shell module called `undefined` before. The bootstrap now advertises it, and `shellCapabilities.test.mjs` fails for any optional method with a native branch that isn't advertised.
+
+Windows open with their saved frame first, so on X11 they go fullscreen on the display that frame is on. Wayland gives no positions, so the compositor picks the output there.
+
+## #79: keys typed before a new window's UI is ready
+
+From `Initialize` until its UI reports ready, a regular window's root key handler holds every key press and release it owns (`OwnsKeyboardEvent`: not other widgets, not under a modal dialog) in a bounded `Typeahead` buffer (`ac_linux_typeahead.h`, 512 events) and stops them before shortcut handling. Stopping the post-IME dispatch also keeps Chrome's input method from inserting the character.
+
+`ArdiaShell.typeaheadReady` (advertised capability; utility windows get an error) posts a replay: held events go, in order, through the window's input method (`InputMethod::DispatchKeyEvent`), so they land where focus is then: the new tab's field, or a native page. Replay stops if the window goes away mid-way. A 10 s deadline replays whatever is held if the UI never reports ready.
+
+The Linux UI (`typeahead.ts`) announces readiness after the first window commit, as soon as a text field holds focus, or after 500 ms without one.
+
+Left: text an IME commits asynchronously during the load ([#154](https://github.com/mckamyk/ardia/issues/154)).
+
+## #70: isolated profiles and paging
+
+**Decision.** Linux keeps one engine profile per regular window. macOS pages isolated profiles inside one window by keeping a Chrome Browser per profile per window; the Linux host attaches one Browser to each window, and the equivalent needs hidden companion Browsers with their own tab strips, viewports and lifetimes ([#153](https://github.com/mckamyk/ardia/issues/153)). Shared-data profiles switch in place; an isolated profile lives in its own window, which switching focuses or opens.
+
+**What changed.** The transient wrong-window state is gone. The Linux pager shim asks a reach callback whether the window hosts a page (`setPagerReach`; installed by `installProfileWindows` with the same `pagesInPlace` rule its `switchProfile` routing uses):
+
+- a drag stops at a profile the window can't host (rubber band at that edge) and never selects it; a release that would have reached it springs back and routes to that profile's window;
+- a programmatic switch or step to such a profile is refused, so the shared `ProfilePager` falls back to `switchProfile`, which routes.
+
+## #114: site zoom for any named profile
+
+`sites.zoomLevels` and `sites.setZoom` validate their arguments, refuse a private name with `ERR_PROFILE_PRIVATE`, then resolve the named profile through the registry like every other `sites.*` call: `""`/`default` is the app profile, an isolated id its own profile, an off-the-record result is refused. The calling window's page profile no longer matters, so Settings lists and resets any regular profile's zoom levels, and private zoom levels are never listed or written. This matches macOS.
+
+## Tests
+
+| Command | Result |
+| --- | --- |
+| `pnpm --filter @ardia/linux typecheck` | passes |
+| `pnpm --filter @ardia/linux test:host` | all pass (counts in the PR body) |
+| `pnpm --filter @ardia/linux test:graph` | 3 pass |
+| `pnpm --filter @ardia/linux build` | passes |
+| `pnpm --filter @ardia/linux acceptance:self-test` | all pass |
+| `python3 -m unittest discover -s engine/ardiacore-linux/tests` | all pass (counts in the PR body) |
+| `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs` | 7 pass |
+
+New or extended: `windowSweep.test.mjs` (3), `typeahead.test.mjs` (4), `profilePaging.test.mjs` (5), `shellCapabilities.test.mjs` (2), `test_fullscreen_restore.py` (6, compiled ledger + host glue), `test_typeahead.py` (6), three new compiled scenarios in `test_window_lifecycle.py`'s real-host harness, and `test_profile_host.py`'s zoom test rewritten for the named-profile contract. Each was failing before its fix.
+
+## Acceptance scenarios
+
+`apps/linux/scripts/acceptance/scenarios/r-window-followups.mjs`: W92 (reload and new-window sweeps keep live and Little Ardia windows), W77 (seeded fullscreen window restores, its sibling stays windowed, a later renderer doesn't restore again), W79 (capability and readiness; the typing itself is manual), W70 (shared profile in place, isolated profile in its own window, no duplicate window), W114 (Settings sets, lists and resets an isolated profile's zoom; private refused).
+
+## Needs native runtime acceptance (not done here)
+
+I could not build or run Chromium 156. On a build:
+
+1. W92, W77, W79, W70 and W114 in the acceptance suite.
+2. Ctrl+N then immediate typing on Hyprland and X11, and typing right at launch (W79 manual).
+3. Fullscreen restore on a second monitor (W77 manual).
+4. Trackpad swipes toward an isolated profile stop at the edge and bring that profile's window forward (W70 manual).
