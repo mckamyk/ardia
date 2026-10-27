@@ -30,7 +30,10 @@ These files build against BoringSSL in Chromium and against system OpenSSL in th
 - Reads skip anything that isn't `<tag>.nns`, so Dropbox and Syncthing conflict copies are never applied.
 - Syncthing's `.syncthing.<id>.nns.tmp` is reported as pending when the whole file isn't there yet.
 - Half-copied, empty, renamed or moved files are reported as damaged, with their age.
-- Chain and scope folders are opened without following symlinks. Deleting a chain never follows a link out of it. Ids from JS must be tags, so `../` can't escape.
+- Only the sync folder the user chose may be a symlink. Below it, the chain and scope folders and every file are opened relative to open directory descriptors with `O_NOFOLLOW` (`openat`, `mkdirat`, `renameat2`, `unlinkat`).
+  - A symlinked chain or scope reads as missing: `chainStatus` says `missing`, reads come back empty, and writes and removes refuse.
+  - Deleting a chain walks open directory descriptors and removes entries with `unlinkat` (`AT_REMOVEDIR` for folders). A folder swapped for a link mid-walk is unlinked as a link, so nothing outside the chain can be deleted.
+  - Ids from JS must be tags, so `../` can't escape.
 
 **Legacy `pw:` passwords**
 - `read` and `openLocal` seal a legacy record's `p` into `s` before JS sees it, and drop `pw:` base strings.
@@ -39,8 +42,9 @@ These files build against BoringSSL in Chromium and against system OpenSSL in th
 
 **Key storage**
 - Normally the key lives in the Secret Service through libsecret, loaded at runtime from `libsecret-1.so.0`. The item uses schema `dev.ardia.linux.SyncKey`, label "Ardia Sync Key", the account attribute set to the device id, and the default collection. The 32 bytes are stored as hex.
-- No D-Bus, no Secret Service or a missing libsecret reports `unavailable`. `SECRET_ERROR_IS_LOCKED` reports `locked`. Nothing falls back to a file in normal use.
-- Only a hidden test instance (`ARDIA_BACKGROUND=1`) started with an explicit `--user-data-dir` uses a 0600 file in `<user-data-dir>/Ardia Sync Keys/sync-key-<device id>`. That is how macOS test instances work too.
+- No D-Bus, no Secret Service or a missing libsecret reports `unavailable`. `SECRET_ERROR_IS_LOCKED` and a dismissed unlock prompt (`G_IO_ERROR_CANCELLED`) report `locked`. Nothing falls back to a file in normal use.
+- Only a hidden test instance (`ARDIA_BACKGROUND=1`) started with an explicit `--user-data-dir` that isn't Chromium's default (`UseFileKeyStore`) uses a 0600 file in `<user-data-dir>/Ardia Sync Keys/sync-key-<device id>`. That is how macOS test instances work too.
+- The file store refuses a key file that isn't a regular file owned by the user with mode 0600 or tighter.
 
 ### Chromium glue (not compiled here)
 
@@ -52,7 +56,7 @@ Choosing, disclosing and opening:
 - Choosing a folder and saving the kit use `SelectFileDialog` with `ChromeSelectFilePolicy`, parented to the asking window.
 - Disclosure is gated by `ardia::Reauth` (#118's polkit). A grant lasts 60 s, and `forget`, `createPhrase` and `enterPhrase` revoke it.
 - The QR code comes from `qr_code_generator::GenerateBitmap` as a PNG data URL.
-- Copy Words uses `ScopedClipboardWriter` with `MarkAsConfidential()`.
+- Copy Words writes the words with `ScopedClipboardWriter`, adds `x-kde-passwordManagerHint: secret` as a raw clipboard format (`PhraseClipboard`; on Linux the macOS counterpart is ConcealedType), and calls `MarkAsConfidential()`. On 156 Ozone ignores `MarkAsConfidential()`, so the hint is what tells clipboard managers (Klipper, CopyQ, cliphist with its filter) not to save the words.
 - Show Sync Folder uses `platform_util::OpenItem(OPEN_FOLDER)`.
 
 **Defaults**
@@ -81,6 +85,8 @@ Choosing, disclosing and opening:
 
 **`syncEngine.ts`** replaces `apps/browser/src/state/sync/engine.ts` through `vite.config.ts`, so the shared Sync pane, sheets, menu, telemetry and import keep their imports.
 - Before starting, the authority re-reads `sync.json`, `sync-state.nns`, `sync-journal.nns` and every `sync-journal-N.nns` through the new `refreshDocument` (`hostDocuments.ts`, `shims/shellBase.tsx`). The bootstrap snapshot is capped at 128 documents and 8 MiB and can be stale after a failover. Without this refresh, a takeover could save an empty `sync.json` over the real one.
+- The re-read probes every journal part up to 1000, in batches. Parts after the first missing one are stale (the journal numbers parts consecutively from 1), so they are deleted before the engine reads the journal.
+- If starting fails (for example a document read error), the window keeps its Web Lock, releases the native lease and retries with backoff (5 s doubling, up to 60 s), instead of leaving sync with no owner.
 - `main.tsx` starts sync in every renderer: as a candidate in browser windows, as a client in utility windows. It also exposes `ardiaLinux.sync` for the acceptance suite.
 
 ## The contract
@@ -123,8 +129,9 @@ What `test_sync.py` covers:
    - padding; tampering at five offsets, truncation, and the wrong file, scope or phrase;
    - deterministic password sealing;
    - a folder with no plaintext and 0600 files; staging, truncated, empty, renamed and moved files; Syncthing temp files; conflict copies; a restart reading the same files; path-traversal removes; a chain delete that doesn't follow a symlink;
-   - legacy `pw:` round trips and refusals; JSON depth and UTF-8 limits;
-   - the file key store (0600 file, 0700 folder, symlink refused);
+   - legacy `pw:` round trips and refusals; JSON depth and UTF-8 limits; 100k-key objects parse in under 3 s (0.67 s under ASan; duplicate keys keep the last value);
+   - a delete race in which a hook swaps a folder for a link to a victim folder between listing and walking (the old path-based walk deleted the victim's file); symlinked chain and scope folders neither read, remove nor delete through the link;
+   - the file key store (0600 file, 0700 folder, symlink and 0644/0640 files refused), the test-store gate, the keyring error mapping and the Copy Words clipboard formats;
    - every `SyncCore` method, including keychain failures, the unreadable latch and the 0600 kit;
    - lease and disclosure-window timing.
 2. **Cross-format exchange.** `tests/sync_reference.mjs`, an independent `node:crypto` implementation of the spec, writes a folder and sealed passwords that the C++ opens and re-seals byte for byte. The C++ then writes a folder that the reference opens, checking it for plaintext.
@@ -154,6 +161,8 @@ None of this was compiled or run in Chromium; the build belongs to another threa
 
 ## Follow-ups
 
+- **#174 macOS password vector.** Add a sealed-password test vector produced on a Mac.
+- **Phrase tokenizing.** Non-ASCII phrase input splits on a fixed list of separator ranges rather than Swift's `CharacterSet.lowercaseLetters`. ASCII input behaves identically, and a non-ASCII token is always an unknown word on both, but the reported word can differ.
 - **#145 Passwords.** No non-prompting sealed engine path exists for passwords yet, so they don't sync on Linux. The adapter skips them, and nothing is deleted.
 - **#146 Document size.** Linux's 8 MiB document limit can reject a large `sync-state.nns`.
 - **#147 Linux copy and kit formats.** The Sync pane still says Mac, iCloud and Finder, and the kit has no PDF, preview, copy or share.

@@ -6,7 +6,6 @@
 #include <unistd.h>
 
 #include <cerrno>
-#include <cstring>
 #include <utility>
 
 namespace ardia::linux_sync {
@@ -49,6 +48,7 @@ using ErrorFreeFn = void (*)(GError*);
 using QuarkNameFn = const char* (*)(GQuark);
 
 constexpr int kSecretErrorIsLocked = 2;
+constexpr int kIoErrorCancelled = 19;
 constexpr char kDefaultCollection[] = "default";
 
 const SecretSchema& Schema() {
@@ -78,7 +78,8 @@ class FileKeyStore final : public KeyStore {
     const int fd = open(PathOf(account).c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) return errno == ENOENT ? KeyStatus::kNotFound : KeyStatus::kUnavailable;
     struct stat info;
-    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size > 1024) {
+    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size > 1024 || info.st_uid != geteuid() ||
+        (info.st_mode & 077) != 0) {
       close(fd);
       return KeyStatus::kUnavailable;
     }
@@ -225,9 +226,9 @@ class SecretServiceKeyStore final : public KeyStore {
 
   KeyStatus Classify(GError* error) {
     const char* domain = quark_name_(error->domain);
-    const bool locked = domain && std::strcmp(domain, "secret-error") == 0 && error->code == kSecretErrorIsLocked;
+    const KeyStatus status = ClassifySecretError(domain ? domain : "", error->code);
     error_free_(error);
-    return locked ? KeyStatus::kLocked : KeyStatus::kUnavailable;
+    return status;
   }
 
   void* handle_ = nullptr;
@@ -251,6 +252,22 @@ std::string_view KeyStatusName(KeyStatus status) {
     case KeyStatus::kUnavailable: return "unavailable";
   }
   return "unavailable";
+}
+
+KeyStatus ClassifySecretError(std::string_view domain, int code) {
+  if (domain == "secret-error" && code == kSecretErrorIsLocked) return KeyStatus::kLocked;
+  if (domain == "g-io-error-quark" && code == kIoErrorCancelled) return KeyStatus::kLocked;
+  return KeyStatus::kUnavailable;
+}
+
+bool UseFileKeyStore(bool background, bool explicit_user_data_dir, std::string_view user_data_dir,
+                     std::string_view default_user_data_dir) {
+  auto trimmed = [](std::string_view path) {
+    while (path.size() > 1 && path.back() == '/') path.remove_suffix(1);
+    return path;
+  };
+  return background && explicit_user_data_dir && !user_data_dir.empty() && user_data_dir.front() == '/' &&
+         trimmed(user_data_dir) != trimmed(default_user_data_dir);
 }
 
 std::unique_ptr<KeyStore> MakeFileKeyStore(std::string directory) {

@@ -2,6 +2,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <string_view>
+#include <unordered_map>
 
 #include "ardia/linux/ac_linux_sync_crypto.h"
 
@@ -234,7 +236,7 @@ class Parser {
       ++at_;
       auto value = Value(depth + 1);
       if (!value) return std::nullopt;
-      object.Set(std::move(*key), std::move(*value));
+      object.members.emplace_back(std::move(*key), std::move(*value));
       Space();
       if (at_ >= text_.size()) return std::nullopt;
       if (text_[at_] == ',') {
@@ -243,10 +245,31 @@ class Parser {
       }
       if (text_[at_] == '}') {
         ++at_;
+        KeepLastOfEachKey(object);
         return object;
       }
       return std::nullopt;
     }
+  }
+
+  static void KeepLastOfEachKey(JsonValue& object) {
+    auto& members = object.members;
+    if (members.size() < 2) return;
+    std::vector<bool> keep(members.size(), false);
+    {
+      std::unordered_map<std::string_view, size_t> last;
+      last.reserve(members.size());
+      for (size_t i = 0; i < members.size(); ++i) last[members[i].first] = i;
+      if (last.size() == members.size()) return;
+      for (const auto& [key, index] : last) keep[index] = true;
+    }
+    std::vector<std::pair<std::string, JsonValue>> kept;
+    kept.reserve(members.size());
+    for (size_t i = 0; i < members.size(); ++i) {
+      if (keep[i]) kept.push_back(std::move(members[i]));
+      else WipeJson(members[i].second);
+    }
+    members = std::move(kept);
   }
 
   std::string_view text_;

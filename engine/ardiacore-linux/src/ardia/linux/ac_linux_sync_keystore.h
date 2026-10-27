@@ -31,6 +31,10 @@ inline constexpr char kProbeAccount[] = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
 std::unique_ptr<KeyStore> MakeFileKeyStore(std::string directory);
 std::unique_ptr<KeyStore> MakeSecretServiceKeyStore(std::string library = kSecretLibrary);
 
+KeyStatus ClassifySecretError(std::string_view domain, int code);
+bool UseFileKeyStore(bool background, bool explicit_user_data_dir, std::string_view user_data_dir,
+                     std::string_view default_user_data_dir);
+
 bool HexDecode(std::string_view text, Bytes* out);
 std::string HexEncode(const Bytes& data);
 

@@ -101,6 +101,16 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn('IsOffTheRecord()', service)
         self.assertIn('Holds(', service)
         self.assertIn('ardia::Reauth(', service)
+        self.assertIn('sync::PhraseClipboard(', service)
+        self.assertIn('WriteRawDataForTest(ui::ClipboardFormatType::CustomPlatformType(format)', service)
+        self.assertIn('MarkAsConfidential()', service)
+        self.assertIn('sync::UseFileKeyStore(', service)
+        self.assertIn('GetDefaultUserDataDirectory', service)
+        vault = (LINUX / 'ac_linux_sync_vault.cc').read_text()
+        for unsafe in ['opendir', 'rmdir', 'lstat', 'unlink']:
+            self.assertIsNone(re.search(rf'(?<![a-z_]){unsafe}\(', vault), f'the vault walks paths with {unsafe}')
+        self.assertIn('O_NOFOLLOW', vault)
+        self.assertIn('AT_REMOVEDIR', vault)
 
 
 if __name__ == '__main__':

@@ -35,12 +35,14 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/device_reauth/device_reauth_metrics_util.h"
 #include "components/qr_code_generator/bitmap_generator.h"
 #include "content/public/browser/browser_thread.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
+#include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
@@ -85,8 +87,11 @@ scoped_refptr<base::SequencedTaskRunner> Runner() {
 std::unique_ptr<sync::KeyStore> MakeKeyStore() {
   const auto& command = *base::CommandLine::ForCurrentProcess();
   base::FilePath user_data;
-  if (ardiacore::BackgroundInstance() && command.HasSwitch(switches::kUserDataDir) &&
-      base::PathService::Get(chrome::DIR_USER_DATA, &user_data) && !user_data.empty()) {
+  base::FilePath default_user_data;
+  base::PathService::Get(chrome::DIR_USER_DATA, &user_data);
+  chrome::GetDefaultUserDataDirectory(&default_user_data);
+  if (sync::UseFileKeyStore(ardiacore::BackgroundInstance(), command.HasSwitch(switches::kUserDataDir),
+                            user_data.value(), default_user_data.value())) {
     return sync::MakeFileKeyStore(user_data.Append(kKeyDirectory).value());
   }
   return sync::MakeSecretServiceKeyStore();
@@ -223,14 +228,19 @@ void Deliver(std::string method, Done done, sync::Outcome words) {
   std::string joined = JoinedWords(words.value);
   sync::WipeJson(words.value);
   if (method == "ArdiaSync.copyRecoveryPhrase") {
-    std::u16string text = base::UTF8ToUTF16(joined);
+    sync::ClipboardWrite write = sync::PhraseClipboard(std::move(joined));
+    std::u16string text = base::UTF8ToUTF16(write.text);
     {
       ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
       writer.WriteText(text);
-      writer.MarkAsConfidential();
+      for (const auto& [format, value] : write.raw) {
+        writer.WriteRawDataForTest(ui::ClipboardFormatType::CustomPlatformType(format),
+                                   std::vector<uint8_t>(value.begin(), value.end()));
+      }
+      if (write.confidential) writer.MarkAsConfidential();
     }
     sync::Wipe(text.data(), text.size() * sizeof(char16_t));
-    sync::Wipe(joined);
+    sync::Wipe(write.text);
     return std::move(done).Run(true, base::Value(true));
   }
   auto bitmap = qr_code_generator::GenerateBitmap(base::as_byte_span(joined), qr_code_generator::ModuleStyle::kSquares,

@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ardia/linux/ac_linux_sync_crypto.h"
@@ -154,6 +155,17 @@ class SyncCore {
   uint64_t generation_ = 0;
   KeyStatus last_key_status_ = KeyStatus::kNotFound;
 };
+
+inline constexpr char kPasswordManagerHintFormat[] = "x-kde-passwordManagerHint";
+inline constexpr char kPasswordManagerHintValue[] = "secret";
+
+struct ClipboardWrite {
+  std::string text;
+  std::vector<std::pair<std::string, std::string>> raw;
+  bool confidential = true;
+};
+
+ClipboardWrite PhraseClipboard(std::string words);
 
 std::string KitText(const std::vector<std::string>& words, std::string_view created, std::string_view device);
 std::string LossyUtf8(const Bytes& data);

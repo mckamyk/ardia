@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -617,6 +618,118 @@ void CrossFormat(const std::string& reference, const std::string& out) {
   std::printf("cross-format reference files opened and Linux files written\n");
 }
 
+std::string race_victim;
+std::string race_parked;
+
+void SwapForLink(const std::string& path) {
+  if (path.size() < 5 || path.substr(path.size() - 5) != "/swap") return;
+  CHECK(rename(path.c_str(), race_parked.c_str()) == 0);
+  CHECK(symlink(race_victim.c_str(), path.c_str()) == 0);
+}
+
+void DeleteRace(const std::string& scratch) {
+  const std::string folder = scratch + "/race-folder";
+  const SyncKeys keys(*NewEntropy());
+  const Vault vault(folder, keys);
+  CHECK(vault.CreateChain().ok());
+  std::string id;
+  CHECK(vault.Write("app", Text("{}"), &id).ok());
+  const std::string swap = vault.ScopePath("app") + "/swap";
+  CHECK(mkdir(swap.c_str(), 0700) == 0);
+  WriteText(swap + "/inner", "inner");
+  race_victim = scratch + "/race-home";
+  race_parked = scratch + "/race-parked";
+  CHECK(mkdir(race_victim.c_str(), 0700) == 0);
+  WriteText(race_victim + "/precious", "precious");
+  SetRemoveTreeHookForTesting(&SwapForLink);
+  vault.DeleteChain();
+  SetRemoveTreeHookForTesting(nullptr);
+  CHECK(access((race_victim + "/precious").c_str(), F_OK) == 0);
+  CHECK(!vault.ChainExists());
+}
+
+void SymlinkedChain(const std::string& scratch) {
+  const std::string folder = scratch + "/linked-folder";
+  const SyncKeys keys(*NewEntropy());
+  const std::string elsewhere = scratch + "/linked-elsewhere";
+  const Vault real(elsewhere, keys);
+  CHECK(real.CreateChain().ok());
+  std::string id;
+  CHECK(real.Write("app", Text("{\"elsewhere\":true}"), &id).ok());
+  const std::string target = real.ScopePath("app") + "/" + id + ".nns";
+  CHECK(mkdir(folder.c_str(), 0700) == 0);
+  const Vault linked(folder, keys);
+  CHECK(symlink(real.ChainPath().c_str(), linked.ChainPath().c_str()) == 0);
+  CHECK(!linked.ChainExists());
+  CHECK(linked.Read("app", {}, NowSeconds()).present.empty());
+  linked.Remove("app", {id});
+  CHECK(access(target.c_str(), F_OK) == 0);
+  std::string written;
+  CHECK(!linked.Write("app", Text("{}"), &written).ok());
+  CHECK(real.Read("app", {}, NowSeconds()).files.size() == 1);
+  CHECK(linked.DeleteChain().ok());
+  CHECK(access(target.c_str(), F_OK) == 0);
+  CHECK(real.ChainExists());
+
+  const std::string scoped_folder = scratch + "/linked-scope";
+  const Vault scoped(scoped_folder, keys);
+  CHECK(scoped.CreateChain().ok());
+  CHECK(symlink(real.ScopePath("app").c_str(), scoped.ScopePath("app").c_str()) == 0);
+  CHECK(scoped.Read("app", {}, NowSeconds()).present.empty());
+  scoped.Remove("app", {id});
+  CHECK(access(target.c_str(), F_OK) == 0);
+  CHECK(!scoped.Write("app", Text("{}"), &written).ok());
+  CHECK(scoped.DeleteChain().ok());
+  CHECK(access(target.c_str(), F_OK) == 0);
+}
+
+void LargeJson() {
+  std::string json = "{";
+  for (int i = 0; i < 100000; ++i) json += (i ? ",\"k" : "\"k") + std::to_string(i) + "\":" + std::to_string(i);
+  json += ",\"k5\":\"last\"}";
+  const auto start = std::chrono::steady_clock::now();
+  auto parsed = ParseJson(json);
+  const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  CHECK(parsed && parsed->members.size() == 100000);
+  CHECK(parsed && parsed->Find("k5") && parsed->Find("k5")->text == "last");
+  CHECK(parsed && parsed->members.back().first == "k5");
+  CHECK(seconds < 3.0);
+  std::printf("parsed 100000 keys in %.2f s\n", seconds);
+}
+
+void KeyFileModes(const std::string& scratch) {
+  auto store = MakeFileKeyStore(scratch + "/mode-keys");
+  const std::string account = NewFileId();
+  const Bytes secret = *NewEntropy();
+  CHECK(store->Save(account, secret) == KeyStatus::kOk);
+  const std::string path = scratch + "/mode-keys/sync-key-" + account;
+  Bytes loaded;
+  CHECK(chmod(path.c_str(), 0644) == 0);
+  CHECK(store->Load(account, &loaded) == KeyStatus::kUnavailable);
+  CHECK(chmod(path.c_str(), 0640) == 0);
+  CHECK(store->Load(account, &loaded) == KeyStatus::kUnavailable);
+  CHECK(chmod(path.c_str(), 0600) == 0);
+  CHECK(store->Load(account, &loaded) == KeyStatus::kOk && loaded == secret);
+}
+
+void KeyStorePolicy() {
+  CHECK(ClassifySecretError("secret-error", 2) == KeyStatus::kLocked);
+  CHECK(ClassifySecretError("g-io-error-quark", 19) == KeyStatus::kLocked);
+  CHECK(ClassifySecretError("g-dbus-error-quark", 2) == KeyStatus::kUnavailable);
+  CHECK(ClassifySecretError("secret-error", 1) == KeyStatus::kUnavailable);
+  CHECK(UseFileKeyStore(true, true, "/tmp/ardia-test-profile", "/home/u/.config/ardia"));
+  CHECK(!UseFileKeyStore(false, true, "/tmp/ardia-test-profile", "/home/u/.config/ardia"));
+  CHECK(!UseFileKeyStore(true, false, "/tmp/ardia-test-profile", "/home/u/.config/ardia"));
+  CHECK(!UseFileKeyStore(true, true, "/home/u/.config/ardia", "/home/u/.config/ardia"));
+  CHECK(!UseFileKeyStore(true, true, "/home/u/.config/ardia/", "/home/u/.config/ardia"));
+  CHECK(!UseFileKeyStore(true, true, "", "/home/u/.config/ardia"));
+  CHECK(!UseFileKeyStore(true, true, "relative", "/home/u/.config/ardia"));
+  const ClipboardWrite write = PhraseClipboard("legal winner thank");
+  CHECK(write.text == "legal winner thank");
+  CHECK(write.confidential);
+  CHECK(write.raw.size() == 1 && write.raw[0].first == "x-kde-passwordManagerHint" && write.raw[0].second == "secret");
+}
+
 }
 
 int main(int argc, char** argv) {
@@ -633,6 +746,11 @@ int main(int argc, char** argv) {
     KeyStores(scratch);
     Core(scratch);
     Lease();
+    DeleteRace(scratch);
+    SymlinkedChain(scratch);
+    LargeJson();
+    KeyFileModes(scratch);
+    KeyStorePolicy();
     if (argc > 4) CrossFormat(argv[3], argv[4]);
   } else {
     std::printf("usage: sync_scenarios <scratch> <sealed fixture> [reference dir] [output dir]\n"

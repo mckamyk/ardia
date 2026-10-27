@@ -403,6 +403,13 @@ Outcome SyncCore::SaveKit(const std::string& path, std::string_view created) {
   return Outcome::Value(JsonValue::String(path));
 }
 
+ClipboardWrite PhraseClipboard(std::string words) {
+  ClipboardWrite write;
+  write.text = std::move(words);
+  write.raw.emplace_back(kPasswordManagerHintFormat, kPasswordManagerHintValue);
+  return write;
+}
+
 std::string KitText(const std::vector<std::string>& words, std::string_view created, std::string_view device) {
   std::string out = "Ardia Recovery Kit\nCreated ";
   out.append(created).append(" on ").append(device).append("\n\n");

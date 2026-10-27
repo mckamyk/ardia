@@ -74,6 +74,9 @@ class Vault {
 
 int64_t NowSeconds();
 
+using RemoveTreeHook = void (*)(const std::string& path);
+void SetRemoveTreeHookForTesting(RemoveTreeHook hook);
+
 }
 
 #endif

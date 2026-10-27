@@ -20,6 +20,36 @@ namespace {
 constexpr unsigned kRenameNoReplace = 1;
 constexpr mode_t kDirectoryMode = 0700;
 constexpr mode_t kFileMode = 0600;
+constexpr int kDirectoryFlags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
+
+RemoveTreeHook remove_tree_hook = nullptr;
+
+class Fd {
+ public:
+  explicit Fd(int fd = -1) : fd_(fd) {}
+  Fd(Fd&& other) noexcept : fd_(std::exchange(other.fd_, -1)) {}
+  Fd& operator=(Fd&& other) noexcept {
+    if (this != &other) {
+      Reset();
+      fd_ = std::exchange(other.fd_, -1);
+    }
+    return *this;
+  }
+  Fd(const Fd&) = delete;
+  Fd& operator=(const Fd&) = delete;
+  ~Fd() { Reset(); }
+
+  int get() const { return fd_; }
+  bool valid() const { return fd_ >= 0; }
+
+ private:
+  void Reset() {
+    if (fd_ >= 0) close(fd_);
+    fd_ = -1;
+  }
+
+  int fd_;
+};
 
 std::string Join(const std::string& directory, std::string_view name) {
   std::string path = directory;
@@ -32,17 +62,14 @@ std::string ErrorText(std::string_view what, int error) {
   return std::string(what) + ": " + std::strerror(error);
 }
 
-bool IsDirectoryNoFollow(const std::string& path) {
-  struct stat info;
-  return lstat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
+Fd OpenFolder(const std::string& folder) {
+  return Fd(open(folder.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
 }
 
-bool EnsureDirectory(const std::string& path, bool follow) {
-  struct stat info;
-  if ((follow ? stat(path.c_str(), &info) : lstat(path.c_str(), &info)) == 0) return S_ISDIR(info.st_mode);
-  if (errno != ENOENT) return false;
-  if (mkdir(path.c_str(), kDirectoryMode) == 0) return true;
-  return errno == EEXIST && (follow ? DirectoryExists(path) : IsDirectoryNoFollow(path));
+Fd OpenChild(const Fd& parent, const std::string& name, bool create) {
+  if (!parent.valid()) return Fd();
+  if (create && mkdirat(parent.get(), name.c_str(), kDirectoryMode) != 0 && errno != EEXIST) return Fd();
+  return Fd(openat(parent.get(), name.c_str(), kDirectoryFlags));
 }
 
 bool EnsureFolder(const std::string& folder) {
@@ -53,17 +80,13 @@ bool EnsureFolder(const std::string& folder) {
     partial = folder.substr(0, next == std::string::npos ? folder.size() : next);
     at = next == std::string::npos ? folder.size() : next;
     if (partial.empty() || partial == "/") continue;
-    if (!EnsureDirectory(partial, true)) return false;
+    if (mkdir(partial.c_str(), kDirectoryMode) != 0 && errno != EEXIST) return false;
   }
   return DirectoryExists(folder);
 }
 
-bool SyncDirectory(const std::string& path) {
-  const int fd = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (fd < 0) return false;
-  const bool ok = fsync(fd) == 0 || errno == EINVAL || errno == EROFS;
-  close(fd);
-  return ok;
+void SyncDirectory(const Fd& directory) {
+  if (directory.valid()) fsync(directory.get());
 }
 
 bool WriteAll(int fd, const Bytes& data) {
@@ -79,14 +102,8 @@ bool WriteAll(int fd, const Bytes& data) {
   return true;
 }
 
-std::optional<Bytes> ReadRegularFile(const std::string& path, size_t limit) {
-  const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-  if (fd < 0) return std::nullopt;
-  struct stat info;
-  if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || static_cast<uint64_t>(info.st_size) > limit) {
-    close(fd);
-    return std::nullopt;
-  }
+std::optional<Bytes> ReadOpenFile(int fd, const struct stat& info, size_t limit) {
+  if (!S_ISREG(info.st_mode) || static_cast<uint64_t>(info.st_size) > limit) return std::nullopt;
   Bytes data(static_cast<size_t>(info.st_size));
   size_t got = 0;
   while (got < data.size()) {
@@ -95,15 +112,21 @@ std::optional<Bytes> ReadRegularFile(const std::string& path, size_t limit) {
     if (n <= 0) break;
     got += static_cast<size_t>(n);
   }
-  close(fd);
   if (got != data.size()) return std::nullopt;
   return data;
 }
 
-std::vector<std::string> Names(const std::string& directory) {
+std::vector<std::string> NamesAt(const Fd& directory) {
   std::vector<std::string> names;
-  DIR* dir = opendir(directory.c_str());
-  if (!dir) return names;
+  if (!directory.valid()) return names;
+  const int copy = fcntl(directory.get(), F_DUPFD_CLOEXEC, 0);
+  if (copy < 0) return names;
+  DIR* dir = fdopendir(copy);
+  if (!dir) {
+    close(copy);
+    return names;
+  }
+  rewinddir(dir);
   while (const dirent* entry = readdir(dir)) {
     const std::string_view name(entry->d_name);
     if (name != "." && name != "..") names.emplace_back(name);
@@ -111,6 +134,10 @@ std::vector<std::string> Names(const std::string& directory) {
   closedir(dir);
   std::sort(names.begin(), names.end());
   return names;
+}
+
+std::vector<std::string> Names(const std::string& directory) {
+  return NamesAt(OpenFolder(directory));
 }
 
 bool EndsWith(std::string_view text, std::string_view suffix) {
@@ -121,38 +148,50 @@ bool StartsWith(std::string_view text, std::string_view prefix) {
   return text.substr(0, prefix.size()) == prefix;
 }
 
-void RemoveStaleStaging(const std::string& directory, int64_t now) {
-  for (const auto& name : Names(directory)) {
+void RemoveStaleStaging(const Fd& directory, int64_t now) {
+  for (const auto& name : NamesAt(directory)) {
     if (!StartsWith(name, kStagingPrefix)) continue;
-    const std::string path = Join(directory, name);
     struct stat info;
-    if (lstat(path.c_str(), &info) == 0 && S_ISREG(info.st_mode) && now - info.st_mtime >= kStaleStagingSeconds)
-      unlink(path.c_str());
+    if (fstatat(directory.get(), name.c_str(), &info, AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(info.st_mode) &&
+        now - info.st_mtime >= kStaleStagingSeconds)
+      unlinkat(directory.get(), name.c_str(), 0);
   }
 }
 
-int RenameNoReplace(const std::string& from, const std::string& to) {
-  if (syscall(SYS_renameat2, AT_FDCWD, from.c_str(), AT_FDCWD, to.c_str(), kRenameNoReplace) == 0) return 0;
+int RenameNoReplaceAt(const Fd& directory, const std::string& from, const std::string& to) {
+  const int fd = directory.get();
+  if (syscall(SYS_renameat2, fd, from.c_str(), fd, to.c_str(), kRenameNoReplace) == 0) return 0;
   if (errno != EINVAL && errno != ENOSYS && errno != ENOTSUP && errno != EOPNOTSUPP) return errno;
-  if (link(from.c_str(), to.c_str()) == 0) {
-    unlink(from.c_str());
+  if (linkat(fd, from.c_str(), fd, to.c_str(), 0) == 0) {
+    unlinkat(fd, from.c_str(), 0);
     return 0;
   }
   if (errno == EEXIST) return EEXIST;
   struct stat info;
-  if (lstat(to.c_str(), &info) == 0) return EEXIST;
-  return rename(from.c_str(), to.c_str()) == 0 ? 0 : errno;
+  if (fstatat(fd, to.c_str(), &info, AT_SYMLINK_NOFOLLOW) == 0) return EEXIST;
+  return renameat(fd, from.c_str(), fd, to.c_str()) == 0 ? 0 : errno;
 }
 
-bool RemoveTree(const std::string& path) {
-  struct stat info;
-  if (lstat(path.c_str(), &info) != 0) return errno == ENOENT;
-  if (!S_ISDIR(info.st_mode)) return unlink(path.c_str()) == 0 || errno == ENOENT;
+bool RemoveContents(const Fd& directory, const std::string& path) {
   bool ok = true;
-  for (const auto& name : Names(path)) ok = RemoveTree(Join(path, name)) && ok;
-  return (rmdir(path.c_str()) == 0 || errno == ENOENT) && ok;
+  for (const auto& name : NamesAt(directory)) {
+    const std::string child_path = Join(path, name);
+    if (remove_tree_hook) remove_tree_hook(child_path);
+    Fd child(openat(directory.get(), name.c_str(), kDirectoryFlags));
+    if (child.valid()) {
+      ok = RemoveContents(child, child_path) && ok;
+      ok = (unlinkat(directory.get(), name.c_str(), AT_REMOVEDIR) == 0 || errno == ENOENT) && ok;
+    } else {
+      ok = (unlinkat(directory.get(), name.c_str(), 0) == 0 || errno == ENOENT) && ok;
+    }
+  }
+  return ok;
 }
 
+}
+
+void SetRemoveTreeHookForTesting(RemoveTreeHook hook) {
+  remove_tree_hook = hook;
 }
 
 int64_t NowSeconds() {
@@ -193,14 +232,16 @@ std::string Vault::ScopePath(std::string_view scope) const {
 }
 
 bool Vault::ChainExists() const {
-  return DirectoryExists(ChainPath());
+  return OpenChild(OpenFolder(folder_), keys_.chain_tag(), false).valid();
 }
 
 VaultError Vault::CreateChain() const {
   if (!ValidFolderPath(folder_)) return {"The sync folder path isn't valid"};
   if (!EnsureFolder(folder_)) return {ErrorText("Couldn't create the sync folder", errno)};
-  if (!EnsureDirectory(ChainPath(), false)) return {ErrorText("Couldn't create the sync data folder", errno)};
-  SyncDirectory(folder_);
+  const Fd folder = OpenFolder(folder_);
+  if (!OpenChild(folder, keys_.chain_tag(), true).valid())
+    return {ErrorText("Couldn't create the sync data folder", errno)};
+  SyncDirectory(folder);
   return {};
 }
 
@@ -212,29 +253,31 @@ VaultError Vault::Write(std::string_view scope, const Bytes& payload, std::strin
 
 VaultError Vault::WriteAs(std::string_view scope, const Bytes& payload, const std::string& id) const {
   if (!IsTag(id)) return {"Invalid sync file name"};
-  if (!ValidFolderPath(folder_) || !DirectoryExists(folder_)) return {"The sync folder isn't available"};
+  if (!ValidFolderPath(folder_)) return {"The sync folder isn't available"};
+  const Fd folder = OpenFolder(folder_);
+  if (!folder.valid()) return {"The sync folder isn't available"};
   const std::string scope_tag = keys_.ScopeTag(scope);
   auto sealed = keys_.Seal(payload, scope_tag, id);
   if (!sealed) return {"Couldn't seal the sync file"};
-  const std::string directory = ScopePath(scope);
-  if (!EnsureDirectory(ChainPath(), false) || !EnsureDirectory(directory, false))
-    return {ErrorText("Couldn't create the sync data folder", errno)};
+  const Fd chain = OpenChild(folder, keys_.chain_tag(), true);
+  const Fd directory = OpenChild(chain, scope_tag, true);
+  if (!directory.valid()) return {ErrorText("Couldn't open the sync data folder", errno)};
   RemoveStaleStaging(directory, NowSeconds());
   uint8_t random[10];
   if (!RandomBytes(random, sizeof(random))) return {"Couldn't make a staging name"};
-  const std::string staging = Join(directory, kStagingPrefix + Base32(random, sizeof(random)));
-  const std::string destination = Join(directory, id + kFileExtension);
-  const int fd = open(staging.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, kFileMode);
+  const std::string staging = kStagingPrefix + Base32(random, sizeof(random));
+  const std::string destination = id + kFileExtension;
+  const int fd = openat(directory.get(), staging.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, kFileMode);
   if (fd < 0) return {ErrorText("Couldn't write a sync file", errno)};
   const bool written = WriteAll(fd, *sealed) && fsync(fd) == 0;
   const int write_error = errno;
   const bool closed = close(fd) == 0;
   if (!written || !closed) {
-    unlink(staging.c_str());
+    unlinkat(directory.get(), staging.c_str(), 0);
     return {ErrorText("Couldn't write a sync file", written ? errno : write_error)};
   }
-  if (const int error = RenameNoReplace(staging, destination); error != 0) {
-    unlink(staging.c_str());
+  if (const int error = RenameNoReplaceAt(directory, staging, destination); error != 0) {
+    unlinkat(directory.get(), staging.c_str(), 0);
     return {ErrorText("Couldn't move a sync file into place", error)};
   }
   SyncDirectory(directory);
@@ -243,11 +286,11 @@ VaultError Vault::WriteAs(std::string_view scope, const Bytes& payload, const st
 
 Listing Vault::Read(std::string_view scope, const std::vector<std::string>& known_ids, int64_t now_seconds) const {
   Listing listing;
-  const std::string directory = ScopePath(scope);
-  if (!IsDirectoryNoFollow(directory)) return listing;
-  const std::set<std::string, std::less<>> known(known_ids.begin(), known_ids.end());
   const std::string scope_tag = keys_.ScopeTag(scope);
-  const auto names = Names(directory);
+  const Fd directory = OpenChild(OpenChild(OpenFolder(folder_), keys_.chain_tag(), false), scope_tag, false);
+  if (!directory.valid()) return listing;
+  const std::set<std::string, std::less<>> known(known_ids.begin(), known_ids.end());
+  const auto names = NamesAt(directory);
   std::set<std::string, std::less<>> whole;
   for (const auto& name : names) {
     if (EndsWith(name, kFileExtension)) whole.insert(name.substr(0, name.size() - (sizeof(kFileExtension) - 1)));
@@ -271,10 +314,11 @@ Listing Vault::Read(std::string_view scope, const std::vector<std::string>& know
     if (!IsTag(id)) continue;
     mark_present(id);
     if (known.contains(id)) continue;
-    const std::string path = Join(directory, name);
+    const Fd file(openat(directory.get(), name.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
     struct stat info;
-    const bool stated = lstat(path.c_str(), &info) == 0;
-    auto data = stated && S_ISREG(info.st_mode) ? ReadRegularFile(path, kMaxSyncFileBytes) : std::nullopt;
+    const bool stated = file.valid() ? fstat(file.get(), &info) == 0
+                                     : fstatat(directory.get(), name.c_str(), &info, AT_SYMLINK_NOFOLLOW) == 0;
+    auto data = file.valid() && stated ? ReadOpenFile(file.get(), info, kMaxSyncFileBytes) : std::nullopt;
     Bytes payload;
     if (data && keys_.Open(*data, scope_tag, id, &payload) == OpenError::kNone) {
       listing.files.push_back({id, std::move(payload)});
@@ -287,20 +331,30 @@ Listing Vault::Read(std::string_view scope, const std::vector<std::string>& know
 }
 
 void Vault::Remove(std::string_view scope, const std::vector<std::string>& ids) const {
-  const std::string directory = ScopePath(scope);
-  if (!IsDirectoryNoFollow(directory)) return;
+  const Fd directory = OpenChild(OpenChild(OpenFolder(folder_), keys_.chain_tag(), false), keys_.ScopeTag(scope), false);
+  if (!directory.valid()) return;
   for (const auto& id : ids) {
     if (!IsTag(id)) continue;
-    unlink(Join(directory, id + kFileExtension).c_str());
+    unlinkat(directory.get(), (id + kFileExtension).c_str(), 0);
   }
 }
 
 VaultError Vault::DeleteChain() const {
-  const std::string chain = ChainPath();
+  const Fd folder = OpenFolder(folder_);
+  if (!folder.valid()) return {};
+  const std::string& name = keys_.chain_tag();
   struct stat info;
-  if (lstat(chain.c_str(), &info) != 0) return {};
-  if (!RemoveTree(chain)) return {ErrorText("Couldn't delete the sync data", errno)};
-  SyncDirectory(folder_);
+  if (fstatat(folder.get(), name.c_str(), &info, AT_SYMLINK_NOFOLLOW) != 0) return {};
+  const Fd chain(openat(folder.get(), name.c_str(), kDirectoryFlags));
+  bool ok = true;
+  if (chain.valid()) {
+    ok = RemoveContents(chain, ChainPath());
+    ok = unlinkat(folder.get(), name.c_str(), AT_REMOVEDIR) == 0 && ok;
+  } else {
+    ok = unlinkat(folder.get(), name.c_str(), 0) == 0;
+  }
+  if (!ok) return {ErrorText("Couldn't delete the sync data", errno)};
+  SyncDirectory(folder);
   return {};
 }
 
