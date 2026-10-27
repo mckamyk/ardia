@@ -11,9 +11,12 @@ type PendingDialog = {
   generation?: string;
   begun: boolean;
   result?: DialogResult;
+  settled: Promise<DialogResult>;
   resolve(result: DialogResult): void;
   reject(error: unknown): void;
+  detach(): void;
 };
+export type DialogSuspension = { readonly settled: Promise<void> };
 
 const MAX_PENDING = 16;
 const decimal = (value: unknown): value is string => typeof value === "string" && /^[1-9][0-9]{0,19}$/.test(value);
@@ -24,12 +27,24 @@ export function createHostDialogs(host: ArdiaHost, newId = () => `dialog:${crypt
   const windowId = host.bootstrap.windowId;
   const pending = new Map<string, PendingDialog>();
   let retired = false;
+  let suspension: DialogSuspension | undefined;
   let sequence = 0;
 
   const cancelNative = (id: string) => { void invokeHost("ArdiaShell.cancelDialog", { args: [id] }, host).catch(() => {}); };
+  const release = (id: string, entry: PendingDialog) => {
+    if (pending.get(id) !== entry) return false;
+    pending.delete(id);
+    entry.detach();
+    return true;
+  };
+  const cancelEntry = (id: string, entry: PendingDialog) => {
+    if (!release(id, entry)) return;
+    if (entry.begun) cancelNative(id);
+    entry.resolve(canceled(entry.kind));
+  };
   const finish = (id: string, entry: PendingDialog) => {
     if (pending.get(id) !== entry || !entry.accepted || !entry.received) return;
-    pending.delete(id);
+    release(id, entry);
     entry.resolve(entry.result!);
   };
   const unsubscribe = host.onEvent((module, event, payload) => {
@@ -58,51 +73,69 @@ export function createHostDialogs(host: ArdiaHost, newId = () => `dialog:${crypt
     retired = true;
     unsubscribe();
     removeBeforeClose?.();
-    const entries = [...pending];
-    pending.clear();
-    for (const [id, entry] of entries) {
-      if (entry.begun) cancelNative(id);
-      entry.resolve(canceled(entry.kind));
-    }
+    for (const [id, entry] of [...pending]) cancelEntry(id, entry);
   };
   removeBeforeClose = host.onBeforeClose?.(retire);
+  const suspend = (): DialogSuspension => {
+    const entries = [...pending];
+    const current: DialogSuspension = Object.freeze({ settled: Promise.allSettled(entries.map(([, entry]) => entry.settled)).then(() => undefined) });
+    suspension = current;
+    for (const [id, entry] of entries) cancelEntry(id, entry);
+    return current;
+  };
+  const resume = (token: unknown) => {
+    if (retired || !suspension || token !== suspension) return false;
+    suspension = undefined;
+    return true;
+  };
 
-  const begin = (kind: PendingDialog["kind"], options: ConfirmOptions | PromptOptions): Promise<DialogResult> => {
+  const begin = (kind: PendingDialog["kind"], options: ConfirmOptions | PromptOptions, signal?: AbortSignal): Promise<DialogResult> => {
     if (retired) return Promise.reject(failure("The dialog renderer is unavailable"));
+    if (suspension) return Promise.reject(failure("Dialogs are suspended for this window"));
     if (!options || typeof options.title !== "string" || options.title.length > 4096 || (options.windowId !== undefined && options.windowId !== windowId)) return Promise.reject(failure("Invalid dialog owner or title"));
+    if (signal?.aborted) return Promise.resolve(canceled(kind));
     if (pending.size >= MAX_PENDING) return Promise.reject(failure("Too many pending dialogs"));
     if (sequence === Number.MAX_SAFE_INTEGER) return Promise.reject(failure("Dialog identities exhausted"));
     const id = `${newId()}:${++sequence}`;
     if (!/^[A-Za-z0-9:_-]{16,96}$/.test(id) || pending.has(id)) return Promise.reject(failure("Invalid or duplicate dialog identity"));
-    return new Promise((resolve, reject) => {
-      const entry: PendingDialog = { kind, suppression: kind === "confirm" && typeof (options as ConfirmOptions).suppression === "string", accepted: false, received: false, begun: false, resolve, reject };
-      const request = { dialogId: id, kind, options: { ...options } };
-      pending.set(id, entry);
-      const register = async () => {
-        const identity = await hostModuleMethod("ArdiaShell", "windowIdentity", host)() as { windowId?: unknown; rendererGeneration?: unknown } | null;
-        if (retired || pending.get(id) !== entry) return;
-        if (!identity || typeof identity !== "object" || Array.isArray(identity) || identity.windowId !== windowId || !decimal(identity.rendererGeneration)) throw failure("Invalid native dialog window identity");
-        entry.generation = identity.rendererGeneration;
-        await Promise.resolve();
-        if (retired || pending.get(id) !== entry) return;
-        entry.begun = true;
-        const reply = await host.invoke("ArdiaShell.beginDialog", { args: [request] });
-        if (retired || pending.get(id) !== entry) return;
-        if (!reply || typeof reply !== "object" || !("accepted" in reply) || reply.accepted !== true) throw failure("The native dialog was not accepted");
-        entry.accepted = true;
-        finish(id, entry);
-      };
-      void register().catch((error: unknown) => {
-        if (pending.get(id) !== entry) return;
-        pending.delete(id);
-        if (entry.begun) cancelNative(id);
-        entry.reject(error);
-      });
+    let resolve!: PendingDialog["resolve"], reject!: PendingDialog["reject"];
+    const settled = new Promise<DialogResult>((yes, no) => { resolve = yes; reject = no; });
+    const entry: PendingDialog = { kind, suppression: kind === "confirm" && typeof (options as ConfirmOptions).suppression === "string", accepted: false, received: false, begun: false, settled, resolve, reject, detach() {} };
+    const request = { dialogId: id, kind, options: { ...options } };
+    pending.set(id, entry);
+    if (signal) {
+      const abort = () => cancelEntry(id, entry);
+      signal.addEventListener("abort", abort, { once: true });
+      entry.detach = () => signal.removeEventListener("abort", abort);
+    }
+    const register = async () => {
+      const identity = await hostModuleMethod("ArdiaShell", "windowIdentity", host)() as { windowId?: unknown; rendererGeneration?: unknown } | null;
+      if (retired || pending.get(id) !== entry) return;
+      if (!identity || typeof identity !== "object" || Array.isArray(identity) || identity.windowId !== windowId || !decimal(identity.rendererGeneration)) throw failure("Invalid native dialog window identity");
+      entry.generation = identity.rendererGeneration;
+      await Promise.resolve();
+      if (retired || pending.get(id) !== entry) return;
+      entry.begun = true;
+      const reply = await host.invoke("ArdiaShell.beginDialog", { args: [request] });
+      if (retired || pending.get(id) !== entry) return;
+      if (!reply || typeof reply !== "object" || !("accepted" in reply) || reply.accepted !== true) throw failure("The native dialog was not accepted");
+      entry.accepted = true;
+      finish(id, entry);
+    };
+    void register().catch((error: unknown) => {
+      if (!release(id, entry)) return;
+      if (entry.begun) cancelNative(id);
+      entry.reject(error);
     });
+    return settled;
   };
   return {
     confirm: (options: ConfirmOptions) => begin("confirm", options) as Promise<Confirmation>,
     prompt: (options: PromptOptions) => begin("prompt", options) as Promise<string | null>,
+    abortableConfirm: (options: ConfirmOptions, signal: AbortSignal) => begin("confirm", options, signal) as Promise<Confirmation>,
+    abortablePrompt: (options: PromptOptions, signal: AbortSignal) => begin("prompt", options, signal) as Promise<string | null>,
+    suspend,
+    resume,
     retire,
   };
 }
