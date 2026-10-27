@@ -207,7 +207,7 @@ void Domain() {
 
 void Zoom() {
   Harness h;auto controller=std::make_unique<zoom::ZoomController>();h.page.zoom=controller.get();LinuxHistoryZoom zoom(h.lease->GetWeakPtr());assert(controller->observers.size()==1);
-  controller->scale_one=false;h.page.view.widget.provider.value.page_scale_factor=1.75;assert(Number(*zoom.Snapshot(),"pinchScale")==1.75);
+  controller->scale_one=false;assert(!zoom.Snapshot() && !zoom.Emit());
   h.page.Notify([](auto* o) { o->OnPageScaleFactorChanged(2.5); });assert(Number(*zoom.Snapshot(),"pinchScale")==2.5);
   h.page.zoom=nullptr;controller.reset();assert(!zoom.Snapshot());zoom.Reset();
   zoom::ZoomController next;h.page.zoom=&next;LinuxHistoryZoom rebound(h.lease->GetWeakPtr());assert(rebound.Emit());rebound.Reset();assert(next.observers.empty());

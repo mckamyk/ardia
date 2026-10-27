@@ -6,10 +6,8 @@
 #include <utility>
 
 #include "components/zoom/page_zoom.h"
-#include "content/browser/renderer_host/render_widget_host_impl.h"  // nogncheck
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
-#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "url/gurl.h"
@@ -107,11 +105,6 @@ std::optional<base::DictValue> LinuxHistoryZoom::Snapshot() const {
   const auto factor = blink::ZoomLevelToZoomFactor(controller_->GetZoomLevel());
   auto scale = controller_->PageScaleFactorIsOne() ? std::optional<double>(1) :
       pinch_request_ && pinch_request_->Valid() ? pinch_scale_ : std::nullopt;
-  if (!scale) {
-    auto* view = contents->GetRenderWidgetHostView();
-    auto* widget = view ? content::RenderWidgetHostImpl::From(view->GetRenderWidgetHost()) : nullptr;
-    if (widget) scale = widget->render_frame_metadata_provider()->LastRenderFrameMetadata().page_scale_factor;
-  }
   if (!scale || !std::isfinite(*scale) || *scale <= 0 || !std::isfinite(factor) || factor <= 0) return std::nullopt;
   return base::DictValue().Set("zoom", factor).Set("host", contents->GetLastCommittedURL().host())
       .Set("isDefault", controller_->IsAtDefaultZoom()).Set("pinchScale", *scale);

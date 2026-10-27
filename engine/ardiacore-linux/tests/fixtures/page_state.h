@@ -238,10 +238,6 @@ class WebContentsObserver {
   virtual void OnPageScaleFactorChanged(float) {}
  private: WebContents* contents_=nullptr;
 };
-struct Metadata { float page_scale_factor=1; };
-struct MetadataProvider { Metadata value; const Metadata& LastRenderFrameMetadata() { return value; } };
-struct RenderWidgetHostImpl { MetadataProvider provider; static RenderWidgetHostImpl* From(RenderWidgetHostImpl* widget) { return widget; } MetadataProvider* render_frame_metadata_provider() { return &provider; } };
-struct RenderWidgetHostView { RenderWidgetHostImpl widget; RenderWidgetHostImpl* GetRenderWidgetHost() { return &widget; } };
 class WebContents {
  public:
   explicit WebContents(Profile* p):profile(p) {}
@@ -252,7 +248,6 @@ class WebContents {
   NavigationController& GetController() { return controller; }
   GURL GetLastCommittedURL() const { return committed; }
   std::optional<uint32_t> GetThemeColor() { return theme; }
-  RenderWidgetHostView* GetRenderWidgetHostView() { return &view; }
   const std::vector<blink::mojom::FaviconURLPtr>& GetFaviconURLs() { return favicons; }
   std::vector<blink::mojom::FaviconURLPtr> favicons;
   template<class F> void Notify(F fn) { auto copy=observers; for(auto* o:copy) if(std::find(observers.begin(),observers.end(),o)!=observers.end()) fn(o); }
@@ -263,7 +258,6 @@ class WebContents {
   NavigationController controller{&entry};
   GURL committed{"https://example.test/"};
   std::optional<uint32_t> theme;
-  RenderWidgetHostView view;
   security_state::VisibleSecurityState security;
   void* zoom=nullptr;
   std::vector<WebContentsObserver*> observers;
