@@ -6,6 +6,7 @@
 #include <set>
 #include <string>
 #include <variant>
+#include <vector>
 
 using namespace linux_site_controls;
 
@@ -313,6 +314,93 @@ void BlockerStates() {
   assert(!ValidBundledVersion("") && !ValidBundledVersion("1.75<script>") && !ValidBundledVersion(std::string(33, '1')));
 }
 
+base::Value TextList(const std::vector<std::string>& items) {
+  base::ListValue list;
+  for (const std::string& item : items) list.Append(base::Value(item));
+  return base::Value(std::move(list));
+}
+
+void FollowDefault() {
+  for (const char* name : {"contentBlocker.settings", "contentBlocker.follow", "contentBlocker.followDefault"}) {
+    assert(AsFailure(PrepareBlockerCall(name, base::DictValue())));
+  }
+  const std::string off = "/^(?:ardia-blocking-off|)/";
+  base::Value read(base::DictValue()
+                       .Set("lists", TextList({"easylist", "easyprivacy"}))
+                       .Set("whitelist", TextList({"chrome-extension-scheme", "news.example", off}))
+                       .Set("autoUpdate", base::Value(false)));
+  std::optional<BlockerSettings> settings = ParseBlockerSettings(read);
+  assert(settings);
+  assert((settings->lists == std::vector<std::string>{"easylist", "easyprivacy"}));
+  assert((settings->whitelist == std::vector<std::string>{"chrome-extension-scheme", "news.example", off}));
+  assert(!settings->auto_update);
+
+  BlockerRequest follow;
+  follow.op = BlockerOp::kFollow;
+  follow.settings = *settings;
+  PendingCall call{.ticket = 7, .request = follow, .deadline_ms = 20000};
+  base::DictValue request = BridgeRequest(call, 0);
+  assert(Text(request, "op") == "follow");
+  const base::DictValue* args = request.FindDict("args");
+  assert(args && args->Find("lists") && args->Find("lists")->GetList().size() == 2);
+  assert(args->Find("whitelist")->GetList().size() == 3 && !BoolOf(*args, "autoUpdate"));
+  BlockerRequest read_request;
+  read_request.op = BlockerOp::kSettings;
+  assert(BridgeOpName(BlockerOp::kSettings) == "settings");
+  assert(!Mutates(BlockerOp::kSettings) && !Mutates(BlockerOp::kFollow));
+
+  auto completed = CompleteBlockerCall(read_request, &read, nullptr, "1.75.0");
+  assert(!AsFailure(completed));
+  assert(ParseBlockerSettings(std::get<base::Value>(completed)));
+  base::Value imported(base::DictValue()
+                           .Set("lists", TextList({"easylist", "https://example.com/filters.txt", "../x"}))
+                           .Set("whitelist", TextList({"news.example"}))
+                           .Set("autoUpdate", base::Value(true)));
+  std::optional<BlockerSettings> kept = ParseBlockerSettings(imported);
+  assert(kept && kept->lists == std::vector<std::string>{"easylist"});
+  assert((kept->whitelist == std::vector<std::string>{"news.example"}));
+  assert(!AsFailure(CompleteBlockerCall(read_request, &imported, nullptr, "1.75.0")));
+  base::Value not_lists(base::DictValue().Set("lists", base::Value(3)).Set("whitelist", TextList({})).Set("autoUpdate", base::Value(true)));
+  assert(AsFailure(CompleteBlockerCall(read_request, &not_lists, nullptr, "1.75.0")));
+  const std::string failed = "uBlock Origin never started";
+  assert(AsFailure(CompleteBlockerCall(read_request, nullptr, &failed, "1.75.0"))->code == kUnavailableCode);
+  assert(!AsFailure(CompleteBlockerCall(follow, nullptr, nullptr, "1.75.0")));
+
+  for (const std::string& directive : {std::string("a\nb"), std::string("a\rb"), std::string(1, '\0'), std::string(), std::string(2049, 'a')}) {
+    base::Value with(base::DictValue().Set("lists", TextList({})).Set("whitelist", TextList({directive})).Set("autoUpdate", base::Value(true)));
+    assert(!ParseBlockerSettings(with));
+  }
+  assert(!ParseBlockerSettings(base::Value(base::DictValue().Set("lists", TextList({})).Set("whitelist", TextList({})))));
+  assert(!ParseBlockerSettings(base::Value(base::DictValue().Set("lists", base::Value(3)).Set("whitelist", TextList({})).Set("autoUpdate", base::Value(true)))));
+  base::ListValue many;
+  for (size_t i = 0; i <= kMaxFollowedDirectives; ++i) many.Append(base::Value("h" + std::to_string(i) + ".test"));
+  assert(!ParseBlockerSettings(base::Value(base::DictValue().Set("lists", TextList({})).Set("whitelist", base::Value(std::move(many))).Set("autoUpdate", base::Value(true)))));
+  base::ListValue mixed_list;
+  mixed_list.Append(base::Value("ok.test"));
+  mixed_list.Append(base::Value(4));
+  assert(!ParseBlockerSettings(base::Value(base::DictValue().Set("lists", TextList({})).Set("whitelist", base::Value(std::move(mixed_list))).Set("autoUpdate", base::Value(true)))));
+}
+
+void NavigationHoldPolicy() {
+  for (const char* scheme : {"http", "https", "ws", "wss", "file", "data", "blob", "ftp"}) assert(HoldsNavigationTo(scheme));
+  for (const char* scheme : {"chrome-extension", "chrome", "chrome-untrusted", "devtools", "about"}) assert(!HoldsNavigationTo(scheme));
+  assert(ShouldHoldNavigations(false, false));
+  assert(ShouldHoldNavigations(false, true));
+  assert(ShouldHoldNavigations(true, true));
+  assert(!ShouldHoldNavigations(true, false));
+  assert(HoldUntilFirstCopy(false, true));
+  assert(!HoldUntilFirstCopy(false, false));
+  assert(!HoldUntilFirstCopy(true, true) && !HoldUntilFirstCopy(true, false));
+  assert(kHoldDeadlineMs == 10000);
+  assert(kInheritAttempts == 6);
+  int64_t total = 0;
+  for (int attempt = 0; attempt + 1 < kInheritAttempts; ++attempt) {
+    assert(InheritRetryDelayMs(attempt) == (int64_t{1000} << attempt));
+    total += InheritRetryDelayMs(attempt);
+  }
+  assert(total == 31000);
+}
+
 void BridgeScripts() {
   const std::string send = SendScript("\"{\\\"ticket\\\":1}\"");
   assert(send.find("data-ardia-bridge") != std::string::npos);
@@ -449,5 +537,7 @@ int main() {
   BlockerStates();
   BridgeScripts();
   Queue();
+  FollowDefault();
+  NavigationHoldPolicy();
   std::puts("site controls scenarios passed");
 }

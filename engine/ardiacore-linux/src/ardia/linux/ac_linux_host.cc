@@ -1636,7 +1636,7 @@ void ShellHostView::Initialize() {
     GetWidget()->OnSizeConstraintsChanged();
   }
   LayoutOverlay();
-  StartLinuxContentBlocker(profile());
+  StartLinuxContentBlocker(profile(), page_profile());
   if (!title_.empty()) {
     browser_->GetWindow()->GetNativeWindow()->SetTitle(base::UTF8ToUTF16(title_));
   }

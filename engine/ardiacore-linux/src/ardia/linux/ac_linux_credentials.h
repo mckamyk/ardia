@@ -76,6 +76,19 @@ struct Arg {
 
 enum class Store { kPasswords, kAddresses, kCards };
 enum class StoreError { kNone, kTemporary, kKeychain, kInactionable, kOther };
+enum class Protection { kUnknown, kNone, kKeyring, kPortal, kObfuscated };
+
+inline constexpr char kProtectionProbeText[] = "ardia protection probe";
+
+Protection ProtectionFromCiphertext(std::string_view ciphertext);
+
+struct Storage {
+  std::string protection;
+  bool fallback = false;
+  std::string label;
+};
+
+Storage DescribeStorage(std::string_view backend, Protection protection);
 
 struct Probe {
   bool private_profile = false;
@@ -83,6 +96,7 @@ struct Probe {
   StoreError error = StoreError::kNone;
   bool encryption = true;
   bool decryption = true;
+  Protection protection = Protection::kUnknown;
 };
 
 struct Availability {

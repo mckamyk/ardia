@@ -6,7 +6,12 @@ This covers saved passwords and full card numbers in the Linux port (#17, source
 
 - **No Ardia copy.** Ardia stores no secret of its own. Passwords live in Chromium's `Login Data` and card numbers in `Web Data`, both encrypted by OSCrypt (os_crypt_async).
 - **Encryption key.** It comes from the Secret Service (libsecret), KWallet or the secret portal, chosen by `--password-store`. With `--password-store=basic`, or when no keyring answers, Chromium falls back to its v10 key, which only obfuscates. Ardia reports the configured backend (`backend` in `ArdiaPasswords.status` / `ArdiaAutofill.status`). For `basic`, the Settings pane says so in plain words.
-- **Silent fallback.** The silent fallback to v10 when a keyring is configured but fails is Chromium behaviour. Ardia can't yet tell it apart from real keyring encryption: follow-up #102.
+- **Which key encrypts new data (#102).** os_crypt_async prefixes every ciphertext with its provider's tag: `v10` for Chromium's built-in key, `v11` for the Secret Service or KWallet, `v12` for the secret portal. The status probe encrypts a fixed non-secret string (`kProtectionProbeText`) and reads that tag, so both status calls report:
+  - `protection`: `keyring`, `portal`, `obfuscated`, `none` or `unknown`;
+  - `protectionFallback`: true when the store isn't `basic` but new secrets still get the v10 key, which is Chromium's silent fallback when the keyring is configured but doesn't answer;
+  - `storage`: a label naming the key in use.
+
+  The Linux notice above Passwords and Autofill warns about the fallback, and its "Storage on this computer" row names the key. A fallback store stays available, so saved data never looks like an empty vault.
 - **Unavailable store.** If the password store reports `kKeychainError`/`kInactionable`, or the encryptor has no key, every password call fails with `ERR_PASSWORDS_UNAVAILABLE`. The card calls fail with `ERR_AUTOFILL_UNAVAILABLE`. None of them returns an empty list, so a locked keyring never looks like an empty vault.
 
 ## Authentication
@@ -17,7 +22,7 @@ This covers saved passwords and full card numbers in the Linux port (#17, source
   - `AllowUserInteraction`;
   - a per-request cancellation id;
   - a 120 s timeout.
-- **The policy.** `scripts/linux/dev.ardia.linux.policy` sets `auth_self` for active sessions only and `no` for inactive and remote sessions. It never uses `auth_self_keep`. The package ships it under `share/polkit-1/actions/`. It takes effect only once installed into `/usr/share/polkit-1/actions` (#105); until then polkit reports the action unknown and Ardia treats that as unavailable.
+- **The policy.** `scripts/linux/dev.ardia.linux.policy` sets `auth_self` for active sessions only and `no` for inactive and remote sessions. It never uses `auth_self_keep`. The package ships it under `share/polkit-1/actions/` and carries `install.sh`, which always installs it at `DESTDIR/usr/share/polkit-1/actions` (mode 0644) whatever the prefix, because that is the only directory polkit reads. `scripts/linux/arch/PKGBUILD` packages through that installer (#105). Without the installed policy polkit reports the action unknown; Ardia treats that as unavailable, and the message names the directory.
 - **Only one reply grants.** The grant needs `is_authorized && !is_challenge` with no error.
 - **Everything else refuses.**
 
@@ -65,7 +70,7 @@ The UI renderer is the trusted `chrome://ardia/` WebUI. The host accepts `ardiaR
    - checks store availability;
    - builds `{"origin","username"}`;
    - calls `ac_passwords_reveal`, which asks for authentication.
-3. The engine replies with JSON text. The handler parses it, copies only `password` (or `null`) into a fresh value, and `Cleanse`s the parsed tree.
+3. On Linux the engine converts the UTF-16 password with `SecretUTF8` into a buffer reserved for three bytes per unit, which never reallocates or shrinks, and serializes the reply with `Reply::SendSecret` (#103): `SendSecretJson` reserves a buffer for the worst-case escaping (six bytes per input byte), so the JSON writer never reallocates and leaves no partial copy, runs the reply callback, then cleanses the buffer and the source value. The engine also wipes the `CredentialUIEntry`'s UTF-16 password. The Linux handler parses the JSON, copies only `password` (or `null`) into a fresh value, and `Cleanse`s the parsed tree.
 4. The value goes back to the WebUI through `CallJavascriptFunction("__ardiaReply")`. The adapter turns it into `{"password":…}` text, because the shared `call()` contract parses JSON, and the pane shows it.
 
 Without a grant the reply is `{"password": null}`, so the pane never shows a stale or partial value.
@@ -92,7 +97,7 @@ Without a grant the reply is `{"password": null}`, so the pane never shows a sta
 ### Card numbers
 
 - **Saving.** `ArdiaAutofill.saveCard(profile, card, number)` validates 12–19 digits for a new card. It sends `numberHex` to `ac_autofill_save_card`, the same way as a password.
-- **Revealing.** `revealCardNumber` → `autofill.cardNumber` → the typed `ArdiaAutofill.cardNumber`. That calls `ac_autofill_card_number`, which always prompts, then extracts `number` and `authenticated` and cleanses the parse.
+- **Revealing.** `revealCardNumber` → `autofill.cardNumber` → the typed `ArdiaAutofill.cardNumber`. That calls `ac_autofill_card_number`, which always prompts. On Linux the engine converts the number with `SecretUTF8`, wipes its UTF-16 and UTF-8 copies and replies through `Reply::SendSecret`; the Linux handler extracts `number` and `authenticated` and cleanses the parse.
 - **Listing.** Lists come from `ac_autofill_cards` and carry `last4` only.
 
 ### Unlock (`unlockPasswords`)
@@ -121,10 +126,10 @@ Without a grant the reply is `{"password": null}`, so the pane never shows a sta
 - **Chromium's own buffers.** These aren't ours to wipe:
   - the WebUI IPC message carrying a typed request;
   - the `base::Value` passed to `CallJavascriptFunction`;
-  - the engine's reply `std::string` (shared `ardia::Reply::Send`);
-  - the JSON text that `HostMessageHandler::Resolve` builds with `base::WriteJson` for every generic `engine.call` reply. Typed secret replies don't take that path (they go to `Reply` as a value), but any reply resolved there leaves an unwiped serialized copy.
+  - the JSON text that `HostMessageHandler::Resolve` builds with `base::WriteJson` for every generic `engine.call` reply. Typed secret replies don't take that path (they go to `Reply` as a value), but any reply resolved there leaves an unwiped serialized copy;
+  - what the reply callback itself copies: on Linux, `JSONReader` builds a parsed tree that the handler cleanses, but the parser's internal buffers are Chromium's.
 
-  The engine reply is the same on macOS. Wiping it through `c_str()` would be undefined behaviour, so it is left to follow-up #103 (a cleansing secret reply in the shared engine).
+  On Linux the engine's own reply buffer for reveal and card numbers is now wiped (#103). macOS keeps its original behaviour (the wipe is behind `BUILDFLAG(IS_LINUX)`) until the owner decides to enable it there. Other engine replies still use `Reply::Send`, which doesn't wipe; none of them carries a secret.
 
 ## Private windows and profiles
 

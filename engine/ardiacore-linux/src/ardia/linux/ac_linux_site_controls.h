@@ -40,14 +40,36 @@ bool ValidOrigin(std::string_view origin);
 std::optional<std::string> NormalizeHost(std::string_view host);
 bool ValidListId(std::string_view id);
 
-enum class BlockerOp { kState, kSetEnabled, kSetList, kIsAllowed, kSetAllowed, kFailNext };
+enum class BlockerOp { kState, kSetEnabled, kSetList, kIsAllowed, kSetAllowed, kFailNext, kSettings, kFollow };
+
+inline constexpr size_t kMaxFollowedLists = 512;
+inline constexpr size_t kMaxFollowedDirectives = 10000;
+inline constexpr size_t kMaxDirectiveBytes = 2048;
+
+struct BlockerSettings {
+  std::vector<std::string> lists;
+  std::vector<std::string> whitelist;
+  bool auto_update = true;
+};
+
+std::optional<BlockerSettings> ParseBlockerSettings(const base::Value& value);
+base::DictValue BlockerSettingsValue(const BlockerSettings& settings);
 
 struct BlockerRequest {
   BlockerOp op = BlockerOp::kState;
   std::string id;
   std::string host;
   bool flag = false;
+  BlockerSettings settings;
 };
+
+inline constexpr int64_t kHoldDeadlineMs = 10000;
+inline constexpr int kInheritAttempts = 6;
+
+bool HoldsNavigationTo(std::string_view scheme);
+bool ShouldHoldNavigations(bool leader, bool new_profile);
+bool HoldUntilFirstCopy(bool leader, bool new_profile);
+int64_t InheritRetryDelayMs(int attempt);
 
 std::variant<BlockerRequest, Failure> PrepareBlockerCall(std::string_view name,
                                                          const base::DictValue& args);

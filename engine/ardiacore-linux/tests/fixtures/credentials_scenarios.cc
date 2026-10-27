@@ -259,6 +259,47 @@ void StoreAvailability() {
   assert(!Assess(Store::kCards, no_decrypt).available);
 }
 
+void StorageProtection() {
+  assert(ProtectionFromCiphertext("v10\x01\x02") == Protection::kObfuscated);
+  assert(ProtectionFromCiphertext("v11abc") == Protection::kKeyring);
+  assert(ProtectionFromCiphertext("v12abc") == Protection::kPortal);
+  assert(ProtectionFromCiphertext("v1") == Protection::kUnknown);
+  assert(ProtectionFromCiphertext("") == Protection::kUnknown);
+  assert(ProtectionFromCiphertext("v13abc") == Protection::kUnknown);
+  assert(ProtectionFromCiphertext("V11abc") == Protection::kUnknown);
+
+  const Storage fallback = DescribeStorage("gnome-libsecret", Protection::kObfuscated);
+  assert(fallback.protection == "obfuscated" && fallback.fallback);
+  assert(fallback.label.find("built-in key") != std::string::npos);
+  assert(DescribeStorage("auto", Protection::kObfuscated).fallback);
+  assert(DescribeStorage("kwallet6", Protection::kObfuscated).fallback);
+  const Storage basic = DescribeStorage("basic", Protection::kObfuscated);
+  assert(basic.protection == "obfuscated" && !basic.fallback);
+  assert(basic.label.find("basic") != std::string::npos);
+
+  const Storage secret_service = DescribeStorage("gnome-libsecret", Protection::kKeyring);
+  assert(secret_service.protection == "keyring" && !secret_service.fallback);
+  assert(secret_service.label == "the Secret Service keyring");
+  for (const char* wallet : {"kwallet", "kwallet5", "kwallet6"}) {
+    assert(DescribeStorage(wallet, Protection::kKeyring).label == "KWallet");
+  }
+  assert(DescribeStorage("auto", Protection::kKeyring).label == "your desktop keyring (Secret Service or KWallet)");
+  assert(DescribeStorage("", Protection::kKeyring).label == "your desktop keyring (Secret Service or KWallet)");
+  assert(DescribeStorage("auto", Protection::kPortal).protection == "portal");
+  assert(DescribeStorage("auto", Protection::kPortal).label == "your desktop's secret portal");
+  assert(DescribeStorage("auto", Protection::kNone).protection == "none");
+  assert(!DescribeStorage("auto", Protection::kNone).fallback);
+  assert(DescribeStorage("auto", Protection::kUnknown).protection == "unknown");
+  assert(!DescribeStorage("auto", Protection::kUnknown).fallback);
+  assert(DescribeStorage("auto", Protection::kUnknown).label == "an unknown key");
+  assert(DescribeStorage("gnome-libsecret", Protection::kUnknown).label.find("encrypt") == std::string::npos);
+
+  Probe weak;
+  weak.protection = Protection::kObfuscated;
+  assert(Assess(Store::kPasswords, weak).available);
+  assert(Assess(Store::kCards, weak).available);
+}
+
 void EngineErrors() {
   assert(ClassifyEngineError("OS authentication is unavailable on this platform").code == "ERR_REAUTH_UNAVAILABLE");
   assert(ClassifyEngineError("Not authenticated").code == "ERR_REAUTH_DENIED");
@@ -269,6 +310,7 @@ void EngineErrors() {
   assert(ClassifyEngineError("invalid number").code == "ERR_CARD_NUMBER");
   assert(ReauthMessage("available").empty());
   assert(ReauthMessage("policyMissing").find("polkit policy isn't installed") != std::string::npos);
+  assert(ReauthMessage("policyMissing").find("/usr/share/polkit-1/actions") != std::string::npos);
   assert(ReauthMessage("noPolkit").find("polkit isn't running") != std::string::npos);
   assert(ReauthMessage("background").find("background") != std::string::npos);
   assert(ReauthMessage("notPermitted").find("isn't allowed") != std::string::npos);
@@ -356,6 +398,7 @@ void Origins() {
 }
 
 int main(int argc, char** argv) {
+  StorageProtection();
   assert(argc == 2);
   GenericCalls();
   TypedMethods();

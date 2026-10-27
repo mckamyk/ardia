@@ -2,16 +2,16 @@ import { evaluate } from "../lib/cdp.mjs";
 import { navigateTab, restartBrowser, startBrowser } from "../lib/flows.mjs";
 import { nonce, until } from "../lib/util.mjs";
 
-const BLOCKER_DIR = process.env.ARDIA_ACCEPTANCE_CONTENT_BLOCKER;
-const extraArgs = BLOCKER_DIR ? [`--ardia-content-blocker-dir=${BLOCKER_DIR}`] : [];
+export const BLOCKER_DIR = process.env.ARDIA_ACCEPTANCE_CONTENT_BLOCKER;
+export const extraArgs = BLOCKER_DIR ? [`--ardia-content-blocker-dir=${BLOCKER_DIR}`] : [];
 
-async function call(shell, name, args = {}, profile = "") {
+export async function call(shell, name, args = {}, profile = "") {
   const reply = await shell.call(name, args, profile);
   if (!reply.ok) throw new Error(`${name} failed: ${reply.code} ${reply.message}`);
   return reply.value;
 }
 
-async function pageEval(app, url, expression) {
+export async function pageEval(app, url, expression) {
   const session = await app.pageSession((t) => t.type === "page" && t.url.startsWith(url), { label: `page ${url}` });
   return evaluate(session, expression);
 }
@@ -50,7 +50,7 @@ function adRequests(t, run) {
   return t.fixtures.requests.filter((r) => r.path === `/ads/banners/${run}.png`).length;
 }
 
-async function loadBlockerPage(state, tabId, host, t) {
+export async function loadBlockerPage(state, tabId, host, t) {
   const run = nonce("ad");
   const url = t.fixtures.url.blocker(host, run);
   await navigateTab(state.shell, tabId, url);
@@ -60,7 +60,7 @@ async function loadBlockerPage(state, tabId, host, t) {
   return { run, requests: adRequests(t, run), images };
 }
 
-async function expectBlocked(state, tabId, host, t, blocked, label) {
+export async function expectBlocked(state, tabId, host, t, blocked, label) {
   let last;
   await until(async () => {
     last = await loadBlockerPage(state, tabId, host, t);
@@ -69,7 +69,7 @@ async function expectBlocked(state, tabId, host, t, blocked, label) {
   return last;
 }
 
-async function blockerReady(shell) {
+export async function blockerReady(shell) {
   let last;
   return until(async () => {
     last = await call(shell, "contentBlocker.state");

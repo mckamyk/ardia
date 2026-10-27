@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -192,6 +193,11 @@ inline std::vector<OnceClosure>& Tasks() {
 
 inline void PostTask(OnceClosure task) { Tasks().push_back(std::move(task)); }
 
+inline std::vector<std::pair<int64_t, OnceClosure>>& DelayedTasks() {
+  static std::vector<std::pair<int64_t, OnceClosure>> tasks;
+  return tasks;
+}
+
 class SequencedTaskRunner {
  public:
   static SequencedTaskRunner* GetCurrentDefault() {
@@ -199,9 +205,25 @@ class SequencedTaskRunner {
     return &runner;
   }
   template <class F> void PostTask(int, F task) { base::PostTask(OnceClosure(std::move(task))); }
+  template <class F> void PostDelayedTask(int, F task, TimeDelta delay) {
+    DelayedTasks().emplace_back(FakeNowMs() + delay.InMilliseconds(), OnceClosure(std::move(task)));
+  }
 };
 
+inline void PromoteDueTasks() {
+  auto& delayed = DelayedTasks();
+  for (size_t i = 0; i < delayed.size();) {
+    if (delayed[i].first > FakeNowMs()) {
+      ++i;
+      continue;
+    }
+    PostTask(std::move(delayed[i].second));
+    delayed.erase(delayed.begin() + static_cast<std::ptrdiff_t>(i));
+  }
+}
+
 inline void RunTasks() {
+  PromoteDueTasks();
   for (int round = 0; round < 64 && !Tasks().empty(); ++round) {
     auto tasks = std::move(Tasks());
     Tasks().clear();
@@ -236,9 +258,42 @@ class RepeatingTimer {
   bool running_ = false;
 };
 
+class OneShotTimer;
+inline std::vector<OneShotTimer*>& OneShotTimers() {
+  static std::vector<OneShotTimer*> timers;
+  return timers;
+}
+
+class OneShotTimer {
+ public:
+  OneShotTimer() { OneShotTimers().push_back(this); }
+  ~OneShotTimer() { std::erase(OneShotTimers(), this); }
+  template <class F> void Start(int, TimeDelta delay, F task) {
+    due_ms_ = FakeNowMs() + delay.InMilliseconds();
+    task_ = OnceClosure(std::move(task));
+    running_ = true;
+  }
+  void Stop() { running_ = false; }
+  bool IsRunning() const { return running_; }
+  void FireIfDue() {
+    if (!running_ || FakeNowMs() < due_ms_) return;
+    running_ = false;
+    OnceClosure task = std::move(task_);
+    std::move(task).Run();
+  }
+
+ private:
+  int64_t due_ms_ = 0;
+  OnceClosure task_;
+  bool running_ = false;
+};
+
 inline void FireTimers() {
   for (auto* timer : std::vector<RepeatingTimer*>(Timers())) {
     if (std::find(Timers().begin(), Timers().end(), timer) != Timers().end()) timer->Fire();
+  }
+  for (auto* timer : std::vector<OneShotTimer*>(OneShotTimers())) {
+    if (std::find(OneShotTimers().begin(), OneShotTimers().end(), timer) != OneShotTimers().end()) timer->FireIfDue();
   }
 }
 
@@ -545,6 +600,10 @@ class GURL {
   const std::string& spec() const { return spec_; }
   bool is_empty() const { return spec_.empty(); }
   bool IsAboutBlank() const { return spec_ == "about:blank"; }
+  std::string scheme() const {
+    const size_t colon = spec_.find(':');
+    return colon == std::string::npos ? std::string() : spec_.substr(0, colon);
+  }
   GURL DeprecatedGetOriginAsURL() const {
     const size_t scheme = spec_.find("://");
     if (scheme == std::string::npos) return GURL();
@@ -660,6 +719,7 @@ class WebContents {
   int notifying = 0;
   NavigationController& GetController() { return controller_; }
   RenderFrameHost* GetPrimaryMainFrame() { return &frame_; }
+  BrowserContext* GetBrowserContext();
   void Commit(const GURL& url) {
     frame_.url = url;
     frame_.live = true;
@@ -691,6 +751,39 @@ class WebContents {
  private:
   NavigationController controller_;
   RenderFrameHost frame_;
+};
+
+class NavigationHandle {
+ public:
+  WebContents* GetWebContents() { return contents; }
+  const GURL& GetURL() const { return url; }
+  WebContents* contents = nullptr;
+  GURL url;
+};
+
+class NavigationThrottle;
+
+class NavigationThrottleRegistry {
+ public:
+  NavigationHandle& GetNavigationHandle() { return handle; }
+  void AddThrottle(std::unique_ptr<NavigationThrottle> throttle) { throttles.push_back(std::move(throttle)); }
+  NavigationHandle handle;
+  std::vector<std::unique_ptr<NavigationThrottle>> throttles;
+};
+
+class NavigationThrottle {
+ public:
+  enum ThrottleCheckResult { PROCEED, DEFER };
+  explicit NavigationThrottle(NavigationThrottleRegistry& registry) : registry_(registry) {}
+  virtual ~NavigationThrottle() = default;
+  virtual ThrottleCheckResult WillStartRequest() { return PROCEED; }
+  virtual const char* GetNameForLogging() = 0;
+  NavigationHandle* navigation_handle() const { return &registry_.handle; }
+  virtual void Resume() { ++resumed; }
+  int resumed = 0;
+
+ private:
+  NavigationThrottleRegistry& registry_;
 };
 
 }
@@ -764,14 +857,19 @@ class ExtensionsBrowserClient {
 
 }
 
-class Profile {
+class Profile : public content::BrowserContext {
  public:
+  static Profile* FromBrowserContext(content::BrowserContext* context) { return static_cast<Profile*>(context); }
   explicit Profile(std::string path, bool off_the_record = false, Profile* original = nullptr)
       : path_(std::move(path)), off_the_record_(off_the_record), original_(original ? original : this) {}
   ~Profile() {
-    for (auto* observer : std::vector<ProfileObserver*>(observers_)) observer->OnProfileWillBeDestroyed(this);
+    for (auto* observer : std::vector<ProfileObserver*>(observers_)) {
+      if (std::find(observers_.begin(), observers_.end(), observer) != observers_.end()) observer->OnProfileWillBeDestroyed(this);
+    }
   }
   bool IsOffTheRecord() const { return off_the_record_; }
+  bool IsNewProfile() const { return new_profile; }
+  bool new_profile = false;
   Profile* GetOriginalProfile() { return original_; }
   const base::FilePath& GetPath() const { return path_; }
   void AddObserver(ProfileObserver* observer) { observers_.push_back(observer); }
@@ -789,6 +887,7 @@ class Profile {
 };
 
 inline extensions::ExtensionRegistry* extensions::ExtensionRegistry::Get(Profile* profile) { return &profile->registry; }
+inline content::BrowserContext* content::WebContents::GetBrowserContext() { return profile; }
 inline extensions::ComponentLoader* extensions::ComponentLoader::Get(Profile* profile) {
   profile->loader.profile = profile;
   return &profile->loader;
@@ -806,6 +905,7 @@ struct FakeBridge {
   std::vector<std::string> whitelist{"chrome-extension-scheme"};
   std::map<std::string, bool> lists{{"easylist", true}, {"easyprivacy", true}, {"fanboy-cookiemonster", false}};
   bool auto_update = true;
+  int fail_follows = 0;
   int requests = 0;
   int polls = 0;
   int sends_answered = 0;
@@ -847,6 +947,31 @@ struct FakeBridge {
       return answer(base::Value(base::DictValue().Set("lists", base::Value(std::move(out))).Set("allowedHosts", base::Value(std::move(hosts)))
           .Set("enabled", base::Value(on)).Set("networkFilters", base::Value(300)).Set("cosmeticFilters", base::Value(20))));
     }
+    if (op == "settings") {
+      base::ListValue selected;
+      for (const auto& [id, on] : lists) {
+        if (on) selected.Append(base::Value(id));
+      }
+      std::vector<std::string> sorted = whitelist;
+      std::sort(sorted.begin(), sorted.end());
+      base::ListValue directives;
+      for (const auto& d : sorted) directives.Append(base::Value(d));
+      return answer(base::Value(base::DictValue().Set("lists", base::Value(std::move(selected)))
+          .Set("whitelist", base::Value(std::move(directives))).Set("autoUpdate", base::Value(auto_update))));
+    }
+    if (op == "follow") {
+      if (fail_follows > 0) {
+        --fail_follows;
+        return error("setWhitelist: failed");
+      }
+      std::set<std::string> want;
+      for (const auto& id : args.Find("lists")->GetList()) want.insert(id.GetString());
+      for (auto& [id, on] : lists) on = want.contains(id);
+      whitelist.clear();
+      for (const auto& d : args.Find("whitelist")->GetList()) whitelist.push_back(d.GetString());
+      auto_update = args.Find("autoUpdate")->GetBool();
+      return answer(base::Value());
+    }
     if (op == "setEnabled") {
       const bool on = args.Find("enabled")->GetBool();
       std::erase(whitelist, off);
@@ -878,6 +1003,16 @@ struct FakeBridge {
 inline FakeBridge& Bridge() {
   static FakeBridge bridge;
   return bridge;
+}
+
+inline std::map<Profile*, FakeBridge>& Bridges() {
+  static std::map<Profile*, FakeBridge> bridges;
+  return bridges;
+}
+
+inline FakeBridge& BridgeFor(Profile* profile) {
+  auto found = Bridges().find(profile);
+  return found == Bridges().end() ? Bridge() : found->second;
 }
 
 struct LoadBehavior {
@@ -944,7 +1079,7 @@ inline void content::RenderFrameHost::ExecuteJavaScriptInIsolatedWorld(const std
   const std::string script = base::UTF16ToUTF8(script16);
   std::shared_ptr<bool> alive = contents->alive;
   WebContents* owner = contents;
-  FakeBridge& bridge = Bridge();
+  FakeBridge& bridge = BridgeFor(owner->profile);
   base::Value result;
   if (script.find("data-ardia-request") != std::string::npos && script.find("setAttribute") != std::string::npos) {
     const std::string marker = "root.setAttribute('data-ardia-request', ";
