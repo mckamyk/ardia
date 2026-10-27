@@ -22,7 +22,7 @@ class NativeCallbackTests(unittest.TestCase):
                 end += 1
             return source[start:end]
 
-        methods = '\n'.join(method(name) for name in ['Rebind', 'MoveTo', 'DidOpenRequestedURL', 'WebContentsDestroyed'])
+        methods = '\n'.join(method(name) for name in ['RemoveViewports', 'Rebind', 'MoveTo', 'DidOpenRequestedURL', 'WebContentsDestroyed'])
         prelude = r'''
         #include <cassert>
         #include <map>
@@ -65,6 +65,7 @@ class NativeCallbackTests(unittest.TestCase):
           content::WebContents* contents = nullptr;
           int detachments = 0;
           bool GetVisible() { return visible; }
+          void SetVisible(bool value) { visible = value; }
           void SetWebContents(content::WebContents* value) { contents = value; if (!value) ++detachments; }
         };
         }
@@ -90,9 +91,13 @@ class NativeCallbackTests(unittest.TestCase):
           bool presentation_departed = false;
           int cancelled_auto_pip_until = 0;
           int requested_auto_pip_until = 0;
+          bool pane_visible = false;
+          int resets = 0;
           void RememberPendingAutoPictureInPicture() {}
-          TabBinding(ShellHostView* owner, content::WebContents* contents, views::WebView* viewport = nullptr)
-              : owner_(owner), contents_(contents), viewport_(viewport) { Observe(contents); }
+          void ResetPageCommands() { ++resets; }
+          void RemoveViewports();
+          TabBinding(ShellHostView* owner, content::WebContents* contents, views::WebView* viewport = nullptr, views::WebView* devtools = nullptr)
+              : owner_(owner), contents_(contents), viewport_(viewport), devtools_viewport_(devtools) { Observe(contents); }
           ~TabBinding() { Observe(nullptr); }
           void Observe(content::WebContents* value) {
             if (observed_ && observed_->observer == this) observed_->observer = nullptr;
@@ -106,6 +111,7 @@ class NativeCallbackTests(unittest.TestCase):
           raw_ptr<ShellHostView> owner_;
           raw_ptr<content::WebContents> contents_;
           raw_ptr<views::WebView> viewport_;
+          raw_ptr<views::WebView> devtools_viewport_;
           content::WebContents* observed_ = nullptr;
         };
         void content::WebContents::Destroy() { if (observer) observer->WebContentsDestroyed(); }
@@ -155,24 +161,31 @@ class NativeCallbackTests(unittest.TestCase):
           content::WebContents original{20, &profile};
           content::WebContents replacement{20, &profile};
           views::WebView viewport;
-          TabBinding binding(&first, &original, &viewport);
+          views::WebView tools;
+          tools.contents = &original;
+          TabBinding binding(&first, &original, &viewport, &tools);
           binding.Rebind(&replacement);
+          assert(binding.resets == 1 && !tools.visible && !tools.contents);
           original.Destroy();
           assert(first.events.empty());
           binding.presented = true;
           binding.presentation_applied = true;
           binding.presentation_attached = true;
           binding.presentation_departed = true;
+          binding.pane_visible = true;
           binding.MoveTo(&second);
+          assert(binding.resets == 2 && !binding.pane_visible);
+          assert(!binding.devtools_viewport_.get());
           assert(!binding.presented);
           assert(!binding.presentation_applied);
           assert(!binding.presentation_attached);
           assert(!binding.presentation_departed);
           assert(first.events.empty());
           assert(second.events.empty());
-          assert(first.removed_views == 1);
+          assert(first.removed_views == 2);
           assert(binding.viewport_.get() == nullptr);
           replacement.Destroy();
+          assert(binding.resets == 3);
           assert(first.events.empty());
           assert(second.events.size() == 1);
           assert(second.events.front().first == 20);

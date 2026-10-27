@@ -87,7 +87,13 @@ template <typename F, typename... Bound> auto BindOnce(F fn, Bound... bound) {
 class SequencedTaskRunner {
  public:
   static SequencedTaskRunner* GetCurrentDefault() { static SequencedTaskRunner runner; return &runner; }
+  static bool HasCurrentDefault() { return true; }
   void PostTask(int, OnceClosure task) { tasks.push_back(std::move(task)); }
+  template <typename T> bool DeleteSoon(int, std::unique_ptr<T> object) {
+    std::shared_ptr<T> owned(std::move(object));
+    tasks.push_back(OnceClosure([owned]() mutable { owned.reset(); }));
+    return true;
+  }
   void Drain() {
     while (!tasks.empty()) {
       auto pending = std::move(tasks);
