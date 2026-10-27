@@ -81,6 +81,50 @@ int main() {
             result = subprocess.run([str(binary)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_private_window_close_requests_only_come_from_the_window_or_its_opener(self):
+        main = r'''
+int main() {
+  (void)Ignore;
+  ShellHostView stranger;
+  ShellHostView opener;
+  ShellHostView target;
+  stranger.window_id_ = "w-new";
+  opener.window_id_ = "main";
+  target.window_id_ = "w-p1";
+  target.page_profile_ = "incognito:w-p1@";
+  target.opener_ = "main";
+  for (ShellHostView* host : {&stranger, &opener, &target}) host->native_profile.regular = true;
+  for (ShellHostView* host : {&stranger, &target}) host->shared_profile = &opener.native_profile;
+  hosts[1] = &stranger; hosts[2] = &opener; hosts[3] = &target;
+  auto request = [](ShellHostView& host, const char* window) {
+    base::ListValue values; values.Append(base::Value(window));
+    base::DictValue args; args.Set("args", base::Value(std::move(values)));
+    bool accepted = false;
+    host.CloseInvoke("ArdiaShell.requestWindowClose", args, [&](bool success, base::Value) { accepted = success; });
+    return accepted;
+  };
+  assert(!request(stranger, "w-p1"));
+  assert(target.events.empty());
+  assert(request(opener, "w-p1"));
+  assert(target.events.size() == 1);
+  target.page_profile_ = "";
+  assert(request(stranger, "w-p1"));
+}
+'''
+        compiler = shutil.which('clang++') or shutil.which('c++')
+        self.assertIsNotNone(compiler)
+        with tempfile.TemporaryDirectory(prefix='ardia-private-close-') as scratch:
+            root = Path(scratch)
+            (root / 'base/json').mkdir(parents=True)
+            (root / 'base/values.h').write_text(values())
+            (root / 'base/json/json_writer.h').write_text(WRITER)
+            (root / 'main.cc').write_text(PRELUDE + host_methods() + close_invoke() + main)
+            binary = root / 'close'
+            result = subprocess.run([compiler, '-std=c++23', '-Wall', '-Wextra', '-Werror', '-I', str(root), '-I', str(ROOT / 'src'), *[str(ROOT / 'src/ardia/linux' / name) for name in SOURCES], str(root / 'main.cc'), '-o', str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_bare_close_is_request_only_and_all_host_widgets_install_the_gate(self):
         source = (ROOT / 'src/ardia/linux/ac_linux_host.cc').read_text()
         close = method(source, '  if (method == "ArdiaShell.windowFrame" || method == "ArdiaShell.closeWindow"')

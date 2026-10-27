@@ -4,7 +4,7 @@ from test_session_merge import VALUES, WRITER
 from test_renderer_contract import method
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = ['ac_linux_documents.cc', 'ac_linux_document_schema.cc', 'ac_linux_document_reducer.cc', 'ac_linux_document_service.cc']
+SOURCES = ['ac_linux_documents.cc', 'ac_linux_document_schema.cc', 'ac_linux_document_reducer.cc', 'ac_linux_document_service.cc', 'ac_linux_profiles.cc']
 
 
 def values():
@@ -258,14 +258,18 @@ inline bool CancelLinuxCloseAttempt(Browser* browser, const base::UnguessableTok
 ARDIA_PROFILE
 ARDIA_HANDLER
 ARDIA_DIALOGS
+#include "ardia/linux/ac_linux_profiles.h"
 struct ShellHostView {
   Browser native;
+  std::string page_profile_;
+  std::string opener_;
   Browser* browser_ = &native;
   void* browser_view_ = this;
   Handler handler;
   Handler* handler_ = &handler;
   Profile native_profile;
-  Profile* profile() const { return browser_ ? const_cast<Profile*>(&native_profile) : nullptr; }
+  Profile* shared_profile = nullptr;
+  Profile* profile() const { return browser_ ? (shared_profile ? shared_profile : const_cast<Profile*>(&native_profile)) : nullptr; }
   std::shared_ptr<bool> alive = std::make_shared<bool>(true);
   uint64_t renderer_generation_ = 9007199254740993ULL;
   std::shared_ptr<DocumentAuthority> documents_ = std::make_shared<DocumentAuthority>();
@@ -332,6 +336,7 @@ struct ShellHostView {
   }
   ~ShellHostView() { *alive = false; }
   const std::string& window_id() const { return window_id_; }
+  ardiacore::linux_profiles::WindowAccess access() const { return {window_id_, page_profile_, opener_}; }
   void GenericInvoke(std::string, const base::DictValue&, base::OnceCallback<void(bool, base::Value)>);
   void CloseInvoke(std::string, const base::DictValue&, base::OnceCallback<void(bool, base::Value)>);
   Browser* browser() { return browser_; }
