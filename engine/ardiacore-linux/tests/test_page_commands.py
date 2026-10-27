@@ -192,18 +192,35 @@ int main(int argc, char** argv) {
     f.browser.profile = &foreign;
     f.Error("ERR_PAGE_STALE_TARGET", "print");
     f.browser.profile = &f.profile;
-    f.profile.otr = true;
-    f.Error("ERR_PAGE_STALE_TARGET", "print");
-    f.profile.otr = false;
-    f.profile.regular = false;
-    f.Error("ERR_PAGE_STALE_TARGET", "print");
-    f.profile.regular = true;
-    f.profile.path.name = "Profile 1";
-    f.Error("ERR_PAGE_STALE_TARGET", "print");
-    f.profile.path.name = "Default";
     f.browser.type = BrowserWindowInterface::TYPE_DEVTOOLS;
     f.Error("ERR_PAGE_STALE_TARGET", "print");
+    f.browser.type = BrowserWindowInterface::TYPE_NORMAL;
     assert(f.a.prints == 0 && f.b.prints == 0);
+    f.profile.path.name = "Profile work";
+    f.Ok("print");
+    f.Ok("runPageCommand", ListValue().Append("savePage"));
+    f.Ok("showDevTools");
+    f.profile.path.name = "Default";
+    f.profile.otr = true;
+    f.Ok("find", ListValue().Append("needle").Append(true).Append(false));
+    f.Ok("print");
+    f.Ok("runPageCommand", ListValue().Append("savePage"));
+    f.Ok("showDevTools");
+    f.b.devtools_allowed = false;
+    f.Error("ERR_PAGE_POLICY", "showDevTools");
+    f.b.devtools_allowed = true;
+    f.profile.prefs.ints["downloadRestrictions"] = 3;
+    f.Error("ERR_PAGE_POLICY", "runPageCommand", ListValue().Append("savePage"));
+    f.profile.prefs.ints["downloadRestrictions"] = 0;
+    f.profile.primary_otr = false;
+    f.Error("ERR_PAGE_PROFILE", "print");
+    f.Error("ERR_PAGE_PROFILE", "find", ListValue().Append("needle").Append(true).Append(false));
+    f.profile.otr = false;
+    f.profile.primary_otr = true;
+    f.profile.regular = false;
+    f.Error("ERR_PAGE_PROFILE", "print");
+    f.profile.regular = true;
+    assert(f.b.prints == 2 && f.b.saves == 2 && f.a.prints == 0);
     return 0;
   }
   if (mode == "arguments") {
@@ -726,7 +743,7 @@ class PageCommandTests(unittest.TestCase):
     def test_result_can_destroy_its_own_commands(self):
         self.run_case('reentrant')
 
-    def test_exact_window_profile_and_default_regular_restrictions(self):
+    def test_exact_window_profile_and_supported_profile_kinds(self):
         self.run_case('authority')
 
     def test_current_argument_contracts_and_explicit_caret_browsing_rejection(self):

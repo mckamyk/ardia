@@ -43,6 +43,8 @@ class LinuxPageCommands : public content::WebContentsObserver {
   void Reset();
 
  private:
+  enum class Authority { kCurrent, kStale, kProfile };
+  Authority Check() const;
   bool IsCurrent() const;
   void RefreshDevTools();
   void WebContentsDestroyed() override;

@@ -14,7 +14,6 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_constants.h"
 #include "chrome/common/content_restriction.h"
 #include "chrome/common/pref_names.h"
 #include "components/policy/core/common/policy_pref_names.h"
@@ -81,27 +80,39 @@ bool LinuxPageCommands::Handles(std::string_view command) {
          command == "runPageCommand" || command == "showDevTools";
 }
 
-bool LinuxPageCommands::IsCurrent() const {
+LinuxPageCommands::Authority LinuxPageCommands::Check() const {
   auto contents = contents_;
   auto* profile = service_profile_.get();
   auto owner = owner_;
   if (!contents || !profile || !owner)
-    return false;
+    return Authority::kStale;
   auto* browser = owner.Run();
-  return contents && browser && browser->GetProfile() == profile &&
-         profile->IsRegularProfile() && !profile->IsOffTheRecord() &&
-         profile->GetPath().BaseName().value() == chrome::kInitialProfile &&
-         contents->GetBrowserContext() == profile &&
-         browser->GetType() != BrowserWindowInterface::TYPE_DEVTOOLS &&
-         browser->GetTabStripModel() &&
-         browser->GetTabStripModel()->GetIndexOfWebContents(contents.get()) !=
-             TabStripModel::kNoTab;
+  if (!contents || !browser || browser->GetProfile() != profile ||
+      contents->GetBrowserContext() != profile ||
+      browser->GetType() == BrowserWindowInterface::TYPE_DEVTOOLS ||
+      !browser->GetTabStripModel() ||
+      browser->GetTabStripModel()->GetIndexOfWebContents(contents.get()) ==
+          TabStripModel::kNoTab) {
+    return Authority::kStale;
+  }
+  if (!profile->IsRegularProfile() && !profile->IsIncognitoProfile())
+    return Authority::kProfile;
+  return Authority::kCurrent;
+}
+
+bool LinuxPageCommands::IsCurrent() const {
+  return Check() == Authority::kCurrent;
 }
 
 std::optional<base::DictValue> LinuxPageCommands::Dispatch(
     std::string_view command,
     const base::ListValue& args) {
-  if (!IsCurrent())
+  const Authority authority = Check();
+  if (authority == Authority::kProfile) {
+    return Error("ERR_PAGE_PROFILE",
+                 "Page commands are unavailable in this kind of profile");
+  }
+  if (authority != Authority::kCurrent)
     return Error("ERR_PAGE_STALE_TARGET", "Page claim is no longer current");
   if (command == "find") {
     if (args.size() != 3 || !args[0].is_string() || !args[1].is_bool() ||
