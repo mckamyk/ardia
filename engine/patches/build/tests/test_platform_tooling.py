@@ -398,6 +398,38 @@ class PackagingTests(unittest.TestCase):
                 self.assertNotEqual(refused.returncode, 0, bad)
                 self.assertFalse((root / 'refused').exists(), bad)
 
+    @unittest.skipUnless(shutil.which('fakeroot'), 'fakeroot is required')
+    def test_root_install_owns_every_file_as_root_whoever_unpacked_the_package(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            _, package_root = self.fake_package(root)
+            destdir = root / 'dest'
+            script = 'set -e; chown -R 1000:1000 "$1"; "$1/install.sh" --prefix /usr --destdir "$2"; find "$2" -printf "%U:%G %p\\n"'
+            result = subprocess.run(['fakeroot', 'bash', '-c', script, 'install', str(package_root), str(destdir)],
+                                    capture_output=True, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            owners = [line for line in result.stdout.splitlines() if line.strip()]
+            self.assertTrue(any(line.endswith('/usr/lib/ardia/chrome') for line in owners), owners)
+            self.assertEqual([line for line in owners if not line.startswith('0:0 ')], [])
+
+    def test_installer_refuses_parent_segments_and_a_non_root_system_install_up_front(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            _, package_root = self.fake_package(root)
+            installer = package_root / 'install.sh'
+            for bad in ['/usr/../etc', '/opt/ardia/..', '/../usr']:
+                refused = subprocess.run([str(installer), '--prefix', bad, '--destdir', str(root / 'dotdot')],
+                                         capture_output=True, text=True, timeout=30)
+                self.assertNotEqual(refused.returncode, 0, bad)
+                self.assertFalse((root / 'dotdot').exists(), bad)
+            if os.geteuid() == 0:
+                self.skipTest('the non-root refusal needs a non-root user')
+            target = root / 'system'
+            refused = subprocess.run([str(installer), '--prefix', str(target)], capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn('root', refused.stderr)
+            self.assertFalse(target.exists())
+
     def test_arch_package_installs_the_policy_through_the_installer(self):
         pkgbuild = (REPO / 'scripts/linux/arch/PKGBUILD').read_text()
         self.assertIn("'polkit'", pkgbuild)
