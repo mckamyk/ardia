@@ -10,7 +10,7 @@ import { quiesceLinuxDocuments, resumeLinuxDocuments, flushLinuxDocuments } from
 import { linuxMenuShortcuts } from "../shortcuts";
 import { useBrowser } from "../../../browser/src/state/browser/store";
 import { setManagedWindowClose } from "../../../browser/src/platform/windowClose";
-import { createWindowCloseCoordinator, type DecideClose, type DrainReply } from "../windowCloseCoordinator";
+import { createWindowCloseCoordinator, type DecideClose, type DialogSuspension, type DrainReply } from "../windowCloseCoordinator";
 
 export * from "./shellBase";
 export { menuShown, showMenu, watchMenus } from "../menus";
@@ -56,6 +56,11 @@ const closeCoordinator = createWindowCloseCoordinator({
   reject: (request) => hostModuleMethod("ArdiaShell", "rejectWindowClose")(request) as Promise<void>,
   barrier: closeBarrier,
   cancelled: closeBarrier.cancelled,
+  ...(ardiaHost ? {
+    ask: (options: ConfirmOptions, signal: AbortSignal) => linuxHostDialogs().abortableConfirm(options, signal),
+    suspendDialogs: () => linuxHostDialogs().suspend(),
+    resumeDialogs: (suspension: DialogSuspension) => linuxHostDialogs().resume(suspension),
+  } : {}),
   report: reportHostError,
 });
 const reportClose = (error: unknown) => {
