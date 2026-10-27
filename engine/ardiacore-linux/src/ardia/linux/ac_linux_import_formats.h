@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -22,12 +23,13 @@ inline constexpr double kVaultLifetimeMs = 10 * 60 * 1000;
 inline constexpr size_t kVaultEntriesPerOwner = 8;
 inline constexpr double kChosenFileLifetimeMs = 10 * 60 * 1000;
 inline constexpr size_t kChosenFiles = 16;
+inline constexpr size_t kPasswordChunk = 500;
 
 inline constexpr const char* kImportCapabilities[] = {
     "ArdiaImport.listBrowsers",  "ArdiaImport.startImport",     "ArdiaImport.cancelImport",
     "ArdiaImport.writePasswords", "ArdiaImport.discardPasswords", "ArdiaImport.chooseImportFile",
     "ArdiaImport.importBookmarksHTML", "ArdiaImport.importPasswordsCSV", "ArdiaImport.listExtensions",
-    "ArdiaImport.forgetUnlockedKeys"};
+    "ArdiaImport.forgetUnlockedKeys", "ArdiaImport.cancelChooser"};
 
 void Wipe(std::string& secret);
 
@@ -83,7 +85,20 @@ struct CsvParse {
 
 std::vector<std::vector<std::string>> ParseCsvRows(std::string_view text);
 CsvParse ParsePasswordsCsv(std::string_view text);
-base::ListValue CredentialRows(const std::vector<Credential>& credentials);
+base::ListValue CredentialSummaries(const std::vector<Credential>& credentials);
+bool ReplyLeaksSecret(const base::Value& reply, const std::vector<Credential>& credentials);
+
+std::string ExistingKey(std::string_view url, std::string_view username, std::string_view password);
+size_t CountExisting(const std::vector<Credential>& chunk, const std::set<std::string>& existing);
+
+struct PasswordTally {
+  int added = 0;
+  int existing = 0;
+  int conflicts = 0;
+  int invalid = 0;
+  void AddChunk(size_t number_imported, size_t existing_in_chunk, int chunk_conflicts, int chunk_invalid);
+  base::DictValue ToValue() const;
+};
 
 struct FirefoxProfileEntry {
   std::string name;
@@ -136,6 +151,7 @@ class CredentialVault {
 
   bool Put(std::string_view owner, std::string_view token, std::vector<Credential> credentials, double now);
   bool Contains(std::string_view owner, std::string_view token, double now);
+  std::optional<double> NextExpiry() const;
   std::optional<std::vector<Credential>> Take(std::string_view owner, std::string_view token, double now);
   bool Discard(std::string_view owner, std::string_view token);
   void DiscardOwner(std::string_view owner);

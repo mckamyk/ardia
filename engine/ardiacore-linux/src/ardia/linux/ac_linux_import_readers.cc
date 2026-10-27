@@ -24,6 +24,9 @@ namespace ardia::linux_import {
 const unsigned char kChromiumBasicKey[16] = {0xfd, 0x62, 0x1f, 0xe5, 0xa2, 0xb4, 0x02, 0x53,
                                              0x9d, 0xfa, 0x14, 0x7c, 0xa9, 0x27, 0x27, 0x78};
 
+const unsigned char kChromiumEmptyKey[16] = {0xd0, 0xd0, 0xec, 0x9c, 0x7d, 0x77, 0xd4, 0x3a,
+                                             0xc5, 0x41, 0x87, 0xfa, 0x48, 0x18, 0xd1, 0x7f};
+
 namespace {
 
 constexpr int64_t kWebKitEpochOffsetMicros = 11644473600000000LL;
@@ -131,8 +134,8 @@ std::string SkColorHex(int color) {
   return buffer;
 }
 
-FileRead CopyFile(const std::string& from, const std::string& to, size_t max_bytes) {
-  const int in = open(from.c_str(), O_RDONLY | O_CLOEXEC | O_NOCTTY | O_NOFOLLOW);
+FileRead CopyFile(const std::string& from, const std::string& to, size_t max_bytes, const ImportObserver* observer) {
+  const int in = open(from.c_str(), O_RDONLY | O_CLOEXEC | O_NOCTTY | O_NOFOLLOW | O_NONBLOCK);
   if (in < 0) return errno == ENOENT ? FileRead::kMissing : FileRead::kUnreadable;
   struct stat info;
   if (fstat(in, &info) != 0 || !S_ISREG(info.st_mode)) {
@@ -151,7 +154,12 @@ FileRead CopyFile(const std::string& from, const std::string& to, size_t max_byt
   std::vector<char> buffer(64 * 1024);
   bool ok = true;
   uint64_t copied = 0;
+  int chunks = 0;
   while (ok) {
+    if (observer && ++chunks % 64 == 0 && observer->Cancelled()) {
+      ok = false;
+      break;
+    }
     const ssize_t got = read(in, buffer.data(), buffer.size());
     if (got < 0 && errno == EINTR) continue;
     if (got <= 0) {
@@ -259,16 +267,17 @@ class Statement {
 
 class Database {
  public:
-  static std::unique_ptr<Database> Snapshot(const std::string& source, ScratchDirectory& scratch, FileRead* status) {
+  static std::unique_ptr<Database> Snapshot(const std::string& source, ScratchDirectory& scratch,
+                                            const ImportObserver& observer, FileRead* status) {
     if (!scratch.ok()) {
       *status = FileRead::kUnreadable;
       return nullptr;
     }
     const std::string copy = scratch.Next();
-    *status = CopyFile(source, copy, kMaxDatabaseBytes);
+    *status = CopyFile(source, copy, kMaxDatabaseBytes, &observer);
     if (*status != FileRead::kOk) return nullptr;
     for (const char* suffix : {"-wal", "-journal"}) {
-      const FileRead side = CopyFile(source + suffix, copy + suffix, kMaxDatabaseBytes);
+      const FileRead side = CopyFile(source + suffix, copy + suffix, kMaxDatabaseBytes, &observer);
       if (side != FileRead::kOk && side != FileRead::kMissing) {
         *status = side;
         return nullptr;
@@ -534,7 +543,7 @@ std::optional<Failure> ReadFirefoxBookmarks(const std::string& directory, Scratc
   const std::string places = Join(directory, "places.sqlite");
   if (!IsFile(places)) return Failure{"empty", "No bookmarks in this profile"};
   FileRead status = FileRead::kOk;
-  std::unique_ptr<Database> db = Database::Snapshot(places, scratch, &status);
+  std::unique_ptr<Database> db = Database::Snapshot(places, scratch, observer, &status);
   if (!db) return Failure{status == FileRead::kTooLarge ? "tooLarge" : "unreadable", "Couldn't read places.sqlite"};
   if (!db->HasTable("moz_bookmarks")) return Failure{"unreadable", "places.sqlite has no bookmarks"};
   struct Row {
@@ -619,7 +628,7 @@ std::optional<Failure> ReadHistory(const std::string& file, bool firefox, const 
                                    int* count, bool* cancelled) {
   if (!IsFile(file)) return Failure{"empty", "No history in this profile"};
   FileRead status = FileRead::kOk;
-  std::unique_ptr<Database> db = Database::Snapshot(file, scratch, &status);
+  std::unique_ptr<Database> db = Database::Snapshot(file, scratch, observer, &status);
   if (!db) return Failure{status == FileRead::kTooLarge ? "tooLarge" : "unreadable", "Couldn't read the history database"};
   const char* table = firefox ? "moz_places" : "urls";
   if (!db->HasTable(table)) return Failure{"unreadable", "The history database has no history table"};
@@ -684,7 +693,7 @@ std::optional<Failure> ReadChromiumLogins(const std::string& directory, ScratchD
     if (!IsFile(file)) continue;
     found = true;
     FileRead status = FileRead::kOk;
-    std::unique_ptr<Database> db = Database::Snapshot(file, scratch, &status);
+    std::unique_ptr<Database> db = Database::Snapshot(file, scratch, observer, &status);
     if (!db) return Failure{status == FileRead::kTooLarge ? "tooLarge" : "unreadable", "Couldn't read the saved passwords"};
     if (!db->HasTable("logins")) return Failure{"unreadable", "Login Data has no logins table"};
     Statement statement(db->get(), "SELECT * FROM logins");
@@ -862,7 +871,7 @@ int RemoveStaleScratch(const std::string& temp_root, int64_t now, int64_t max_ag
 
 FileRead ReadFileLimited(const std::string& path, size_t max_bytes, std::string* contents) {
   contents->clear();
-  const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOCTTY);
+  const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOCTTY | O_NONBLOCK);
   if (fd < 0) return errno == ENOENT ? FileRead::kMissing : FileRead::kUnreadable;
   struct stat info;
   if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode)) {
@@ -895,16 +904,9 @@ FileRead ReadFileLimited(const std::string& path, size_t max_bytes, std::string*
   return FileRead::kOk;
 }
 
-Decrypted DecryptChromiumPassword(std::string_view blob, std::string* password) {
-  password->clear();
-  if (blob.substr(0, 3) == "v11") return Decrypted::kKeyring;
-  if (blob.substr(0, 3) != "v10") {
-    if (blob.empty() || !ValidUtf8(blob)) return Decrypted::kFailed;
-    password->assign(blob);
-    return Decrypted::kOk;
-  }
-  const std::string_view cipher = blob.substr(3);
-  if (cipher.empty() || cipher.size() % 16 != 0) return Decrypted::kFailed;
+namespace {
+
+bool DecryptWith(const unsigned char* key, std::string_view cipher, std::string* password) {
   unsigned char iv[16];
   std::fill(std::begin(iv), std::end(iv), static_cast<unsigned char>(' '));
   std::string plain(cipher.size() + 16, '\0');
@@ -912,23 +914,36 @@ Decrypted DecryptChromiumPassword(std::string_view blob, std::string* password) 
   int last = 0;
   EVP_CIPHER_CTX* context = EVP_CIPHER_CTX_new();
   const bool ok = context &&
-      EVP_DecryptInit_ex(context, EVP_aes_128_cbc(), nullptr, kChromiumBasicKey, iv) == 1 &&
+      EVP_DecryptInit_ex(context, EVP_aes_128_cbc(), nullptr, key, iv) == 1 &&
       EVP_DecryptUpdate(context, reinterpret_cast<unsigned char*>(plain.data()), &first,
                         reinterpret_cast<const unsigned char*>(cipher.data()), static_cast<int>(cipher.size())) == 1 &&
       EVP_DecryptFinal_ex(context, reinterpret_cast<unsigned char*>(plain.data()) + first, &last) == 1;
   EVP_CIPHER_CTX_free(context);
-  if (!ok || first + last < 0) {
+  if (!ok || first + last < 0 || !ValidUtf8(std::string_view(plain).substr(0, static_cast<size_t>(first + last)))) {
     Wipe(plain);
-    return Decrypted::kFailed;
+    return false;
   }
-  const size_t length = static_cast<size_t>(first + last);
-  if (!ValidUtf8(std::string_view(plain).substr(0, length))) {
-    Wipe(plain);
-    return Decrypted::kFailed;
-  }
-  password->assign(plain, 0, length);
+  password->assign(plain, 0, static_cast<size_t>(first + last));
   Wipe(plain);
-  return Decrypted::kOk;
+  return true;
+}
+
+}
+
+Decrypted DecryptChromiumPassword(std::string_view blob, std::string* password) {
+  password->clear();
+  if (blob.substr(0, 3) == "v11" || blob.substr(0, 3) == "v12") return Decrypted::kKeyring;
+  if (blob.substr(0, 3) != "v10") {
+    if (blob.empty() || !ValidUtf8(blob)) return Decrypted::kFailed;
+    password->assign(blob);
+    return Decrypted::kOk;
+  }
+  const std::string_view cipher = blob.substr(3);
+  if (cipher.empty() || cipher.size() % 16 != 0) return Decrypted::kFailed;
+  if (DecryptWith(kChromiumBasicKey, cipher, password) || DecryptWith(kChromiumEmptyKey, cipher, password)) {
+    return Decrypted::kOk;
+  }
+  return Decrypted::kFailed;
 }
 
 ImportOutcome ReadBrowserProfile(const Environment& environment, std::string_view browser_id,
@@ -942,7 +957,8 @@ ImportOutcome ReadBrowserProfile(const Environment& environment, std::string_vie
     return outcome;
   }
   std::optional<std::string> directory = ProfileDirectory(environment, *browser, profile_id);
-  if (!directory) {
+  const std::string own = RealPath(environment.own_data_directory);
+  if (!directory || (!own.empty() && RealPath(DataDirectory(environment, *browser)) == own)) {
     outcome.error_code = "notFound";
     outcome.error = "Profile not found";
     return outcome;
@@ -1019,7 +1035,7 @@ ImportOutcome ReadBrowserProfile(const Environment& environment, std::string_vie
     } else {
       failure = Failure{"unsupported", std::string(browser->name) + " " + std::string(name) + " can't be imported on Linux yet"};
     }
-    if (cancelled) {
+    if (cancelled || observer.Cancelled()) {
       outcome.cancelled = true;
       outcome.credentials.clear();
       return outcome;

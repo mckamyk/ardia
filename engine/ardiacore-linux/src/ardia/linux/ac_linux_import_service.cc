@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include "ardia/linux/ac_linux_import_readers.h"
 #include "ardia/linux/ac_linux_profile_service.h"
 #include "ardia/linux/ac_linux_profiles.h"
+#include "base/callback_list.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -25,11 +27,13 @@
 #include "base/scoped_observation.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate_factory.h"
+#include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
@@ -38,6 +42,8 @@
 #include "components/password_manager/core/browser/import/import_results.h"
 #include "components/password_manager/core/browser/import/password_importer.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/ui/credential_ui_entry.h"
+#include "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/shell_dialogs/selected_file_info.h"
@@ -149,22 +155,30 @@ base::Value ReadBookmarksFile(std::string path) {
   return base::Value(base::DictValue().Set("root", std::move(*parse.root)).Set("links", parse.links));
 }
 
-base::Value ReadPasswordsFile(std::string path) {
+struct CsvRead {
+  std::string code;
+  std::string message;
+  std::optional<li::CsvParse> parse;
+};
+
+CsvRead ReadPasswordsFile(std::string path) {
+  CsvRead read;
   std::string csv;
-  const li::FileRead read = li::ReadFileLimited(path, li::kMaxPasswordsCsvBytes, &csv);
-  if (read != li::FileRead::kOk) {
-    return base::Value(base::DictValue().Set("code", read == li::FileRead::kTooLarge ? "tooLarge" : "unreadable"));
+  const li::FileRead status = li::ReadFileLimited(path, li::kMaxPasswordsCsvBytes, &csv);
+  if (status != li::FileRead::kOk) {
+    read.code = status == li::FileRead::kTooLarge ? "tooLarge" : "unreadable";
+    read.message = "The passwords file couldn't be read";
+    return read;
   }
   li::CsvParse parse = li::ParsePasswordsCsv(csv);
   li::Wipe(csv);
   if (!parse.error_code.empty()) {
-    return base::Value(base::DictValue().Set("code", parse.error_code).Set("message", parse.error));
+    read.code = parse.error_code;
+    read.message = parse.error;
+    return read;
   }
-  return base::Value(base::DictValue()
-                         .Set("credentials", li::CredentialRows(parse.credentials))
-                         .Set("rows", parse.rows)
-                         .Set("duplicates", parse.duplicates)
-                         .Set("invalid", parse.invalid));
+  read.parse = std::move(parse);
+  return read;
 }
 
 class FileChooser : public ui::SelectFileDialog::Listener {
@@ -178,9 +192,9 @@ class FileChooser : public ui::SelectFileDialog::Listener {
     if (dialog_) dialog_->ListenerDestroyed();
   }
 
-  bool Open(content::WebContents* contents, std::string_view kind) {
+  void Open(content::WebContents* contents, std::string_view kind) {
     dialog_ = ui::SelectFileDialog::Create(this, std::make_unique<ChromeSelectFilePolicy>(contents));
-    if (!dialog_) return false;
+    if (!dialog_) return Finish(std::nullopt);
     ui::SelectFileDialog::FileTypeInfo types;
     if (kind == "bookmarksHTML") types.extensions = {{FILE_PATH_LITERAL("html"), FILE_PATH_LITERAL("htm")}};
     else types.extensions = {{FILE_PATH_LITERAL("csv")}};
@@ -189,7 +203,6 @@ class FileChooser : public ui::SelectFileDialog::Listener {
                         kind == "bookmarksHTML" ? u"Choose a Bookmarks HTML File" : u"Choose a Passwords CSV File",
                         base::FilePath(), &types, 1, base::FilePath::StringType(),
                         contents ? contents->GetTopLevelNativeWindow() : gfx::NativeWindow());
-    return true;
   }
 
   void FileSelected(const ui::SelectedFileInfo& file, int) override { Finish(file.path()); }
@@ -206,13 +219,19 @@ class FileChooser : public ui::SelectFileDialog::Listener {
 
 class PasswordWriter : public ProfileObserver {
  public:
-  PasswordWriter(Profile* profile, std::vector<li::Credential> credentials, Done done, base::OnceClosure release)
-      : profile_(profile), credentials_(std::move(credentials)), done_(std::move(done)), release_(std::move(release)) {
+  using Finished = base::OnceCallback<void(bool, base::DictValue)>;
+  using Progress = base::RepeatingCallback<void(int processed, int total)>;
+
+  PasswordWriter(Profile* profile, std::vector<li::Credential> credentials, Progress progress, Finished finished)
+      : profile_(profile),
+        credentials_(std::move(credentials)),
+        progress_(std::move(progress)),
+        finished_(std::move(finished)) {
     observation_.Observe(profile);
   }
   PasswordWriter(const PasswordWriter&) = delete;
   PasswordWriter& operator=(const PasswordWriter&) = delete;
-  ~PasswordWriter() override = default;
+  ~PasswordWriter() override { ForgetExisting(); }
 
   void OnProfileWillBeDestroyed(Profile*) override {
     weak_factory_.InvalidateWeakPtrs();
@@ -220,24 +239,45 @@ class PasswordWriter : public ProfileObserver {
     delegate_.reset();
     observation_.Reset();
     profile_ = nullptr;
-    Finish(false, "ERR_PROFILE_UNAVAILABLE", "The profile closed before the passwords were saved");
+    Fail("ERR_PROFILE_UNAVAILABLE", "The profile closed before the passwords were saved");
   }
 
   void Start() {
-    if (!profile_) return Finish(false, "ERR_PROFILE_UNAVAILABLE", "The profile is unavailable");
+    if (!profile_) return Fail("ERR_PROFILE_UNAVAILABLE", "The profile is unavailable");
     delegate_ = extensions::PasswordsPrivateDelegateFactory::GetForBrowserContext(profile_, true);
-    if (!delegate_) return Finish(false, "ERR_PASSWORDS_UNAVAILABLE", "The password store is unavailable");
+    if (!delegate_) return Fail("ERR_PASSWORDS_UNAVAILABLE", "The password store is unavailable");
     delegate_->GetSavedPasswordsList(base::BindOnce(&PasswordWriter::Loaded, weak_factory_.GetWeakPtr()));
   }
 
  private:
   void Loaded(const extensions::PasswordsPrivateDelegate::UiEntries&) {
     password_manager::SavedPasswordsPresenter* presenter = delegate_->GetSavedPasswordsPresenter();
-    if (!presenter) return Finish(false, "ERR_PASSWORDS_UNAVAILABLE", "The password store is unavailable");
+    if (!presenter) return Fail("ERR_PASSWORDS_UNAVAILABLE", "The password store is unavailable");
+    for (password_manager::CredentialUIEntry& entry : presenter->GetSavedPasswords()) {
+      std::string username = base::UTF16ToUTF8(entry.username);
+      std::string password = base::UTF16ToUTF8(entry.password);
+      existing_.insert(li::ExistingKey(entry.GetURL().spec(), username, password));
+      li::Wipe(password);
+      std::fill(entry.password.begin(), entry.password.end(), u'\0');
+    }
     importer_ = std::make_unique<password_manager::PasswordImporter>(*presenter);
+    NextChunk();
+  }
+
+  void NextChunk() {
+    if (offset_ >= credentials_.size()) {
+      base::DictValue counts = tally_.ToValue();
+      return Complete(true, std::move(counts));
+    }
+    const size_t end = std::min(credentials_.size(), offset_ + li::kPasswordChunk);
+    chunk_.clear();
+    for (size_t i = offset_; i < end; ++i) chunk_.push_back(std::move(credentials_[i]));
+    offset_ = end;
+    chunk_existing_ = li::CountExisting(chunk_, existing_);
+    chunk_conflicts_ = 0;
     std::vector<password_manager::CSVPassword> rows;
-    rows.reserve(credentials_.size());
-    for (li::Credential& credential : credentials_) {
+    rows.reserve(chunk_.size());
+    for (const li::Credential& credential : chunk_) {
       const GURL url(credential.url);
       if (url.is_valid()) {
         rows.emplace_back(url, credential.username, credential.password, credential.note,
@@ -247,18 +287,17 @@ class PasswordWriter : public ProfileObserver {
                           password_manager::CSVPassword::Status::kOK);
       }
     }
-    credentials_.clear();
     importer_->Import(rows, password_manager::PasswordForm::Store::kProfileStore,
                       base::BindOnce(&PasswordWriter::Imported, weak_factory_.GetWeakPtr()));
   }
 
   void Imported(const password_manager::ImportResults& results) {
     if (results.status == password_manager::ImportResults::Status::CONFLICTS) {
-      conflicts_ += static_cast<int>(results.displayed_entries.size());
+      chunk_conflicts_ += static_cast<int>(results.displayed_entries.size());
       return importer_->ContinueImport({}, base::BindOnce(&PasswordWriter::Imported, weak_factory_.GetWeakPtr()));
     }
     if (results.status != password_manager::ImportResults::Status::SUCCESS) {
-      return Finish(false, "ERR_PASSWORDS_IMPORT", "Chromium's password importer rejected the passwords");
+      return Fail("ERR_PASSWORDS_IMPORT", "Chromium's password importer rejected the passwords");
     }
     int invalid = 0;
     for (const password_manager::ImportEntry& entry : results.displayed_entries) {
@@ -268,28 +307,42 @@ class PasswordWriter : public ProfileObserver {
         ++invalid;
       }
     }
-    Reply(true, base::Value(base::DictValue()
-                                .Set("imported", static_cast<int>(results.number_imported))
-                                .Set("conflicts", conflicts_)
-                                .Set("invalid", invalid)));
+    tally_.AddChunk(results.number_imported, chunk_existing_, chunk_conflicts_, invalid);
+    chunk_.clear();
+    progress_.Run(static_cast<int>(offset_), static_cast<int>(credentials_.size()));
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&PasswordWriter::NextChunk, weak_factory_.GetWeakPtr()));
   }
 
-  void Finish(bool ok, std::string_view code, std::string_view message) {
-    Reply(ok, base::Value(base::DictValue().Set("code", code).Set("message", message)));
+  void Fail(std::string_view code, std::string_view message) {
+    Complete(false, base::DictValue().Set("code", code).Set("message", message));
   }
 
-  void Reply(bool ok, base::Value value) {
+  void Complete(bool ok, base::DictValue payload) {
     credentials_.clear();
-    if (done_) std::move(done_).Run(ok, std::move(value));
-    if (release_) std::move(release_).Run();
+    chunk_.clear();
+    ForgetExisting();
+    if (finished_) std::move(finished_).Run(ok, std::move(payload));
+  }
+
+  void ForgetExisting() {
+    while (!existing_.empty()) {
+      auto node = existing_.extract(existing_.begin());
+      li::Wipe(node.value());
+    }
   }
 
   raw_ptr<Profile> profile_;
   base::ScopedObservation<Profile, ProfileObserver> observation_{this};
   std::vector<li::Credential> credentials_;
-  Done done_;
-  base::OnceClosure release_;
-  int conflicts_ = 0;
+  std::vector<li::Credential> chunk_;
+  std::set<std::string> existing_;
+  size_t offset_ = 0;
+  size_t chunk_existing_ = 0;
+  int chunk_conflicts_ = 0;
+  li::PasswordTally tally_;
+  Progress progress_;
+  Finished finished_;
   scoped_refptr<extensions::PasswordsPrivateDelegate> delegate_;
   std::unique_ptr<password_manager::PasswordImporter> importer_;
   base::WeakPtrFactory<PasswordWriter> weak_factory_{this};
@@ -304,6 +357,7 @@ class ImportService {
 
   void Invoke(LinuxImportRequester requester, const std::string& method, const base::ListValue& values, Done done) {
     vault_.Expire(NowMs());
+    if (terminating_) return Fail(std::move(done), "ERR_SHUTTING_DOWN", "Ardia is quitting");
     if (method == "ArdiaImport.listBrowsers") return ListBrowsers(std::move(done));
     if (method == "ArdiaImport.startImport") return StartImport(std::move(requester), values, std::move(done));
     if (method == "ArdiaImport.cancelImport") {
@@ -320,9 +374,14 @@ class ImportService {
       return std::move(done).Run(true, base::Value());
     }
     if (method == "ArdiaImport.chooseImportFile") return Choose(std::move(requester), values, std::move(done));
-    if (method == "ArdiaImport.importBookmarksHTML" || method == "ArdiaImport.importPasswordsCSV") {
-      return ReadChosen(std::move(requester), method == "ArdiaImport.importBookmarksHTML", values, std::move(done));
+    if (method == "ArdiaImport.cancelChooser") {
+      auto found = choosers_.find(requester.owner);
+      const bool cancelled = found != choosers_.end() && found->second.request == Argument(values, 0);
+      if (cancelled) choosers_.erase(found);
+      return std::move(done).Run(true, base::Value(cancelled));
     }
+    if (method == "ArdiaImport.importBookmarksHTML") return ReadBookmarks(std::move(requester), values, std::move(done));
+    if (method == "ArdiaImport.importPasswordsCSV") return ReadPasswords(std::move(requester), values, std::move(done));
     if (method == "ArdiaImport.listExtensions") {
       const std::string browser = Argument(values, 0);
       const std::string profile = Argument(values, 1);
@@ -356,7 +415,44 @@ class ImportService {
 
  private:
   friend class base::NoDestructor<ImportService>;
-  ImportService() = default;
+
+  struct OpenChooser {
+    std::string request;
+    std::unique_ptr<FileChooser> chooser;
+  };
+
+  ImportService()
+      : terminating_subscription_(browser_shutdown::AddAppTerminatingCallback(
+            base::BindOnce(&ImportService::Terminate, base::Unretained(this)))) {}
+
+  void Terminate() {
+    terminating_ = true;
+    for (auto& [key, flag] : jobs_) flag->data.store(true);
+    jobs_.clear();
+    vault_.Clear();
+    choosers_.clear();
+  }
+
+  void Store(const std::string& owner, std::vector<li::Credential> credentials, base::DictValue& reply,
+             base::ListValue& failed, base::ListValue& warnings) {
+    if (credentials.empty()) return;
+    const int count = static_cast<int>(credentials.size());
+    const std::string token = base::HexEncodeLower(base::RandBytesAsVector(16));
+    if (!vault_.Put(owner, token, std::move(credentials), NowMs())) {
+      failed.Append("passwords");
+      warnings.Append(base::DictValue()
+                          .Set("kind", "passwords")
+                          .Set("code", "unavailable")
+                          .Set("message", "The imported passwords couldn't be held for saving"));
+      return;
+    }
+    reply.Set("passwords", base::DictValue().Set("token", token).Set("count", count));
+    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce(&ImportService::ExpireVault, weak_factory_.GetWeakPtr()),
+        base::Milliseconds(li::kVaultLifetimeMs + 1));
+  }
+
+  void ExpireVault() { vault_.Expire(NowMs()); }
 
   void ListBrowsers(Done done) {
     base::ThreadPool::PostTaskAndReplyWithResult(
@@ -410,24 +506,31 @@ class ImportService {
       event.Set("code", outcome.error_code);
       event.Set("message", outcome.error);
     } else {
-      if (!outcome.credentials.empty()) {
-        const int count = static_cast<int>(outcome.credentials.size());
-        const std::string token = base::HexEncodeLower(base::RandBytesAsVector(16));
-        if (vault_.Put(owner, token, std::move(outcome.credentials), NowMs())) {
-          outcome.result.Set("passwords", base::DictValue().Set("token", token).Set("count", count));
-        }
+      if (li::ReplyLeaksSecret(base::Value(outcome.result.Clone()), outcome.credentials)) {
+        event.Set("type", "failed");
+        event.Set("code", "ERR_SECRET_IN_REPLY");
+        event.Set("message", "The import result was withheld because it contained a password");
+      } else {
+        base::ListValue failed;
+        base::ListValue warnings;
+        if (base::ListValue* listed = outcome.result.FindList("failed")) failed = std::move(*listed);
+        if (base::ListValue* listed = outcome.result.FindList("warnings")) warnings = std::move(*listed);
+        Store(owner, std::move(outcome.credentials), outcome.result, failed, warnings);
+        outcome.result.Set("failed", std::move(failed));
+        outcome.result.Set("warnings", std::move(warnings));
+        event.Set("type", "done");
+        event.Set("result", std::move(outcome.result));
       }
-      event.Set("type", "done");
-      event.Set("result", std::move(outcome.result));
     }
     outcome.credentials.clear();
     emit.Run(base::Value(std::move(event)));
   }
 
   void WritePasswords(LinuxImportRequester requester, const base::ListValue& values, Done done) {
-    const std::string token = Argument(values, 0);
-    if (!li::ValidToken(token)) return Fail(std::move(done), "invalid", "Invalid password token");
-    const std::string engine_profile = Argument(values, 1);
+    const std::string request = Argument(values, 0);
+    const std::string token = Argument(values, 1);
+    if (!li::ValidJobId(request) || !li::ValidToken(token)) return Fail(std::move(done), "invalid", "Invalid password write");
+    const std::string engine_profile = Argument(values, 2);
     const li::ProfileTarget target = li::ClassifyProfile(engine_profile);
     if (target == li::ProfileTarget::kPrivate || target == li::ProfileTarget::kInvalid) {
       vault_.Discard(requester.owner, token);
@@ -436,33 +539,55 @@ class ImportService {
     if (!vault_.Contains(requester.owner, token, NowMs())) {
       return Fail(std::move(done), "expired", "The imported passwords are no longer available");
     }
-    ResolveImportProfile(engine_profile,
-                         base::BindOnce(&ImportService::WriteResolved, weak_factory_.GetWeakPtr(), requester.owner,
-                                        token, std::move(done)));
+    std::move(done).Run(true, base::Value(true));
+    ResolveImportProfile(engine_profile, base::BindOnce(&ImportService::WriteResolved, weak_factory_.GetWeakPtr(),
+                                                        requester.owner, request, token, requester.emit));
   }
 
-  void WriteResolved(std::string owner, std::string token, Done done, Profile* profile, std::string code) {
+  void WriteResolved(std::string owner, std::string request, std::string token, Emit emit, Profile* profile,
+                     std::string code) {
+    auto failed = [&](std::string_view failure, std::string_view message) {
+      emit.Run(base::Value(base::DictValue()
+                               .Set("jobId", request)
+                               .Set("type", "failed")
+                               .Set("code", failure)
+                               .Set("message", message)));
+    };
     if (!profile) {
       vault_.Discard(owner, token);
-      return Fail(std::move(done), code, "Passwords can't be imported into that profile");
+      return failed(code, "Passwords can't be imported into that profile");
     }
     std::optional<std::vector<li::Credential>> credentials = vault_.Take(owner, token, NowMs());
-    if (!credentials) return Fail(std::move(done), "expired", "The imported passwords are no longer available");
+    if (!credentials) return failed("expired", "The imported passwords are no longer available");
     const int id = ++next_writer_;
     auto writer = std::make_unique<PasswordWriter>(
-        profile, std::move(*credentials), std::move(done),
-        base::BindOnce(
-            [](base::WeakPtr<ImportService> service, int id) {
-              if (!service) return;
-              auto found = service->writers_.find(id);
-              if (found == service->writers_.end()) return;
-              base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(found->second));
-              service->writers_.erase(found);
+        profile, std::move(*credentials),
+        base::BindRepeating(
+            [](Emit emit, std::string request, int processed, int total) {
+              emit.Run(base::Value(base::DictValue()
+                                       .Set("jobId", request)
+                                       .Set("type", "progress")
+                                       .Set("kind", "passwords")
+                                       .Set("phase", "progress")
+                                       .Set("processed", processed)
+                                       .Set("total", total)));
             },
-            weak_factory_.GetWeakPtr(), id));
+            emit, request),
+        base::BindOnce(&ImportService::Written, weak_factory_.GetWeakPtr(), id, request, emit));
     PasswordWriter* started = writer.get();
     writers_[id] = std::move(writer);
     started->Start();
+  }
+
+  void Written(int id, std::string request, Emit emit, bool ok, base::DictValue payload) {
+    auto found = writers_.find(id);
+    if (found != writers_.end()) {
+      base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(found->second));
+      writers_.erase(found);
+    }
+    payload.Set("jobId", request);
+    payload.Set("type", ok ? "written" : "failed");
+    emit.Run(base::Value(std::move(payload)));
   }
 
   void Choose(LinuxImportRequester requester, const base::ListValue& values, Done done) {
@@ -477,18 +602,15 @@ class ImportService {
     auto chooser = std::make_unique<FileChooser>(base::BindOnce(
         &ImportService::Chosen, weak_factory_.GetWeakPtr(), requester.owner, request, kind, requester.emit));
     FileChooser* opening = chooser.get();
-    choosers_[requester.owner] = std::move(chooser);
-    if (!opening->Open(requester.contents.get(), kind)) {
-      choosers_.erase(requester.owner);
-      return Fail(std::move(done), "ERR_FILE_CHOOSER_UNAVAILABLE", "No file chooser is available on this desktop");
-    }
+    choosers_[requester.owner] = OpenChooser{request, std::move(chooser)};
     std::move(done).Run(true, base::Value(true));
+    opening->Open(requester.contents.get(), kind);
   }
 
   void Chosen(std::string owner, std::string request, std::string kind, Emit emit, std::optional<base::FilePath> path) {
     auto found = choosers_.find(owner);
-    if (found != choosers_.end()) {
-      base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(found->second));
+    if (found != choosers_.end() && found->second.request == request) {
+      base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(found->second.chooser));
       choosers_.erase(found);
     }
     base::DictValue event;
@@ -503,14 +625,17 @@ class ImportService {
     emit.Run(base::Value(std::move(event)));
   }
 
-  void ReadChosen(LinuxImportRequester requester, bool bookmarks, const base::ListValue& values, Done done) {
+  bool TakeChosen(const LinuxImportRequester& requester, std::string_view kind, const std::string& path) {
+    return li::ValidLocalFile(path) && chosen_.Take(requester.owner, kind, path, NowMs());
+  }
+
+  void ReadBookmarks(LinuxImportRequester requester, const base::ListValue& values, Done done) {
     const std::string path = Argument(values, 0);
-    const char* kind = bookmarks ? "bookmarksHTML" : "passwordsCSV";
-    if (!li::ValidLocalFile(path) || !chosen_.Take(requester.owner, kind, path, NowMs())) {
+    if (!TakeChosen(requester, "bookmarksHTML", path)) {
       return Fail(std::move(done), "ERR_FILE_NOT_CHOSEN", "Choose the file to import first");
     }
     base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, kBlocking, base::BindOnce(bookmarks ? &ReadBookmarksFile : &ReadPasswordsFile, path),
+        FROM_HERE, kBlocking, base::BindOnce(&ReadBookmarksFile, path),
         base::BindOnce(
             [](Done done, base::Value reply) {
               const bool ok = reply.is_dict() && !reply.GetDict().contains("code");
@@ -519,10 +644,40 @@ class ImportService {
             std::move(done)));
   }
 
+  void ReadPasswords(LinuxImportRequester requester, const base::ListValue& values, Done done) {
+    const std::string path = Argument(values, 0);
+    if (!TakeChosen(requester, "passwordsCSV", path)) {
+      return Fail(std::move(done), "ERR_FILE_NOT_CHOSEN", "Choose the file to import first");
+    }
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, kBlocking, base::BindOnce(&ReadPasswordsFile, path),
+        base::BindOnce(&ImportService::PasswordsRead, weak_factory_.GetWeakPtr(), requester.owner, std::move(done)));
+  }
+
+  void PasswordsRead(std::string owner, Done done, CsvRead read) {
+    if (!read.parse) return Fail(std::move(done), read.code, read.message);
+    li::CsvParse& parse = *read.parse;
+    base::DictValue reply;
+    reply.Set("entries", li::CredentialSummaries(parse.credentials));
+    reply.Set("rows", parse.rows);
+    reply.Set("duplicates", parse.duplicates);
+    reply.Set("invalid", parse.invalid);
+    if (li::ReplyLeaksSecret(base::Value(reply.Clone()), parse.credentials)) {
+      return Fail(std::move(done), "ERR_SECRET_IN_REPLY", "The passwords file reply was withheld");
+    }
+    base::ListValue failed;
+    base::ListValue warnings;
+    Store(owner, std::move(parse.credentials), reply, failed, warnings);
+    if (!failed.empty()) return Fail(std::move(done), "unavailable", "The imported passwords couldn't be held for saving");
+    std::move(done).Run(true, base::Value(std::move(reply)));
+  }
+
+  bool terminating_ = false;
+  base::CallbackListSubscription terminating_subscription_;
   std::map<std::string, scoped_refptr<Flag>> jobs_;
   li::CredentialVault vault_;
   li::ChosenFiles chosen_;
-  std::map<std::string, std::unique_ptr<FileChooser>> choosers_;
+  std::map<std::string, OpenChooser> choosers_;
   std::map<int, std::unique_ptr<PasswordWriter>> writers_;
   int next_writer_ = 0;
   base::WeakPtrFactory<ImportService> weak_factory_{this};

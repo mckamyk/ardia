@@ -51,6 +51,7 @@ int RemoveStaleScratch(const std::string& temp_root, int64_t now, int64_t max_ag
 FileRead ReadFileLimited(const std::string& path, size_t max_bytes, std::string* contents);
 
 extern const unsigned char kChromiumBasicKey[16];
+extern const unsigned char kChromiumEmptyKey[16];
 
 enum class Decrypted { kOk, kKeyring, kFailed };
 Decrypted DecryptChromiumPassword(std::string_view blob, std::string* password);

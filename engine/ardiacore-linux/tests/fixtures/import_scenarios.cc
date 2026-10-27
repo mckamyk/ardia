@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <set>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -23,7 +24,93 @@ std::string Slurp(const char* path) {
 }
 
 base::ListValue Rows(const std::vector<Credential>& credentials) {
-  return CredentialRows(credentials);
+  base::ListValue rows;
+  for (const Credential& credential : credentials) {
+    base::DictValue row;
+    row.Set("url", credential.url);
+    row.Set("username", credential.username);
+    row.Set("password", credential.password);
+    if (!credential.realm.empty()) row.Set("realm", credential.realm);
+    if (!credential.title.empty()) row.Set("title", credential.title);
+    if (!credential.note.empty()) row.Set("note", credential.note);
+    if (credential.created > 0) row.Set("created", credential.created);
+    if (credential.last_used > 0) row.Set("lastUsed", credential.last_used);
+    if (credential.times_used > 0) row.Set("timesUsed", credential.times_used);
+    rows.Append(std::move(row));
+  }
+  return rows;
+}
+
+void ReviewUnits() {
+  static_assert(kPasswordChunk > 0 && kPasswordChunk <= 3000);
+  std::vector<Credential> chunk(3);
+  chunk[0].url = "https://a.example/login";
+  chunk[0].username = "u";
+  chunk[0].password = "p1";
+  chunk[1].url = "https://A.example/other";
+  chunk[1].username = "u";
+  chunk[1].password = "p2";
+  chunk[2].url = "https://b.example/";
+  chunk[2].username = "v";
+  chunk[2].password = "p3";
+  std::set<std::string> existing = {ExistingKey("https://a.example/", "u", "p1"), ExistingKey("https://b.example/x", "v", "other")};
+  assert(ExistingKey("https://a.example/login", "u", "p1") == ExistingKey("https://A.EXAMPLE/", "u", "p1"));
+  assert(CountExisting(chunk, existing) == 1);
+
+  PasswordTally tally;
+  tally.AddChunk(3, 1, 2, 1);
+  tally.AddChunk(2, 5, 0, 0);
+  assert(tally.added == 2 && tally.existing == 3 && tally.conflicts == 2 && tally.invalid == 1);
+  base::DictValue counts = tally.ToValue();
+  assert(counts.FindInt("added") == 2 && counts.FindInt("existing") == 3 && counts.FindInt("conflicts") == 2 &&
+         counts.FindInt("invalid") == 1);
+
+  base::ListValue summaries = CredentialSummaries(chunk);
+  assert(summaries.size() == 3);
+  assert(base::ToJson(summaries).find("p1") == std::string::npos);
+  assert(*summaries[0].GetDict().FindString("username") == "u");
+  std::vector<Credential> secrets(1);
+  secrets[0].password = "secret-two";
+  assert(!ReplyLeaksSecret(base::Value(std::move(summaries)), secrets));
+  base::DictValue exact;
+  base::ListValue nested;
+  nested.Append("secret-two");
+  exact.Set("rows", std::move(nested));
+  assert(ReplyLeaksSecret(base::Value(std::move(exact)), secrets));
+  base::DictValue substring;
+  substring.Set("title", "contains secret-two inside a history title");
+  assert(!ReplyLeaksSecret(base::Value(std::move(substring)), secrets));
+  base::DictValue field;
+  base::DictValue inner;
+  inner.Set("password", "x");
+  field.Set("entry", std::move(inner));
+  assert(ReplyLeaksSecret(base::Value(std::move(field)), {}));
+  base::DictValue rows;
+  base::ListValue listed;
+  listed.Append(base::DictValue());
+  rows.Set("credentials", std::move(listed));
+  assert(ReplyLeaksSecret(base::Value(std::move(rows)), {}));
+  base::DictValue empty_rows;
+  empty_rows.Set("credentials", base::ListValue());
+  empty_rows.Set("password", "");
+  assert(!ReplyLeaksSecret(base::Value(std::move(empty_rows)), {}));
+
+  std::string password;
+  assert(DecryptChromiumPassword("v12whatever", &password) == Decrypted::kKeyring && password.empty());
+  assert(kChromiumEmptyKey[0] == 0xd0 && kChromiumEmptyKey[15] == 0x7f);
+
+  CredentialVault vault;
+  assert(vault.Put("w1", "0000000000000000000000000000000a", {}, 5));
+  assert(vault.Put("w1", "0000000000000000000000000000000b", {}, 9));
+  assert(vault.NextExpiry() == 5 + kVaultLifetimeMs);
+  vault.Expire(5 + kVaultLifetimeMs);
+  assert(vault.NextExpiry() == 9 + kVaultLifetimeMs);
+  vault.Clear();
+  assert(!vault.NextExpiry());
+
+  BookmarksParse lt = ParseNetscapeBookmarks("<DL><p><DT><A HREF=\"https://lt.example/\">a < b &lt; c</A></DL>");
+  assert(lt.root && *lt.root->FindList("children")->begin()->GetDict().FindString("title") == "a < b < c");
+  std::printf("review units passed\n");
 }
 
 class Recorder : public ImportObserver {
@@ -179,6 +266,15 @@ int main(int argc, char** argv) {
   const std::string command = argv[1];
   if (command == "units") {
     Units();
+    return 0;
+  }
+  if (command == "review") {
+    ReviewUnits();
+    return 0;
+  }
+  if (command == "readfile") {
+    std::string contents;
+    std::printf("%d\n", static_cast<int>(ReadFileLimited(argv[2], 1024, &contents)));
     return 0;
   }
   if (command == "key") {

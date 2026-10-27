@@ -31,6 +31,12 @@ def encrypt_v10(password):
     return b'v10' + result.stdout
 
 
+def encrypt_with(key, password):
+    result = subprocess.run(['openssl', 'enc', '-aes-128-cbc', '-K', key.hex(), '-iv', '20' * 16, '-nosalt'],
+                            input=password.encode(), capture_output=True, timeout=30, check=True)
+    return b'v10' + result.stdout
+
+
 def webkit(ms):
     return ms * 1000 + WEBKIT_OFFSET
 
@@ -520,6 +526,56 @@ class ScratchSweepTests(ImportFixture):
         os.utime(fresh, (now - 60, now - 60))
         self.assertEqual(self.run_binary('sweep', self.temp, now, 3600).strip(), '1')
         self.assertEqual(sorted(p.name for p in self.temp.iterdir()), ['ardia-import-file', 'ardia-import-new222', 'unrelated-old'])
+
+
+class ReviewRoundOneTests(ImportFixture):
+    def test_chunks_counts_summaries_leak_gate_expiry_and_v12(self):
+        self.assertIn('review units passed', self.run_binary('review'))
+
+    def test_empty_key_fallback_and_v12_are_handled_like_chromium(self):
+        default = self.chrome_profile('Default')
+        empty_key = hashlib.pbkdf2_hmac('sha1', b'', b'saltysalt', 1, 16)
+        make_logins(default / 'Login Data', [
+            ('https://empty.example/', '', 'e', encrypt_with(empty_key, 'empty key pass'), 'https://empty.example/', webkit(1600000000000), 0, 0, 0),
+            ('https://portal.example/', '', 'p', b'v12' + os.urandom(32), 'https://portal.example/', webkit(1600000000000), 0, 0, 0),
+        ])
+        out = self.read('chrome', 'Default', ['passwords'])
+        self.assertEqual([(c['username'], c['password']) for c in out['credentials']], [('e', 'empty key pass')])
+        messages = [w['message'] for w in out['result']['warnings']]
+        self.assertIn("1 password protected by the system keyring wasn't imported", messages)
+        self.assertFalse(any('decrypted' in m for m in messages))
+
+    def test_fifos_are_refused_without_blocking(self):
+        fifo = self.root / 'fifo.html'
+        os.mkfifo(fifo)
+        result = subprocess.run([str(self.binary), 'readfile', str(fifo)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.stdout.strip(), '3')
+        default = self.chrome_profile('Default')
+        os.mkfifo(default / 'History')
+        os.mkfifo(default / 'Bookmarks')
+        run = subprocess.run([str(self.binary), 'read', *[str(a) for a in self.env_args()], 'chrome', 'Default', 'history,bookmarks', '0', '0', '0'],
+                             capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        result = json.loads(run.stdout)['result']
+        self.assertNotIn('bookmarks', result)
+        self.assertEqual(result['history'], [])
+        self.assertEqual(sorted((w['kind'], w['code']) for w in result['warnings']), [('bookmarks', 'empty'), ('history', 'empty')])
+
+    def test_own_data_directory_is_never_read(self):
+        self.chrome_profile('Default')
+        out = self.json('read', self.home, self.config, self.temp, self.config / 'google-chrome', 'chrome', 'Default', 'bookmarks', 0, 0, 0)
+        self.assertEqual(out['error'], 'notFound')
+
+    def test_service_wiring_from_review(self):
+        service = (LINUX / 'ac_linux_import_service.cc').read_text()
+        self.assertNotIn('ERR_FILE_CHOOSER_UNAVAILABLE', service)
+        self.assertNotIn('CredentialRows', service + (LINUX / 'ac_linux_import_formats.h').read_text())
+        self.assertIn('kPasswordChunk', service)
+        self.assertIn('PostDelayedTask', service)
+        self.assertIn('AddAppTerminatingCallback', service)
+        self.assertIn('ReplyLeaksSecret', service)
+        self.assertIn('"ArdiaImport.cancelChooser"', (LINUX / 'ac_linux_import_formats.h').read_text())
+        self.assertIn('"//chrome/browser/lifetime:termination_notification"', (LINUX / 'BUILD.gn').read_text())
 
 
 class ImportSourceRules(unittest.TestCase):

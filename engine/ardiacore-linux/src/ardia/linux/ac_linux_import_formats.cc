@@ -101,6 +101,12 @@ std::string DecodeEntities(std::string_view text) {
   return out;
 }
 
+bool StartsMarkup(std::string_view rest) {
+  if (rest.empty()) return false;
+  const char c = rest[0];
+  return c == '/' || c == '!' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
 struct Tag {
   bool closing = false;
   std::string name;
@@ -166,6 +172,10 @@ class TagScanner {
   std::string Text(std::string_view until) {
     std::string out;
     while (i_ < s_.size()) {
+      if (s_[i_] == '<' && !StartsMarkup(s_.substr(i_ + 1))) {
+        out.push_back(s_[i_++]);
+        continue;
+      }
       if (s_[i_] == '<') {
         const size_t start = i_;
         std::optional<Tag> tag = Next();
@@ -646,22 +656,82 @@ CsvParse ParsePasswordsCsv(std::string_view bytes) {
   return parse;
 }
 
-base::ListValue CredentialRows(const std::vector<Credential>& credentials) {
+base::ListValue CredentialSummaries(const std::vector<Credential>& credentials) {
   base::ListValue rows;
   for (const Credential& credential : credentials) {
     base::DictValue row;
     row.Set("url", credential.url);
     row.Set("username", credential.username);
-    row.Set("password", credential.password);
-    if (!credential.realm.empty()) row.Set("realm", credential.realm);
-    if (!credential.title.empty()) row.Set("title", credential.title);
-    if (!credential.note.empty()) row.Set("note", credential.note);
-    if (credential.created > 0) row.Set("created", credential.created);
-    if (credential.last_used > 0) row.Set("lastUsed", credential.last_used);
-    if (credential.times_used > 0) row.Set("timesUsed", credential.times_used);
     rows.Append(std::move(row));
   }
   return rows;
+}
+
+namespace {
+
+constexpr size_t kExactSecretBytes = 6;
+
+bool ValueLeaks(const base::Value& value, const std::set<std::string_view>& secrets) {
+  if (value.is_string()) return secrets.contains(value.GetString());
+  if (value.is_list()) {
+    for (const base::Value& item : value.GetList()) {
+      if (ValueLeaks(item, secrets)) return true;
+    }
+    return false;
+  }
+  if (!value.is_dict()) return false;
+  for (const auto [key, item] : value.GetDict()) {
+    if (key == "password" && item.is_string() && !item.GetString().empty()) return true;
+    if (key == "credentials" && item.is_list() && !item.GetList().empty()) return true;
+    if (ValueLeaks(item, secrets)) return true;
+  }
+  return false;
+}
+
+}
+
+bool ReplyLeaksSecret(const base::Value& reply, const std::vector<Credential>& credentials) {
+  std::set<std::string_view> secrets;
+  for (const Credential& credential : credentials) {
+    if (credential.password.size() >= kExactSecretBytes) secrets.insert(credential.password);
+  }
+  return ValueLeaks(reply, secrets);
+}
+
+std::string ExistingKey(std::string_view url, std::string_view username, std::string_view password) {
+  std::string key = OriginOf(url);
+  key.push_back('\0');
+  key += username;
+  key.push_back('\0');
+  key += password;
+  return key;
+}
+
+size_t CountExisting(const std::vector<Credential>& chunk, const std::set<std::string>& existing) {
+  size_t found = 0;
+  for (const Credential& credential : chunk) {
+    std::string key = ExistingKey(credential.url, credential.username, credential.password);
+    if (existing.contains(key)) ++found;
+    Wipe(key);
+  }
+  return found;
+}
+
+void PasswordTally::AddChunk(size_t number_imported, size_t existing_in_chunk, int chunk_conflicts, int chunk_invalid) {
+  const size_t present = std::min(existing_in_chunk, number_imported);
+  added += static_cast<int>(number_imported - present);
+  existing += static_cast<int>(present);
+  conflicts += chunk_conflicts;
+  invalid += chunk_invalid;
+}
+
+base::DictValue PasswordTally::ToValue() const {
+  base::DictValue value;
+  value.Set("added", added);
+  value.Set("existing", existing);
+  value.Set("conflicts", conflicts);
+  value.Set("invalid", invalid);
+  return value;
 }
 
 std::vector<FirefoxProfileEntry> ParseProfilesIni(std::string_view ini) {
@@ -840,6 +910,15 @@ bool CredentialVault::Contains(std::string_view owner, std::string_view token, d
   Expire(now);
   return std::any_of(entries_.begin(), entries_.end(),
                      [&](const Entry& entry) { return entry.owner == owner && entry.token == token; });
+}
+
+std::optional<double> CredentialVault::NextExpiry() const {
+  std::optional<double> next;
+  for (const Entry& entry : entries_) {
+    const double at = entry.at + kVaultLifetimeMs;
+    if (!next || at < *next) next = at;
+  }
+  return next;
 }
 
 std::optional<std::vector<Credential>> CredentialVault::Take(std::string_view owner, std::string_view token, double now) {
