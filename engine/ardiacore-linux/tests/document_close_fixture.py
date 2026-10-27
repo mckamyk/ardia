@@ -1,6 +1,6 @@
 import shutil
 
-from document_host_fixture import PRELUDE, WRITER, values, host_methods
+from document_host_fixture import PRELUDE, PROFILE, WRITER, values, host_methods
 from test_chromium_close import patched_sources, production_methods, method, FIXTURES
 
 
@@ -39,7 +39,7 @@ def fixture(scratch):
     asyncs = PRELUDE[PRELUDE.index('base::SingleThreadTaskRunner files;'):PRELUDE.index('struct ShellHostView;')].replace('auto* ui =', 'auto ui =')
     widget = PRELUDE[PRELUDE.index('struct ShellHostView;'):PRELUDE.index('struct Browser {')]
     host = PRELUDE[PRELUDE.index('struct Handler {'):]
-    host = host.replace('struct Profile { bool regular = true; bool IsRegularProfile() const { return regular; } };', '')
+    host = host.replace(PROFILE, '')
     host = host.replace('  Browser native;', '  BrowserWindowInterface& native;\n  views::Widget native_widget;')
     host = host.replace('Browser*', 'BrowserWindowInterface*')
     host = host.replace('  ShellHostView() {\n    native.widget.owner = this;\n    native.on_cancel = [this](base::UnguessableToken token) { ChromeCloseCancelled(token); };\n  }', '  explicit ShellHostView(BrowserWindowInterface& b) : native(b) { native_widget.owner = this; }')
