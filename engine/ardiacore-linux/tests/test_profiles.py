@@ -411,6 +411,16 @@ void PrivateWindowAccess() {
   assert(!WindowReachableBy(orphan, {1, 4}));
   const WindowAccess malformed{"w-x", "../x", 8, 1, 4};
   assert(!WindowReachableBy(malformed, {1, 5}));
+  for (const WindowRequester requester : {WindowRequester{1, 4}, WindowRequester{1, 5}, WindowRequester{5, 7}, WindowRequester{9, 4}}) {
+    assert(WindowFocusableBy(first, requester));
+    assert(WindowFocusableBy(regular, requester));
+  }
+  assert(!WindowFocusableBy(first, {0, 0}));
+  assert(!WindowFocusableBy(malformed, {1, 5}));
+  assert(WindowListedAsPrivate(first, {1, 4}) && WindowListedAsPrivate(second, {1, 4}));
+  assert(!WindowListedAsPrivate(first, {3, 1}));
+  assert(!WindowListedAsPrivate(regular, {1, 4}) && !WindowListedAsPrivate(isolated, {3, 7}));
+  assert(!WindowListedAsPrivate(malformed, {1, 4}) && !WindowListedAsPrivate(first, {0, 0}));
   std::puts("private_window_access=ok");
 }
 

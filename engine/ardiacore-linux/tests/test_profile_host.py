@@ -119,7 +119,7 @@ int main() {
         request = method(self.source, '  if (method == "ArdiaShell.requestWindowClose") {')
         self.assertIn('!Reaches(target)) continue;', request)
         operations = method(self.source, '  if (method == "ArdiaShell.windowFrame" || method == "ArdiaShell.closeWindow"')
-        self.assertIn('if (host->window_id() == ArgumentString(values, 0) && Reaches(host)) target = host;', operations)
+        self.assertIn('(method == "ArdiaShell.focusWindow" ? FocusReaches(host) : Reaches(host))) target = host;', operations)
         open_window = method(self.source, '  if (method == "ArdiaShell.openWindow") {')
         self.assertIn('if (!Reaches(host)) return std::move(done).Run(false, base::Value("No such native window"));', open_window)
         self.assertIn('request.opener_host != id_ || request.opener_generation != renderer_generation_', open_window)

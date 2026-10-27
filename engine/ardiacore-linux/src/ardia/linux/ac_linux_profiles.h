@@ -69,6 +69,8 @@ struct OpeningTicket {
 std::optional<ProfileName> ParseProfileName(std::string_view value);
 bool PrivateWindow(const WindowAccess& window);
 bool WindowReachableBy(const WindowAccess& window, const WindowRequester& requester);
+bool WindowFocusableBy(const WindowAccess& window, const WindowRequester& requester);
+bool WindowListedAsPrivate(const WindowAccess& window, const WindowRequester& requester);
 StartupProfiles PinnedStartupProfiles(const StartupProfiles& current, std::string_view app_directory);
 std::string ProfileDirectoryName(std::string_view isolated_id);
 std::string_view ProfileErrorCode(ProfileError error);

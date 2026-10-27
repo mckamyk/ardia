@@ -832,6 +832,13 @@ class ShellHostView : public views::View,
   bool Reaches(const ShellHostView* target) const {
     return target && ardiacore::linux_profiles::WindowReachableBy(target->access(), requester());
   }
+  bool FocusReaches(const ShellHostView* target) const {
+    return target && ardiacore::linux_profiles::WindowFocusableBy(target->access(), requester());
+  }
+  bool private_window() const {
+    const auto name = ardiacore::linux_profiles::ParseProfileName(page_profile_);
+    return name && name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate;
+  }
   int opener_host() const { return opener_host_; }
   void ForgetOpener(int host) {
     if (opener_host_ != host) return;
@@ -3748,6 +3755,12 @@ bool PrivateProfileId(std::string_view profile) {
   return !name || name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate;
 }
 
+void PrivateWindowsChanged() {
+  for (const auto& [id, host] : Hosts()) {
+    host->Event("ArdiaShell", "privateWindows", base::Value(base::DictValue()));
+  }
+}
+
 void NotifyOpener(int opener_host, const base::DictValue& event) {
   const auto found = Hosts().find(opener_host);
   if (found != Hosts().end()) found->second->Event("ArdiaShell", "onWindowEvent", base::Value(event.Clone()));
@@ -4293,6 +4306,16 @@ void ShellHostView::Invoke(
       return std::move(done).Run(false, base::Value("Unknown launch step"));
     return std::move(done).Run(true, base::Value(steps.Complete(values[0].GetString())));
   }
+  if (method == "ArdiaShell.privateWindows") {
+    base::ListValue windows;
+    for (const auto& [id, host] : Hosts()) {
+      if (!host->is_utility() && host->browser() &&
+          ardiacore::linux_profiles::WindowListedAsPrivate(host->access(), requester())) {
+        windows.Append(base::DictValue().Set("id", host->window_id()));
+      }
+    }
+    return std::move(done).Run(true, base::Value(std::move(windows)));
+  }
   if (method == "ArdiaShell.windowIds") {
     base::ListValue ids;
     for (const auto& [id, host] : Hosts()) {
@@ -4307,7 +4330,8 @@ void ShellHostView::Invoke(
       method == "ArdiaShell.setWindowTitle") {
     ShellHostView* target = nullptr;
     for (const auto& [id, host] : Hosts()) {
-      if (host->window_id() == ArgumentString(values, 0) && Reaches(host)) target = host;
+      if (host->window_id() == ArgumentString(values, 0) &&
+          (method == "ArdiaShell.focusWindow" ? FocusReaches(host) : Reaches(host))) target = host;
     }
     if (!target) return std::move(done).Run(false, base::Value("No such native window"));
     if (method == "ArdiaShell.utilityReady") {
@@ -4875,6 +4899,7 @@ class HostRegistry : public BrowserCollectionObserver,
     view->AddChildView(std::move(overlay));
     shell->Initialize();
     if (opener) NotifyOpener(*opener, base::DictValue().Set("type", "attached").Set("id", shell->window_id()));
+    if (shell->private_window()) PrivateWindowsChanged();
   }
   void OnBrowserCreated(BrowserWindowInterface* browser) override {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -4902,6 +4927,7 @@ class HostRegistry : public BrowserCollectionObserver,
     if (private_window) {
       ardiacore::ReleaseLinuxProfile(closed_profile->id);
       NotifyOpener(opener, base::DictValue().Set("type", "close").Set("id", closed_window));
+      PrivateWindowsChanged();
     }
     base::DictValue tx = base::DictValue()
         .Set("rev", ++Revision()).Set("cmd", base::Value())
