@@ -1,6 +1,6 @@
 # Linux native acceptance suite (#81)
 
-One command runs the runtime acceptance scenarios for #11, #12, #13, #18, #20, #30, #32, #33, #36 and #37 against a packaged Linux Ardia build. It runs headless, uses throwaway profiles, and prints the result for each issue as JSON. An issue can be closed with evidence once its result is `pass`. A `manual` result means every automated check passed and the steps that need a person are listed.
+One command runs the runtime acceptance scenarios for #11, #12, #13, #17, #18, #20, #30, #32, #33, #36 and #37 against a packaged Linux Ardia build. It runs headless, uses throwaway profiles, and prints the result for each issue as JSON. An issue can be closed with evidence once its result is `pass`. A `manual` result means every automated check passed and the steps that need a person are listed.
 
 ## Running it
 
@@ -90,6 +90,7 @@ Local fixtures:
 | F02 | #12 | Isolated profile window has its own browser context, cookies, localStorage and history; host refuses a default-profile tab in an isolated window (`ERR_PROFILE_*`); shared-data profile shares cookies/storage and context; private window is a separate context, reads and leaks nothing, never reaches `linux-session.json`, and its data is gone after the last private window closes; a blocked profile directory leaves no phantom window; restart restores no private window and keeps regular data | Extension isolation; Settings panes per profile |
 | F03 | #13 | Site panel text for HTTPS, HTTP, mixed, invalid certificate, HTTPS again, HTTP after HTTPS (no stale certificate) and `chrome://version`; web pages are never "Local Page" | Certificate viewer details |
 | F23 | #33 | Four-page history; history menu jumps −2, +2, −3; zoom in matches `devicePixelRatio` and shows the `Zoom: 110%` indicator; the popover shows the percentage and its Reset returns to 100% and hides the indicator; zoom out and the reset command; per-site zoom listed by `sites.zoomLevels`, restored after restart with matching page scale, removed on reset | Pinch zoom |
+| F07 | #17 | Status reports the store available, `backend: basic` and no reauthentication in a background instance; an empty vault lists `[]`; a credential saves through `ArdiaPasswords.save` and lists without its password; remove and never-save list work; a private profile name is refused with `ERR_PROFILE_PRIVATE` on generic and typed calls, and a credential saved in an isolated profile stays out of the default profile and the other way round; generic `passwords.reveal`/`passwords.save`/`autofill.cardNumber` are refused with `ERR_SECRET_ROUTE`; reveal, unlock, update and export are refused with `ERR_REAUTH_UNAVAILABLE`; addresses add, update and remove; a card saves through `ArdiaAutofill.saveCard`, lists only its last four digits and its number stays gated; password and autofill toggles change; the Passwords pane shows the basic-store notice; everything survives a restart; `Login Data`, `Web Data` and the browser log hold no fixture secret in plain text | polkit prompts (grant, deny, dismiss, timeout) for unlock, reveal, edit, export and card numbers; the five-minute grant window; a locked Secret Service; a private window's own renderer |
 | F08 | #18 | Known file completes on disk and `fileStatus` sees it; Ctrl+J lists it; slow download progresses, pause stalls it, resume finishes it; cancel removes the partial file; remove forgets it in Chromium's history; the folder setting changes the destination; clear empties finished rows; restart shows the kept download once, nothing live, nothing cleared, no popover | Open, Show in Folder and Trash; ask-where-to-save dialog |
 | F20 | #30 | Sidebar drop area found by its DOM `drop` listener; dropping one URL, several URLs and address-like text opens tabs; prose opens nothing; a CDP file drop (DOM-only paths) opens no `file:` tab; malformed `javascript:`/comment/NUL lists open nothing unsafe | Drag out of Downloads; real file-manager drops; internal reorder and page drops |
 | F10 | #20 | With suggestions on, typed queries get the local endpoint's suggestions and requests carry no cookie (a `SID` cookie is planted for the host) or authorization; with suggestions off, zero requests and no remote rows; a private window gets suggestions without cookies | — |
@@ -120,6 +121,13 @@ The JSON lists each manual item with these steps. They are kept here so they can
 **#13 F03**
 
 - **Certificate viewer.** Its issuer, validity and fingerprint match the served certificate.
+
+**#17 F07**
+
+- **System authentication.** Install `share/polkit-1/actions/dev.ardia.linux.policy` into `/usr/share/polkit-1/actions` and run a polkit agent. Unlock asks for your password and lists the passwords. Opening one within five minutes shows it without a second prompt; after five minutes it prompts again. Export CSV… shows the save dialog, then always prompts, and leaves the file at mode 0600 (Chromium writes it under the umask, then changes the mode). Showing a card number always prompts.
+- **Refusals.** Deny the prompt, dismiss it, and leave it open for two minutes. Each time the password stays hidden, Edit doesn't save, Export writes nothing, and the card number stays masked.
+- **Locked keyring.** With `--password-store=gnome-libsecret` and a locked or absent Secret Service, the Passwords pane shows "Passwords are unavailable" with the keyring reason, not an empty vault.
+- **Private windows.** A private window's own renderer gets `ERR_PROFILE_PRIVATE` for every passwords and autofill call and never shows the regular profile's data.
 
 **#18 F08**
 

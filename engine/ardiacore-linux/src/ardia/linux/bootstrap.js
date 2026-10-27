@@ -11,8 +11,15 @@
   const prefix = crypto.randomUUID();
   let sequence = 0;
   let disposed = false;
+  const interactive = new Map([
+    ["ArdiaPasswords.unlock", 180000],
+    ["ArdiaPasswords.reveal", 180000],
+    ["ArdiaPasswords.update", 180000],
+    ["ArdiaAutofill.cardNumber", 180000],
+    ["ArdiaPasswords.export", 900000],
+  ]);
 
-  const request = (method, args) => {
+  const request = (method, args, deadline = 30000) => {
     if (disposed) return Promise.reject(new Error("The browser UI has closed"));
     if (pending.size >= 256) return Promise.reject(new Error("Too many pending native requests"));
     return new Promise((resolve, reject) => {
@@ -20,7 +27,7 @@
       const timer = setTimeout(() => {
         if (!pending.delete(id)) return;
         reject(new Error(`Native request timed out: ${method}`));
-      }, 30000);
+      }, deadline);
       pending.set(id, { resolve, reject, timer });
       try {
         chrome.send("ardiaRequest", [id, method, args]);
@@ -71,7 +78,7 @@
         if (typeof method !== "string" || !args || typeof args !== "object" || Array.isArray(args)) {
           return Promise.reject(new TypeError("Invalid host call"));
         }
-        return request("host.invoke", { method, args });
+        return request("host.invoke", { method, args }, interactive.get(method));
       },
       onEvent(listener) {
         if (typeof listener !== "function") throw new TypeError("Expected an event listener");

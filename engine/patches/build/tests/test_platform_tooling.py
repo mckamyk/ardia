@@ -300,6 +300,12 @@ class PackagingTests(unittest.TestCase):
                 self.assertIn('ardia/lib/ardia/ardia-ui/index.html', packed.getnames())
                 self.assertIn('ardia/lib/ardia/libEGL.so', packed.getnames())
                 self.assertNotIn('--no-sandbox', packed.extractfile('ardia/bin/ardia').read().decode())
+                policy = packed.extractfile('ardia/share/polkit-1/actions/dev.ardia.linux.policy').read().decode()
+                self.assertIn('<action id="dev.ardia.linux.reauthenticate">', policy)
+                self.assertIn('<allow_active>auth_self</allow_active>', policy)
+                self.assertIn('<allow_any>no</allow_any>', policy)
+                self.assertNotIn('auth_self_keep', policy)
+                self.assertNotIn('<!--', policy)
             with self.assertRaises(ValueError):
                 packaging.package(output, ui, archive)
 

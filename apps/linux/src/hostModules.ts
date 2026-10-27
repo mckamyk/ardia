@@ -1,6 +1,7 @@
 import { hostLaunchConfig } from "./hostLaunchConfig.ts";
 import type { ArdiaHost } from "./host";
 import { callHost, hostModuleMethod, hostSupports } from "./host.ts";
+import { credentialModuleMethod } from "./hostCredentials.ts";
 import { linuxSystemMethod } from "./hostFiles.ts";
 import { linuxModuleMethod } from "./hostSystem.ts";
 
@@ -28,6 +29,8 @@ export function resolveHostModule(host: ArdiaHost, name: string, method: string)
   }
   const platform = linuxModuleMethod(host, name, method);
   if (platform) return platform;
+  const credential = credentialModuleMethod(host, name, method);
+  if (credential !== undefined) return credential;
   if (name === "ArdiaDocuments" && method === "call") {
     return (verb: string, profile: string, args: string) => {
       if (!["watch", "commit", "flush", "unwatch"].includes(verb)) return Promise.reject(Object.assign(new Error("Unknown document operation"), { code: "ERR_UNKNOWN_CALL" }));
