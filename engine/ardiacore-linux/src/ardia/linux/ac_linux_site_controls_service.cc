@@ -23,6 +23,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
+#include "base/one_shot_event.h"
 #include "base/path_service.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"

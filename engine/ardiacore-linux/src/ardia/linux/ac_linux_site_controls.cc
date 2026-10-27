@@ -50,7 +50,7 @@ Failure BlockerInvalid(std::string message) {
 Failure BadReply(std::string message) { return Failure{"ERR_BAD_REPLY", std::move(message)}; }
 
 bool OnlyKeys(const base::DictValue& args, std::initializer_list<std::string_view> allowed) {
-  for (const auto& [key, value] : args) {
+  for (const auto [key, value] : args) {
     if (std::find(allowed.begin(), allowed.end(), key) == allowed.end()) return false;
   }
   return true;
@@ -283,7 +283,7 @@ std::variant<base::Value, Failure> CompleteServiceCall(std::string_view name,
     const base::DictValue* settings = dict.FindDict("settings");
     if (!settings) return BadReply("Missing site settings");
     base::DictValue out;
-    for (const auto& [type, entry] : *settings) {
+    for (const auto [type, entry] : *settings) {
       if (!Contains(kSettingTypes, type) || !entry.is_dict()) continue;
       const std::string* value = String(entry.GetDict(), "value");
       const std::optional<bool> is_default = Bool(entry.GetDict(), "isDefault");

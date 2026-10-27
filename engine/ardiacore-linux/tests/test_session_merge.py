@@ -71,8 +71,19 @@ class DictValue {
   DictValue& operator=(DictValue&&) = default;
   DictValue(const DictValue&) = delete;
   DictValue& operator=(const DictValue&) = delete;
-  auto begin() const { return entries_.begin(); }
-  auto end() const { return entries_.end(); }
+  class const_iterator {
+   public:
+    using Inner = std::map<std::string, Value, std::less<>>::const_iterator;
+    explicit const_iterator(Inner inner) : inner_(inner) {}
+    std::pair<const std::string&, const Value&> operator*() const { return {inner_->first, inner_->second}; }
+    const_iterator& operator++() { ++inner_; return *this; }
+    bool operator==(const const_iterator& other) const { return inner_ == other.inner_; }
+    bool operator!=(const const_iterator& other) const { return inner_ != other.inner_; }
+   private:
+    Inner inner_;
+  };
+  const_iterator begin() const { return const_iterator(entries_.begin()); }
+  const_iterator end() const { return const_iterator(entries_.end()); }
   size_t size() const { return entries_.size(); }
   bool contains(std::string_view key) const { return entries_.contains(key); }
   const Value* Find(std::string_view key) const {
