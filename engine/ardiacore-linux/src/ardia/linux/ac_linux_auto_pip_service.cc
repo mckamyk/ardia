@@ -36,7 +36,7 @@ class AutoPictureInPictureProfiles : public ProfileManagerObserver {
   }
 
   static bool Regular(Profile* profile) {
-    return !profile->IsOffTheRecord() && !profile->ShutdownStarted();
+    return profile->IsRegularProfile() && !profile->ShutdownStarted();
   }
 
   void OnProfileAdded(Profile* profile) override {
