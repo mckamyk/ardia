@@ -27,10 +27,10 @@ while (($#)); do
   esac
 done
 
-case "$prefix" in
-  /*) ;;
-  *) echo "install.sh: --prefix must be absolute: $prefix" >&2; exit 2 ;;
-esac
+if [[ ! "$prefix" =~ ^/[A-Za-z0-9._/+-]*$ ]]; then
+  echo "install.sh: --prefix must be an absolute path of letters, digits and ._/+-: $prefix" >&2
+  exit 2
+fi
 prefix="${prefix%/}"
 [[ -n "$prefix" ]] || prefix=/usr
 

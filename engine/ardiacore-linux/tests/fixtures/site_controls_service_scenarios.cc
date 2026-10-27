@@ -622,6 +622,24 @@ void IsolatedProfilesFollowTheDefault(const std::filesystem::path& scratch) {
   Advance(40000);
   assert(100 - Bridges()[&stuck].fail_follows == 6);
 
+  auto short_lead = std::make_unique<Profile>("/profiles/ShortLead");
+  Profile orphan("/profiles/Orphan");
+  Bridges()[short_lead.get()];
+  Bridges()[&orphan].fail_follows = 1;
+  ardia::StartLinuxContentBlocker(short_lead.get(), &orphan);
+  base::RunTasks();
+  short_lead->system.ready_event.Signal();
+  orphan.system.ready_event.Signal();
+  Advance(500);
+  assert(Bridges()[&orphan].fail_follows == 0 && !ardia::LinuxNavigationsHeld(&orphan));
+  const auto follows = [&] { return std::count(Bridges()[&orphan].ops.begin(), Bridges()[&orphan].ops.end(), "follow"); };
+  assert(follows() == 1);
+  short_lead.reset();
+  Advance(40000);
+  assert(follows() == 1);
+  auto orphan_state = Settle(Call(&lead, "contentBlocker.state", "{}", "orphan", &orphan));
+  assert(orphan_state->ok);
+
   auto leaving = std::make_unique<Profile>("/profiles/Leaving");
   Bridges()[leaving.get()].fail_follows = 1;
   ardia::StartLinuxContentBlocker(&lead, leaving.get());

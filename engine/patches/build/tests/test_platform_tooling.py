@@ -392,8 +392,11 @@ class PackagingTests(unittest.TestCase):
                 self.assertIn(f'Exec={prefix}/bin/ardia %U', desktop)
                 self.assertFalse((installed / 'install.sh').exists())
                 self.assertFalse((installed / 'share/polkit-1').exists() and prefix != '/usr')
-            refused = subprocess.run([str(installer), '--prefix', 'relative'], capture_output=True, text=True, timeout=30)
-            self.assertNotEqual(refused.returncode, 0)
+            for bad in ['relative', '/opt/a|b', '/opt/a&b', '/opt/a b']:
+                refused = subprocess.run([str(installer), '--prefix', bad, '--destdir', str(root / 'refused')],
+                                         capture_output=True, text=True, timeout=30)
+                self.assertNotEqual(refused.returncode, 0, bad)
+                self.assertFalse((root / 'refused').exists(), bad)
 
     def test_arch_package_installs_the_policy_through_the_installer(self):
         pkgbuild = (REPO / 'scripts/linux/arch/PKGBUILD').read_text()

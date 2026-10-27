@@ -174,13 +174,13 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
  public:
   static LinuxContentBlocker* For(Profile* profile) { return Start(profile, nullptr); }
 
-  static LinuxContentBlocker* Start(Profile* profile, Profile* follows) {
+  static LinuxContentBlocker* Start(Profile* profile, LinuxContentBlocker* follows) {
     if (LinuxContentBlocker* found = Find(profile)) return found;
     auto blocker = std::make_unique<LinuxContentBlocker>(profile);
     LinuxContentBlocker* raw = blocker.get();
     All().emplace(profile, std::move(blocker));
     raw->leader_ = !follows;
-    raw->follows_ = follows;
+    if (follows) raw->follows_ = follows->weak_factory_.GetWeakPtr();
     if (controls::ShouldHoldNavigations(raw->leader_, profile->IsNewProfile())) {
       raw->holding_ = true;
       HoldLinuxNavigations(profile);
@@ -234,10 +234,7 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
     return *all;
   }
 
-  LinuxContentBlocker* Leader() const {
-    LinuxContentBlocker* leader = follows_ ? Find(follows_) : nullptr;
-    return leader && leader->leader_ ? leader : nullptr;
-  }
+  LinuxContentBlocker* Leader() const { return follows_ && follows_->leader_ ? follows_.get() : nullptr; }
 
   void ReleaseHold(const std::string& why) {
     if (!holding_) return;
@@ -287,11 +284,13 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
         base::Milliseconds(controls::InheritRetryDelayMs(failed)));
   }
 
-  bool Follows(const Profile* leader) const { return !leader_ && follows_ == leader && load_ == Load::kLoaded; }
+  bool Follows(const LinuxContentBlocker* leader) const {
+    return !leader_ && follows_.get() == leader && load_ == Load::kLoaded;
+  }
 
   void FollowAll() {
     bool followers = false;
-    for (auto& [profile, blocker] : All()) followers = followers || blocker->Follows(profile_);
+    for (auto& [profile, blocker] : All()) followers = followers || blocker->Follows(this);
     if (!followers) return;
     Call(Internal(controls::BlockerOp::kSettings), base::BindOnce([](base::WeakPtr<LinuxContentBlocker> leader, bool ok,
                                                                      base::Value settings) {
@@ -303,7 +302,7 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
         return;
       }
       for (auto& [profile, blocker] : All()) {
-        if (!blocker->Follows(leader->profile_)) continue;
+        if (!blocker->Follows(leader.get())) continue;
         controls::BlockerRequest follow = Internal(controls::BlockerOp::kFollow);
         follow.settings = *parsed;
         blocker->Call(std::move(follow), base::BindOnce([](bool ok, base::Value result) {
@@ -562,7 +561,7 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
   }
 
   raw_ptr<Profile> profile_;
-  raw_ptr<Profile> follows_ = nullptr;
+  base::WeakPtr<LinuxContentBlocker> follows_;
   bool leader_ = false;
   bool holding_ = false;
   int inherit_attempts_ = 0;
@@ -658,9 +657,9 @@ void StartLinuxSiteControls(ContentBlockerChanged changed) {
 void StartLinuxContentBlocker(Profile* app_profile, Profile* page_profile) {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   if (!app_profile || app_profile->IsOffTheRecord()) return;
-  LinuxContentBlocker::Start(app_profile, nullptr);
+  LinuxContentBlocker* leader = LinuxContentBlocker::Start(app_profile, nullptr);
   if (!page_profile || page_profile->IsOffTheRecord() || page_profile == app_profile) return;
-  LinuxContentBlocker::Start(page_profile, app_profile);
+  LinuxContentBlocker::Start(page_profile, leader);
 }
 
 }
