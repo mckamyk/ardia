@@ -107,6 +107,11 @@ bool LinuxHandles(std::string_view name) {
   return name.starts_with("extensions.") || name == "search.engines";
 }
 
+bool UsesWindowProfile(std::string_view name) {
+  return name == "extensions.actionStates" || name == "extensions.sidePanelUrl" ||
+         name == "extensions.resolveInstallPrompt";
+}
+
 std::optional<base::DictValue> Configuration(const base::DictValue& input) {
   const auto* id = input.FindString("id");
   const auto* options = input.FindDict("options");

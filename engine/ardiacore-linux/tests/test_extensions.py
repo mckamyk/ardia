@@ -93,6 +93,119 @@ class ExtensionSurfaceTests(unittest.TestCase):
         self.assertIn('extension views scenarios passed', output)
 
 
+SERVICE_PRELUDE = r'''
+#include "extension_views_support.h"
+#include "ardia/linux/ac_linux_extensions.h"
+#include "ardia/linux/ac_linux_profiles.h"
+#include "ardia/linux/ac_linux_extension_service.h"
+namespace extensions {
+struct ExtensionInstallPromptClient {
+  enum class Result { ACCEPTED, ACCEPTED_WITH_WITHHELD_PERMISSIONS, USER_CANCELED, ABORTED };
+  struct DoneCallbackPayload {
+    explicit DoneCallbackPayload(Result value) : result(value) {}
+    Result result;
+  };
+  using DoneCallback = base::OnceCallback<void(DoneCallbackPayload)>;
+};
+}
+namespace ardiacore {
+inline std::map<std::string, Profile*> g_profiles;
+using LinuxProfileDone = base::OnceCallback<void(Profile*, linux_profiles::ProfileError)>;
+inline void ResolveLinuxProfile(std::string_view id, LinuxProfileDone done) {
+  auto found = g_profiles.find(std::string(id));
+  if (found == g_profiles.end()) return std::move(done).Run(nullptr, linux_profiles::ProfileError::kUnavailable);
+  std::move(done).Run(found->second, linux_profiles::ProfileError::kNone);
+}
+inline std::optional<std::string> LinuxProfileName(const Profile* profile) {
+  for (const auto& [name, known] : g_profiles) if (known == profile) return name;
+  return std::nullopt;
+}
+}
+namespace ardia {
+namespace ext = linux_extensions;
+using Done = LinuxExtensionsDone;
+using InstallDone = extensions::ExtensionInstallPromptClient::DoneCallback;
+using InstallPayload = extensions::ExtensionInstallPromptClient::DoneCallbackPayload;
+using InstallResult = extensions::ExtensionInstallPromptClient::Result;
+ARDIA_SERVICE
+}
+'''
+
+
+class ExtensionServiceTests(unittest.TestCase):
+    def test_window_calls_use_the_window_profile_and_prompts_resolve_once_in_their_window(self):
+        service = (LINUX / 'ac_linux_extension_service.cc').read_text()
+        extracted = '\n'.join([
+            method(service, 'void Fail(Done done,'), method(service, 'struct PendingInstall {') + ';',
+            method(service, 'ext::PromptLedger<PendingInstall>& Prompts() {'), method(service, 'void Answer(PendingInstall pending,'),
+            method(service, 'std::string ProfileId(const Profile* profile) {'), method(service, 'void ResolvePrompt('),
+            method(service, 'content::WebContents* ProfileTab('), method(service, 'void LinuxExtensionsProfile('),
+            method(service, 'void CallProfile('),
+            *[line for line in service.splitlines() if line.startswith('LinuxExtensionWindow')],
+        ])
+        with tempfile.TemporaryDirectory(prefix='ardia-extension-service-') as directory:
+            root = pathlib.Path(directory)
+            (root / 'base').mkdir()
+            (root / 'base/values.h').write_text(EXTENDED)
+            stub_tree(root, ['base/functional/callback.h', 'ui/gfx/native_ui_types.h'], 'extension_views_support.h')
+            source = root / 'service.cc'
+            source.write_text(SERVICE_PRELUDE.replace('ARDIA_SERVICE', extracted) + (FIXTURES / 'extension_service_scenarios.cc').read_text())
+            output = compile_and_run(self, 'extension-service', [source, LINUX / 'ac_linux_extensions.cc', LINUX / 'ac_linux_profiles.cc'],
+                                     extra_includes=[root, FIXTURES])
+        self.assertIn('extension service scenarios passed', output)
+
+
+class ExtensionBroadcastTests(unittest.TestCase):
+    def test_extension_changes_reach_only_windows_of_that_profile(self):
+        host = (LINUX / 'ac_linux_host.cc').read_text()
+        start = host.index('  extensions.broadcast = base::BindRepeating(')
+        lambda_text = host[start:host.index('\n  });\n', start) + len('\n  });\n')]
+        code = r'''
+#include "extension_views_support.h"
+#include <cassert>
+#include <cstdio>
+struct FakeHost {
+  Profile* page = nullptr;
+  std::vector<std::string> seen;
+  Profile* page_profile() const { return page; }
+  bool ExtensionEvent(std::string_view name, base::DictValue data) {
+    seen.push_back(std::string(name) + ":" + *data.FindString("id"));
+    return true;
+  }
+};
+std::map<int, FakeHost*>& Hosts() {
+  static std::map<int, FakeHost*> hosts;
+  return hosts;
+}
+namespace base {
+template <class F> F BindRepeating(F fn) { return fn; }
+}
+int main() {
+  Profile regular, isolated;
+  FakeHost a, b, c;
+  a.page = &regular;
+  b.page = &isolated;
+  c.page = &regular;
+  Hosts() = {{1, &a}, {2, &b}, {3, &c}};
+  struct { base::RepeatingCallback<void(Profile*, std::string_view, base::DictValue)> broadcast; } extensions;
+ARDIA_LAMBDA
+  extensions.broadcast.Run(&isolated, "extensions.changed", base::DictValue().Set("id", "x"));
+  assert(a.seen.empty() && c.seen.empty() && b.seen.size() == 1 && b.seen[0] == "extensions.changed:x");
+  extensions.broadcast.Run(&regular, "extensions.changed", base::DictValue().Set("id", "y"));
+  assert(a.seen.size() == 1 && c.seen.size() == 1 && b.seen.size() == 1);
+  std::printf("broadcast scenarios passed\n");
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='ardia-extension-broadcast-') as directory:
+            root = pathlib.Path(directory)
+            (root / 'base').mkdir()
+            (root / 'base/values.h').write_text(EXTENDED)
+            source = root / 'broadcast.cc'
+            source.write_text(code.replace('ARDIA_LAMBDA', lambda_text))
+            output = compile_and_run(self, 'extension-broadcast', [source], extra_includes=[root, FIXTURES])
+        self.assertIn('broadcast scenarios passed', output)
+
+
 class ExtensionWiringTests(unittest.TestCase):
     def setUp(self):
         self.host = (LINUX / 'ac_linux_host.cc').read_text()
@@ -166,7 +279,8 @@ int main() {
         for name in ['ac_linux_extension_service', 'ac_linux_extension_views', 'ac_linux_extensions']:
             for suffix in ['.cc', '.h']:
                 self.assertIn(f'"{name}{suffix}"', target)
-        for dep in ['//chrome/browser/extensions', '//extensions/common', '//extensions/browser', '//ui/shell_dialogs']:
+        for dep in ['//chrome/browser/extensions', '//chrome/browser/ui/extensions:extension_popup_types', '//extensions/common',
+                    '//extensions/browser', '//ui/shell_dialogs']:
             self.assertIn(f'"{dep}"', target)
 
     def test_action_popup_hook_patch_is_registered_for_linux_and_applies(self):

@@ -349,7 +349,7 @@ void LinuxExtensionSurfaces::CloseAll() {
 }
 
 void LinuxExtensionSurfaces::ExpectPopup(std::string extension_id, ShowPopupCallback callback) {
-  if (auto previous = pending_.Expect(std::move(extension_id), Now(), std::move(callback))) {
+  if (auto previous = pending_.Expect(std::move(extension_id), Now(), std::move(callback)); previous && *previous) {
     LOG(WARNING) << "[ardia] action.openPopup: another openPopup came first";
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
                                                                 base::BindOnce(std::move(*previous), nullptr));
@@ -364,7 +364,7 @@ std::optional<ShowPopupCallback> LinuxExtensionSurfaces::TakePendingPopup() {
 }
 
 void LinuxExtensionSurfaces::ExpirePending() {
-  if (auto expired = pending_.Expire(Now())) {
+  if (auto expired = pending_.Expire(Now()); expired && *expired) {
     LOG(WARNING) << "[ardia] action.openPopup: no popup of the extension opened in its window within 10 s";
     std::move(*expired).Run(nullptr);
   }
@@ -372,7 +372,7 @@ void LinuxExtensionSurfaces::ExpirePending() {
 
 void LinuxExtensionSurfaces::FailPending() {
   pending_timer_.Stop();
-  if (auto pending = pending_.Fail()) {
+  if (auto pending = pending_.Fail(); pending && *pending) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
                                                                 base::BindOnce(std::move(*pending), nullptr));
   }

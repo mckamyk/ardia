@@ -26,6 +26,9 @@ void Requests() {
          !ValidFolderPath("/a//b") && !ValidFolderPath("/a/") && !ValidFolderPath(std::string("/a\0b", 4)) &&
          !ValidFolderPath("/" + std::string(kMaxPathBytes, 'x')));
   assert(LinuxHandles("extensions.list") && LinuxHandles("search.engines") && !LinuxHandles("downloads.list"));
+  assert(UsesWindowProfile("extensions.actionStates") && UsesWindowProfile("extensions.sidePanelUrl") &&
+         UsesWindowProfile("extensions.resolveInstallPrompt") && !UsesWindowProfile("extensions.list") &&
+         !UsesWindowProfile("extensions.uninstall"));
   assert(ValidateRequest("extensions.list", Dict()).empty());
   assert(!ValidateRequest("extensions.list", Dict().Set("x", base::Value(1))).empty());
   assert(ValidateRequest("search.engines", Dict()).empty());

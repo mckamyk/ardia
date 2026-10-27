@@ -54,8 +54,8 @@ The shared UI already speaks the typed `extensions.*` domain. Linux routed most 
 - **Profile resolution** goes through #62's registry, in two small functions:
   - `LinuxExtensionsProfile` serves calls. It parses the requested profile name and resolves it asynchronously with `ResolveLinuxProfile`, so the default and isolated profiles both work. Private names or off-the-record results get `ERR_PROFILE_PRIVATE`; other failures get the registry's code.
   - `LinuxExtensionViewProfile` serves extension views. It uses the window's page profile and requires the requested name to be the one that window hosts (`ERR_PROFILE_WINDOW` otherwise). Private windows get `ERR_PROFILE_PRIVATE`.
-  - `actionStates` and `sidePanelUrl` also require the tab to belong to the resolved profile.
-  - Events and prompts carry the registry's profile name.
+  - `actionStates`, `sidePanelUrl` and `resolveInstallPrompt` don't take a profile from the shared UI. They use the calling window's page profile, so isolated-profile windows can answer their own prompts. `actionStates` and `sidePanelUrl` also require the tab to belong to that profile.
+  - Events and prompts carry the registry's profile name. `extensions.changed` goes only to windows of the changed profile.
   - Extensions in private windows remain #99.
 
 **`ac_linux_extension_views.{h,cc}`** contains `LinuxExtensionSurfaces`, one per window. It hosts popups and side panels as real `ExtensionViewHost`s, made by `ExtensionViewHostFactory::CreatePopupHost` and `CreateSidePanelHost`, in a `views::WebView` child of the window's host view:
@@ -80,7 +80,7 @@ The shared UI already speaks the typed `extensions.*` domain. Linux routed most 
 - `RetireRenderer`, the destructor and `DetachBrowser` release views and re-send or cancel prompts;
 - `StartLinuxHost` installs the delegate (deliver, window choice, tab key, views, broadcast).
 
-`BUILD.gn` lists the new files and adds `//chrome/browser/extensions`, `//extensions/common` and `//ui/shell_dialogs`.
+`BUILD.gn` lists the new files and adds `//chrome/browser/extensions`, `//chrome/browser/ui/extensions:extension_popup_types`, `//extensions/common` and `//ui/shell_dialogs`.
 
 **`engine/patches/chromium-linux-action-popup-hook.patch`**, registered `linux` in `series`, defines `g_ardia_open_action_popup` in `extension_action_api.cc`. On macOS the same hook comes from `engine/ardiacore/apply.sh`. It applies with zero fuzz to the 156 source.
 
@@ -192,4 +192,6 @@ Manual: Web Store consent and Cancel, the permission-increase re-enable prompt (
   - #97: extension search providers (`chrome_settings_overrides`) are Windows- and macOS-only in Chromium;
   - #98: extension keyboard shortcuts;
   - #99: extensions in private windows (isolated profiles already work through the registry);
-  - #100: native messaging hosts.
+  - #100: native messaging hosts;
+  - #137: an install prompt outlives its parent tab (Chromium's own dialog aborts in that case).
+- `chrome.action.openPopup` passes a null `ShowPopupCallback`. Expecting, expiring and failing a pending popup skip null callbacks, as macOS does.

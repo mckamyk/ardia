@@ -113,6 +113,23 @@ auto BindOnce(OnceCallback<R(A...)> callback, B... bound) {
   };
 }
 
+template <class F, class... B>
+auto BindOnce(F fn, B... bound) {
+  return [fn = std::move(fn), bound = std::make_tuple(std::move(bound)...)](auto&&... rest) mutable {
+    return std::apply([&](auto&&... values) { return fn(std::move(values)..., std::forward<decltype(rest)>(rest)...); },
+                      std::move(bound));
+  };
+}
+
+template <class T> class NoDestructor {
+ public:
+  T& operator*() { return value_; }
+  T* operator->() { return &value_; }
+
+ private:
+  T value_;
+};
+
 inline std::deque<OnceClosure>& PostedTasks() {
   static std::deque<OnceClosure> tasks;
   return tasks;
@@ -161,8 +178,16 @@ class TimeTicks {
   double seconds_ = 0;
 };
 
+class OneShotTimer;
+inline std::vector<OneShotTimer*>& LiveTimers() {
+  static std::vector<OneShotTimer*> timers;
+  return timers;
+}
+
 class OneShotTimer {
  public:
+  OneShotTimer() { LiveTimers().push_back(this); }
+  ~OneShotTimer() { std::erase(LiveTimers(), this); }
   template <class F> void Start(int, TimeDelta delay, F task) {
     delay_ = delay;
     task_ = OnceClosure(std::move(task));
@@ -303,6 +328,8 @@ class WebContents {
   std::string GetTitle() const { return title; }
   bool IsLoading() const { return loading; }
   void Focus() { ++focuses; }
+  BrowserContext* GetBrowserContext() const { return context; }
+  BrowserContext* context = nullptr;
   std::vector<WebContentsObserver*> observers;
   RenderFrameHost frame;
   std::string url;

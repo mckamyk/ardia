@@ -248,6 +248,23 @@ void ApiPopups() {
   assert(shown.size() == 6 && shown[5] == nullptr);
 }
 
+void NullApiPopupCallbacks() {
+  Fixture f;
+  f.surfaces->ExpectPopup(kId, ShowPopupCallback());
+  f.surfaces->ExpectPopup(kOther, ShowPopupCallback());
+  base::RunPostedTasks();
+  base::FakeNow() += 11;
+  for (auto* timer : std::vector<base::OneShotTimer*>(base::LiveTimers())) timer->Fire();
+  base::RunPostedTasks();
+  f.surfaces->ExpectPopup(kId, ShowPopupCallback());
+  const int popup = f.Create("popup", kPopup);
+  extensions::Factory().host->FinishLoad(true);
+  assert(f.Invoke("extensionView.release", base::DictValue().Set("id", popup)).ok);
+  f.surfaces->ExpectPopup(kOther, ShowPopupCallback());
+  f.surfaces.reset();
+  base::RunPostedTasks();
+}
+
 }
 
 int main() {
@@ -257,5 +274,6 @@ int main() {
   AutoResize();
   RendererAndWindowRetirement();
   ApiPopups();
+  NullApiPopupCallbacks();
   std::printf("extension views scenarios passed\n");
 }

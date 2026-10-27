@@ -4602,8 +4602,10 @@ void StartLinuxHost() {
     const auto found = Hosts().find(window);
     return found != Hosts().end() && !found->second->is_utility() ? found->second->ExtensionSurfaces() : nullptr;
   });
-  extensions.broadcast = base::BindRepeating([](Profile*, std::string_view name, base::DictValue data) {
-    for (const auto& [id, host] : Hosts()) host->ExtensionEvent(name, data.Clone());
+  extensions.broadcast = base::BindRepeating([](Profile* profile, std::string_view name, base::DictValue data) {
+    for (const auto& [id, host] : Hosts()) {
+      if (host->page_profile() == profile) host->ExtensionEvent(name, data.Clone());
+    }
   });
   StartLinuxExtensions(std::move(extensions));
   ac_engine_set_event_sink(EngineEvent, nullptr);

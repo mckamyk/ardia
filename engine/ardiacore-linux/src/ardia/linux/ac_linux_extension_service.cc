@@ -506,6 +506,14 @@ bool LinuxExtensionsHandles(std::string_view name) {
 
 namespace {
 
+void CallProfile(const LinuxExtensionWindow& window, const std::string& name, std::string_view requested,
+                 base::OnceCallback<void(Profile*, std::string)> done) {
+  if (!ext::UsesWindowProfile(name)) return LinuxExtensionsProfile(requested, std::move(done));
+  if (!window.profile) return std::move(done).Run(nullptr, "ERR_WINDOW_CLOSED");
+  if (window.profile->IsOffTheRecord()) return std::move(done).Run(nullptr, "ERR_PROFILE_PRIVATE");
+  std::move(done).Run(window.profile, std::string());
+}
+
 void Dispatch(const LinuxExtensionWindow& window, const std::string& name, base::DictValue input, Done done,
               Profile* profile, std::string code) {
   if (!profile) {
@@ -545,7 +553,7 @@ void LinuxExtensionsCall(const LinuxExtensionWindow& window, std::string_view re
   base::DictValue input = std::move(*parsed).TakeDict();
   if (const auto invalid = ext::ValidateRequest(name, input); !invalid.empty())
     return Fail(std::move(done), "ERR_EXTENSION_REQUEST", invalid);
-  LinuxExtensionsProfile(requested_profile, base::BindOnce(&Dispatch, window, name, std::move(input), std::move(done)));
+  CallProfile(window, name, requested_profile, base::BindOnce(&Dispatch, window, name, std::move(input), std::move(done)));
 }
 
 std::string LinuxExecuteExtensionAction(content::WebContents* contents, const base::ListValue& values) {
