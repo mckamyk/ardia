@@ -1,0 +1,1930 @@
+{
+  "schema_version": 1,
+  "repository": "mckamyk/ardia",
+  "source_commit": "b70711df2af16cee08146b78f7d3405c57d6d1de",
+  "upstream_main": "a2ca6bdf8f69ef1b5818525ca79e9d85de2fc962",
+  "previous_linux": "82ecec2af452dcb9ef088e0a3a0fd8a8af32b699",
+  "coordination_issue": "https://github.com/mckamyk/ardia/issues/10",
+  "planning_only": true,
+  "stack_is_not_a_global_scheduling_barrier": true,
+  "runtime_acceptance_gates": [
+    "N01",
+    "N02",
+    "N03",
+    "N04",
+    "N05"
+  ],
+  "stages": [
+    {
+      "id": 1,
+      "slug": "upstream-and-capabilities",
+      "title": "Upstream baseline, capabilities and profile boundaries",
+      "ids": [
+        "N01",
+        "N02",
+        "N03",
+        "N04",
+        "N05",
+        "N06",
+        "F02",
+        "F26"
+      ],
+      "contracts": [
+        "Stable domain/verb JSON and error/event envelope",
+        "Synchronous launch configuration and real host capability contract",
+        "Application tab ID versus native transport ID",
+        "Profile resolver and isolation authority",
+        "One effective Linux shortcut catalog"
+      ],
+      "branch": "t3/linux-parity-plan-01-upstream-and-capabilities",
+      "file": "01-upstream-and-capabilities.md"
+    },
+    {
+      "id": 2,
+      "slug": "commands-and-dialogs",
+      "title": "Everyday page commands and application dialogs",
+      "ids": [
+        "F01",
+        "F05",
+        "F23"
+      ],
+      "contracts": [
+        "Owned per-tab command arguments and cancellation",
+        "Window-owned confirm/prompt results",
+        "Find and zoom event state"
+      ],
+      "branch": "t3/linux-parity-plan-02-commands-and-dialogs",
+      "file": "02-commands-and-dialogs.md"
+    },
+    {
+      "id": 3,
+      "slug": "persistent-documents",
+      "title": "Canonical document state and save-before-close",
+      "ids": [
+        "F04"
+      ],
+      "contracts": [
+        "Profile/document revisions and identity-aware merge",
+        "Canonical notifications without write echoes",
+        "Pending debounce and native write close barrier"
+      ],
+      "branch": "t3/linux-parity-plan-03-persistent-documents",
+      "file": "03-persistent-documents.md"
+    },
+    {
+      "id": 4,
+      "slug": "native-events-and-services",
+      "title": "Page events and native browser services",
+      "ids": [
+        "F03",
+        "F06",
+        "F07",
+        "F08",
+        "F09",
+        "F15",
+        "F16",
+        "F17",
+        "F24",
+        "F25"
+      ],
+      "contracts": [
+        "Security/media/capture/fullscreen/page-focus event coverage",
+        "Typed secure storage and reauthentication",
+        "Bounded page-message substrate",
+        "Download/extension/filesystem view ownership"
+      ],
+      "branch": "t3/linux-parity-plan-04-native-events-and-services",
+      "file": "04-native-events-and-services.md"
+    },
+    {
+      "id": 5,
+      "slug": "integrations-and-input",
+      "title": "Integrations, input and shared startup services",
+      "ids": [
+        "F10",
+        "F11",
+        "F12",
+        "F13",
+        "F14",
+        "F18",
+        "F19",
+        "F20",
+        "F27"
+      ],
+      "contracts": [
+        "Narrow network and protected credential operations",
+        "App-wide versus renderer-local service ownership",
+        "Portable import/sync/calendar provider APIs",
+        "Pointer modifiers and native drag sessions",
+        "Safe lifecycle policy prerequisites"
+      ],
+      "branch": "t3/linux-parity-plan-05-integrations-and-input",
+      "file": "05-integrations-and-input.md"
+    },
+    {
+      "id": 6,
+      "slug": "desktop-and-acceptance",
+      "title": "Desktop lifecycle and native acceptance scenarios",
+      "ids": [
+        "F21",
+        "F22",
+        "R01",
+        "R02",
+        "R03"
+      ],
+      "contracts": [
+        "Regular-window close request/acknowledgment",
+        "Requested focus versus observed activation",
+        "Compositor-appropriate geometry and native drag target identity",
+        "Feature-level current-build acceptance evidence"
+      ],
+      "branch": "t3/linux-parity-plan-06-desktop-and-acceptance",
+      "file": "06-desktop-and-acceptance.md"
+    }
+  ],
+  "contracts": [
+    {
+      "name": "Domain calls and events",
+      "providers": "N02",
+      "contract": "Exact domain/verb routing, serialized replies, structured errors and {name,data} event envelopes. Dedicated secret-bearing methods stay typed native operations."
+    },
+    {
+      "name": "Stable page identity",
+      "providers": "N03",
+      "contract": "Application tab IDs are stable strings; browser/strip/window IDs remain explicit native transport identifiers. Close/adopt/transfer and events resolve the owning tab."
+    },
+    {
+      "name": "Launch configuration",
+      "providers": "N04, N05",
+      "contract": "Synchronous validated configuration, app-versus-test flags and Linux launch-switch implementation, with no Promise masquerading as a configuration object."
+    },
+    {
+      "name": "Profile authority",
+      "providers": "F02",
+      "contract": "Profile lookup and off-the-record lifetime, deliberate shared-data spaces, no fallback from private or isolated IDs to regular storage."
+    },
+    {
+      "name": "Canonical documents",
+      "providers": "F04",
+      "contract": "Profile/document revisions, identity-aware reconciliation, tombstones, canonical notifications and debounce/write close barrier."
+    },
+    {
+      "name": "Page-message substrate",
+      "providers": "F16",
+      "contract": "Bounded authenticated routing, document lifetime, trusted shell distinction and narrow evaluation. F25 needs only scroll reporting, not the entire selection/peek UI."
+    },
+    {
+      "name": "Protected secrets",
+      "providers": "F07; coordinate F11/F12/F13",
+      "contract": "Linux protected credential storage and real OS authentication before reveal/export/secret writes. Metadata, parsers and non-secret controls can proceed earlier."
+    },
+    {
+      "name": "Policy protection state",
+      "providers": "F15, F17; consumed by F18",
+      "contract": "Reliable media/capture/PiP/prompt/dirty-input/visible-pane state before automatic freezing/discard is enabled. Unknown state protects the page."
+    },
+    {
+      "name": "Filesystem and drag",
+      "providers": "F08, F12, F20, F26",
+      "contract": "Owned native file tokens, validated paths, picker cancellation and native export/drop sessions. DOM URLs/text and native files are distinct."
+    },
+    {
+      "name": "Window lifecycle",
+      "providers": "F21, F22, R03",
+      "contract": "Close request/acknowledgment, readiness, requested focus versus observed activation, compositor-appropriate geometry. R02 consumes target identities without assuming Wayland global coordinates."
+    },
+    {
+      "name": "Effective shortcuts",
+      "providers": "N06",
+      "contract": "One Linux binding/default/alias/conflict catalog shared by native dispatch, command hints and Settings. Preserve physical modifier identities."
+    },
+    {
+      "name": "Service authority",
+      "providers": "F27; coordinate F04/F13/F18",
+      "contract": "Define app-wide, profile-wide and renderer-local ownership so extra native windows do not duplicate services or writers."
+    }
+  ],
+  "findings": [
+    {
+      "id": "F01",
+      "priority": "P1",
+      "area": "Page tools",
+      "title": "Find, Print, Save Page and DevTools are exposed but cannot execute",
+      "impact": "Ctrl+F opens a search bar that cannot search a native page. Print, system print, Save Page, DevTools, Inspect and Console actions reject instead of completing.",
+      "evidence": "Shared FindBar still calls find/stopFinding and command dispatch calls print/runPageCommand/showDevTools. Linux HostWebView forwards them as tab.command, whose native dispatcher still lacks these methods. Linux shortcuts consume matched accelerators, preventing normal Chromium shortcut fallback. Domain migration does not supply per-tab commands.",
+      "refs": [
+        "apps/browser/src/components/find/FindBar.tsx:48",
+        "apps/browser/src/state/commands/commands.ts:168",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1045"
+      ],
+      "caveat": "Source revalidated after rebase; current UI cannot be runtime-tested until N01/N02/N03/N04 bootstrap compatibility is repaired. Chromium context-menu alternatives may exist.",
+      "verify": "On a loaded native page, search for known text, print, save and open each DevTools mode. Require a successful visible result, not merely a dispatched command.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Implement typed per-tab find, print/system-print/save-page and DevTools modes using Chromium helpers.",
+        "Emit find results and preserve tab ownership, cancellation and native modal shortcut ownership."
+      ],
+      "acceptance": [
+        "Find known text with counts, previous/next and dismissal on two real tabs.",
+        "Print/save and all DevTools modes produce actual correct-tab results from shell and page focus."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 11,
+        "id": 6045125790,
+        "url": "https://github.com/mckamyk/ardia/issues/11",
+        "title": "[Linux parity F01] [P1] Find, Print, Save Page and DevTools are exposed but cannot execute"
+      },
+      "primary_stage": 2,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F05",
+        "F17",
+        "F23",
+        "R01"
+      ],
+      "suggested_role": "Native page-command and dialog owners",
+      "ownership_boundary": "Separate Linux page-command and dialog helpers; coordinate narrow dispatch registration in ac_linux_host.cc. Current find/commands state consumers are references, not a reason to fork shared UI."
+    },
+    {
+      "id": "F02",
+      "priority": "P1",
+      "area": "Profiles",
+      "title": "The default isolated-profile flow and private windows are unsupported",
+      "impact": "A user can create and select an isolated profile whose real pages and services fail to load. New Incognito Window updates shell state but cannot create its native window.",
+      "evidence": "The isolated-profile default still creates generated profile IDs; the Linux resolver permits only empty/default identities for native tabs, services and regular windows and rejects incognito. No upstream commit adds Linux profile ownership.",
+      "refs": [
+        "apps/browser/src/components/profiles/CreateProfile.tsx:41",
+        "apps/browser/src/state/profiles/profiles.ts:79",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:271",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:738",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1218",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1961"
+      ],
+      "caveat": "Sharing default engine data can work as spaces. This is unsupported behavior, not demonstrated cross-profile leakage. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Create an independent profile and browse in it; create a private window; then test cookie, history and storage isolation, disposal and restart exclusion.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Add a Linux Profile/OTR registry and route tabs, services, windows and adoption through it.",
+        "Capability-gate unsupported profiles/private controls until implementation; never substitute the regular profile.",
+        "Reconcile failed native creation with shell state."
+      ],
+      "acceptance": [
+        "Independent profiles isolate cookies, history, localStorage and extensions; shared-data profiles share deliberately.",
+        "Private windows create real OTR pages, clear on disposal and never persist.",
+        "Cross-profile adoption rejects and failed creation leaves no phantom window."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 12,
+        "id": 6045126217,
+        "url": "https://github.com/mckamyk/ardia/issues/12",
+        "title": "[Linux parity F02] [P1] The default isolated-profile flow and private windows are unsupported"
+      },
+      "primary_stage": 1,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "N02",
+        "N03",
+        "F07",
+        "F12",
+        "F13"
+      ],
+      "suggested_role": "Linux baseline and capability integrator",
+      "ownership_boundary": "apps/linux/vite.config.ts; vite.shared.ts; hostModules.ts; shims/expo-modules-core.ts; shims/ardiacore.tsx; HostWebView.tsx; engine/ardiacore-linux helper modules. One designated owner integrates changes to ac_linux_host.cc."
+    },
+    {
+      "id": "F03",
+      "priority": "P1",
+      "area": "Privacy",
+      "title": "HTTP and HTTPS pages can be described as \u201cLocal Page\u201d",
+      "impact": "Ardia\u2019s site panel gives incorrect connection information and cannot show the expected certificate or mixed-content details.",
+      "evidence": "SiteControls still asks getSecurityInfo; Linux has no command or security event producer. Security remains null, which SiteConnection converts to Local Page and local/internal description for an ordinary HTTP/HTTPS page.",
+      "refs": [
+        "apps/browser/src/components/site/SiteControls.tsx:136",
+        "apps/browser/src/components/site/SiteConnection.tsx:9",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2153"
+      ],
+      "caveat": "This is incorrect Ardia presentation, not evidence of a TLS validation bypass. Runtime recheck waits on bootstrap migration.",
+      "verify": "Compare the site panel on HTTPS, HTTP, mixed content, an invalid certificate and an internal page. Unknown security must not be labeled local.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Observe native security state and implement getSecurityInfo with the current public schema.",
+        "Render unknown/unavailable honestly and invalidate old certificate state on navigation."
+      ],
+      "acceptance": [
+        "Check HTTPS, HTTP, mixed content, invalid certificate and internal pages.",
+        "Unknown never renders local and previous-document certificates cannot persist."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 13,
+        "id": 6045126639,
+        "url": "https://github.com/mckamyk/ardia/issues/13",
+        "title": "[Linux parity F03] [P1] HTTP and HTTPS pages can be described as \u201cLocal Page\u201d"
+      },
+      "primary_stage": 4,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F17",
+        "N02"
+      ],
+      "suggested_role": "Page observer and domain service owners",
+      "ownership_boundary": "Separate Linux-native helpers by security, downloads, extensions, media, page messaging and credentials. One host dispatcher/observer integrator. Shared packages remain contracts; secret native APIs retain typed paths."
+    },
+    {
+      "id": "F04",
+      "priority": "P1",
+      "area": "Persistence",
+      "title": "Live-folder and Calendar edits can stay stale, disappear or overwrite another window",
+      "impact": "A setting changed in the utility window does not reach an already open browser. Later whole-document saves can restore deleted folders or overwrite preferences. Closing Settings before its debounce expires can lose the edit.",
+      "evidence": "live.json moved into state/live and gained versioned JSON serialization; it still loads one module-local store and writes whole snapshots after 800ms. Linux caches remain per-renderer, document writes have no broadcast/merge, and utility close flushes only session persistence.",
+      "refs": [
+        "apps/browser/src/state/live/store.ts:63",
+        "apps/browser/src/state/live/store.ts:105",
+        "apps/linux/src/hostDocuments.ts:4",
+        "apps/linux/src/hostSession.ts:67",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1813",
+        "apps/linux/src/utilityClose.ts:9"
+      ],
+      "caveat": "Schema versioning does not fix stale caches or concurrent whole-document overwrites. Pre-rebase adapter reproduction showed disk/Settings false and browser cache true. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Open two browser windows and Settings; edit/delete a live folder and a Calendar preference; close immediately and after 800 ms; change the peer window; restart and compare all copies.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Define revisioned document snapshots, canonical updates and identity-aware live-folder merge/tombstones.",
+        "Update host caches and live stores across renderers without echo writes.",
+        "Register pending document timers/writes with save-before-close; retain live.json version and migration metadata."
+      ],
+      "acceptance": [
+        "Two browser windows and Settings converge after preference edits and folder creation/deletion.",
+        "Close immediately and after 800ms; restart preserves the same final state.",
+        "Concurrent edits survive; save failures retain the utility for retry."
+      ],
+      "historical_proof": "Source + adapter reproduction",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 14,
+        "id": 6045127028,
+        "url": "https://github.com/mckamyk/ardia/issues/14",
+        "title": "[Linux parity F04] [P1] Live-folder and Calendar edits can stay stale, disappear or overwrite another window"
+      },
+      "primary_stage": 3,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [
+        "F11",
+        "F14"
+      ],
+      "coordinate_with": [
+        "F11",
+        "F14",
+        "F13",
+        "F21",
+        "F27"
+      ],
+      "suggested_role": "Canonical document and persistence owner",
+      "ownership_boundary": "apps/linux/src/hostDocuments.ts; hostSession.ts; utilityClose.ts; Linux native document worker. Coordinate a small state/live persistence adapter hook; never race separate owners over the whole document."
+    },
+    {
+      "id": "F05",
+      "priority": "P2",
+      "area": "Dialogs",
+      "title": "Application confirm/prompt dialogs have no Linux implementation",
+      "impact": "Essential-tile rename, bookmark-folder creation, pinned-URL editing, profile deletion and warning-enabled group/last-tab closes can fail at the awaited dialog.",
+      "evidence": "Shared callers moved into state and now import platform/dialogs. That platform module still reaches the Linux shell override, which sends unsupported ArdiaShell.confirm/prompt operations. Awaited destructive/rename actions therefore remain blocked.",
+      "refs": [
+        "apps/linux/src/shims/shellBase.tsx:74",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074",
+        "apps/browser/src/state/sidebar/actions.ts:45",
+        "apps/browser/src/state/sidebar/actions.ts:125",
+        "apps/browser/src/state/browser/actions.ts:47",
+        "apps/browser/src/state/browser/actions.ts:65",
+        "apps/browser/src/state/browser/actions.ts:95"
+      ],
+      "caveat": "Inline row rename is separate; website JS dialogs are Chromium-owned. Last-tab confirmation depends on effective last-tab policy. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Exercise one prompt and every destructive confirmation, including Cancel, keyboard dismissal, suppression and native-page focus.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Implement requester-owned native Linux confirm/prompt helpers with suppression, keyboard semantics and promise cancellation.",
+        "Serialize dialog requests and respect native modal ownership.",
+        "Keep mutations after a successful result and settle requests when renderer/window disappears."
+      ],
+      "acceptance": [
+        "Rename an essential, create a bookmark folder and edit its URL.",
+        "Cancel/confirm group, last-tab, profile and credential deletion dialogs.",
+        "Suppression persists; Escape/Enter work; closing owner leaves no orphan dialog."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 15,
+        "id": 6045127438,
+        "url": "https://github.com/mckamyk/ardia/issues/15",
+        "title": "[Linux parity F05] [P2] Application confirm/prompt dialogs have no Linux implementation"
+      },
+      "primary_stage": 2,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [
+        "F21"
+      ],
+      "coordinate_with": [
+        "F21",
+        "F06",
+        "F07"
+      ],
+      "suggested_role": "Native page-command and dialog owners",
+      "ownership_boundary": "Separate Linux page-command and dialog helpers; coordinate narrow dispatch registration in ac_linux_host.cc. Current find/commands state consumers are references, not a reason to fork shared UI."
+    },
+    {
+      "id": "F06",
+      "priority": "P2",
+      "area": "Privacy",
+      "title": "Site permissions, data clearing and Ardia content-blocker controls are disconnected",
+      "impact": "The shared site panel and Privacy settings cannot reliably read, change or reset permissions, clear browsing data, manage origin exceptions or configure Ardia\u2019s filter lists.",
+      "evidence": "Current APIs use sites.*, profiles.clearBrowsingData and contentBlocker.* domain calls. Linux implements neither the new domain dispatch nor underlying missing site/blocker Expo equivalents. Settings still catches unavailable resources as empty origins/exceptions or null blocker.",
+      "refs": [
+        "packages/ardiacore/src/siteSettings.ts:14",
+        "packages/ardiacore/src/contentBlocker.ts:34",
+        "packages/ardiacore/src/module.ts:145",
+        "apps/browser/src/state/settings/paneData.ts:36",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074"
+      ],
+      "caveat": "Chromium enforcement/native permission bubbles may work independently. N02 migration can restore transport but is not itself a Linux blocker implementation.",
+      "verify": "Grant and revoke camera/location/notifications; clear a cookie and site storage; toggle a blocker list and site exception; reload and verify the actual engine state.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "After N02, map typed per-profile site settings/data clearing/zoom operations to supported services.",
+        "Implement Linux blocker backend and expose explicit unavailable/error states.",
+        "Coordinate destructive confirmation UX with F05 without blocking non-dialog service work."
+      ],
+      "acceptance": [
+        "Grant/revoke real permissions; verify actual engine state after reload/restart.",
+        "Clear fixture cookies/storage/cache/history with scope and cancellation checks.",
+        "Toggle filter lists/site exception and verify network behavior rather than successful dispatch only."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 16,
+        "id": 6045127926,
+        "url": "https://github.com/mckamyk/ardia/issues/16",
+        "title": "[Linux parity F06] [P2] Site permissions, data clearing and Ardia content-blocker controls are disconnected"
+      },
+      "primary_stage": 4,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F05",
+        "F03",
+        "F07",
+        "F23"
+      ],
+      "suggested_role": "Page observer and domain service owners",
+      "ownership_boundary": "Separate Linux-native helpers by security, downloads, extensions, media, page messaging and credentials. One host dispatcher/observer integrator. Shared packages remain contracts; secret native APIs retain typed paths."
+    },
+    {
+      "id": "F07",
+      "priority": "P2",
+      "area": "Privacy",
+      "title": "Passwords and Autofill management have no usable native bridge",
+      "impact": "The Passwords pane cannot unlock/manage/export saved credentials, and addresses/cards can appear empty or autofill enabled even though their data could not be read.",
+      "evidence": "Non-secret management now uses passwords.* and autofill.* domain calls; secret writes deliberately use dedicated ArdiaPasswords.save/update and ArdiaAutofill.saveCard. Linux has no implementations. Pane resources still hide unavailable state as enabled defaults/empty collections. Linux ReauthAvailable remains false.",
+      "refs": [
+        "packages/ardiacore/src/passwords.ts:6",
+        "packages/ardiacore/src/autofill.ts:32",
+        "packages/ardiacore/src/nativeModules.ts:17",
+        "apps/browser/src/state/settings/paneData.ts:40",
+        "engine/chromium/src/chrome/browser/ardia/ac_reauth_linux.cc:12"
+      ],
+      "caveat": "Native Chromium save/fill is separate. Keyring encryption/passkeys are not established. Secret operations must not fall back to generic JSON, logs, unprotected storage or bypass authentication.",
+      "verify": "Use fixture credentials and addresses to test list/edit/delete/fill, restart encryption and OS authentication. An unavailable service must be shown as unavailable, not as an empty vault.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Wire metadata/config and address CRUD via typed domain handlers.",
+        "Implement secure native storage and real authentication before unlock/reveal/export.",
+        "Preserve dedicated secret-bearing native methods and report unavailable distinctly from empty vault."
+      ],
+      "acceptance": [
+        "Fixture credential/address/card management, enabled toggles and restart work.",
+        "Authentication denied/cancelled/expired never reveals secrets; inspect encryption at rest.",
+        "No passwords/full card numbers in generic request JSON, logs or telemetry."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 17,
+        "id": 6045128402,
+        "url": "https://github.com/mckamyk/ardia/issues/17",
+        "title": "[Linux parity F07] [P2] Passwords and Autofill management have no usable native bridge"
+      },
+      "primary_stage": 4,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F02",
+        "F05",
+        "F11",
+        "F12",
+        "F13"
+      ],
+      "suggested_role": "Page observer and domain service owners",
+      "ownership_boundary": "Separate Linux-native helpers by security, downloads, extensions, media, page messaging and credentials. One host dispatcher/observer integrator. Shared packages remain contracts; secret native APIs retain typed paths."
+    },
+    {
+      "id": "F08",
+      "priority": "P2",
+      "area": "Downloads",
+      "title": "Ardia\u2019s Downloads view lacks download events and controls",
+      "impact": "Downloads can occur in Chromium without appearing in Ardia\u2019s popover or internal Downloads page; pause/resume/cancel and file open/reveal are not wired through the Linux shell.",
+      "evidence": "Downloads now subscribes to downloads.changed through ArdiaDownloads and calls downloads.cancel/pause/resume/settings. Linux still emits legacy ArdiaCEF.onEngineEvent and has no current domain handlers, download initialization/translation or file open/reveal backend. Unlike the old baseline, settings also cannot be claimed currently working until N02.",
+      "refs": [
+        "packages/ardiacore/src/module.ts:129",
+        "packages/ardiacore/src/module.ts:135",
+        "apps/browser/src/state/app/nativeSync.ts:66",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1181",
+        "packages/shell/src/system.tsx:50"
+      ],
+      "caveat": "Actual Chromium downloading is separate and may work. Source revalidation does not establish native download failure.",
+      "verify": "Download a known file; require progress and completion in Ctrl+J; pause/resume/cancel; restart; open/reveal; change the destination directory.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Initialize native download observation/snapshot and deliver current domain event schema.",
+        "Wire control methods and reconcile native IDs with persisted records.",
+        "Add shared Linux file open/reveal/folder-picker primitives with F12/F26 coordination."
+      ],
+      "acceptance": [
+        "Known file shows progress/completion in Ctrl+J and pause/resume/cancel work.",
+        "Restart has no duplicate or stale live entry; open/reveal target selected file.",
+        "Download destination and ask-where settings alter actual engine behavior."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 18,
+        "id": 6045128827,
+        "url": "https://github.com/mckamyk/ardia/issues/18",
+        "title": "[Linux parity F08] [P2] Ardia\u2019s Downloads view lacks download events and controls"
+      },
+      "primary_stage": 4,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [
+        "F20"
+      ],
+      "coordinate_with": [
+        "F12",
+        "F20",
+        "F26"
+      ],
+      "suggested_role": "Page observer and domain service owners",
+      "ownership_boundary": "Separate Linux-native helpers by security, downloads, extensions, media, page messaging and credentials. One host dispatcher/observer integrator. Shared packages remain contracts; secret native APIs retain typed paths."
+    },
+    {
+      "id": "F09",
+      "priority": "P2",
+      "area": "Extensions",
+      "title": "Extensions can be listed, but management and toolbar integration are incomplete",
+      "impact": "Enable/disable, install/reload/uninstall, action popups, side panels and extension search-engine discovery cannot operate through the shared Ardia UI.",
+      "evidence": "Shared extension APIs now use extensions.* and search.engines calls and domain events. Linux retains legacy ArdiaExtensions.list, but current listExtensions calls ArdiaExtensions.call(list,...), so even listing regresses until N02; management/action/panel implementations remain absent afterward.",
+      "refs": [
+        "packages/ardiacore/src/extensions.ts:114",
+        "packages/ardiacore/src/extensions.ts:118",
+        "packages/ardiacore/src/extensions.ts:152",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2054",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074"
+      ],
+      "caveat": "An installed extension may execute in native Chromium. Listing support exists only in the legacy native contract, not current UI. Native messaging/1Password require separate evidence.",
+      "verify": "Install a fixture extension with an action, side panel and search provider, then enable/disable/reload/uninstall it and test toolbar activation.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Restore listing through current typed domain contract then implement management and registry events.",
+        "Implement action states/execution, real popup/side-panel hosting semantics and install consent.",
+        "Map search.engines and installation picker without unrestricted forwarding."
+      ],
+      "acceptance": [
+        "Fixture extension install/consent/list/toggle/reload/uninstall works.",
+        "Action badge/popup/side panel target correct tab/profile; search provider updates and removes.",
+        "Handle cancelled install, increased permissions and native view lifecycle."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 19,
+        "id": 6045129250,
+        "url": "https://github.com/mckamyk/ardia/issues/19",
+        "title": "[Linux parity F09] [P2] Extensions can be listed, but management and toolbar integration are incomplete"
+      },
+      "primary_stage": 4,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F17",
+        "F27"
+      ],
+      "suggested_role": "Page observer and domain service owners",
+      "ownership_boundary": "Separate Linux-native helpers by security, downloads, extensions, media, page messaging and credentials. One host dispatcher/observer integrator. Shared packages remain contracts; secret native APIs retain typed paths."
+    },
+    {
+      "id": "F10",
+      "priority": "P2",
+      "area": "Omnibox",
+      "title": "Online search suggestions are blocked by the production shell CSP",
+      "impact": "Turning on search suggestions does not enable remote suggestions in the Linux command/address bar. Local tabs, history and bookmark suggestions remain distinct sources.",
+      "evidence": "Omnibox still gives renderer fetch to createSuggestFetcher; production chrome://ardia retains connect-src none. No narrow Linux suggestion request service replaces that path. Domain refactoring does not change the CSP constraint.",
+      "refs": [
+        "apps/browser/src/components/omnibox/useSuggestions.ts:98",
+        "packages/core/src/suggestFetcher.ts:55",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:788"
+      ],
+      "caveat": "Local tabs/history/bookmarks are separate sources; their new transport additionally depends on N02. No runtime claim for the presently unbuildable UI.",
+      "verify": "Run the packaged chrome://ardia UI with suggestions enabled and type a non-URL query. Verify both successful suggestions and cancellation, using a controlled endpoint.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Provide a narrow policy-aware native suggestion request path with bounded replies and provider validation.",
+        "Preserve cancellation/privacy/disabled state; keep privileged CSP narrow."
+      ],
+      "acceptance": [
+        "Packaged UI receives controlled online suggestions only when enabled.",
+        "Disabled sends zero requests; stale/cancelled/malformed/oversized/offline replies cannot replace current suggestions.",
+        "Do not introduce unrestricted privileged fetch or inadvertently forward cookies/secrets."
+      ],
+      "historical_proof": "Source + CSP/native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 20,
+        "id": 6045129727,
+        "url": "https://github.com/mckamyk/ardia/issues/20",
+        "title": "[Linux parity F10] [P2] Online search suggestions are blocked by the production shell CSP"
+      },
+      "primary_stage": 5,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F11"
+      ],
+      "suggested_role": "Linux integration and input owners",
+      "ownership_boundary": "Linux-only network/import/sync/calendar/startup/input helpers; coordinate shims/shellBase.tsx and main.tsx with their single integrator. Independent parsers and fixtures need no shared-file ownership."
+    },
+    {
+      "id": "F11",
+      "priority": "P2",
+      "area": "Live",
+      "title": "Live folders render, but service connection and refresh are unavailable",
+      "impact": "GitHub/Bitbucket pull requests and Notion/Confluence/Drive documents cannot connect or refresh real service data despite their Settings controls.",
+      "evidence": "Live startup remains present through sidebar effects. Service HTTP calls still use renderer fetch under connect-src none; ArdiaKeychain credentials still have no Linux handler. Moving networking/state behind platform reexports did not supply Linux implementations.",
+      "refs": [
+        "apps/browser/src/state/sidebar/effects.ts:18",
+        "apps/browser/src/state/live/net.ts:26",
+        "apps/browser/src/state/live/net.ts:64",
+        "packages/shell/src/live.ts:58",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:788",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074"
+      ],
+      "caveat": "Persisted cached rows can render. This is not a missing startLive call. F04 remains a separate persistence defect. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Connect each supported source, restart with protected credentials, refresh, disconnect and test revoked credentials and offline behavior.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Add narrow bounded/cancellable Linux service networking; keep privileged shell CSP restrictive.",
+        "Implement protected secret storage and supported sign-in/refresh flows.",
+        "Coordinate network API with F10, secret storage with F07/F13 and document integration with F04."
+      ],
+      "acceptance": [
+        "Connect, refresh, restart and disconnect each advertised provider using fixtures.",
+        "Test revoked tokens, renewal, offline/retry and cancellation.",
+        "Ordinary pages cannot invoke privileged network/secret operations."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 21,
+        "id": 6045130199,
+        "url": "https://github.com/mckamyk/ardia/issues/21",
+        "title": "[Linux parity F11] [P2] Live folders render, but service connection and refresh are unavailable"
+      },
+      "primary_stage": 5,
+      "hard_acceptance_blocked_by": [
+        "F04"
+      ],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F04",
+        "F07",
+        "F10",
+        "F14"
+      ],
+      "suggested_role": "Linux integration and input owners",
+      "ownership_boundary": "Linux-only network/import/sync/calendar/startup/input helpers; coordinate shims/shellBase.tsx and main.tsx with their single integrator. Independent parsers and fixtures need no shared-file ownership."
+    },
+    {
+      "id": "F12",
+      "priority": "P2",
+      "area": "Import / sync",
+      "title": "Import has a real utility window but no data-import backend",
+      "impact": "Browser discovery yields an empty/error chooser, and Linux-relevant bookmark HTML and password CSV imports cannot run.",
+      "evidence": "Import flow was split into a hook/actions and importModule moved to platform. The Linux shim still merely reexports ArdiaImport APIs; discovery, portable-file selection/parsing, import jobs and cancellation have no native handlers.",
+      "refs": [
+        "apps/linux/src/shims/import.tsx:1",
+        "packages/import/src/index.ts:212",
+        "packages/import/src/index.ts:227",
+        "apps/browser/src/platform/importModule.ts:23",
+        "apps/browser/src/components/import/useImportFlow.ts:42",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2074"
+      ],
+      "caveat": "Do not require Safari/Apple automation on Linux. Generic HTML/CSV and supported Linux browsers remain required. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Import fixture HTML/CSV and scratch Chromium/Firefox data; verify counts, duplicates, partial errors and cancellation without reading real user profiles.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Implement portable HTML/CSV import and Linux browser discovery/readers against scratch fixtures.",
+        "Define native chooser, progress/cancellation and short-lived decrypted import payloads.",
+        "Separate portable parsing from protected credential/decryption integration."
+      ],
+      "acceptance": [
+        "Import nested bookmarks and CSV credentials with accurate counts/deduplication.",
+        "Import scratch Chromium/Firefox profiles with partial errors and cancellation.",
+        "Source files are unchanged; temporary secrets and cancelled jobs are cleaned up."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 22,
+        "id": 6045130662,
+        "url": "https://github.com/mckamyk/ardia/issues/22",
+        "title": "[Linux parity F12] [P2] Import has a real utility window but no data-import backend"
+      },
+      "primary_stage": 5,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F07",
+        "F08",
+        "F13",
+        "F26"
+      ],
+      "suggested_role": "Linux integration and input owners",
+      "ownership_boundary": "Linux-only network/import/sync/calendar/startup/input helpers; coordinate shims/shellBase.tsx and main.tsx with their single integrator. Independent parsers and fixtures need no shared-file ownership."
+    },
+    {
+      "id": "F13",
+      "priority": "P2",
+      "area": "Import / sync",
+      "title": "Encrypted folder sync is unavailable",
+      "impact": "Linux cannot create/join an encrypted sync folder or synchronize browser data with another device.",
+      "evidence": "Sync state was split into several modules but still relies on optional ArdiaSync. Linux advertises no module/capabilities and starts no sync service, so the shared status remains unavailable.",
+      "refs": [
+        "packages/sync/src/native.ts:53",
+        "apps/linux/src/shims/expo-modules-core.ts:86",
+        "apps/browser/src/state/sync/engine.ts:41",
+        "apps/browser/src/components/settings/panes/Sync.tsx:38",
+        "apps/linux/src/main.tsx:40"
+      ],
+      "caveat": "The unavailable UI is honest. Preserve existing encrypted formats and new sync document version/migration rules. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Build a Linux-native secure-storage/crypto transport and exercise two-device merge, locked state, recovery and restart behavior.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Implement Linux secure storage, compatible cryptography/recovery and atomic folder transport.",
+        "Choose one application/profile authority for sync rather than racing each renderer.",
+        "Integrate profile resolution and canonical document/state handling."
+      ],
+      "acceptance": [
+        "Linux-Linux and Linux-macOS encrypted fixture exchange and concurrent/offline merge.",
+        "Wrong phrase/tampering/locked storage fail safely; recovery and interruption/restart work.",
+        "No cleartext credential material appears in sync artifacts."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 23,
+        "id": 6045131127,
+        "url": "https://github.com/mckamyk/ardia/issues/23",
+        "title": "[Linux parity F13] [P2] Encrypted folder sync is unavailable"
+      },
+      "primary_stage": 5,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F02",
+        "F04",
+        "F07",
+        "F12"
+      ],
+      "suggested_role": "Linux integration and input owners",
+      "ownership_boundary": "Linux-only network/import/sync/calendar/startup/input helpers; coordinate shims/shellBase.tsx and main.tsx with their single integrator. Independent parsers and fixtures need no shared-file ownership."
+    },
+    {
+      "id": "F14",
+      "priority": "P2",
+      "area": "Live",
+      "title": "Calendar previews, countdowns and meeting alerts lack a Linux calendar backend",
+      "impact": "Pinned calendar sites cannot supply the promised native previews or upcoming-meeting alerts. The denied-state button sends users to a macOS-only Settings URL.",
+      "evidence": "Calendar authorization remains hardcoded denied; no Linux access/calendar/event provider exists. The shared denied-state UI still links macOS System Settings. Shared Calendar state moved without adding a Linux backend.",
+      "refs": [
+        "apps/linux/src/hostModules.ts:17",
+        "packages/shell/src/live.ts:37",
+        "apps/browser/src/state/live/calendar.ts:101",
+        "apps/browser/src/components/settings/panes/Calendar.tsx:36",
+        "apps/browser/src/components/settings/panes/Calendar.tsx:41"
+      ],
+      "caveat": "Calendar websites still browse normally. Backend choice is a product/platform decision; gating unavailable controls can proceed first. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Either connect a supported Linux calendar source and verify alerts/previews, or clearly gate the unsupported integration.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Define Linux calendar provider/status capabilities and select EDS/CalDAV or another supported backend.",
+        "Replace macOS account/permission instructions and URLs.",
+        "Map calendar events into shared state and include its settings in F04 synchronization."
+      ],
+      "acceptance": [
+        "Recurring/time-zone/all-day/declined/cancelled fixtures render correctly.",
+        "Filtering, countdowns, Join alerts, disconnect and permission errors work.",
+        "Settings changes reach browser windows and persist immediately on close."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 24,
+        "id": 6045131534,
+        "url": "https://github.com/mckamyk/ardia/issues/24",
+        "title": "[Linux parity F14] [P2] Calendar previews, countdowns and meeting alerts lack a Linux calendar backend"
+      },
+      "primary_stage": 5,
+      "hard_acceptance_blocked_by": [
+        "F04"
+      ],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F04",
+        "F11",
+        "F26"
+      ],
+      "suggested_role": "Linux integration and input owners",
+      "ownership_boundary": "Linux-only network/import/sync/calendar/startup/input helpers; coordinate shims/shellBase.tsx and main.tsx with their single integrator. Independent parsers and fixtures need no shared-file ownership."
+    },
+    {
+      "id": "F15",
+      "priority": "P2",
+      "area": "Media",
+      "title": "Shared media controls and manual PiP are missing their command/event paths",
+      "impact": "Playing-audio badges, sidebar/mini-player transport and camera/microphone/screen indicators do not receive their expected state. Ardia\u2019s manual PiP toggle and media-command controls reject.",
+      "evidence": "Linux still lacks media/nowPlaying/mediaAccess producers and manual media/PiP commands. Shared startup now calls webView.setDisplayMediaPicker/setAutoPictureInPicture/setVideoUpscaling unconditionally; the old ArdiaCEF auto-PiP implementation is unreachable until N02. Cast/capture controls also lack current handlers.",
+      "refs": [
+        "apps/browser/src/components/window/TabWebView.tsx:195",
+        "apps/browser/src/state/media/pip.ts:23",
+        "packages/ardiacore/src/module.ts:120",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1688",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2153"
+      ],
+      "caveat": "Existing native automatic PiP code/events remain present, but current UI integration needs domain migration before claiming it works. Native playback/mute/page-requested PiP/portal sharing are distinct fallbacks.",
+      "verify": "Play audio/video, switch tabs, use manual and automatic PiP separately, control playback and test a PipeWire/portal share with capture indicators.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Add media/audibility/session/capture events and native transport/manual PiP commands with user-activation validation.",
+        "Restore global auto-PiP setting under webView domain without altering tested native cancellation lifecycle.",
+        "Implement or honestly gate cast/source controls."
+      ],
+      "acceptance": [
+        "Audio badges/player metadata and transport update correct real tab.",
+        "Manual and automatic PiP pass separate entry/return/dismissal tests.",
+        "Real portal sharing reports capture state and stop/change-source accurately."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 25,
+        "id": 6045132008,
+        "url": "https://github.com/mckamyk/ardia/issues/25",
+        "title": "[Linux parity F15] [P2] Shared media controls and manual PiP are missing their command/event paths"
+      },
+      "primary_stage": 4,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F18",
+        "F17"
+      ],
+      "suggested_role": "Page observer and domain service owners",
+      "ownership_boundary": "Separate Linux-native helpers by security, downloads, extensions, media, page messaging and credentials. One host dispatcher/observer integrator. Shared packages remain contracts; secret native APIs retain typed paths."
+    },
+    {
+      "id": "F16",
+      "priority": "P2",
+      "area": "Page tools",
+      "title": "Peek/split-link gestures and selection tools do not reach native pages",
+      "impact": "Configured link modifiers, selection search/popovers, quote/highlight links, jump-to-selection and find/replace-in-field lack the page-side integration used by macOS.",
+      "evidence": "Peek/selection settings now call webView.* domain methods rather than optional ArdiaCEF methods. Linux still lacks page-script/channel installation, command/pageMessage producers, evaluate and executeJavaScript. Updating transport alone will not implement the page tools.",
+      "refs": [
+        "packages/ardiacore/src/module.ts:123",
+        "apps/browser/src/state/peek/actions.ts:102",
+        "apps/browser/src/state/site/selection.ts:79",
+        "apps/browser/src/components/window/TabWebView.tsx:224",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434"
+      ],
+      "caveat": "Store-driven split creation/layout remains distinct. Ordinary pages must never obtain privileged shell bridge; incoming page messages are untrusted.",
+      "verify": "Exercise each modifier on a real link, text selection tools, editable-field replacement and Escape while a page has native focus.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Add bounded page-message/request-response substrate with frame/document lifetime checks.",
+        "Install shared page script appropriately and forward supported modifiers/settings.",
+        "Implement selection/peek tools while preserving ordinary/download/post-body/native link behavior."
+      ],
+      "acceptance": [
+        "Real-page modifier peek/split, selection search/quote/jump/replace and Escape work.",
+        "Navigation invalidates pending replies; cross-origin/iframe spoof attempts cannot execute privileged operations.",
+        "No __ardiaHost in ordinary tabs."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 26,
+        "id": 6045132487,
+        "url": "https://github.com/mckamyk/ardia/issues/26",
+        "title": "[Linux parity F16] [P2] Peek/split-link gestures and selection tools do not reach native pages"
+      },
+      "primary_stage": 4,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F25",
+        "F18",
+        "R01"
+      ],
+      "suggested_role": "Page observer and domain service owners",
+      "ownership_boundary": "Separate Linux-native helpers by security, downloads, extensions, media, page messaging and credentials. One host dispatcher/observer integrator. Shared packages remain contracts; secret native APIs retain typed paths."
+    },
+    {
+      "id": "F17",
+      "priority": "P2",
+      "area": "Page state",
+      "title": "Fullscreen, renderer failures and several page-status events never reach Ardia",
+      "impact": "Ardia cannot reliably hide its chrome for page fullscreen, show its own crash/unresponsive recovery state, show hovered-link status or surface blocked-pop-up state.",
+      "evidence": "Linux observer still produces only navigation/progress/title/error/favicon/open-window/destruction and PiP. Fullscreen/crashed/unresponsive/responsive/status/popupBlocked are not produced. Shared callbacks moved to TabWebView and public page-event schema now uses name/data, with find/focus special names.",
+      "refs": [
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:464",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2153",
+        "apps/browser/src/components/window/TabWebView.tsx:203",
+        "packages/ardiacore/src/pageEvents.ts:59"
+      ],
+      "caveat": "Chromium fullscreen, popup enforcement and native crash UI may remain functional; the issue is shared Ardia chrome/recovery state. Direct host-specific callback transport can remain if it meets public schema.",
+      "verify": "Enter/exit video and document fullscreen; terminate a scratch renderer; simulate a hung page; hover a link; trigger a blocked pop-up and verify Ardia\u2019s state.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Add native observers and initial/rebind/navigation state delivery.",
+        "Implement associated recovery/popup commands and reject stale events.",
+        "Coordinate one event envelope with F03/F15/F23/F25 and window bookkeeping R03."
+      ],
+      "acceptance": [
+        "Fullscreen hides/restores correct Ardia chrome.",
+        "Terminate/hang a scratch renderer and recover; hovered links clear status; blocked popup can be reviewed/opened.",
+        "Repeat after split/transfer/navigation/destruction without stale state."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 27,
+        "id": 6045132951,
+        "url": "https://github.com/mckamyk/ardia/issues/27",
+        "title": "[Linux parity F17] [P2] Fullscreen, renderer failures and several page-status events never reach Ardia"
+      },
+      "primary_stage": 4,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F03",
+        "F15",
+        "F23",
+        "R01",
+        "R03"
+      ],
+      "suggested_role": "Page observer and domain service owners",
+      "ownership_boundary": "Separate Linux-native helpers by security, downloads, extensions, media, page messaging and credentials. One host dispatcher/observer integrator. Shared packages remain contracts; secret native APIs retain typed paths."
+    },
+    {
+      "id": "F18",
+      "priority": "P2",
+      "area": "Lifecycle",
+      "title": "Memory saver, freezing and battery-aware tab policies are not started",
+      "impact": "Linux does not run the shared sleep/freeze/battery-saving policies represented by the app\u2019s settings. Its similarly named host tab-lifecycle service handles explicit close/unload ownership instead.",
+      "evidence": "Current browser main still starts resource lifecycle and memory trim; Linux starts only explicit tab close/unload ownership. Shared policy needs unsupported evaluate/discard/setFrozen and engine.tasks/systemState/batterySaver plus synchronous input-idle facilities, now using domain architecture.",
+      "refs": [
+        "apps/browser/src/main.tsx:35",
+        "apps/browser/src/main.tsx:42",
+        "apps/linux/src/main.tsx:43",
+        "apps/browser/src/state/tabs/tabLifecycle.ts:66",
+        "apps/browser/src/state/tabs/tabLifecycle.ts:265"
+      ],
+      "caveat": "Chromium background throttling is separate. Dirty-input uncertainty still declines destructive sleep. Do not enable policies until protections are reliable.",
+      "verify": "Test policy transitions with scratch tabs, dirty forms, active media/PiP and mocked power/memory states; confirm wake restores navigation.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Inventory per-process/per-renderer startup and register supported shared policies once.",
+        "Implement safe unsaved-work query, discard/wake/freeze and power/memory/task/input-idle APIs.",
+        "Hard-gate automatic discard on reliable dirty-form, prompt, media/capture/PiP and visibility protections; coordinate F15/F17."
+      ],
+      "acceptance": [
+        "Safe idle tabs sleep/freeze/wake with navigation intact.",
+        "Dirty forms, visible splits, active media/capture/PiP and pending prompts remain protected.",
+        "Unknown state fails safely; mocked pressure/power transitions and restart do not double-register policies."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 28,
+        "id": 6045133419,
+        "url": "https://github.com/mckamyk/ardia/issues/28",
+        "title": "[Linux parity F18] [P2] Memory saver, freezing and battery-aware tab policies are not started"
+      },
+      "primary_stage": 5,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F15",
+        "F16",
+        "F17",
+        "F27"
+      ],
+      "suggested_role": "Linux integration and input owners",
+      "ownership_boundary": "Linux-only network/import/sync/calendar/startup/input helpers; coordinate shims/shellBase.tsx and main.tsx with their single integrator. Independent parsers and fixtures need no shared-file ownership."
+    },
+    {
+      "id": "F19",
+      "priority": "P2",
+      "area": "Input",
+      "title": "Ctrl-click is not translated for shared tab and bookmark actions",
+      "impact": "Ctrl-clicking a bookmark can replace the current page instead of opening a background tab. Ctrl-click multiselection in sidebar/top tabs fails; Ctrl+Shift-click can take the Shift-only new-window route.",
+      "evidence": "Upstream centralized click modifiers in lib/keys and selection logic in state/drag; these types/helpers still recognize metaKey/shiftKey/altKey and omit ctrlKey. Linux Pressable still forwards physical DOM modifiers without primary-button normalization.",
+      "refs": [
+        "apps/linux/src/shims/web/motion/macView.tsx:202",
+        "apps/browser/src/lib/keys.ts:3",
+        "apps/browser/src/state/bookmarks/actions.ts:11",
+        "apps/browser/src/state/drag/drops.ts:34",
+        "apps/browser/src/state/drag/drops.ts:160"
+      ],
+      "caveat": "Middle-click, Shift range and ordinary web-page input are separate. This persists despite the useful upstream helper consolidation. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Use real pointer Ctrl/Shift combinations on bookmarks, sidebar rows and top tabs. Confirm active-tab identity, new-tab disposition and selection membership.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Normalize Linux primary pointer modifier at an explicit Linux boundary or injected helper.",
+        "Preserve physical modifiers for recording/native page input and avoid treating Super as Ctrl.",
+        "Use the same normalized behavior for sidebar, top tabs and bookmark clicks."
+      ],
+      "acceptance": [
+        "Ctrl-click opens bookmarks in background; Ctrl+Shift opens foreground.",
+        "Ctrl selection toggle and Shift ranges work in sidebar/top tabs.",
+        "Middle-click/text editing/native webpage modifiers remain unchanged."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 29,
+        "id": 6045133870,
+        "url": "https://github.com/mckamyk/ardia/issues/29",
+        "title": "[Linux parity F19] [P2] Ctrl-click is not translated for shared tab and bookmark actions"
+      },
+      "primary_stage": 5,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "N06",
+        "F20"
+      ],
+      "suggested_role": "Linux integration and input owners",
+      "ownership_boundary": "Linux-only network/import/sync/calendar/startup/input helpers; coordinate shims/shellBase.tsx and main.tsx with their single integrator. Independent parsers and fixtures need no shared-file ownership."
+    },
+    {
+      "id": "F20",
+      "priority": "P2",
+      "area": "Input",
+      "title": "External drop into browser chrome and file drag out are absent",
+      "impact": "Dropping URLs/files/text onto the sidebar or top strip never reaches the shared tab-drop parser. Dragging a downloaded file out of Ardia has no exported file path.",
+      "evidence": "UPDATED MECHANISM: upstream removed the metadata fallback and now always requests ArdiaFileDrop. Linux requireNativeViewManager returns a placeholder View with no drag/drop producer, so shared onDropUpdate still never runs. Outbound MouseArea still discards path.",
+      "refs": [
+        "packages/shell/src/system.tsx:87",
+        "packages/shell/src/system.tsx:117",
+        "apps/linux/src/shims/expo-modules-core.ts:93",
+        "apps/browser/src/components/window/TabDropArea.tsx:105",
+        "apps/linux/src/shims/web/MouseArea.tsx:12",
+        "apps/linux/src/shims/web/motion/macView.tsx:158"
+      ],
+      "caveat": "Do not repeat the old metadata-check evidence. Internal PanResponder reorder and webpage upload-drop are distinct. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Drop a scratch file, URL and text onto each supported chrome target, then drag a downloaded file to another scratch application.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Provide Linux FileDropArea with DOM URL/text handling and native brokered file payloads.",
+        "Implement outbound native downloaded-file drag with validated path/token ownership.",
+        "Honor ordered enter/move/exit/drop/cancel coordinates and payload bounds."
+      ],
+      "acceptance": [
+        "Drop URL, text, files and multiple items onto supported sidebar/top-strip positions.",
+        "Drag a downloaded scratch file into a scratch target application.",
+        "Malformed payload/cancel works; internal reorder/page drop remain valid."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 30,
+        "id": 6045134321,
+        "url": "https://github.com/mckamyk/ardia/issues/30",
+        "title": "[Linux parity F20] [P2] External drop into browser chrome and file drag out are absent"
+      },
+      "primary_stage": 5,
+      "hard_acceptance_blocked_by": [
+        "F08"
+      ],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F08",
+        "R02",
+        "F19"
+      ],
+      "suggested_role": "Linux integration and input owners",
+      "ownership_boundary": "Linux-only network/import/sync/calendar/startup/input helpers; coordinate shims/shellBase.tsx and main.tsx with their single integrator. Independent parsers and fixtures need no shared-file ownership."
+    },
+    {
+      "id": "F21",
+      "priority": "P2",
+      "area": "Windows",
+      "title": "The window close button bypasses the multi-tab warning",
+      "impact": "A user with \u201cWarn before closing a window with multiple tabs\u201d enabled can close the native browser window without the Ardia confirmation.",
+      "evidence": "Header non-utility close still forwards directly to native closure without closeRequest. Shared guard moved to state/windows and now finishes via closeWindowAnimated, but Linux emits no closeRequest. Only utility close interception exists.",
+      "refs": [
+        "apps/linux/src/TrafficLights.tsx:21",
+        "apps/linux/src/utilityClose.ts:6",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1894",
+        "apps/browser/src/state/windows/windowClose.ts:13",
+        "apps/browser/src/state/windows/windowClose.ts:31",
+        "apps/browser/src/state/settings/settings.ts:114"
+      ],
+      "caveat": "Chromium beforeunload remains separate. New unconditional animateWindowClose introduces an additional synchronous failure if the guard becomes reachable; do not count a missing animation as missing warning itself. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "With two ordinary tabs and the warning enabled, test header close and compositor close; Cancel must keep the window and its tabs.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Unify header/compositor/shortcut close into request/approve/cancel protocol.",
+        "Implement F05 warning first for final integration, then flush canonical writes before native close.",
+        "Provide Linux-safe completion fallback for animateWindowClose and preserve beforeunload/renderer-failure behavior."
+      ],
+      "acceptance": [
+        "Two tabs with warning on/off across header, compositor and window-close shortcuts.",
+        "Cancel retains native window/tabs; repeated requests yield one dialog.",
+        "Suppression, save failures and beforeunload cancellation leave no stuck pending close."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 31,
+        "id": 6045134762,
+        "url": "https://github.com/mckamyk/ardia/issues/31",
+        "title": "[Linux parity F21] [P2] The window close button bypasses the multi-tab warning"
+      },
+      "primary_stage": 6,
+      "hard_acceptance_blocked_by": [
+        "F05"
+      ],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F05",
+        "F04",
+        "R03"
+      ],
+      "suggested_role": "Native window lifecycle and desktop acceptance owners",
+      "ownership_boundary": "One owner for close/focus/geometry integration in ac_linux_host.cc; a separate drag owner consumes agreed window identities. Acceptance authors use scratch profiles and keep native source ownership separate."
+    },
+    {
+      "id": "F22",
+      "priority": "P2",
+      "area": "Windows",
+      "title": "New regular windows ignore their requested foreground focus",
+      "impact": "Ctrl+N and other new-window flows may leave the new window inactive while keyboard input stays in the previous window.",
+      "evidence": "Shared window creation now uses a WindowPort but still passes focus/behind. Linux openWindow still never reads focus; utilities focus and regular windows always ShowInactive. The port extraction provides an integration seam, not a Linux activation fix.",
+      "refs": [
+        "apps/browser/src/state/windows/windowSync.ts:60",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1945",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2016"
+      ],
+      "caveat": "Actual compositor behavior needs physical input; explicit focus after creation can mask the missing option. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "On the target compositor, use Ctrl+N and immediately type. Verify focus=true, focus=false, restore-behind and window reuse separately.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Honor focus/behind/reuse intent through readiness-aware native activation.",
+        "Use supported Wayland activation semantics and retain background-instance protection.",
+        "Coordinate window notification policy with R03."
+      ],
+      "acceptance": [
+        "Ctrl+N and immediate typing target the new window.",
+        "focus=false and restore-behind never activate unexpectedly.",
+        "Reuse/utility focus work and background test windows never steal focus."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 32,
+        "id": 6045135174,
+        "url": "https://github.com/mckamyk/ardia/issues/32",
+        "title": "[Linux parity F22] [P2] New regular windows ignore their requested foreground focus"
+      },
+      "primary_stage": 6,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "R03",
+        "R01"
+      ],
+      "suggested_role": "Native window lifecycle and desktop acceptance owners",
+      "ownership_boundary": "One owner for close/focus/geometry integration in ac_linux_host.cc; a separate drag owner consumes agreed window identities. Acceptance authors use scratch profiles and keep native source ownership separate."
+    },
+    {
+      "id": "F23",
+      "priority": "P2",
+      "area": "Page state",
+      "title": "History jumps and zoom feedback only partially work",
+      "impact": "Selecting an older history entry fails when it requires a multi-step jump. Page zoom changes natively, while Ardia\u2019s percentage and nondefault-zoom indicator can remain at 100%.",
+      "evidence": "Native navigationEntries and actual zoomStep still exist; goToOffset does not. Shared history selection uses normal back/forward for +/-1 but goToOffset for longer jumps. No native zoom event updates shared tab.zoom. New domain sites.zoomLevels/setZoom additionally need N02 mapping.",
+      "refs": [
+        "apps/browser/src/state/tabs/navigation.ts:123",
+        "apps/browser/src/components/window/TabWebView.tsx:187",
+        "apps/browser/src/components/site/ZoomControls.tsx:11",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1406",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434"
+      ],
+      "caveat": "Basic native back/forward/actual zoom code remains present. Current UI runtime still blocked by bootstrap/identity migration.",
+      "verify": "Navigate through at least four pages, jump back two entries, then zoom through multiple levels and compare page scale, percentage and saved per-site zoom.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Implement validated native history offset jumps and zoom observer/initial report.",
+        "Map saved per-site zoom via current sites domain contract."
+      ],
+      "acceptance": [
+        "Four-page history supports jumps back/forward by two or more.",
+        "Native page scale, displayed percentage, nondefault indicator and reset agree.",
+        "Per-site zoom persists and resets without stale navigation feedback."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 33,
+        "id": 6045135602,
+        "url": "https://github.com/mckamyk/ardia/issues/33",
+        "title": "[Linux parity F23] [P2] History jumps and zoom feedback only partially work"
+      },
+      "primary_stage": 2,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F06",
+        "F17",
+        "F01"
+      ],
+      "suggested_role": "Native page-command and dialog owners",
+      "ownership_boundary": "Separate Linux page-command and dialog helpers; coordinate narrow dispatch registration in ac_linux_host.cc. Current find/commands state consumers are references, not a reason to fork shared UI."
+    },
+    {
+      "id": "F24",
+      "priority": "P2",
+      "area": "Page state",
+      "title": "New favicon refreshes can remain generic after a cache miss",
+      "impact": "Newly visited or changed sites can keep generic icons in the sidebar, essentials and tab strip.",
+      "evidence": "Favicon events still call unsupported per-tab downloadFavicon. Fallback now calls favicons.fetch domain API with no Linux implementation. Cached get/set also moved to favicons domain, so existing cache service availability depends on N02; the original refresh gap survives transport repair.",
+      "refs": [
+        "apps/browser/src/state/favicons/favicons.ts:126",
+        "apps/browser/src/state/favicons/favicons.ts:139",
+        "packages/ardiacore/src/favicons.ts:6",
+        "packages/ardiacore/src/favicons.ts:19",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1434"
+      ],
+      "caveat": "Do not claim all artwork broken: persisted data URLs/predefined art can render. Frequency not screenshot-verified on rebased UI.",
+      "verify": "Visit a controlled uncached site with a favicon, change the favicon, restart and compare the sidebar/top-strip/essentials output.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Map cached favicons.get/set then implement bounded native fetch/download result contracts.",
+        "Handle navigation cancellation, candidate changes, image decoding/size limits and stale tab results."
+      ],
+      "acceptance": [
+        "Uncached controlled favicon appears in row/essentials/top strip, changes, and survives restart.",
+        "Malformed/oversized/unreachable images fall back without stale repaint or persistent error."
+      ],
+      "historical_proof": "Source + native probe",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 34,
+        "id": 6045135993,
+        "url": "https://github.com/mckamyk/ardia/issues/34",
+        "title": "[Linux parity F24] [P2] New favicon refreshes can remain generic after a cache miss"
+      },
+      "primary_stage": 4,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "N02"
+      ],
+      "suggested_role": "Page observer and domain service owners",
+      "ownership_boundary": "Separate Linux-native helpers by security, downloads, extensions, media, page messaging and credentials. One host dispatcher/observer integrator. Shared packages remain contracts; secret native APIs retain typed paths."
+    },
+    {
+      "id": "F25",
+      "priority": "P2",
+      "area": "Appearance behavior",
+      "title": "Website tint and scroll-driven toolbar hiding cannot respond to pages",
+      "impact": "\u201cExtend Website Color\u201d does not receive site theme color, and \u201cHide Toolbar While Scrolling\u201d lacks the scroll events it needs.",
+      "evidence": "Linux Navigation still omits themeColor/themeColorSource. Shared TabWebView expects theme state and pageMessage(scroll) for toolbar auto-hide; native host installs no producer. Settings still exposes both behaviors.",
+      "refs": [
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:2135",
+        "apps/browser/src/components/window/TabWebView.tsx:230",
+        "apps/browser/src/components/settings/panes/Tabs.tsx:85",
+        "apps/browser/src/components/settings/panes/Tabs.tsx:117"
+      ],
+      "caveat": "Different shaders/fonts/blur are expected rendering adaptations and excluded. Theme reporting is independent of full page-script implementation; scroll-hide depends only on its narrow message substrate.",
+      "verify": "Use a controlled theme-color page with scrollable content; toggle each setting and verify live transitions and scroll direction.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Report native theme color/source and clear state correctly on navigation.",
+        "Deliver bounded scroll reports through F16 substrate and synchronize setting changes."
+      ],
+      "acceptance": [
+        "Controlled theme-color page updates tint and resets across navigation.",
+        "Scroll down/up hides/reveals toolbar; disabling either setting restores normal behavior.",
+        "Background/iframe/stale-document events cannot control another tab."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 35,
+        "id": 6045136418,
+        "url": "https://github.com/mckamyk/ardia/issues/35",
+        "title": "[Linux parity F25] [P2] Website tint and scroll-driven toolbar hiding cannot respond to pages"
+      },
+      "primary_stage": 4,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F16",
+        "F17"
+      ],
+      "suggested_role": "Page observer and domain service owners",
+      "ownership_boundary": "Separate Linux-native helpers by security, downloads, extensions, media, page messaging and credentials. One host dispatcher/observer integrator. Shared packages remain contracts; secret native APIs retain typed paths."
+    },
+    {
+      "id": "F26",
+      "priority": "P2",
+      "area": "Settings",
+      "title": "Unsupported platform choices are exposed as normal settings",
+      "impact": "Default-browser/autostart actions reject or fail silently. Choosing WebKit changes stored settings without selecting another engine. The app-drawn drag region does not initiate native window movement.",
+      "evidence": "Default-browser/autostart still call absent ArdiaSystem methods with false/notRegistered fallbacks. WebKit remains selectable although Linux always creates Chromium; now protectedVideoInWebKit defaults true and automatically labels/routes streaming sites as WebKit. App drag region remains non-native. Incoming pageScrollBars adds another exposed preference: nativeSync calls absent ArdiaSystem.setThinScrollBars on startup and preference changes.",
+      "refs": [
+        "packages/shell/src/system.tsx:44",
+        "apps/browser/src/state/settings/paneData.ts:29",
+        "apps/browser/src/components/settings/panes/General.tsx:257",
+        "apps/browser/src/components/settings/panes/Engines.tsx:23",
+        "apps/browser/src/state/settings/settings.ts:171",
+        "apps/browser/src/state/engines/engines.ts:58",
+        "apps/linux/src/shims/web/HostWebView.tsx:63",
+        "apps/linux/src/shims/web/chrome.tsx:244",
+        "apps/browser/src/state/settings/settings.ts:61",
+        "apps/browser/src/state/app/nativeSync.ts:70",
+        "apps/browser/src/state/app/nativeSync.ts:129",
+        "packages/shell/src/system.tsx:38",
+        "packages/shell/src/system.tsx:59"
+      ],
+      "caveat": "WebKit is not required on Linux; honest capability gating is. The new automatic protected-video route enlarges the existing F26 mismatch rather than proving DRM failure. Outer compositor decoration may supply dragging. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Check every rendered setting against an advertised host capability. Verify actual default URL routing/login registration; ensure engine labels match reality; test custom-header dragging.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Add granular Linux capabilities and filter unavailable engines/platform settings.",
+        "Implement truthful default-browser/autostart query/change/error flows.",
+        "Disable unavailable automatic WebKit routing and add native custom-header move where supported.",
+        "Capability-gate or implement the Linux scrollbar preference through a supported engine/native path; handle unavailable operation without startup rejection."
+      ],
+      "acceptance": [
+        "No rendered choice calls an absent backend or reports an engine different from actual native host.",
+        "URL routing/default registration and autostart survive restart.",
+        "Streaming sites retain correct Chromium identity and header dragging works on target compositor.",
+        "Toggle system/thin on a real page, restart, and verify actual page scrollbar behavior and no unhandled startup errors."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 36,
+        "id": 6045136862,
+        "url": "https://github.com/mckamyk/ardia/issues/36",
+        "title": "[Linux parity F26] [P2] Unsupported platform choices are exposed as normal settings"
+      },
+      "primary_stage": 1,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "N04",
+        "N06",
+        "F02",
+        "F08",
+        "F14",
+        "R03"
+      ],
+      "suggested_role": "Linux baseline and capability integrator",
+      "ownership_boundary": "apps/linux/vite.config.ts; vite.shared.ts; hostModules.ts; shims/expo-modules-core.ts; shims/ardiacore.tsx; HostWebView.tsx; engine/ardiacore-linux helper modules. One designated owner integrates changes to ac_linux_host.cc."
+    },
+    {
+      "id": "F27",
+      "priority": "P2",
+      "area": "Startup",
+      "title": "App-level help/onboarding and developer services are not started",
+      "impact": "Automatic onboarding/version tracking and handlers for app-level commands such as feedback, diagnostics, performance recording, release notes and task manager are absent from Linux startup. CLI control and watched user scripts have no backend.",
+      "evidence": "Linux still starts only its historical subset and imports WindowRoot rather than browser main. App-level command/onboarding/first-window service registration remains absent. Incoming setup-code UI is bundled but does not start onboarding; incoming synchronous LaunchConfig also needs a Linux provider.",
+      "refs": [
+        "apps/browser/src/main.tsx:34",
+        "apps/browser/src/main.tsx:40",
+        "apps/browser/src/main.tsx:59",
+        "apps/linux/src/main.tsx:40",
+        "apps/browser/src/state/app/appIntegration.ts:39",
+        "apps/browser/src/state/onboarding/onboarding.ts:378",
+        "apps/browser/src/state/presets/actions.ts:50",
+        "apps/browser/src/platform/launchConfig.ts:5"
+      ],
+      "caveat": "Do not blindly start Apple scripting/telemetry. Setup code application itself is shared pure state and is not established broken merely because onboarding startup is missing. N01 and the new LaunchConfig/domain prerequisites must land before runtime acceptance. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Inventory all startup services and visible commands; exercise each from Linux UI/command dispatch. Register only supported services and ensure first-window callbacks run once.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "persists",
+      "suggested_steps": [
+        "Inventory startup service ownership and add a Linux startup registry/command adapter.",
+        "Provide a synchronous validated LaunchConfig; signal firstWindowCommitted exactly once per intended owner.",
+        "Register supported help/onboarding/version/task tools; gate unavailable CLI/user-script/music integrations deliberately."
+      ],
+      "acceptance": [
+        "Fresh profile onboarding starts once; completed/resumed cases behave correctly.",
+        "Visible app commands work from correct browser/utility ownership.",
+        "Setup code preserves search/privacy choices and applies layouts/pins across windows without duplicate services."
+      ],
+      "historical_proof": "Source",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 37,
+        "id": 6045137321,
+        "url": "https://github.com/mckamyk/ardia/issues/37",
+        "title": "[Linux parity F27] [P2] App-level help/onboarding and developer services are not started"
+      },
+      "primary_stage": 5,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "N04",
+        "F05",
+        "F09",
+        "F18",
+        "N06"
+      ],
+      "suggested_role": "Linux integration and input owners",
+      "ownership_boundary": "Linux-only network/import/sync/calendar/startup/input helpers; coordinate shims/shellBase.tsx and main.tsx with their single integrator. Independent parsers and fixtures need no shared-file ownership."
+    },
+    {
+      "id": "N01",
+      "priority": "P1",
+      "status": "new",
+      "area": "Upstream integration",
+      "title": "Migrate Linux imports, Vite adapters and type contracts after the upstream layer move",
+      "impact": "The current Linux UI cannot build or typecheck, and three host-test files fail to load. A new Linux UI cannot be packaged until these entry points and tests target the current browser graph.",
+      "evidence": "The rebase imports 311 upstream commits that move browser/src/store, lib and component state into state/ and platform/, split feature components, and tighten native types. Linux still imports removed paths and Vite replacement/lazy maps name removed files. The current production build fails resolving browser/src/components/settings/windows from src/settingsWindows.ts. Typecheck reports 105 errors, including obsolete imports, removed WebView props, shortcut modifier typing and a nullable fetchBangList reply.",
+      "refs": [
+        "apps/linux/src/main.tsx:7",
+        "apps/linux/src/settingsWindows.ts:2",
+        "apps/linux/vite.config.ts:6",
+        "apps/linux/vite.shared.ts:62",
+        "apps/linux/scripts/host-test-loader.mjs:1",
+        "apps/browser/src/platform/launchConfig.ts:1",
+        "apps/browser/src/state/browser/store.ts:1"
+      ],
+      "caveat": "These are rebase integration failures, not evidence that upstream macOS is broken. Do not restore obsolete shared files or point Linux back to an older/duplicate store to make imports resolve. The native ABI, tab identity and launch configuration have separate migration issues.",
+      "suggested_steps": [
+        "Map every Linux import to the current state/platform/feature owner; update test loaders, Vite component replacements and lazy chunk paths with the same mapping.",
+        "Adapt Linux component wrappers to current shared exports and exact synchronous/Promise return types; preserve disabled Linux New Tab prewarming through the current switch/config boundary.",
+        "Keep one canonical browser store and native-module/menu instance in the bundle; use Linux-owned adapters instead of changing the demo or adding compatibility aliases to shared browser files.",
+        "Fix nullability and ShortcutModifier return contracts, then run the real production module graph and host tests. Coordinate HostWebView prop changes with N03."
+      ],
+      "acceptance": [
+        "pnpm --filter @ardia/linux build and typecheck pass on the rebased source without unresolved old paths or implicit-any fallout.",
+        "All Linux host test files load and run; production bundle contains no apps/demo modules or duplicate browser stores.",
+        "Linux replacement components, native WebView, utility navigation, menu and symbol modules resolve exactly once.",
+        "Current-source native runtime bootstrap is subsequently verified with N02\u2013N05; a build-only pass must not be called feature parity."
+      ],
+      "proof": "Rebased production build / typecheck / host-test failures",
+      "issue": {
+        "number": 38,
+        "id": 6045137751,
+        "url": "https://github.com/mckamyk/ardia/issues/38",
+        "title": "[Linux parity N01] [P1] Migrate Linux imports, Vite adapters and type contracts after the upstream layer move"
+      },
+      "primary_stage": 1,
+      "hard_acceptance_blocked_by": [
+        "N03"
+      ],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "N02",
+        "N03",
+        "N04",
+        "N05",
+        "N06"
+      ],
+      "suggested_role": "Linux baseline and capability integrator",
+      "ownership_boundary": "apps/linux/vite.config.ts; vite.shared.ts; hostModules.ts; shims/expo-modules-core.ts; shims/ardiacore.tsx; HostWebView.tsx; engine/ardiacore-linux helper modules. One designated owner integrates changes to ac_linux_host.cc."
+    },
+    {
+      "id": "N02",
+      "status": "new",
+      "refs": [
+        "packages/ardiacore/src/engine/call.ts:24",
+        "packages/ardiacore/src/engine/call.ts:47",
+        "packages/ardiacore/src/engine/call.ts:68",
+        "apps/linux/src/shims/ardiacore.tsx:8",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1181",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1835"
+      ],
+      "evidence": "Upstream now requires per-domain Ardia*.call(verb,profile,JSONargs) returning a JSON string and rejecting errors. Events subscribe to domain channels with {name,data}. Linux intercepts only obsolete ArdiaCEF.engineCall and emits legacy ArdiaCEF.onEngineEvent/onTabStrip. Current history/bookmarks/strip/engine/extension/download-setting and auto-PiP calls cannot use existing backends. Raw C {error} replies also must become rejections rather than apparent success.",
+      "caveat": "Source-confirmed compatibility regression; N01 currently prevents runtime boot, so this is not a fresh packaged runtime result. Preserve default-profile fail-closed policy, typed secrets and explicit unsupported errors.",
+      "suggested_steps": [
+        "Implement allowlisted current domain/verb mapping to existing engine/native functions; validate args and preserve separate profile.",
+        "Serialize scalar/null/object replies once and reject engine errors with stable codes.",
+        "Translate current domain event envelopes with profile/tab ownership filtering; preserve dedicated secret native methods."
+      ],
+      "acceptance": [
+        "Contract tests cover JSON string/scalar/null/error handling and domain event subscriptions/removal.",
+        "Current shared history/bookmarks/strips/extension list/download settings/auto-PiP paths reach real supported native services.",
+        "Unknown/private profile and ordinary-page privileged access remain rejected."
+      ],
+      "severity": "P1",
+      "title": "Rebased shared UI cannot use the Linux legacy native call and event ABI",
+      "area": "Upstream integration",
+      "priority": "P1",
+      "impact": "Rebased shared UI cannot use the Linux legacy native call and event ABI",
+      "issue": {
+        "number": 39,
+        "id": 6045138157,
+        "url": "https://github.com/mckamyk/ardia/issues/39",
+        "title": "[Linux parity N02] [P1] Rebased shared UI cannot use the Linux legacy native call and event ABI"
+      },
+      "primary_stage": 1,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "N03",
+        "N04",
+        "F03",
+        "F06",
+        "F07",
+        "F08",
+        "F09",
+        "F15",
+        "F17"
+      ],
+      "suggested_role": "Linux baseline and capability integrator",
+      "ownership_boundary": "apps/linux/vite.config.ts; vite.shared.ts; hostModules.ts; shims/expo-modules-core.ts; shims/ardiacore.tsx; HostWebView.tsx; engine/ardiacore-linux helper modules. One designated owner integrates changes to ac_linux_host.cc."
+    },
+    {
+      "id": "N03",
+      "status": "new",
+      "refs": [
+        "packages/ardiacore/src/pageTypes.ts:147",
+        "apps/browser/src/components/window/TabWebView.tsx:121",
+        "apps/linux/src/shims/web/HostWebView.tsx:26",
+        "apps/linux/src/shims/web/HostWebView.tsx:112",
+        "packages/ardiacore/src/module.ts:33"
+      ],
+      "evidence": "Current shared WebView supplies tabId and zero-argument onReady; Linux reads removed transferKey, falls back to random host_UUID and uses missing transferKey for overlay checks. Native binding keys therefore diverge from store tab IDs. Current permissions/media/extension/task events also use stable string tab IDs, while Linux transport still works with numeric IDs internally.",
+      "caveat": "Do not globally remove numeric IDs: strip/window/native transport identifiers remain numeric. Identity mismatch is source-established, but physical effects need runtime after bootstrap repairs.",
+      "suggested_steps": [
+        "Use props.tabId for stable native binding/claim/overlay identity and zero-argument readiness.",
+        "Maintain explicit native-ID-to-tab-key lookup for current service calls/events and ownership.",
+        "Adapt fixtures to assert native binding key equals store tab ID across remount/adopt/transfer."
+      ],
+      "acceptance": [
+        "Create/close/remount/adopt/transfer retains exactly one correct native tab and event owner.",
+        "Shared strip selection and close-by-key operate on the requested tab.",
+        "Overlay checks use correct owner; service events target stable tab IDs without leaking across windows/profiles."
+      ],
+      "severity": "P1",
+      "title": "Rebased tabId contract diverges from Linux random native binding keys",
+      "area": "Upstream integration",
+      "priority": "P1",
+      "impact": "Rebased tabId contract diverges from Linux random native binding keys",
+      "issue": {
+        "number": 40,
+        "id": 6045138597,
+        "url": "https://github.com/mckamyk/ardia/issues/40",
+        "title": "[Linux parity N03] [P1] Rebased tabId contract diverges from Linux random native binding keys"
+      },
+      "primary_stage": 1,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [
+        "N01"
+      ],
+      "coordinate_with": [
+        "R01",
+        "R02",
+        "F02"
+      ],
+      "suggested_role": "Linux baseline and capability integrator",
+      "ownership_boundary": "apps/linux/vite.config.ts; vite.shared.ts; hostModules.ts; shims/expo-modules-core.ts; shims/ardiacore.tsx; HostWebView.tsx; engine/ardiacore-linux helper modules. One designated owner integrates changes to ac_linux_host.cc."
+    },
+    {
+      "id": "N04",
+      "status": "new",
+      "refs": [
+        "packages/shell/src/app.ts:49",
+        "packages/shell/src/app.ts:145",
+        "apps/browser/src/platform/launchConfig.ts:5",
+        "apps/browser/src/platform/killSwitches.ts:127",
+        "apps/linux/src/hostModules.ts:16",
+        "apps/linux/src/shims/shellBase.tsx:85"
+      ],
+      "evidence": "New synchronous ArdiaApp.launchConfig() returns LaunchConfig; shared switchOverride immediately indexes result.switches. Linux has no launchConfig local provider or synchronous host mapping and returns an async hostModuleMethod for unknown methods, so code indexes a Promise and native invocation later rejects. Existing systemInfo has a Linux local adapter and should not be falsely counted as equally missing.",
+      "caveat": "Source-confirmed boot hazard once moved imports resolve. Do not make synchronous API shape correct by silently enabling unsupported experiments or exposing process secrets.",
+      "suggested_steps": [
+        "Provide bootstrap-backed synchronous LaunchConfig with complete dataDirectory/background/isolated/testInstance/instance/switches/trace/test fields.",
+        "Use intentional Linux defaults, retain disabled new-tab prewarm, and audit other synchronous methods.",
+        "Test before module import/render, rather than awaiting a native Promise."
+      ],
+      "acceptance": [
+        "launchConfig returns plain complete object synchronously; switchOverride and test access do not throw.",
+        "Fresh and restored production UI starts without unsupported launchConfig rejection.",
+        "Linux prewarm/focus safeguards and experiment defaults remain deliberate; no environment secrets exposed."
+      ],
+      "severity": "P1",
+      "title": "Synchronous launchConfig contract has no Linux provider and can break startup",
+      "area": "Upstream integration",
+      "priority": "P1",
+      "impact": "Synchronous launchConfig contract has no Linux provider and can break startup",
+      "issue": {
+        "number": 41,
+        "id": 6045139043,
+        "url": "https://github.com/mckamyk/ardia/issues/41",
+        "title": "[Linux parity N04] [P1] Synchronous launchConfig contract has no Linux provider and can break startup"
+      },
+      "primary_stage": 1,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F27",
+        "N05"
+      ],
+      "suggested_role": "Linux baseline and capability integrator",
+      "ownership_boundary": "apps/linux/vite.config.ts; vite.shared.ts; hostModules.ts; shims/expo-modules-core.ts; shims/ardiacore.tsx; HostWebView.tsx; engine/ardiacore-linux helper modules. One designated owner integrates changes to ac_linux_host.cc."
+    },
+    {
+      "id": "N05",
+      "priority": "P1",
+      "status": "new",
+      "area": "Upstream integration",
+      "title": "Provide Linux launch switches and qualify the Chromium 156 native build and package",
+      "impact": "A matching Linux native engine is not established for the rebased source. The shared engine now depends on a Mac-only GN target/source, so the existing Chromium 155 package cannot stand in for a current native build.",
+      "evidence": "Main advances Chromium to156.0.8078.47 and shared Helium 0.20.1. The rebased shared Ardia BUILD depends on //ardia/core:launch_switches, whose BUILD asserts is_mac and whose ac_launch_switches.cc includes Apple Security frameworks. Linux apply copies only the hook headers, not the new launch-switch contract. ac_downloads.cc now includes that header. Linux pins have been aligned to Helium Linux 0.20.1.1 (473c0f72\u2026), whose shared submodule matches f29a2596\u2026; no Linux 156 build/strict series/package qualification was run. One tooling test still hardcodes 155 and fails after the corrected pin.",
+      "refs": [
+        "engine/patches/build/helium-pins.ini:1",
+        "engine/chromium/src/chrome/browser/ardia/BUILD.gn:110",
+        "engine/ardiacore/src/ardia/core/BUILD.gn:1",
+        "engine/ardiacore/src/ardia/core/ac_launch_switches.cc:3",
+        "engine/chromium/src/chrome/browser/ardia/ac_downloads.cc:13",
+        "engine/ardiacore-linux/apply.sh:27",
+        "engine/patches/build/tests/test_platform_tooling.py:197"
+      ],
+      "caveat": "Matching pins are source metadata, not build or runtime evidence. Do not weaken the test/authentication gate, route Linux to Apple-only code, clean existing Chromium outputs, or reuse the 155 binary as validation of 156 APIs.",
+      "suggested_steps": [
+        "Supply a Linux implementation of the shared launch-switch contract and select its GN target under is_linux; retain the existing macOS implementation and behavior.",
+        "Extend Linux layer materialization/drift manifests to include the required shared declarations and Linux implementation. Reconcile all156 hook signatures, selected patch contexts and GN dependencies on a separate/version-correct source tree.",
+        "Update version-sensitive fixture expectations meaningfully, retaining the Linux/shared Helium compatibility check and failing closed for unavailable OS authentication.",
+        "Prepare a matching 156 tree without cleaning or synchronizing an existing build cache, compile incrementally under the Chromium lock, package the current Linux UI, and retain engine-tree/build provenance."
+      ],
+      "acceptance": [
+        "GN generation and header checks resolve Linux launch-switch dependencies without evaluating the is_mac-only target.",
+        "Strict Linux patch/materialization checks and platform tooling pass for the selected156 pins; no Mac-only changes leak into Linux or vice versa.",
+        "A real matching Linux 156 engine/package boots with scratch profiles, Chromium sandbox, ordinary-page bridge isolation and correct native service ABI.",
+        "Re-run native keyboard/restored-session/auto-PiP checks with the migrated UI and record binary/UI/source identities; do not infer current support from historical 155 evidence."
+      ],
+      "proof": "Rebased source / failing version-sensitive tooling fixture",
+      "issue": {
+        "number": 42,
+        "id": 6045139506,
+        "url": "https://github.com/mckamyk/ardia/issues/42",
+        "title": "[Linux parity N05] [P1] Provide Linux launch switches and qualify the Chromium 156 native build and package"
+      },
+      "primary_stage": 1,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "N02",
+        "N04",
+        "F07"
+      ],
+      "suggested_role": "Linux baseline and capability integrator",
+      "ownership_boundary": "apps/linux/vite.config.ts; vite.shared.ts; hostModules.ts; shims/expo-modules-core.ts; shims/ardiacore.tsx; HostWebView.tsx; engine/ardiacore-linux helper modules. One designated owner integrates changes to ac_linux_host.cc."
+    },
+    {
+      "id": "N06",
+      "priority": "P2",
+      "refs": [
+        "apps/browser/src/state/commands/commandShortcuts.ts:32",
+        "apps/browser/src/state/commands/commandCatalog.ts:93",
+        "apps/browser/src/state/commands/commandCatalog.ts:118",
+        "apps/browser/src/state/commands/shortcuts.ts:13",
+        "apps/linux/src/shortcuts.ts:27",
+        "apps/linux/src/shortcuts.ts:81",
+        "apps/linux/src/shortcuts.ts:90",
+        "apps/linux/vite.config.ts:20"
+      ],
+      "evidence": "The new shared resolver uses Mac catalog defaults for remappable items and only uses native defaults for fixed sources; all Linux items are remappable. Linux native Downloads defaults Ctrl+J, while shared catalog resolves Shift+command+J. Native tabSwitcher uses semantic command/physical Ctrl but shared catalog uses semantic control. Glyph formatting moved into state, outside Linux's components-only Vite translation.",
+      "acceptance": [
+        "Downloads, DevTools, Ctrl+Tab and profile bindings display exactly their physical Linux defaults.",
+        "Recording/reset/conflict displacement and open command/menu hints agree with native dispatch."
+      ],
+      "title": "Linux shortcut hints and conflict resolution diverge from the actual native shortcut catalog",
+      "status": "new",
+      "proof": "Executed actual stripped TypeScript catalog, shortcut resolver and linuxMenuShortcuts against rebased sources: Downloads resolves shift+command+j but native default command+j; DevTools resolves option+command+i but native primary command+shift+i; tabSwitcher resolves control+Tab but native default command+Tab. Rendered hints are Mac glyphs outside components-only Vite translation.",
+      "caveat": "The build blocker N01 still prevents packaged UI reproduction on this revision, but this independent pure-source probe establishes resolver/native catalog disagreement. Linux uses semantic command for physical Ctrl and semantic control for physical Super.",
+      "suggested_steps": [
+        "Make the shared effective resolver consume Linux catalog defaults/aliases and use one resolved catalog for display/conflicts/native binding.",
+        "Add Linux formatter injection instead of translating literal component source."
+      ],
+      "area": "Upstream integration",
+      "impact": "Linux shortcut hints and conflict resolution diverge from the actual native shortcut catalog",
+      "issue": {
+        "number": 43,
+        "id": 6045139964,
+        "url": "https://github.com/mckamyk/ardia/issues/43",
+        "title": "[Linux parity N06] [P2] Linux shortcut hints and conflict resolution diverge from the actual native shortcut catalog"
+      },
+      "primary_stage": 1,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F19",
+        "F27"
+      ],
+      "suggested_role": "Linux baseline and capability integrator",
+      "ownership_boundary": "apps/linux/vite.config.ts; vite.shared.ts; hostModules.ts; shims/expo-modules-core.ts; shims/ardiacore.tsx; HostWebView.tsx; engine/ardiacore-linux helper modules. One designated owner integrates changes to ac_linux_host.cc."
+    },
+    {
+      "id": "R01",
+      "priority": "Risk",
+      "area": "Desktop checks",
+      "title": "Clicking native split pane B may leave Ardia commands targeting pane A",
+      "impact": "Reload, close and address commands could act on the previously selected pane after the user clicks inside another native page.",
+      "evidence": "Shared onPageFocus now calls activateFocusedPane(tabId); Linux still emits no pageFocus/focus event. Real native WebContents input does not necessarily bubble to outer shell touch handlers. TabPane retains onTouchStart activation, so source inspection alone cannot determine physical split behavior.",
+      "refs": [
+        "apps/browser/src/components/window/TabWebView.tsx:221",
+        "apps/browser/src/components/window/TabPane.tsx:99",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:464",
+        "apps/linux/src/shims/web/HostWebView.tsx:16"
+      ],
+      "caveat": "Hypothesis retained, not a confirmed compositor failure. Runtime reproduction of rebased UI requires N01-N04 migration; keyboard pane navigation can still differ from pointer activation.",
+      "verify": "Create two real split pages, select A, physically click a text field in B, type, then use reload/close/Ctrl+L and inspect the shared activeTabId.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "risk",
+      "suggested_steps": [
+        "Reproduce with physical native input before implementing a fix.",
+        "If confirmed, report native viewport/WebContents focus using stable tab ID and synchronize shared active pane.",
+        "Coordinate focus/window ownership with F17/R03; do not synthesize focus generations without native handshake support."
+      ],
+      "acceptance": [
+        "Select A, physically click/type B, assert native and shared active target agree.",
+        "Reload/close/Ctrl+L act on B; test menu/dialog return, keyboard switching, transfers and background windows."
+      ],
+      "historical_proof": "Source risk",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 44,
+        "id": 6045140394,
+        "url": "https://github.com/mckamyk/ardia/issues/44",
+        "title": "[Linux parity R01] [Investigate] Clicking native split pane B may leave Ardia commands targeting pane A"
+      },
+      "primary_stage": 6,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "N03",
+        "F17",
+        "R03"
+      ],
+      "suggested_role": "Native window lifecycle and desktop acceptance owners",
+      "ownership_boundary": "One owner for close/focus/geometry integration in ac_linux_host.cc; a separate drag owner consumes agreed window identities. Acceptance authors use scratch profiles and keep native source ownership separate."
+    },
+    {
+      "id": "R02",
+      "priority": "Risk",
+      "area": "Desktop checks",
+      "title": "Cross-window dragging has coordinate and per-renderer state risks",
+      "impact": "A tab dragged outside its window could miss its target, create a wrongly positioned window or lose the intended insertion position.",
+      "evidence": "Window-drop helper moved to state/drag and still computes bottom-up screen y while Linux returns gfx top-down bounds. Drag state/resolvers remain module-local across separate renderers. Native previews remain unavailable; upstream now calls preview helpers unconditionally.",
+      "refs": [
+        "apps/browser/src/state/drag/windowDrop.ts:7",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1915",
+        "apps/browser/src/state/drag/tabDrag.ts:142",
+        "apps/linux/src/hostModules.ts:6",
+        "packages/shell/src/windows.ts:38"
+      ],
+      "caveat": "Original physical cross-window failure remains a risk, not a confirmed desktop repro. Explicit native adoption and same-window reorder have paths. New unconditional calls are a separate source-confirmed compatibility hazard. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Drag within and between two windows on monitors with different origin/scale; drop into a specific row, outside all windows, and cancel during transfer.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "risk",
+      "suggested_steps": [
+        "Reproduce on target compositor before claiming exact gesture failure.",
+        "Define Linux coordinate/target-identity and native DnD session contracts; broker across renderers.",
+        "Provide optional-helper fallback/capability gating; do not treat y inversion as sufficient on Wayland."
+      ],
+      "acceptance": [
+        "Within-window control and cross-window exact-row insertion.",
+        "Tear-off, cancellation and mixed-origin/mixed-scale monitors.",
+        "Native tab identity/playback retained; unsupported global placement handled honestly."
+      ],
+      "historical_proof": "Source risk",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 45,
+        "id": 6045140801,
+        "url": "https://github.com/mckamyk/ardia/issues/45",
+        "title": "[Linux parity R02] [Investigate] Cross-window dragging has coordinate and per-renderer state risks"
+      },
+      "primary_stage": 6,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "N03",
+        "F20",
+        "R03"
+      ],
+      "suggested_role": "Native window lifecycle and desktop acceptance owners",
+      "ownership_boundary": "One owner for close/focus/geometry integration in ac_linux_host.cc; a separate drag owner consumes agreed window identities. Acceptance authors use scratch profiles and keep native source ownership separate."
+    },
+    {
+      "id": "R03",
+      "priority": "Risk",
+      "area": "Desktop checks",
+      "title": "Window focus/frame/fullscreen bookkeeping lacks native notifications",
+      "impact": "The shared focused-window state and saved frame may stay stale after compositor activation, movement/resizing or fullscreen transitions.",
+      "evidence": "Native window bookkeeping moved behind WindowPort onEvent; it still needs focus/frame/fullScreen notifications. Linux still emits none and its bounds observer only relayouts the overlay. Restoring old bounds is not evidence of recording user changes.",
+      "refs": [
+        "apps/browser/src/state/windows/windowSync.ts:34",
+        "apps/browser/src/state/windows/windowSync.ts:38",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:642",
+        "engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc:1894",
+        "apps/linux/src/hostSession.ts:87"
+      ],
+      "caveat": "Keep as a desktop verification risk until comparing actual compositor, store and session. Chromium can independently restore native placement. Rebased source review at 8b165bd5; N01 prevents a fresh Linux UI from building, so prior native/adapter reproductions are historical evidence rather than a runtime result on this revision.",
+      "verify": "Move/resize/focus two windows and toggle fullscreen through the compositor; inspect store values, saved session and post-restart actual bounds.",
+      "proof": "Current-source revalidation; pre-rebase runtime evidence is historical",
+      "status": "risk",
+      "suggested_steps": [
+        "Observe native widget activation/bounds/fullscreen and deliver owned-window events.",
+        "Reconcile per-renderer focused-window authority without loops.",
+        "Distinguish requested/observed geometry and record only meaningful Wayland values."
+      ],
+      "acceptance": [
+        "Physically focus/move/resize/fullscreen two windows and compare store/native/canonical session.",
+        "Restart reproduces intended sizes/state; document compositor-managed origins.",
+        "Utility events stay isolated and background test windows remain inactive."
+      ],
+      "historical_proof": "Source risk",
+      "validation_scope": "source_only",
+      "issue": {
+        "number": 46,
+        "id": 6045141218,
+        "url": "https://github.com/mckamyk/ardia/issues/46",
+        "title": "[Linux parity R03] [Investigate] Window focus/frame/fullscreen bookkeeping lacks native notifications"
+      },
+      "primary_stage": 6,
+      "hard_acceptance_blocked_by": [],
+      "hard_acceptance_blocks": [],
+      "coordinate_with": [
+        "F22",
+        "F21",
+        "R02"
+      ],
+      "suggested_role": "Native window lifecycle and desktop acceptance owners",
+      "ownership_boundary": "One owner for close/focus/geometry integration in ac_linux_host.cc; a separate drag owner consumes agreed window identities. Acceptance authors use scratch profiles and keep native source ownership separate."
+    }
+  ]
+}
