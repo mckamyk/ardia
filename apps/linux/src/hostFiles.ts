@@ -1,5 +1,6 @@
 import type { ArdiaHost } from "./host";
 import { hostSupports, invokeHost, reportHostError } from "./host.ts";
+import { FILE_STATUS } from "./fileCapabilities.ts";
 
 export const FILE_STATUS_FRESH_MS = 2000;
 const FILE_STATUS_BATCH_MS = 16;
@@ -48,7 +49,7 @@ export function createHostFiles(host: ArdiaHost, clock: Clock = realClock): Host
     }
     if (queued.size) schedule();
     if (!paths.length) return;
-    void invokeHost<unknown>("ArdiaSystem.fileStatus", { args: [paths] }, host)
+    void invokeHost<unknown>(FILE_STATUS, { args: [paths] }, host)
       .then((reply) => {
         if (!Array.isArray(reply) || reply.length !== paths.length) throw Object.assign(new Error("Invalid file status reply"), { code: "ERR_BAD_REPLY" });
         let changed = false;
@@ -78,7 +79,7 @@ export function createHostFiles(host: ArdiaHost, clock: Clock = realClock): Host
 
   return {
     fileExists(path) {
-      if (!localPath(path) || !hostSupports("ArdiaSystem.fileStatus", host)) return false;
+      if (!localPath(path) || !hostSupports(FILE_STATUS, host)) return false;
       const entry = cache.get(path);
       if ((!entry || clock.now() - entry.at > FILE_STATUS_FRESH_MS) && !inflight.has(path)) {
         queued.add(path);

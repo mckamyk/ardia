@@ -21,19 +21,27 @@ export function snapshotDownload(value: unknown): Download | null {
   return { ...(d as Download), profile: "" };
 }
 
-export function mergeDownloadSnapshot(current: Download[], snapshot: unknown, limit = DOWNLOAD_LIMIT): Download[] | null {
-  if (!Array.isArray(snapshot)) return null;
+const SNAPSHOT_PROFILE = "\u0000snapshot";
+
+export function planDownloadSnapshot(current: Download[], snapshot: unknown, excluded: ReadonlySet<string> = new Set(), limit = DOWNLOAD_LIMIT) {
+  if (!Array.isArray(snapshot)) return { downloads: null, added: [] as Download[], hidden: false };
   const known = new Set(current.map((d) => d.id));
-  const added: Download[] = [];
+  const seen = new Set<string>();
+  const listed: Download[] = [];
   for (const entry of snapshot) {
     const d = snapshotDownload(entry);
-    if (!d || known.has(d.id)) continue;
-    known.add(d.id);
-    added.push(d);
+    if (!d || seen.has(d.id) || excluded.has(d.id)) continue;
+    seen.add(d.id);
+    listed.push(d);
   }
-  if (!added.length || current.length >= limit) return null;
-  return [...current, ...added].slice(0, limit);
+  const merged = [...current, ...listed.filter((d) => !known.has(d.id))].slice(0, limit);
+  const shown = new Set(merged.map((d) => d.id));
+  const added = merged.slice(current.length);
+  return { downloads: added.length ? merged : null, added, hidden: listed.some((d) => !shown.has(d.id)) };
 }
+
+export const mergeDownloadSnapshot = (current: Download[], snapshot: unknown, limit = DOWNLOAD_LIMIT) =>
+  planDownloadSnapshot(current, snapshot, new Set(), limit).downloads;
 
 type DownloadState = {
   downloads: Download[];
@@ -50,40 +58,54 @@ const removable = (d: Download) => nativeDownloadId(d.id) && d.state !== "downlo
 
 export function startHostDownloads(host: ArdiaHost, store: DownloadStore) {
   const { removeDownload, clearDownloads } = store.getState();
-  const request = (verb: string, id: string) => callHost(`downloads.${verb}`, "", JSON.stringify({ id }), host);
-  const forget = (gone: Download[]) => {
-    for (const d of gone.filter(removable)) {
-      void request("remove", d.id)
-        .catch((error) => (d.state === "failed" ? request("cancel", d.id).then(() => request("remove", d.id)) : Promise.reject(error)))
-        .catch(reportHostError);
-    }
+  const call = (verb: string, args: object) => callHost(`downloads.${verb}`, "", JSON.stringify(args), host);
+  const kept = () => store.getState().downloads.map((d) => d.id).filter(nativeDownloadId).slice(0, DOWNLOAD_LIMIT);
+  const clearNative = (before: number) => void call("clear", { keep: kept(), before }).catch(reportHostError);
+  let listing = true;
+  const removedWhileListing = new Set<string>();
+  const removedLocally = (gone: Download[]) => {
+    if (listing) for (const d of gone) removedWhileListing.add(d.id);
   };
   store.setState({
     removeDownload(id) {
       const gone = store.getState().downloads.filter((d) => d.id === id);
       removeDownload(id);
-      forget(gone);
+      removedLocally(gone);
+      for (const d of gone.filter(removable)) void call("remove", { id: d.id }).catch(reportHostError);
     },
     clearDownloads(windowId) {
       const before = store.getState().downloads;
       clearDownloads(windowId);
-      const kept = new Set(store.getState().downloads.map((d) => d.id));
-      forget(before.filter((d) => !kept.has(d.id)));
+      const remaining = new Set(store.getState().downloads.map((d) => d.id));
+      removedLocally(before.filter((d) => !remaining.has(d.id)));
+      clearNative(Date.now());
     },
   });
   const stop = host.onEvent((module, event, payload) => {
     if (module !== "ArdiaDownloads" || event !== "downloads" || !payload || typeof payload !== "object") return;
     const { name, data } = payload as { name?: unknown; data?: { id?: unknown } | null };
-    if (name !== "downloads.removed" || !nativeDownloadId(data?.id)) return;
-    if (store.getState().downloads.some((d) => d.id === data.id)) removeDownload(data.id);
+    const id = data?.id;
+    if (name !== "downloads.removed" || !nativeDownloadId(id)) return;
+    if (listing) removedWhileListing.add(id);
+    if (store.getState().downloads.some((d) => d.id === id)) removeDownload(id);
   });
   const stopFiles = hostFiles(host).onChange(() => store.setState({ downloads: [...store.getState().downloads] }));
-  const ready = callHost("downloads.list", "", "{}", host)
+  const requestedAt = Date.now();
+  const ready = call("list", {})
     .then((reply) => {
-      const merged = mergeDownloadSnapshot(store.getState().downloads, JSON.parse(reply));
-      if (merged) store.setState({ downloads: merged });
+      const plan = planDownloadSnapshot(store.getState().downloads, JSON.parse(reply), removedWhileListing);
+      if (plan.downloads) {
+        const fresh = new Set(plan.added.map((d) => d.id));
+        store.setState({ downloads: plan.downloads.map((d) => (fresh.has(d.id) ? { ...d, profile: SNAPSHOT_PROFILE } : d)) });
+        store.setState({ downloads: plan.downloads });
+      }
+      if (plan.hidden) clearNative(requestedAt);
     })
-    .catch(reportHostError);
+    .catch(reportHostError)
+    .finally(() => {
+      listing = false;
+      removedWhileListing.clear();
+    });
   return {
     ready,
     stop() {

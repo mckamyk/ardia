@@ -3,6 +3,7 @@ import { View } from "react-native";
 import type { FileDropAreaProps } from "@ardia-real/shell";
 import { ardiaHost, hostSupports, invokeHost } from "../../host";
 import { acceptsDrag, createDropController, dragCount, type DropPoint } from "../../fileDrop";
+import { FILE_DROP } from "../../fileCapabilities";
 
 const claimed = new WeakSet<Event>();
 const EDITABLE = "input, textarea, [contenteditable='true'], [contenteditable='']";
@@ -23,7 +24,7 @@ function guardDocumentDrops() {
 }
 
 const claimFiles = (names: string[]) =>
-  ardiaHost && hostSupports("ArdiaFileDrop.takeDrop") ? invokeHost<unknown>("ArdiaFileDrop.takeDrop", { args: [names] }) : Promise.resolve([]);
+  ardiaHost && hostSupports(FILE_DROP) ? invokeHost<unknown>(FILE_DROP, { args: [names] }) : Promise.resolve([]);
 
 function assign<T>(ref: Ref<T> | undefined, value: T | null) {
   if (typeof ref === "function") ref(value);

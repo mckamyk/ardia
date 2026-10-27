@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mergeDownloadSnapshot, nativeDownloadId, snapshotDownload, startHostDownloads } from "./hostDownloads.ts";
+import { initialHostSession } from "./hostSession.ts";
+import { useBrowser } from "../../browser/src/state/browser/store.ts";
+import { watchNewDownloads } from "../../browser/src/state/windows/downloadWatch.ts";
 
 const ID = (n) => `3f2504e0-4f89-41d3-9a0c-${String(n).padStart(12, "0")}`;
 const download = (n, patch = {}) => ({
@@ -70,36 +73,99 @@ test("startup lists downloads through the regular profile without opening the po
   running.stop();
 });
 
-test("removing and clearing finished downloads removes them from Chromium history so restart cannot resurrect them", async () => {
+test("removing a finished or failed download removes exactly that entry from Chromium history", async () => {
   const f = fixture();
   const running = startHostDownloads(f.host, f.store);
   await running.ready;
-  f.state.downloads = [download(1), download(2, { state: "downloading" }), download(3, { state: "cancelled" }), { ...download(4), id: "saved-4" }];
+  f.state.downloads = [download(1), download(5, { state: "failed" }), download(2, { state: "downloading" }), { ...download(4), id: "saved-4" }];
   f.state.removeDownload(ID(1));
-  f.state.clearDownloads("main");
+  f.state.removeDownload(ID(5));
+  f.state.removeDownload(ID(2));
+  f.state.removeDownload("saved-4");
   await settle();
-  assert.deepEqual(f.state.downloads.map((d) => d.id), [ID(2)]);
   assert.deepEqual(f.calls.slice(1), [
     { name: "downloads.remove", profile: "default", args: { id: ID(1) } },
-    { name: "downloads.remove", profile: "default", args: { id: ID(3) } },
+    { name: "downloads.remove", profile: "default", args: { id: ID(5) } },
   ]);
   running.stop();
 });
 
-test("a resumable failed download is cancelled before it is removed", async () => {
+test("Clear removes every finished download the engine knows, including history the list never showed", async () => {
   const f = fixture();
   const running = startHostDownloads(f.host, f.store);
   await running.ready;
-  let removes = 0;
-  f.host.call = async (name, profile, args) => {
+  f.state.downloads = [download(1), download(2, { state: "downloading" }), download(3, { state: "cancelled" }), download(4, { state: "failed" })];
+  const before = Date.now();
+  f.state.clearDownloads("main");
+  await settle();
+  assert.deepEqual(f.state.downloads.map((d) => d.id), [ID(2)]);
+  const clears = f.calls.filter((c) => c.name === "downloads.clear");
+  assert.equal(clears.length, 1);
+  assert.deepEqual(clears[0].args.keep, [ID(2)]);
+  assert.ok(clears[0].args.before >= before && clears[0].args.before <= Date.now());
+  assert.equal(f.calls.filter((c) => c.name === "downloads.remove").length, 0);
+  running.stop();
+});
+
+test("history beyond the visible list is pruned at startup so later removals never surface older entries", async () => {
+  const history = Array.from({ length: 150 }, (_, n) => download(150 - n));
+  const f = fixture(history);
+  const started = Date.now();
+  const running = startHostDownloads(f.host, f.store);
+  await running.ready;
+  await settle();
+  assert.equal(f.state.downloads.length, 100);
+  assert.equal(f.state.downloads[0].id, ID(150));
+  const clears = f.calls.filter((c) => c.name === "downloads.clear");
+  assert.equal(clears.length, 1);
+  assert.deepEqual(clears[0].args.keep, f.state.downloads.map((d) => d.id));
+  assert.ok(clears[0].args.before >= started && clears[0].args.before <= Date.now());
+  f.state.removeDownload(ID(150));
+  await settle();
+  assert.equal(f.state.downloads.length, 99);
+  assert.ok(!f.state.downloads.some((d) => d.id === ID(50)));
+  running.stop();
+  const small = fixture([download(2), download(1)]);
+  const quiet = startHostDownloads(small.host, small.store);
+  await quiet.ready;
+  await settle();
+  assert.equal(small.calls.filter((c) => c.name === "downloads.clear").length, 0);
+  quiet.stop();
+});
+
+test("removals seen while the startup list is in flight are not undone by its reply", async () => {
+  const f = fixture();
+  let reply;
+  f.host.call = (name, profile, args) => {
     f.calls.push({ name, profile, args: JSON.parse(args) });
-    if (name === "downloads.remove" && removes++ === 0) throw Object.assign(new Error("download in progress"), { code: "ERR_ENGINE" });
-    return "null";
+    if (name === "downloads.list") return new Promise((resolve) => (reply = resolve));
+    return Promise.resolve("null");
   };
-  f.state.downloads = [download(5, { state: "failed" })];
-  f.state.removeDownload(ID(5));
-  await settle(); await settle(); await settle();
-  assert.deepEqual(f.calls.slice(1).map((c) => c.name), ["downloads.remove", "downloads.cancel", "downloads.remove"]);
+  f.state.downloads = [download(3)];
+  const running = startHostDownloads(f.host, f.store);
+  await settle();
+  f.emit("ArdiaDownloads", "downloads", { name: "downloads.removed", data: { id: ID(1), profile: "" } });
+  f.state.removeDownload(ID(3));
+  reply(JSON.stringify([download(3), download(2), download(1)]));
+  await running.ready;
+  assert.deepEqual(f.state.downloads.map((d) => d.id), [ID(2)]);
+  running.stop();
+});
+
+test("the startup snapshot never announces itself as a new download in the focused window", async () => {
+  const f = fixture([download(2), download(1)]);
+  useBrowser.getState().hydrate(initialHostSession(f.host, null));
+  useBrowser.setState((s) => ({ ui: { ...s.ui, focusedWindowId: "main", focusOrder: ["main"] } }));
+  const fresh = [];
+  const stopWatch = watchNewDownloads("main", (d) => fresh.push(d.id));
+  const running = startHostDownloads(f.host, useBrowser);
+  await running.ready;
+  assert.deepEqual(useBrowser.getState().downloads.map((d) => d.id), [ID(2), ID(1)]);
+  assert.ok(useBrowser.getState().downloads.every((d) => d.profile === ""));
+  assert.deepEqual(fresh, []);
+  useBrowser.getState().upsertDownload(download(3, { state: "downloading" }));
+  assert.deepEqual(fresh, [ID(3)]);
+  stopWatch();
   running.stop();
 });
 
