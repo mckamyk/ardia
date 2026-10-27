@@ -21,7 +21,9 @@
 #include "ardia/linux/ac_linux_launch_config.h"
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/ac_linux_session.h"
+#include "ardia/linux/ac_linux_window_lifecycle.h"
 #include "ardia/linux/host_bootstrap.h"
+#include "base/auto_reset.h"
 #include "base/base_paths.h"
 #include "base/base64.h"
 #include "base/check.h"
@@ -51,6 +53,7 @@
 #include "base/task/thread_pool.h"
 #include "base/threading/sequence_bound.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/uuid.h"
 #include "base/unguessable_token.h"
 #include "base/values.h"
@@ -108,6 +111,8 @@
 #include "ui/aura/window.h"
 #include "ui/aura/window_targeter.h"
 #include "ui/compositor/layer.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
 #include "ui/aura/window_observer.h"
 #include "ui/base/base_window.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -123,10 +128,12 @@
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/events/event_constants.h"
+#include "ui/events/event.h"
 #include "ui/events/event_handler.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/events/keycodes/keyboard_code_conversion.h"
 #include "ui/native_theme/native_theme.h"
+#include "ui/ozone/public/ozone_platform.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/controls/native/native_view_host.h"
 #include "ui/views/focus/focus_manager.h"
@@ -232,17 +239,62 @@ struct RequestedWindow {
 };
 std::map<int, RequestedWindow>& RequestedWindows();
 
-void FocusNativeWindow(BrowserWindowInterface* browser) {
+namespace linux_window = ardia::linux_window;
+
+bool MayActivateNativeWindows() {
   const auto* command = base::CommandLine::ForCurrentProcess();
-  if (ardiacore::BackgroundInstance() ||
-      command->HasSwitch("headless") ||
-      command->GetSwitchValueASCII("ozone-platform") == "headless") {
-    browser->GetWindow()->ShowInactive();
-  } else {
-    browser->GetWindow()->Show();
-    browser->GetWindow()->Activate();
-  }
+  return !ardiacore::BackgroundInstance() && !command->HasSwitch("headless") &&
+         command->GetSwitchValueASCII("ozone-platform") != "headless";
 }
+
+linux_window::FocusLedger& WindowFocus() {
+  static base::NoDestructor<linux_window::FocusLedger> ledger(MayActivateNativeWindows());
+  return *ledger;
+}
+
+bool GlobalScreenCoordinates() {
+  return !ui::OzonePlatform::IsInitialized() ||
+         ui::OzonePlatform::GetInstance()->GetPlatformProperties().supports_global_screen_coordinates;
+}
+
+linux_window::Rect LifecycleRect(const gfx::Rect& rect) {
+  return {rect.x(), rect.y(), rect.width(), rect.height()};
+}
+
+linux_window::Rect PrimaryScreenRect() {
+  auto* screen = display::Screen::Get();
+  return screen ? LifecycleRect(screen->GetPrimaryDisplay().bounds()) : linux_window::Rect();
+}
+
+base::Value SharedFrameValue(const gfx::Rect& bounds) {
+  if (!GlobalScreenCoordinates()) return base::Value();
+  base::ListValue frame;
+  for (const int value : linux_window::SharedFrame(LifecycleRect(bounds), PrimaryScreenRect())) frame.Append(value);
+  return base::Value(std::move(frame));
+}
+
+void ShowNativeWindow(BrowserWindowInterface* browser, linux_window::Presentation presentation) {
+  if (presentation == linux_window::Presentation::kInactive) return browser->GetWindow()->ShowInactive();
+  browser->GetWindow()->Show();
+  browser->GetWindow()->Activate();
+}
+
+void ActivateNativeWindow(BrowserWindowInterface* browser, linux_window::Activation activation) {
+  if (!browser || activation == linux_window::Activation::kNone) return;
+  if (activation == linux_window::Activation::kShowInactive) return browser->GetWindow()->ShowInactive();
+  browser->GetWindow()->Show();
+  browser->GetWindow()->Activate();
+}
+
+class WindowPointerHandler : public ui::EventHandler {
+ public:
+  void OnMouseEvent(ui::MouseEvent* event) override {
+    if (event->type() == ui::EventType::kMousePressed) WindowFocus().PointerPressed();
+  }
+  void OnTouchEvent(ui::TouchEvent* event) override {
+    if (event->type() == ui::EventType::kTouchPressed) WindowFocus().PointerPressed();
+  }
+};
 
 std::map<int, ShellHostView*>& Hosts() {
   static base::NoDestructor<std::map<int, ShellHostView*>> hosts;
@@ -569,6 +621,7 @@ class TabBinding : public content::WebContentsObserver {
   void Rebind(content::WebContents* contents);
   void SetViewport(views::WebView* view) { viewport_ = view; }
   bool presented = false;
+  void FocusFromHost();
   bool presentation_applied = false;
   bool presentation_attached = false;
   bool presentation_departed = false;
@@ -589,6 +642,7 @@ class TabBinding : public content::WebContentsObserver {
   }
   void DidFinishNavigation(content::NavigationHandle* handle) override;
   void DidStartLoading() override;
+  void OnWebContentsFocused(content::RenderWidgetHost*) override;
   void DidStopLoading() override;
   void LoadProgressChanged(double progress) override;
   void TitleWasSet(content::NavigationEntry*) override;
@@ -608,6 +662,7 @@ class TabBinding : public content::WebContentsObserver {
   raw_ptr<content::WebContents> contents_;
   raw_ptr<views::WebView> viewport_ = nullptr;
   std::string key_;
+  bool host_focusing_ = false;
 };
 
 class WindowKeyboardHandler : public ui::EventHandler {
@@ -761,6 +816,9 @@ class ShellHostView : public views::View,
     }
   }
   base::WeakPtr<ShellHostView> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
+  void RendererReady();
+  void SeedWindowActivation();
+  std::vector<base::DictValue> WindowState() const;
 
  private:
   std::map<int, base::WeakPtr<content::WebContents>> offered_;
@@ -841,6 +899,10 @@ class ShellHostView : public views::View,
                               base::OnceCallback<void(bool, base::Value)> done);
   void OnWidgetClosing(views::Widget* widget) override;
   void OnWidgetDestroying(views::Widget* widget) override;
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
+  void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds) override;
+  void OnWidgetShowStateChanged(views::Widget* widget) override;
+  void ReportWindowGeometry();
   void LayoutOverlay();
   void ReattachViewports();
   void OnViewBoundsChanged(views::View*) override { LayoutOverlay(); }
@@ -890,6 +952,7 @@ class ShellHostView : public views::View,
   std::vector<base::OnceCallback<void(bool, base::Value)>> close_replies_;
   raw_ptr<views::FocusManager> focus_manager_ = nullptr;
   std::unique_ptr<WindowKeyboardHandler> input_handler_;
+  WindowPointerHandler pointer_handler_;
   std::map<ui::Accelerator, base::DictValue> shortcuts_;
   bool shortcut_recording_ = false;
   bool switcher_capture_ = false;
@@ -904,6 +967,8 @@ class ShellHostView : public views::View,
   bool utility_close_pending_ = false;
   std::map<int, std::unique_ptr<TabBinding>> bindings_;
   bool app_operation_ = false;
+  linux_window::GeometryLedger geometry_{GlobalScreenCoordinates()};
+  base::OneShotTimer frame_timer_;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
   base::ScopedObservation<aura::Window, aura::WindowObserver> input_observation_{this};
@@ -1238,6 +1303,7 @@ ShellHostView::ShellHostView(BrowserWindowInterface* browser, BrowserView* paren
 }
 
 ShellHostView::~ShellHostView() {
+  WindowFocus().Forget(id_);
   weak_factory_.InvalidateWeakPtrs();
   handler_ = nullptr;
   renderer_document_ = content::WeakDocumentPtr();
@@ -1255,6 +1321,7 @@ void ShellHostView::Initialize() {
   dialogs_ = std::make_unique<LinuxWindowDialogs>(window_id_, DialogProfile(), GetWidget(),
                                                   ardiacore::BackgroundInstance());
   close_observation_.Observe(GetWidget());
+  SeedWindowActivation();
   ArmWindowClose();
   focus_manager_ = GetFocusManager();
   aura::Window* input_window = GetWidget()->GetNativeWindow()->GetRootWindow();
@@ -1262,6 +1329,7 @@ void ShellHostView::Initialize() {
   input_handler_ = std::make_unique<WindowKeyboardHandler>(
       base::BindRepeating(&ShellHostView::OnKeyEvent, GetWeakPtr()));
   input_window->AddPreTargetHandler(input_handler_.get(), ui::EventTarget::Priority::kSystem);
+  input_window->AddPreTargetHandler(&pointer_handler_, ui::EventTarget::Priority::kSystem);
   if (is_utility()) {
     browser_view_->SetPreferredSize(kind_ == "settings" ? gfx::Size(720, 480)
                                                        : gfx::Size(640, 600));
@@ -1353,6 +1421,7 @@ void ShellHostView::OnViewIsDeleting(views::View*) {
 void ShellHostView::UnregisterAccelerators() {
   if (input_observation_.IsObserving()) {
     input_observation_.GetSource()->RemovePreTargetHandler(input_handler_.get());
+    input_observation_.GetSource()->RemovePreTargetHandler(&pointer_handler_);
     input_observation_.Reset();
   }
   input_handler_.reset();
@@ -2106,6 +2175,84 @@ void ShellHostView::OnWidgetDestroying(views::Widget*) {
   close_observation_.Reset();
 }
 
+void BroadcastWindowEvent(const base::DictValue& event) {
+  for (const auto& [id, host] : Hosts()) {
+    if (!host->is_utility()) host->Event("ArdiaShell", "onWindowEvent", base::Value(event.Clone()));
+  }
+}
+
+void ShellHostView::OnWidgetActivationChanged(views::Widget*, bool active) {
+  if (!WindowFocus().Observe(id_, active) || is_utility() || window_id_.empty()) return;
+  BroadcastWindowEvent(base::DictValue().Set("type", "focus").Set("id", window_id_));
+}
+
+void ShellHostView::OnWidgetBoundsChanged(views::Widget*, const gfx::Rect&) {
+  if (is_utility()) return;
+  frame_timer_.Start(FROM_HERE, base::Milliseconds(250),
+                     base::BindOnce(&ShellHostView::ReportWindowGeometry, base::Unretained(this)));
+}
+
+void ShellHostView::OnWidgetShowStateChanged(views::Widget*) {
+  ReportWindowGeometry();
+}
+
+void ShellHostView::ReportWindowGeometry() {
+  views::Widget* widget = GetWidget();
+  if (is_utility() || window_id_.empty() || !widget || !browser_) return;
+  const bool fullscreen = widget->IsFullscreen();
+  if (const auto on = geometry_.FullScreen(fullscreen)) {
+    BroadcastWindowEvent(base::DictValue().Set("type", "fullScreen").Set("id", window_id_).Set("on", *on));
+  }
+  if (const auto frame = geometry_.Frame(LifecycleRect(widget->GetWindowBoundsInScreen()), PrimaryScreenRect(),
+                                         fullscreen, widget->IsMinimized())) {
+    base::ListValue values;
+    for (const int value : *frame) values.Append(value);
+    BroadcastWindowEvent(base::DictValue().Set("type", "frame").Set("id", window_id_).Set("frame", std::move(values)));
+  }
+}
+
+std::vector<base::DictValue> ShellHostView::WindowState() const {
+  std::vector<base::DictValue> state;
+  const views::Widget* widget = GetWidget();
+  if (is_utility() || window_id_.empty() || !widget || !browser_) return state;
+  const bool fullscreen = widget->IsFullscreen();
+  if (GlobalScreenCoordinates() && !fullscreen && !widget->IsMinimized()) {
+    state.push_back(base::DictValue().Set("type", "frame").Set("id", window_id_)
+        .Set("frame", SharedFrameValue(widget->GetWindowBoundsInScreen())));
+  }
+  if (fullscreen) state.push_back(base::DictValue().Set("type", "fullScreen").Set("id", window_id_).Set("on", true));
+  if (WindowFocus().active() == id_) state.push_back(base::DictValue().Set("type", "focus").Set("id", window_id_));
+  return state;
+}
+
+void ShellHostView::SeedWindowActivation() {
+  views::Widget* widget = GetWidget();
+  if (widget && widget->IsActive()) OnWidgetActivationChanged(widget, true);
+}
+
+void ShellHostView::RendererReady() {
+  ActivateNativeWindow(browser_, WindowFocus().Ready(id_));
+  if (is_utility()) return;
+  const auto focus = [](const base::DictValue& event) { return *event.FindString("type") == "focus"; };
+  const std::vector<base::DictValue> own = WindowState();
+  for (const auto& event : own) {
+    if (!focus(event)) BroadcastWindowEvent(event);
+  }
+  std::vector<base::DictValue> replay;
+  for (const auto& [id, host] : Hosts()) {
+    if (host == this) continue;
+    for (auto& event : host->WindowState()) replay.push_back(std::move(event));
+  }
+  for (const bool focused : {false, true}) {
+    for (const auto& event : replay) {
+      if (focus(event) == focused) Event("ArdiaShell", "onWindowEvent", base::Value(event.Clone()));
+    }
+  }
+  for (const auto& event : own) {
+    if (focus(event)) BroadcastWindowEvent(event);
+  }
+}
+
 bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
   const auto found = shortcuts_.find(accelerator);
   if (found == shortcuts_.end()) return false;
@@ -2555,8 +2702,7 @@ void ShellHostView::TabCommand(
   } else if (command == "stopLoading") {
     contents->Stop();
   } else if (command == "focus") {
-    if (binding->viewport()) binding->viewport()->RequestFocus();
-    contents->Focus();
+    binding->FocusFromHost();
   } else if (command == "setMuted") {
     if (values.empty() || !values[0].is_bool()) {
       return std::move(done).Run(false, base::Value("setMuted requires a boolean"));
@@ -3137,6 +3283,7 @@ void ShellHostView::Invoke(
         return std::move(done).Run(false, base::Value("No such utility renderer"));
       }
       utility_ready_ = true;
+      target->RendererReady();
       if (utility_close_pending_) {
         base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE, base::BindOnce(&ShellHostView::RequestUtilityClose, GetWeakPtr()));
@@ -3144,9 +3291,7 @@ void ShellHostView::Invoke(
       return std::move(done).Run(true, base::Value(utility_.Clone()));
     }
     if (method == "ArdiaShell.windowFrame") {
-      const gfx::Rect bounds = target->browser()->GetWindow()->GetBounds();
-      return std::move(done).Run(true, base::Value(base::ListValue()
-          .Append(bounds.x()).Append(bounds.y()).Append(bounds.width()).Append(bounds.height())));
+      return std::move(done).Run(true, base::Value(SharedFrameValue(target->browser()->GetWindow()->GetBounds())));
     }
     if (method == "ArdiaShell.setWindowTitle") {
       target->browser()->GetWindow()->GetNativeWindow()->SetTitle(
@@ -3164,7 +3309,7 @@ void ShellHostView::Invoke(
         window->Maximize();
       }
     } else if (method == "ArdiaShell.focusWindow") {
-      FocusNativeWindow(target->browser());
+      ActivateNativeWindow(target->browser(), WindowFocus().Focus(target->id()));
     } else {
       auto request = target->RequestWindowClose();
       if (request.empty()) return std::move(done).Run(false, base::Value("Target renderer unavailable"));
@@ -3192,29 +3337,38 @@ void ShellHostView::Invoke(
                      !DefaultProfileId(String(*options, "profile"))))) {
       return std::move(done).Run(false, base::Value("Only regular default-profile windows are supported"));
     }
-    std::optional<gfx::Rect> bounds;
+    const std::string* behind = options ? options->FindString("behind") : nullptr;
+    const linux_window::OpenIntent intent{
+        .focus = options ? options->FindBool("focus").value_or(true) : true,
+        .behind = behind && !behind->empty(),
+        .utility = utility};
+    std::optional<linux_window::Requested> requested;
     const base::ListValue* frame = options ? options->FindList("frame") : nullptr;
-    if (!utility && frame && frame->size() == 4 &&
-        std::ranges::all_of(*frame, [](const base::Value& value) { return value.is_int(); }) &&
-        (*frame)[2].GetInt() > 0 && (*frame)[3].GetInt() > 0) {
-      bounds = gfx::Rect((*frame)[0].GetInt(), (*frame)[1].GetInt(),
-                         (*frame)[2].GetInt(), (*frame)[3].GetInt());
+    if (!utility && frame &&
+        std::ranges::all_of(*frame, [](const base::Value& value) { return value.is_int() || value.is_double(); })) {
+      std::vector<double> numbers;
+      for (const base::Value& value : *frame) numbers.push_back(value.GetDouble());
+      requested = linux_window::RequestedFrame(numbers, PrimaryScreenRect(), GlobalScreenCoordinates());
     }
     for (const auto& [native_id, host] : Hosts()) {
       if (host->window_id() != id) continue;
-      if (bounds) host->browser()->GetWindow()->SetBounds(*bounds);
       if (utility_navigation && host->is_utility()) host->NavigateUtility(utility_navigation->Clone());
-      if (utility) FocusNativeWindow(host->browser());
+      ActivateNativeWindow(host->browser(), WindowFocus().Reuse(native_id, intent, host == this));
+      if (host == this) host->RendererReady();
       return std::move(done).Run(true, base::Value());
     }
     for (auto& [native_id, request] : RequestedWindows()) {
       if (request.id != id || !request.browser) continue;
       if (utility_navigation) request.utility = utility_navigation->Clone();
-      if (utility) FocusNativeWindow(request.browser.get());
+      ActivateNativeWindow(request.browser.get(), WindowFocus().Reuse(native_id, intent, false));
       return std::move(done).Run(true, base::Value());
     }
     BrowserWindowCreateParams params(profile(), true);
-    if (bounds) params.initial_bounds = *bounds;
+    if (requested) {
+      const auto& b = requested->bounds;
+      params.initial_bounds = requested->positioned ? gfx::Rect(b.x, b.y, b.width, b.height)
+                                                    : gfx::Rect(b.width, b.height);
+    }
     if (utility) {
       params.type = BrowserWindowInterface::TYPE_APP;
       params.app_name = kind == "settings" ? "ArdiaSettings" : "ArdiaImport";
@@ -3243,8 +3397,7 @@ void ShellHostView::Invoke(
     if (utility_navigation) request.utility = utility_navigation->Clone();
     request.browser = created->GetWeakPtr();
     RequestedWindows()[created->GetSessionID().id()] = std::move(request);
-    if (utility) FocusNativeWindow(created);
-    else created->GetWindow()->ShowInactive();
+    ShowNativeWindow(created, WindowFocus().Create(created->GetSessionID().id(), intent));
     return std::move(done).Run(true, base::Value());
   }
   if (method == "ArdiaShell.isDarkAppearance") {
@@ -3360,6 +3513,17 @@ void TabBinding::DidFinishNavigation(content::NavigationHandle* handle) {
   if (handle->IsInPrimaryMainFrame()) ReportNavigation();
 }
 void TabBinding::DidStartLoading() { ReportNavigation(); }
+
+void TabBinding::FocusFromHost() {
+  base::AutoReset<bool> focusing(&host_focusing_, true);
+  if (viewport_) viewport_->RequestFocus();
+  if (contents_) contents_->Focus();
+}
+
+void TabBinding::OnWebContentsFocused(content::RenderWidgetHost*) {
+  if (host_focusing_ || !contents_ || !presented || !viewport_ || !viewport_->GetVisible()) return;
+  owner_->ReportTab(TabId(contents_), base::DictValue().Set("type", "pageFocus"));
+}
 void TabBinding::DidStopLoading() { ReportNavigation(); }
 void TabBinding::LoadProgressChanged(double progress) {
   if (contents_) owner_->ReportTab(TabId(contents_), base::DictValue()
@@ -3505,6 +3669,7 @@ class HostRegistry : public BrowserCollectionObserver,
                                   browser->GetWeakPtr(), false));
   }
   void OnBrowserClosed(BrowserWindowInterface* browser) override {
+    WindowFocus().Forget(browser->GetSessionID().id());
     RequestedWindows().erase(browser->GetSessionID().id());
     const auto found = Hosts().find(browser->GetSessionID().id());
     if (found == Hosts().end()) return;
