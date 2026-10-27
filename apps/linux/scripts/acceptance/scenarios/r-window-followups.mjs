@@ -102,14 +102,14 @@ export const w79 = {
       const created = await app.shell(id, { timeout: 25000 });
       const advertised = await created.eval("__ardiaHost.bootstrap.capabilities.includes('ArdiaShell.typeaheadReady')");
       if (!advertised) throw new Error("the host does not advertise ArdiaShell.typeaheadReady");
-      const again = await created.invoke("ArdiaShell.typeaheadReady", { args: [] });
+      const again = await created.invoke("ArdiaShell.typeaheadReady", { args: [false] });
       if (!again.ok) throw new Error(`typeaheadReady failed: ${again.code} ${again.message}`);
       return { id };
     });
     await t.check("Settings does not hold keys", async () => {
       await shell.command("openSettings");
       const settings = await app.shell("settings", { timeout: 20000 });
-      const reply = await settings.invoke("ArdiaShell.typeaheadReady", { args: [] });
+      const reply = await settings.invoke("ArdiaShell.typeaheadReady", { args: [false] });
       if (reply.ok) throw new Error("a utility window accepted typeaheadReady");
       return { code: reply.code, message: reply.message };
     });

@@ -38,17 +38,17 @@ test("ready is announced once a text field holds focus, so held keys land in it"
   active = { tagName: "INPUT", type: "text" };
   clock.step();
   await tick();
-  assert.deepEqual(host.calls, [["ArdiaShell.typeaheadReady", { args: [] }]]);
+  assert.deepEqual(host.calls, [["ArdiaShell.typeaheadReady", { args: [true] }]]);
   assert.equal(clock.pending(), 0);
 });
 
-test("without a focused field ready is still announced after a short wait, so keys reach the page", async () => {
+test("without a focused field the held keys are discarded, never sent to a page", async () => {
   const host = fakeHost();
   const clock = frames();
   announceTypeaheadReady(host, { frame: clock.frame, now: clock.now, active: () => null });
   for (let i = 0; i < 40 && clock.pending(); i++) clock.step(16);
   await tick();
-  assert.deepEqual(host.calls, [["ArdiaShell.typeaheadReady", { args: [] }]]);
+  assert.deepEqual(host.calls, [["ArdiaShell.typeaheadReady", { args: [false] }]]);
   assert.equal(clock.pending(), 0);
 });
 
@@ -65,7 +65,7 @@ test("text areas, editable content and search fields count as typing targets, bu
     announceTypeaheadReady(host, { frame: clock.frame, now: clock.now, active: () => active });
     clock.step();
     await tick();
-    assert.equal(host.calls.length, expected, JSON.stringify(active));
+    assert.deepEqual(host.calls.map(([, args]) => args.args[0]), expected ? [true] : [], JSON.stringify(active));
   }
 });
 

@@ -15,9 +15,15 @@ class Typeahead {
   void Start() {
     if (state_ == State::kIdle) state_ = State::kCapturing;
   }
-  bool capturing() const { return state_ == State::kCapturing; }
+  bool capturing() const { return state_ == State::kCapturing || state_ == State::kOverflowed; }
   bool Hold(Event event) {
-    if (!capturing() || held_.size() >= kMaxEvents) return false;
+    if (!capturing()) return false;
+    if (state_ == State::kOverflowed) return true;
+    if (held_.size() >= kMaxEvents) {
+      held_.clear();
+      state_ = State::kOverflowed;
+      return true;
+    }
     held_.push_back(std::move(event));
     return true;
   }
@@ -28,7 +34,7 @@ class Typeahead {
   }
 
  private:
-  enum class State { kIdle, kCapturing, kDone };
+  enum class State { kIdle, kCapturing, kOverflowed, kDone };
   State state_ = State::kIdle;
   std::vector<Event> held_;
 };

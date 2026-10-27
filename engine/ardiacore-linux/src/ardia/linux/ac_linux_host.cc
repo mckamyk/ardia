@@ -160,6 +160,7 @@
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/base/ime/text_input_type.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -313,6 +314,11 @@ linux_window::FocusLedger& WindowFocus() {
 linux_window::FullScreenRestore& FullScreenRestorer() {
   static base::NoDestructor<linux_window::FullScreenRestore> restore;
   return *restore;
+}
+
+uint64_t& FullScreenRestoreEpoch() {
+  static uint64_t epoch = 0;
+  return epoch;
 }
 
 base::OneShotTimer& FullScreenRestoreTimer() {
@@ -1055,7 +1061,9 @@ class ShellHostView : public views::View,
   void UnregisterAccelerators();
   void FocusShell();
   void OnKeyEvent(ui::KeyEvent* event) override;
-  void ReplayTypeahead();
+  void ReplayTypeahead(bool field);
+  void DiscardTypeahead();
+  bool ShellHoldsTextField();
   bool OwnsKeyboardEvent(const ui::KeyEvent& event) const;
   void OnWindowDestroying(aura::Window* window) override;
   void ArmWindowClose();
@@ -1110,6 +1118,7 @@ class ShellHostView : public views::View,
   void OnWidgetClosing(views::Widget* widget) override;
   void OnWidgetDestroying(views::Widget* widget) override;
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
+  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override;
   void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds) override;
   void OnWidgetShowStateChanged(views::Widget* widget) override;
   void ReportWindowGeometry();
@@ -1706,7 +1715,7 @@ void ShellHostView::Initialize() {
   if (!is_utility()) {
     typeahead_.Start();
     typeahead_timer_.Start(FROM_HERE, base::Seconds(10),
-                           base::BindOnce(&ShellHostView::ReplayTypeahead, base::Unretained(this)));
+                           base::BindOnce(&ShellHostView::DiscardTypeahead, base::Unretained(this)));
   }
   if (is_utility()) {
     browser_view_->SetPreferredSize(kind_ == "settings" ? gfx::Size(720, 480)
@@ -1866,15 +1875,27 @@ bool ShellHostView::OwnsKeyboardEvent(const ui::KeyEvent& event) const {
   return true;
 }
 
-void ShellHostView::ReplayTypeahead() {
+bool ShellHostView::ShellHoldsTextField() {
+  views::Widget* widget = GetWidget();
+  ui::InputMethod* input = widget ? widget->GetInputMethod() : nullptr;
+  ui::TextInputClient* client = input ? input->GetTextInputClient() : nullptr;
+  return shell_ && shell_->HasFocus() && client &&
+         client->GetTextInputType() != ui::TEXT_INPUT_TYPE_NONE;
+}
+
+void ShellHostView::DiscardTypeahead() {
+  typeahead_timer_.Stop();
+  std::ignore = typeahead_.Release();
+}
+
+void ShellHostView::ReplayTypeahead(bool field) {
   typeahead_timer_.Stop();
   std::vector<ui::KeyEvent> held = typeahead_.Release();
+  if (!field) return;
   const auto weak = GetWeakPtr();
   for (ui::KeyEvent& event : held) {
-    views::Widget* widget = GetWidget();
-    ui::InputMethod* input = widget ? widget->GetInputMethod() : nullptr;
-    if (!input) return;
-    std::ignore = input->DispatchKeyEvent(&event);
+    if (!ShellHoldsTextField()) return;
+    std::ignore = GetWidget()->GetInputMethod()->DispatchKeyEvent(&event);
     if (!weak) return;
   }
 }
@@ -2622,7 +2643,7 @@ void FinishFullScreenRestore() {
   const auto focus = FullScreenRestorer().Finish();
   if (FullScreenRestorer().active()) return;
   FullScreenRestoreTimer().Stop();
-  if (!focus || WindowFocus().active() == 0) return;
+  if (!focus || WindowFocus().active() == 0 || WindowFocus().epoch() != FullScreenRestoreEpoch()) return;
   for (const auto& [id, host] : Hosts()) {
     if (!host->is_utility() && host->window_id() == *focus) {
       ActivateNativeWindow(host->browser(), WindowFocus().Focus(host->id()));
@@ -2653,6 +2674,10 @@ void ShellHostView::RestoreFullScreenNow() {
     fullscreen->ToggleBrowserFullscreenMode(false);
   }
   FinishFullScreenRestore();
+}
+
+void ShellHostView::OnWidgetVisibilityChanged(views::Widget*, bool visible) {
+  if (visible) RestoreFullScreenNow();
 }
 
 void ShellHostView::OnWidgetShowStateChanged(views::Widget* widget) {
@@ -4414,8 +4439,10 @@ void ShellHostView::Invoke(
   }
   if (method == "ArdiaShell.typeaheadReady") {
     if (is_utility()) return std::move(done).Run(false, base::Value("Typeahead is for browser windows"));
+    if (values.size() != 1 || !values[0].is_bool())
+      return std::move(done).Run(false, base::Value("typeaheadReady takes whether a text field holds focus"));
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&ShellHostView::ReplayTypeahead, GetWeakPtr()));
+        FROM_HERE, base::BindOnce(&ShellHostView::ReplayTypeahead, GetWeakPtr(), values[0].GetBool()));
     return std::move(done).Run(true, base::Value());
   }
   if (method == "ArdiaShell.restoreFullScreen") {
@@ -4429,6 +4456,7 @@ void ShellHostView::Invoke(
     }
     const std::string focus = values.size() == 2 && values[1].is_string() ? values[1].GetString() : std::string();
     if (FullScreenRestorer().Begin(ids, focus)) {
+      FullScreenRestoreEpoch() = WindowFocus().epoch();
       FullScreenRestoreTimer().Start(FROM_HERE, base::Seconds(10), base::BindOnce(&ExpireFullScreenRestore));
       std::vector<base::WeakPtr<ShellHostView>> windows;
       for (const auto& [id, host] : Hosts()) windows.push_back(host->GetWeakPtr());

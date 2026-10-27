@@ -20,8 +20,9 @@ export function announceTypeaheadReady(host: ArdiaHost, {
   if (!hostSupports("ArdiaShell.typeaheadReady", host)) return;
   const started = now();
   const check = () => {
-    if (!typingTarget(active()) && now() - started < FIELD_WAIT_MS) return frame(check);
-    void invokeHost("ArdiaShell.typeaheadReady", { args: [] }, host).catch(reportHostError);
+    const field = typingTarget(active());
+    if (!field && now() - started < FIELD_WAIT_MS) return frame(check);
+    void invokeHost("ArdiaShell.typeaheadReady", { args: [field] }, host).catch(reportHostError);
   };
   frame(check);
 }

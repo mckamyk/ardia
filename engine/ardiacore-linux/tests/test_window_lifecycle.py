@@ -517,6 +517,7 @@ struct ShellHostView {
   void OnWidgetActivationChanged(views::Widget* widget, bool active);
   void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds);
   void OnWidgetShowStateChanged(views::Widget* widget);
+  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible);
   void ReportWindowGeometry();
   std::vector<base::DictValue> WindowState() const;
   bool WindowFullScreen() const;
@@ -853,6 +854,53 @@ static void FullScreenGivenUp() {
   assert(Count(main_browser.window.calls, "Activate") == 0);
 }
 
+static void FullScreenFocusYieldsToTheUser() {
+  for (const bool pressed : {true, false}) {
+    BrowserWindowInterface main_browser{1};
+    ShellHostView main(1, "main", &main_browser);
+    main.startup_ = true;
+    BrowserWindowInterface other_browser{2};
+    ShellHostView other(2, "w-other", &other_browser);
+    main.OnWidgetActivationChanged(&main.widget, true);
+    Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"main", "w-late"}, "main"));
+    main.widget.fullscreen = true;
+    main.OnWidgetShowStateChanged(&main.widget);
+    if (pressed) {
+      WindowPointerHandler pointer;
+      ui::MouseEvent press{{ui::EventType::kMousePressed}};
+      pointer.OnMouseEvent(&press);
+    } else {
+      other.OnWidgetActivationChanged(&other.widget, true);
+    }
+    BrowserWindowInterface late_browser{3};
+    ShellHostView late(3, "w-late", &late_browser);
+    late.RendererReady();
+    late.widget.fullscreen = true;
+    late.OnWidgetShowStateChanged(&late.widget);
+    assert(Toggles(late_browser) == 1);
+    assert(Count(main_browser.window.calls, "Activate") == 0);
+    main.OnWidgetActivationChanged(&main.widget, false);
+    other.OnWidgetActivationChanged(&other.widget, false);
+  }
+}
+
+static void FullScreenWhenShownLater() {
+  BrowserWindowInterface main_browser{1};
+  ShellHostView main(1, "main", &main_browser);
+  main.startup_ = true;
+  BrowserWindowInterface late_browser{3};
+  ShellHostView late(3, "w-late", &late_browser);
+  late.widget.visible = false;
+  Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"w-late"}, nullptr));
+  late.RendererReady();
+  assert(Toggles(late_browser) == 0);
+  late.OnWidgetVisibilityChanged(&late.widget, false);
+  assert(Toggles(late_browser) == 0);
+  late.widget.visible = true;
+  late.OnWidgetVisibilityChanged(&late.widget, true);
+  assert(Toggles(late_browser) == 1);
+}
+
 static void FullScreenInBackground() {
   ardiacore::background = true;
   BrowserWindowInterface main_browser{1};
@@ -873,7 +921,8 @@ int main(int argc, char** argv) {
       {"activation", Activation}, {"seeded", Seeded}, {"geometry", Geometry}, {"page-focus", PageFocus},
       {"wayland", Wayland}, {"background", Background}, {"frames", Frames},
       {"fullscreen-restore", FullScreenRestored}, {"fullscreen-given-up", FullScreenGivenUp},
-      {"fullscreen-background", FullScreenInBackground}};
+      {"fullscreen-background", FullScreenInBackground}, {"fullscreen-focus-yields", FullScreenFocusYieldsToTheUser},
+      {"fullscreen-shown-later", FullScreenWhenShownLater}};
   const auto found = scenarios.find(mode);
   if (found == scenarios.end()) return 2;
   found->second();
@@ -945,6 +994,7 @@ def host_harness():
         'void ShellHostView::OnWidgetActivationChanged(',
         'void ShellHostView::OnWidgetBoundsChanged(',
         'void ShellHostView::OnWidgetShowStateChanged(',
+        'void ShellHostView::OnWidgetVisibilityChanged(',
         'void ShellHostView::ReportWindowGeometry(',
         'std::vector<base::DictValue> ShellHostView::WindowState(',
         'bool ShellHostView::WindowFullScreen(',
@@ -1027,6 +1077,12 @@ class WindowLifecycleHostTests(unittest.TestCase):
 
     def test_unavailable_fullscreen_windows_are_given_up_as_windowed(self):
         self.run_mode('fullscreen-given-up')
+
+    def test_fullscreen_restore_leaves_focus_alone_after_the_user_acts(self):
+        self.run_mode('fullscreen-focus-yields')
+
+    def test_a_window_shown_after_it_is_ready_still_restores_fullscreen(self):
+        self.run_mode('fullscreen-shown-later')
 
     def test_fullscreen_restore_never_activates_a_background_instance(self):
         self.run_mode('fullscreen-background')
