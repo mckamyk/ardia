@@ -782,6 +782,28 @@ Failure ClassifyEngineError(std::string_view message) {
   return {"ERR_ENGINE", "The engine refused the request"};
 }
 
+std::string ReauthMessage(std::string_view reason) {
+  if (reason == "available") {
+    return std::string();
+  }
+  if (reason == "background") {
+    return "System authentication is off in background instances, so secrets stay hidden";
+  }
+  if (reason == "noPolkit") {
+    return "polkit isn't running, so saved passwords and card numbers can't be shown, changed or exported";
+  }
+  if (reason == "policyMissing") {
+    return "Ardia's polkit policy isn't installed, so saved passwords and card numbers can't be shown, changed or "
+           "exported";
+  }
+  if (reason == "notPermitted") {
+    return "This session isn't allowed to authenticate, so saved passwords and card numbers can't be shown, "
+           "changed or exported";
+  }
+  return "System authentication is unavailable, so saved passwords and card numbers can't be shown, changed or "
+         "exported";
+}
+
 bool ShouldRemoveFailedExport(std::string_view status, bool existed_before, bool exists_now) {
   return status != "succeeded" && status != "inProgress" && !existed_before && exists_now;
 }

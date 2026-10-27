@@ -88,6 +88,7 @@ if (is_linux) {
     "ac_external_apps_linux.cc",
     "ac_input_frame_rate_linux.cc",
     "ac_reauth_linux.cc",
+    "ac_reauth_linux.h",
     "ac_reauth_linux_policy.h",
     "pip/ac_pip_hyprland.cc",
     "pip/ac_pip_hyprland.h",

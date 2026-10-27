@@ -37,9 +37,21 @@ This covers saved passwords and full card numbers in the Linux port (#17, source
   - A refusal never extends the window.
 - **Superseding.** A newer request cancels the older one: its callback gets `false` and its polkit check is cancelled. Late replies to old requests are ignored. Profile teardown cancels the pending check and drops its callback.
 - **Events.** Each outcome emits `reauth.requested` with `purpose`, `granted` and `result`, and nothing else.
+- **Availability probe.** `ProbeReauth()` (`ac_reauth_linux.h`) sends the same `CheckAuthorization` without user interaction and with a 5 s timeout, so it never prompts. It classifies the answer:
+
+  | polkit answer | Reason |
+  | --- | --- |
+  | Authorized or challenge | `available` |
+  | Not authorized without a challenge | `notPermitted` |
+  | Unknown-action error | `policyMissing` |
+  | No polkit or no bus name | `noPolkit` |
+  | Background instance | `background` |
+  | Anything else | `unavailable` |
+
+  The status calls report it as `reauth`/`reauthReason`/`reauthMessage`, and the Settings notice explains it. Export runs the probe before showing the save dialog and refuses with `ERR_REAUTH_UNAVAILABLE` and that message.
 - **What it gates.**
   - Engine side: `ac_passwords_unlock` (only when the vault has entries), `ac_passwords_reveal`, `ac_passwords_update` and `ac_passwords_export` gate on this. `ac_autofill_card_number` now does too on Linux; before, it was hard-disabled.
-  - Linux side: before showing the export dialog, Linux checks `ReauthAvailable()`. It refuses with `ERR_REAUTH_UNAVAILABLE`, so no path is asked for when authentication can't happen.
+  - Linux side: before showing the export dialog, Linux runs the availability probe. It refuses with `ERR_REAUTH_UNAVAILABLE`, so no path is asked for when authentication can't happen.
 
 ## Paths, one by one
 
@@ -72,7 +84,7 @@ Without a grant the reply is `{"password": null}`, so the pane never shows a sta
 ### Export (`exportPasswords`)
 
 1. `host.invoke("ArdiaPasswords.export", [profile])`. The renderer can't supply a path.
-2. Native checks availability and `ReauthAvailable()`. It then shows Chromium's `SelectFileDialog` (save-as, `.csv`), honouring the `AllowFileSelectionDialogs` policy through `ChromeSelectFilePolicy`. Cancel returns `{status: "cancelled"}`.
+2. Native checks availability and runs the reauthentication probe. It then shows Chromium's `SelectFileDialog` (save-as, `.csv`), honouring the `AllowFileSelectionDialogs` policy through `ChromeSelectFilePolicy`. Cancel returns `{status: "cancelled"}`.
 3. It records whether the file already existed, then calls `ac_passwords_export {path}`. That asks for authentication with zero validity, then Chromium's `PasswordManagerExporter` writes the CSV with mode `0600`.
 4. **Cleanup.** On `writeFailed`, `cancelled` or `reauthFailed`, a file that didn't exist before the export and is now a regular file (never a symlink) is deleted. Chromium's exporter already deletes on write failure; this guards the rest. A file the user chose to overwrite is never deleted by Ardia.
 5. The reply carries `status` and, only on success, `path`.

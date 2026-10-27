@@ -11,6 +11,7 @@ The path every secret takes, for the reviewer, is in [f07-security-notes.md](f07
   - **Now.** It asks polkit (`CheckAuthorization`, `system-bus-name` subject, action `dev.ardia.linux.reauthenticate`, user interaction allowed, 120 s timeout, cancellable).
   - **Grant window.** It keeps Chrome's grant-validity window per profile.
   - **Refusals.** It supersedes older prompts and cancels the agent prompt on timeout. It grants only an authorized, non-challenge reply. Background instances and off-the-record profiles are refused without a prompt. There is no test grant.
+  - **Availability probe.** `ProbeReauth()` (new Linux-only `ac_reauth_linux.h`) asks the same question without interaction. It reports `available`, `background`, `noPolkit`, `policyMissing`, `notPermitted` or `unavailable`, so the UI can say why authentication can't happen.
   - **Shared code.**
     - `BUILD.gn` adds `//dbus` and `//components/dbus/thread_linux` to the Linux block only.
     - `ac_autofill_card_number` no longer hard-fails on Linux. It uses the same reauthentication with a Linux-only purpose string; the macOS string and flow are unchanged.
@@ -27,7 +28,7 @@ The path every secret takes, for the reviewer, is in [f07-security-notes.md](f07
   - **Profile.** It resolves the profile through `CredentialProfile()`.
   - **Store probe.** It checks the password store's `GetError()`, the `PersonalDataManager` and the OSCrypt encryptor (10 s deadline).
   - **Calls.** It runs preference reads and writes and calls `ac_engine_call`. It extracts only the secret field from secret replies and `Cleanse`s the parse.
-  - **Export.** It shows the save dialog and cleans up a failed export.
+  - **Export.** It runs the reauthentication probe, shows the save dialog only when authentication can happen, and cleans up a failed export.
 - **Host registration** (`ac_linux_host.cc`, four narrow hunks).
   - Generic `passwords.*`/`autofill.*` names go to `LinuxCredentialsCall` before the route table; private windows get `ERR_PROFILE_PRIVATE`.
   - Typed `ArdiaPasswords.*`/`ArdiaAutofill.*` methods go to `LinuxCredentialsInvoke`.
@@ -51,13 +52,13 @@ The path every secret takes, for the reviewer, is in [f07-security-notes.md](f07
 
 | Method | Args after profile | Reply | Gate |
 | --- | --- | --- | --- |
-| `ArdiaPasswords.status` | — | `{passwords: Availability, reauth, backend}` | none |
+| `ArdiaPasswords.status` | — | `{passwords: Availability, reauth, reauthReason, reauthMessage?, backend}` | none |
 | `ArdiaPasswords.unlock` | — | `{unlocked}` | store; polkit when entries exist |
 | `ArdiaPasswords.reveal` | origin, username | `{password: string \| null}` | store; polkit (5 min window) |
 | `ArdiaPasswords.save` | origin, username, password | `{ok: true}` | store |
 | `ArdiaPasswords.update` | origin, username, newUsername \| null, newPassword \| null | `{ok: true}` | store; polkit (5 min window) |
-| `ArdiaPasswords.export` | — | `{status, path?}` | store; `ReauthAvailable()` before the dialog; polkit every time |
-| `ArdiaAutofill.status` | — | `{addresses, cards: Availability, reauth, backend}` | none |
+| `ArdiaPasswords.export` | — | `{status, path?}` | store; the reauthentication probe before the dialog; polkit every time |
+| `ArdiaAutofill.status` | — | `{addresses, cards: Availability, reauth, reauthReason, reauthMessage?, backend}` | none |
 | `ArdiaAutofill.saveCard` | card `{id?, name?, expMonth?, expYear?}`, number \| null | `{id}` | cards available |
 | `ArdiaAutofill.cardNumber` | id | `{number: string \| null, authenticated}` | cards available; polkit every time |
 
@@ -93,7 +94,7 @@ The profile must be `""` or `"default"`.
 
 - **Availability:** `ERR_PROFILE_PRIVATE`, `ERR_PROFILE`, `ERR_PASSWORDS_UNAVAILABLE`, `ERR_AUTOFILL_UNAVAILABLE`.
 - **Authentication:** `ERR_REAUTH_UNAVAILABLE`, `ERR_REAUTH_DENIED`.
-- **Requests:** `ERR_SECRET_ROUTE`, `ERR_CREDENTIAL_REQUEST`, `ERR_CARD_NUMBER`, `ERR_EXPORT_PATH`.
+- **Requests:** `ERR_SECRET_ROUTE`, `ERR_CREDENTIAL_REQUEST`, `ERR_CARD_NUMBER`, `ERR_EXPORT_PATH`, `ERR_WINDOW_CLOSED`.
 - **Store and engine:** `ERR_NOT_FOUND`, `ERR_PASSWORD_REJECTED`, `ERR_STORE_WRITE`, `ERR_ENGINE_CLOSED`, `ERR_BAD_REPLY`, `ERR_PREFERENCE`, `ERR_PREFERENCE_MANAGED`, `ERR_ENGINE`.
 
 ### Profile resolution
@@ -129,6 +130,7 @@ All on this machine (Arch, clang 22, Node 26). The native ones compile real sour
   - a re-entrant request from a superseded callback;
   - an unconnected bus;
   - profile teardown;
+  - the non-interactive availability probe (flags 0, 5 s, no event, nine classified answers, background, no bus);
   - wrong-thread abort;
   - policy-file/action-id parity.
 

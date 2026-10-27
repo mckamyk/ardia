@@ -14,8 +14,9 @@ export const CREDENTIAL_CAPABILITIES = [
 ] as const;
 
 export type CredentialAvailability = { available: boolean; reason?: string; code?: string; message?: string };
-export type PasswordStatus = { passwords: CredentialAvailability; reauth: boolean; backend: string };
-export type AutofillStatus = { addresses: CredentialAvailability; cards: CredentialAvailability; reauth: boolean; backend: string };
+type ReauthStatus = { reauth: boolean; reauthReason?: string; reauthMessage?: string; backend: string };
+export type PasswordStatus = ReauthStatus & { passwords: CredentialAvailability };
+export type AutofillStatus = ReauthStatus & { addresses: CredentialAvailability; cards: CredentialAvailability };
 
 const SECRET_CALLS = new Set(["passwords.save", "passwords.update", "passwords.add", "autofill.saveCard"]);
 
@@ -126,7 +127,15 @@ export function credentialNotice(status: PasswordStatus | AutofillStatus | null 
   const parts: string[] = [];
   const entries = kind === "passwords" ? [(status as PasswordStatus).passwords] : [(status as AutofillStatus).addresses, (status as AutofillStatus).cards];
   for (const entry of entries) if (entry && !entry.available && entry.message && !parts.includes(entry.message)) parts.push(entry.message);
-  if (!status.reauth) parts.push(kind === "passwords" ? "System authentication is unavailable, so saved passwords can't be shown, changed or exported." : "System authentication is unavailable, so card numbers can't be shown.");
+  if (!status.reauth) {
+    parts.push(
+      status.reauthMessage
+        ? `${status.reauthMessage}.`
+        : kind === "passwords"
+          ? "System authentication is unavailable, so saved passwords can't be shown, changed or exported."
+          : "System authentication is unavailable, so card numbers can't be shown.",
+    );
+  }
   if (status.backend === "basic") parts.push("Chromium is using its basic password store, which only obfuscates secrets instead of encrypting them with your keyring.");
   return parts.length ? parts.join(" ") : null;
 }

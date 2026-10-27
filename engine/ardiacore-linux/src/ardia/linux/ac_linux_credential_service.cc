@@ -21,7 +21,7 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/ardia/ac_reauth.h"
+#include "chrome/browser/ardia/ac_reauth_linux.h"
 #include "chrome/browser/ardia/ac_sensitive_args.h"
 #include "chrome/browser/ardia/public/ac_engine.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
@@ -216,12 +216,16 @@ base::DictValue StatusEntry(const credentials::Availability& availability) {
   return entry;
 }
 
-base::Value Status(const Probes& probes, bool autofill) {
+base::Value Status(const Probes& probes, bool autofill, bool reauth, const std::string& reason) {
   const std::string backend =
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(password_manager::kPasswordStore);
   base::DictValue status = base::DictValue()
-                               .Set("reauth", ReauthAvailable())
+                               .Set("reauth", reauth)
+                               .Set("reauthReason", reason)
                                .Set("backend", backend.empty() ? std::string("auto") : backend);
+  if (!reauth) {
+    status.Set("reauthMessage", credentials::ReauthMessage(reason));
+  }
   if (autofill) {
     status.Set("addresses", StatusEntry(credentials::Assess(credentials::Store::kAddresses, probes.autofill)));
     status.Set("cards", StatusEntry(credentials::Assess(credentials::Store::kCards, probes.autofill)));
@@ -385,6 +389,21 @@ class ExportPicker : public ui::SelectFileDialog::Listener {
   scoped_refptr<ui::SelectFileDialog> dialog_;
 };
 
+void ShowExport(base::FilePath profile_dir,
+                base::FilePath export_dir,
+                base::WeakPtr<LinuxShellWebView> shell,
+                Done done,
+                bool available,
+                std::string reason) {
+  if (!available) {
+    return Fail(std::move(done), "ERR_REAUTH_UNAVAILABLE", credentials::ReauthMessage(reason));
+  }
+  if (!shell) {
+    return Fail(std::move(done), "ERR_WINDOW_CLOSED", "The window closed before the export started");
+  }
+  ExportPicker::Show(std::move(profile_dir), std::move(export_dir), shell.get(), std::move(done));
+}
+
 void RunPreferences(Profile* profile, const credentials::Plan& plan, Done done) {
   PrefService* prefs = profile->GetPrefs();
   auto boolean = [prefs](const std::string& name) -> const PrefService::Preference* {
@@ -428,7 +447,11 @@ void Proceed(base::FilePath profile_dir,
              Done done,
              Probes probes) {
   if (plan.reply == credentials::Reply::kStatus) {
-    return std::move(done).Run(true, Status(probes, autofill_status));
+    return ProbeReauth(base::BindOnce(
+        [](Probes probes, bool autofill, Done done, bool available, std::string reason) {
+          std::move(done).Run(true, Status(probes, autofill, available, reason));
+        },
+        probes, autofill_status, std::move(done)));
   }
   for (credentials::Store store : plan.requires_stores) {
     const credentials::Availability availability = credentials::Assess(
@@ -438,11 +461,11 @@ void Proceed(base::FilePath profile_dir,
     }
   }
   if (plan.asks_for_path) {
-    if (!ReauthAvailable()) {
-      return Fail(std::move(done), "ERR_REAUTH_UNAVAILABLE",
-                  "System authentication is unavailable, so passwords can't be exported");
+    if (!shell) {
+      return Fail(std::move(done), "ERR_WINDOW_CLOSED", "The window closed before the export started");
     }
-    return ExportPicker::Show(std::move(profile_dir), std::move(export_dir), shell.get(), std::move(done));
+    return ProbeReauth(base::BindOnce(&ShowExport, std::move(profile_dir), std::move(export_dir), shell,
+                                      std::move(done)));
   }
   CallEngine(profile_dir, std::move(plan), std::move(done));
 }

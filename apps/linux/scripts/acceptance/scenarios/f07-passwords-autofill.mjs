@@ -46,7 +46,7 @@ export default {
     await t.check("status reports the store available, its backend and that authentication is unavailable in a background instance", async () => {
       const passwords = await expectOk(shell.invoke("ArdiaPasswords.status", { args: [""] }), "ArdiaPasswords.status");
       const autofill = await expectOk(shell.invoke("ArdiaAutofill.status", { args: [""] }), "ArdiaAutofill.status");
-      if (!passwords.passwords?.available || passwords.backend !== "basic" || passwords.reauth !== false) throw new Error(JSON.stringify(passwords));
+      if (!passwords.passwords?.available || passwords.backend !== "basic" || passwords.reauth !== false || passwords.reauthReason !== "background") throw new Error(JSON.stringify(passwords));
       if (!autofill.addresses?.available || !autofill.cards?.available) throw new Error(JSON.stringify(autofill));
       return { passwords, autofill };
     }, { critical: true });
@@ -137,7 +137,8 @@ export default {
         return body.includes("basic password store") ? body : false;
       }, { timeout: 8000, label: "credential notice" });
       await t.screenshot(settings, "passwords-pane");
-      return { notice: text.includes("System authentication is unavailable") };
+      if (!text.includes("System authentication is off in background instances")) throw new Error("the notice doesn't explain why authentication is unavailable");
+      return { notice: true };
     });
 
     state = await restartBrowser(t, state, { name: "credentials" });

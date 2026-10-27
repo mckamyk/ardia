@@ -16,12 +16,16 @@ inline constexpr char kPolkitInterface[] = "org.freedesktop.PolicyKit1.Authority
 inline constexpr char kPolkitAction[] = "dev.ardia.linux.reauthenticate";
 inline constexpr uint32_t kAllowUserInteraction = 1;
 inline constexpr int64_t kPromptTimeoutMs = 120000;
+inline constexpr int64_t kProbeTimeoutMs = 5000;
 
 enum class Outcome { kGranted, kDenied, kCancelled, kExpired, kUnavailable };
+
+enum class Availability { kAvailable, kBackground, kNoPolkit, kPolicyMissing, kNotPermitted, kUnavailable };
 
 struct PolkitReply {
   bool responded = false;
   std::string error_name;
+  std::string error_message;
   bool authorized = false;
   bool challenge = false;
   bool dismissed = false;
@@ -71,6 +75,41 @@ inline Outcome Classify(const PolkitReply& reply) {
     return Outcome::kUnavailable;
   }
   return Outcome::kDenied;
+}
+
+inline const char* AvailabilityName(Availability availability) {
+  switch (availability) {
+    case Availability::kAvailable:
+      return "available";
+    case Availability::kBackground:
+      return "background";
+    case Availability::kNoPolkit:
+      return "noPolkit";
+    case Availability::kPolicyMissing:
+      return "policyMissing";
+    case Availability::kNotPermitted:
+      return "notPermitted";
+    case Availability::kUnavailable:
+      return "unavailable";
+  }
+  return "unavailable";
+}
+
+inline Availability ClassifyProbe(const PolkitReply& reply) {
+  if (reply.error_name == "org.freedesktop.DBus.Error.ServiceUnknown" ||
+      reply.error_name == "org.freedesktop.DBus.Error.NameHasNoOwner") {
+    return Availability::kNoPolkit;
+  }
+  if (!reply.error_name.empty()) {
+    return reply.error_message.find("is not registered") != std::string::npos
+               ? Availability::kPolicyMissing
+               : Availability::kUnavailable;
+  }
+  if (!reply.responded) {
+    return Availability::kUnavailable;
+  }
+  return reply.authorized || reply.challenge ? Availability::kAvailable
+                                             : Availability::kNotPermitted;
 }
 
 class GrantWindow {

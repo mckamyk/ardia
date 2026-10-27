@@ -137,6 +137,7 @@ struct Failure {
 };
 
 Failure ClassifyEngineError(std::string_view engine_message);
+std::string ReauthMessage(std::string_view reason);
 
 bool ShouldRemoveFailedExport(std::string_view status, bool existed_before, bool exists_now);
 bool RemoveFailedExport(const std::string& path, std::string_view status, bool existed_before);

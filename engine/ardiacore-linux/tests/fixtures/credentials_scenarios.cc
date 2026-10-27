@@ -267,6 +267,12 @@ void EngineErrors() {
   assert(ClassifyEngineError("no autofill in this profile").code == "ERR_AUTOFILL_UNAVAILABLE");
   assert(ClassifyEngineError("No such password").code == "ERR_NOT_FOUND");
   assert(ClassifyEngineError("invalid number").code == "ERR_CARD_NUMBER");
+  assert(ReauthMessage("available").empty());
+  assert(ReauthMessage("policyMissing").find("polkit policy isn't installed") != std::string::npos);
+  assert(ReauthMessage("noPolkit").find("polkit isn't running") != std::string::npos);
+  assert(ReauthMessage("background").find("background") != std::string::npos);
+  assert(ReauthMessage("notPermitted").find("isn't allowed") != std::string::npos);
+  assert(ReauthMessage("anything else").find("unavailable") != std::string::npos);
   Failure leaked = ClassifyEngineError("bad value " + kPassword);
   assert(leaked.code == "ERR_ENGINE" && leaked.message.find("horse") == std::string::npos);
 }

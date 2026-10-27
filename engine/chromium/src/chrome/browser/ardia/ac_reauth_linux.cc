@@ -1,4 +1,5 @@
 #include "chrome/browser/ardia/ac_reauth.h"
+#include "chrome/browser/ardia/ac_reauth_linux.h"
 
 #include <cstdint>
 #include <string>
@@ -47,6 +48,7 @@ reauth_linux::PolkitReply ReadReply(dbus::Response* response,
     if (reply.error_name.empty()) {
       reply.error_name = "org.freedesktop.DBus.Error.Failed";
     }
+    dbus::MessageReader(error).PopString(&reply.error_message);
     return reply;
   }
   if (!response) {
@@ -77,6 +79,60 @@ reauth_linux::PolkitReply ReadReply(dbus::Response* response,
   reply.challenge = challenge;
   reply.responded = true;
   return reply;
+}
+
+void WriteCheck(dbus::MethodCall* call,
+                const std::string& unique_name,
+                uint32_t flags,
+                const std::string& cancellation) {
+  dbus::MessageWriter writer(call);
+  dbus::MessageWriter subject(nullptr);
+  writer.OpenStruct(&subject);
+  subject.AppendString("system-bus-name");
+  dbus::MessageWriter subject_details(nullptr);
+  subject.OpenArray("{sv}", &subject_details);
+  dbus::MessageWriter name_entry(nullptr);
+  subject_details.OpenDictEntry(&name_entry);
+  name_entry.AppendString("name");
+  name_entry.AppendVariantOfString(unique_name);
+  subject_details.CloseContainer(&name_entry);
+  subject.CloseContainer(&subject_details);
+  writer.CloseContainer(&subject);
+  writer.AppendString(reauth_linux::kPolkitAction);
+  dbus::MessageWriter details(nullptr);
+  writer.OpenArray("{ss}", &details);
+  writer.CloseContainer(&details);
+  writer.AppendUint32(flags);
+  writer.AppendString(cancellation);
+}
+
+using Probed = base::OnceCallback<void(bool, std::string)>;
+
+void FinishProbe(Probed done, reauth_linux::Availability availability) {
+  std::move(done).Run(availability == reauth_linux::Availability::kAvailable,
+                      reauth_linux::AvailabilityName(availability));
+}
+
+void ProbeAs(scoped_refptr<dbus::Bus> bus,
+             Probed done,
+             const std::string& unique_name) {
+  if (unique_name.empty()) {
+    return FinishProbe(std::move(done), reauth_linux::Availability::kNoPolkit);
+  }
+  dbus::ObjectProxy* authority = bus->GetObjectProxy(
+      reauth_linux::kPolkitService,
+      dbus::ObjectPath(reauth_linux::kPolkitPath));
+  dbus::MethodCall call(reauth_linux::kPolkitInterface, "CheckAuthorization");
+  WriteCheck(&call, unique_name, 0, std::string());
+  authority->CallMethodWithErrorResponse(
+      &call, static_cast<int>(reauth_linux::kProbeTimeoutMs),
+      base::BindOnce(
+          [](Probed done, dbus::Response* response,
+             dbus::ErrorResponse* error) {
+            FinishProbe(std::move(done),
+                        reauth_linux::ClassifyProbe(ReadReply(response, error)));
+          },
+          std::move(done)));
 }
 
 class ReauthState : public ProfileState {
@@ -158,25 +214,8 @@ class ReauthState : public ProfileState {
         dbus::ObjectPath(reauth_linux::kPolkitPath));
     dbus::MethodCall call(reauth_linux::kPolkitInterface,
                           "CheckAuthorization");
-    dbus::MessageWriter writer(&call);
-    dbus::MessageWriter subject(nullptr);
-    writer.OpenStruct(&subject);
-    subject.AppendString("system-bus-name");
-    dbus::MessageWriter subject_details(nullptr);
-    subject.OpenArray("{sv}", &subject_details);
-    dbus::MessageWriter name_entry(nullptr);
-    subject_details.OpenDictEntry(&name_entry);
-    name_entry.AppendString("name");
-    name_entry.AppendVariantOfString(unique_name);
-    subject_details.CloseContainer(&name_entry);
-    subject.CloseContainer(&subject_details);
-    writer.CloseContainer(&subject);
-    writer.AppendString(reauth_linux::kPolkitAction);
-    dbus::MessageWriter details(nullptr);
-    writer.OpenArray("{ss}", &details);
-    writer.CloseContainer(&details);
-    writer.AppendUint32(reauth_linux::kAllowUserInteraction);
-    writer.AppendString(cancellation_);
+    WriteCheck(&call, unique_name, reauth_linux::kAllowUserInteraction,
+               cancellation_);
     prompting_ = true;
     authority->CallMethodWithErrorResponse(
         &call, static_cast<int>(reauth_linux::kPromptTimeoutMs),
@@ -232,6 +271,21 @@ class ReauthState : public ProfileState {
   base::WeakPtrFactory<ReauthState> weak_factory_{this};
 };
 
+}
+
+void ProbeReauth(base::OnceCallback<void(bool, std::string)> done) {
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  if (ardiacore::BackgroundInstance()) {
+    return FinishProbe(std::move(done),
+                       reauth_linux::Availability::kBackground);
+  }
+  scoped_refptr<dbus::Bus> bus = dbus_thread_linux::GetSharedSystemBus();
+  if (!bus) {
+    return FinishProbe(std::move(done), reauth_linux::Availability::kNoPolkit);
+  }
+  bus->GetDBusTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&UniqueName, bus),
+      base::BindOnce(&ProbeAs, bus, std::move(done)));
 }
 
 bool ReauthAvailable() {

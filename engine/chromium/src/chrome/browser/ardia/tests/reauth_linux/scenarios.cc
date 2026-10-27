@@ -7,6 +7,7 @@
 #include "ardia/core/ac_launch_switches.h"
 #include "chrome/browser/ardia/ac_engine.h"
 #include "chrome/browser/ardia/ac_reauth.h"
+#include "chrome/browser/ardia/ac_reauth_linux.h"
 #include "components/dbus/thread_linux/dbus_thread_linux.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -59,9 +60,10 @@ void Reply(dbus::SentCall& call, bool authorized, bool challenge,
   std::move(call.reply).Run(&response, nullptr);
 }
 
-void Fail(dbus::SentCall& call, const std::string& name) {
+void Fail(dbus::SentCall& call, const std::string& name, const std::string& message = "") {
   dbus::ErrorResponse error;
   error.error_name = name;
+  if (!message.empty()) error.body.push_back({dbus::Node::Kind::kString, false, 0, message, {}});
   std::move(call.reply).Run(nullptr, &error);
 }
 
@@ -337,6 +339,70 @@ void ProfileTeardownDropsPendingPrompt() {
   assert(!after.granted);
 }
 
+struct Probed {
+  std::optional<bool> available;
+  std::string reason;
+  int runs = 0;
+};
+
+void Probe(Probed& probed) {
+  ardia::ProbeReauth(base::OnceCallback<void(bool, std::string)>([&probed](bool available, std::string reason) {
+    probed.available = available;
+    probed.reason = std::move(reason);
+    ++probed.runs;
+  }));
+}
+
+void ProbeNeverPromptsAndExplainsUnavailability() {
+  Reset();
+  ardiacore::background_instance = true;
+  Probed background;
+  Probe(background);
+  assert(background.available == false && background.reason == "background" && dbus::sent_calls.empty());
+
+  Reset();
+  dbus_thread_linux::system_bus->connects = false;
+  Probed no_bus;
+  Probe(no_bus);
+  Pump();
+  assert(no_bus.available == false && no_bus.reason == "noPolkit" && dbus::sent_calls.empty());
+
+  struct Case {
+    void (*respond)(dbus::SentCall&);
+    bool available;
+    const char* reason;
+  };
+  const Case cases[] = {
+      {[](dbus::SentCall& call) { Reply(call, false, true); }, true, "available"},
+      {[](dbus::SentCall& call) { Reply(call, true, false); }, true, "available"},
+      {[](dbus::SentCall& call) { Reply(call, false, false); }, false, "notPermitted"},
+      {[](dbus::SentCall& call) { Fail(call, "org.freedesktop.PolicyKit1.Error.Failed", "Action dev.ardia.linux.reauthenticate is not registered"); }, false, "policyMissing"},
+      {[](dbus::SentCall& call) { Fail(call, "org.freedesktop.PolicyKit1.Error.Failed", "Something else"); }, false, "unavailable"},
+      {[](dbus::SentCall& call) { Fail(call, "org.freedesktop.DBus.Error.ServiceUnknown"); }, false, "noPolkit"},
+      {[](dbus::SentCall& call) { Fail(call, "org.freedesktop.DBus.Error.NameHasNoOwner"); }, false, "noPolkit"},
+      {[](dbus::SentCall& call) { Fail(call, "org.freedesktop.DBus.Error.NoReply"); }, false, "unavailable"},
+      {[](dbus::SentCall& call) { std::move(call.reply).Run(nullptr, nullptr); }, false, "unavailable"},
+  };
+  for (const Case& test : cases) {
+    Reset();
+    Probed probed;
+    Probe(probed);
+    Pump();
+    assert(dbus::sent_calls.size() == 1);
+    dbus::SentCall check = Take(0);
+    assert(check.member == "CheckAuthorization" && check.timeout_ms == 5000);
+    assert(check.body.size() == 5 && check.body[1].text == "dev.ardia.linux.reauthenticate");
+    assert(check.body[3].kind == dbus::Node::Kind::kUint32 && check.body[3].number == 0);
+    assert(check.body[4].text.empty());
+    test.respond(check);
+    if (probed.runs != 1 || probed.available != test.available || probed.reason != test.reason) {
+      std::printf("probe gave %s\n", probed.reason.c_str());
+      assert(false);
+    }
+    assert(ardia::emitted.empty());
+  }
+}
+
 }
 
 int main(int argc, char**) {
@@ -356,5 +422,6 @@ int main(int argc, char**) {
   ReentrantRequestFromSupersededCallback();
   UnconnectedBusIsUnavailable();
   ProfileTeardownDropsPendingPrompt();
+  ProbeNeverPromptsAndExplainsUnavailability();
   std::puts("reauth scenarios passed");
 }

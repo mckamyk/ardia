@@ -195,6 +195,8 @@ test("status drives an honest notice", async () => {
   assert.equal(credentialNotice(await autofillStatus(host, ""), "autofill"), null);
   assert.equal(credentialNotice({ passwords: { available: true }, reauth: false, backend: "auto" }, "passwords"),
     "System authentication is unavailable, so saved passwords can't be shown, changed or exported.");
+  assert.equal(credentialNotice({ passwords: { available: true }, reauth: false, reauthReason: "policyMissing", reauthMessage: "Ardia's polkit policy isn't installed, so saved passwords and card numbers can't be shown, changed or exported", backend: "gnome-libsecret" }, "autofill"),
+    "Ardia's polkit policy isn't installed, so saved passwords and card numbers can't be shown, changed or exported.");
   assert.equal(credentialNotice(null, "passwords"), null);
 });
 
