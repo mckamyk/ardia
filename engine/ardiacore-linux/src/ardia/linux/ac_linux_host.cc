@@ -24,6 +24,9 @@
 #include "ardia/linux/ac_linux_dialog_views.h"
 #include "ardia/linux/ac_linux_document_service.h"
 #include "ardia/linux/ac_linux_downloads.h"
+#include "ardia/linux/ac_linux_extension_service.h"
+#include "ardia/linux/ac_linux_extension_views.h"
+#include "ardia/linux/ac_linux_extensions.h"
 #include "ardia/linux/ac_linux_files.h"
 #include "ardia/linux/ac_linux_launch_config.h"
 #include "ardia/linux/ac_linux_page_commands.h"
@@ -377,25 +380,6 @@ bool ValidUtilityPlacement(const base::DictValue* placement) {
   const int64_t width = static_cast<int64_t>(*right) - *left;
   const int64_t height = static_cast<int64_t>(*bottom) - *top;
   return width >= 720 && height >= 480 && width <= 16384 && height <= 16384;
-}
-
-std::optional<base::DictValue> ExtensionConfiguration(const base::DictValue& input) {
-  const auto* id = input.FindString("id");
-  const auto* options = input.FindDict("options");
-  if (input.size() != 2 || !id || id->empty() || !options || options->empty()) return std::nullopt;
-  base::DictValue result;
-  result.Set("id", *id);
-  for (const auto& [key, value] : *options) {
-    if (key == "pinned" || key == "fileAccess" || key == "incognito") {
-      if (!value.is_bool()) return std::nullopt;
-    } else if (key == "siteAccess") {
-      if (!value.is_string() || (value.GetString() != "allSites" && value.GetString() != "specificSites" && value.GetString() != "onClick")) return std::nullopt;
-    } else {
-      return std::nullopt;
-    }
-    result.Set(key, value.Clone());
-  }
-  return result;
 }
 
 base::FilePath DocumentDirectory(Profile* profile) {
@@ -892,6 +876,15 @@ class ShellHostView : public views::View,
   void Invoke(std::string method, const base::DictValue& args,
               base::OnceCallback<void(bool, base::Value)> done);
   void ReportPictureInPicture(content::WebContents* contents, base::DictValue state);
+  LinuxExtensionWindow ExtensionWindow();
+  LinuxExtensionSurfaces* ExtensionSurfaces();
+  bool ExtensionEvent(std::string_view name, base::DictValue data);
+  std::string ExtensionTabKey(content::WebContents* contents) const;
+  bool ExtensionsListening() const { return browser_ && handler_ && !is_utility(); }
+  void ReleaseExtensions() {
+    extension_surfaces_.reset();
+    LinuxExtensionsWindowRetired(id_);
+  }
   void OfferTab(content::WebContents* contents) {
     if (contents && contents->GetBrowserContext() == page_profile()) offered_[TabId(contents)] = contents->GetWeakPtr();
   }
@@ -1051,6 +1044,7 @@ class ShellHostView : public views::View,
   raw_ptr<HostMessageHandler> handler_ = nullptr;
   uint64_t renderer_generation_ = 0;
   std::unique_ptr<LinuxWindowDialogs> dialogs_;
+  std::unique_ptr<LinuxExtensionSurfaces> extension_surfaces_;
   std::map<std::string, LinuxDialogSuspension> close_dialogs_;
   std::optional<std::pair<std::string, base::DictValue>> close_departure_;
   content::WeakDocumentPtr renderer_document_;
@@ -1214,11 +1208,6 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       if (!completed) return reply->handler->Fail(reply->id, "ERR_BAD_REPLY", "Malformed site zoom reply");
       return reply->handler->Resolve(reply->id, std::move(*completed));
     }
-    if (reply->name == "search.engines" && value->is_dict()) {
-      auto* engines = value->GetDict().FindList("engines");
-      if (!engines) return reply->handler->Fail(reply->id, "ERR_BAD_REPLY", "Missing search engines");
-      value = base::Value(base::DictValue().Set("list", base::DictValue().Set("engines", engines->Clone())));
-    }
     const auto* route = ardiacore::linux_contract::FindRoute(reply->name);
     if (route && route->field == "null") value = base::Value();
     else if (route && !route->field.empty()) {
@@ -1274,6 +1263,16 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       if (name == "profiles.release") {
         ardiacore::ReleaseLinuxProfile(profile);
         return Resolve(id, base::Value());
+      }
+      if (LinuxExtensionsHandles(name)) {
+        return LinuxExtensionsCall(host_->ExtensionWindow(), profile, name, args.Find("args"),
+            base::BindOnce([](base::WeakPtr<HostMessageHandler> handler, std::string id, bool ok, base::Value result) {
+              if (!handler) return;
+              if (ok) return handler->Resolve(id, std::move(result));
+              const std::string* code = result.is_dict() ? result.GetDict().FindString("code") : nullptr;
+              const std::string* message = result.is_dict() ? result.GetDict().FindString("message") : nullptr;
+              handler->Fail(id, code ? *code : "ERR_ENGINE", message ? *message : "Extension request failed");
+            }, weak_factory_.GetWeakPtr(), id));
       }
       const base::Value* value = args.Find("args");
       if (name.starts_with("documents.") && args.size() != 3)
@@ -1390,13 +1389,6 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       if (!route) return Fail(id, "ERR_UNKNOWN_CALL", "This call is unavailable on Linux");
       if (profile_name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate) {
         return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
-      }
-      if (name == "extensions.configure") {
-        const auto configured = ExtensionConfiguration(input);
-        if (!configured) return Fail(id, "ERR_ENGINE", "Unsupported or invalid extension options");
-        const auto serialized = base::WriteJson(*configured);
-        if (!serialized) return Fail(id, "ERR_BAD_REPLY", "Extension options are not JSON");
-        json = *serialized;
       }
       const std::string service(route->service);
       ardiacore::ResolveLinuxProfile(profile, base::BindOnce(
@@ -1526,9 +1518,11 @@ ShellHostView::~ShellHostView() {
   handler_ = nullptr;
   renderer_document_ = content::WeakDocumentPtr();
   dialogs_.reset();
+  extension_surfaces_.reset();
   RetireDocuments();
   UnregisterAccelerators();
   Hosts().erase(id_);
+  LinuxExtensionsWindowRetired(id_);
   bindings_.clear();
   TabStripModelObserver::StopObservingAll(this);
   view_observation_.Reset();
@@ -1561,6 +1555,8 @@ void ShellHostView::Initialize() {
 }
 
 void ShellHostView::DetachViewports() {
+  if (extension_surfaces_) extension_surfaces_->RetireOlderThan(renderer_generation_);
+  LinuxExtensionsWindowRetired(id_);
   for (auto& [id, binding] : bindings_) {
     binding->pane_visible = false;
     for (views::WebView* view : {binding->viewport(), binding->devtools_viewport()}) {
@@ -1624,6 +1620,7 @@ base::DictValue ShellHostView::Bootstrap() const {
   for (const char* route : ardiacore::kLinuxZoomDomainRoutes)
     capabilities.Append(route);
   for (const char* capability : linux_credentials::kCapabilities) capabilities.Append(capability);
+  for (const char* capability : linux_extensions::kSurfaceCapabilities) capabilities.Append(capability);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
@@ -2622,6 +2619,41 @@ std::unique_ptr<ardiacore::LinuxPageState> ShellHostView::MountPage(TabBinding* 
       std::move(sink), std::move(navigation));
 }
 
+LinuxExtensionWindow ShellHostView::ExtensionWindow() {
+  LinuxExtensionWindow window;
+  window.profile = page_profile();
+  window.window = id_;
+  window.native_window = GetWidget() ? GetWidget()->GetNativeWindow() : gfx::NativeWindow();
+  window.tab = base::BindRepeating([](base::WeakPtr<ShellHostView> host, std::string_view key) -> content::WebContents* {
+    TabBinding* binding = host ? host->BindingForKey(key) : nullptr;
+    return binding ? binding->contents() : nullptr;
+  }, GetWeakPtr());
+  return window;
+}
+
+LinuxExtensionSurfaces* ShellHostView::ExtensionSurfaces() {
+  if (!extension_surfaces_ && browser_) {
+    extension_surfaces_ = std::make_unique<LinuxExtensionSurfaces>(browser_, this, base::BindRepeating(
+        [](base::WeakPtr<ShellHostView> host, int id, base::DictValue event) {
+          if (host) host->Event("ArdiaExtensionView", base::NumberToString(id), base::Value(std::move(event)));
+        }, GetWeakPtr()));
+  }
+  return extension_surfaces_.get();
+}
+
+bool ShellHostView::ExtensionEvent(std::string_view name, base::DictValue data) {
+  if (!browser_ || !handler_) return false;
+  Event("ArdiaExtensions", "extensions", base::Value(base::DictValue().Set("name", name).Set("data", std::move(data))));
+  return true;
+}
+
+std::string ShellHostView::ExtensionTabKey(content::WebContents* contents) const {
+  for (const auto& [id, binding] : bindings_) {
+    if (contents && binding->contents() == contents) return binding->key();
+  }
+  return std::string();
+}
+
 TabBinding* ShellHostView::PageCommandBinding(const PageCommandAuthority& authority) {
   ShellHostView* host = authority.host.get();
   HostMessageHandler* handler = authority.handler.get();
@@ -3243,6 +3275,10 @@ void ShellHostView::TabCommand(
     return std::move(done).Run(true, base::Value(std::move(entries)));
   } else if (command == "close") {
     if (!CloseTab(binding)) return std::move(done).Run(false, base::Value("Tab is no longer in this window"));
+  } else if (command == "executeExtensionAction") {
+    const std::string shown = LinuxExecuteExtensionAction(contents, values);
+    if (shown.empty()) return std::move(done).Run(false, base::Value("executeExtensionAction requires an extension id"));
+    return std::move(done).Run(true, base::Value(shown));
   } else {
     return std::move(done).Run(false, base::Value("Unsupported tab command: " + command));
   }
@@ -3592,6 +3628,10 @@ void ShellHostView::Invoke(
   }
   if (LinuxCredentialsInvokes(method)) {
     return LinuxCredentialsInvoke(!page_profile() || page_profile()->IsOffTheRecord(), shell_, method, values, std::move(done));
+  }
+  if (LinuxExtensionSurfaces::Handles(method)) {
+    return ExtensionSurfaces()->Invoke(method, args, page_profile(), renderer_generation_,
+        blink::ZoomLevelToZoomFactor(zoom::ZoomController::GetZoomLevelForWebContents(shell())), std::move(done));
   }
   if (method == "ArdiaShell.windowIdentity") {
     const auto* supplied = args.Find("args");
@@ -4444,6 +4484,7 @@ class HostRegistry : public BrowserCollectionObserver,
     RequestedWindows().erase(browser->GetSessionID().id());
     const auto found = Hosts().find(browser->GetSessionID().id());
     if (found == Hosts().end()) return;
+    found->second->ReleaseExtensions();
     if (found->second->is_utility()) {
       found->second->DetachBrowser();
       return;
@@ -4531,6 +4572,38 @@ void StartLinuxHost() {
         if (found != Hosts().end() && found->second->browser() == browser)
           found->second->ChromeCloseCancelled(token);
       }};
+  LinuxExtensionsDelegate extensions;
+  extensions.deliver = base::BindRepeating([](int window, std::string_view name, base::DictValue data) {
+    const auto found = Hosts().find(window);
+    return found != Hosts().end() && found->second->ExtensionEvent(name, std::move(data));
+  });
+  extensions.window_for = base::BindRepeating([](Profile* profile, content::WebContents* contents, int excluded) {
+    int chosen = 0;
+    for (const auto& [id, host] : Hosts()) {
+      if (id == excluded || host->page_profile() != profile || !host->ExtensionsListening()) continue;
+      if (contents && !host->ExtensionTabKey(contents).empty()) return id;
+      const bool active = host->GetWidget() && host->GetWidget()->IsActive();
+      if (!chosen || active) chosen = id;
+    }
+    return chosen;
+  });
+  extensions.window_of_browser = base::BindRepeating([](const BrowserWindowInterface* browser) {
+    if (!browser) return 0;
+    const auto found = Hosts().find(browser->GetSessionID().id());
+    return found != Hosts().end() && found->second->browser() == browser ? found->first : 0;
+  });
+  extensions.tab_key = base::BindRepeating([](int window, content::WebContents* contents) {
+    const auto found = Hosts().find(window);
+    return found != Hosts().end() ? found->second->ExtensionTabKey(contents) : std::string();
+  });
+  extensions.surfaces = base::BindRepeating([](int window) -> LinuxExtensionSurfaces* {
+    const auto found = Hosts().find(window);
+    return found != Hosts().end() && !found->second->is_utility() ? found->second->ExtensionSurfaces() : nullptr;
+  });
+  extensions.broadcast = base::BindRepeating([](Profile*, std::string_view name, base::DictValue data) {
+    for (const auto& [id, host] : Hosts()) host->ExtensionEvent(name, data.Clone());
+  });
+  StartLinuxExtensions(std::move(extensions));
   ac_engine_set_event_sink(EngineEvent, nullptr);
   static base::NoDestructor<HostRegistry> registry;
   registry->Start();

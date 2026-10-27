@@ -20,10 +20,12 @@ class ExtensionContractTests(unittest.TestCase):
         probe = ROOT / 'apps/linux/scripts/host-contract-extension.mjs'
         result = subprocess.run(['node', '--experimental-strip-types', '--import', str(loader), str(probe), '{"pinned":true,"fileAccess":true,"siteAccess":"onClick"}'], capture_output=True, text=True, check=True)
         payload = json.loads(result.stdout)
-        self.assertEqual(payload, {'id': 'extension', 'options': {'pinned': True, 'fileAccess': True, 'siteAccess': 'onClick'}})
-        host = (ROOT / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc').read_text()
-        signature = 'std::optional<base::DictValue> ExtensionConfiguration('
-        transform = method(host, signature) if signature in host else 'std::optional<base::DictValue> ExtensionConfiguration(const base::DictValue& input) { return input; }'
+        extension = 'a' * 32
+        self.assertEqual(payload, {'id': extension, 'options': {'pinned': True, 'fileAccess': True, 'siteAccess': 'onClick'}})
+        helper = (ROOT / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_extensions.cc').read_text()
+        transform = ('#include <algorithm>\n#include <string_view>\n' + method(helper, 'bool ValidExtensionId(') + '\n' +
+                     method(helper, 'std::optional<base::DictValue> Configuration(') +
+                     '\nstd::optional<base::DictValue> ExtensionConfiguration(const base::DictValue& input) { return Configuration(input); }')
         backend_source = (ROOT / 'engine/chromium/src/chrome/browser/ardia/ac_extensions.cc').read_text()
         backend = method(backend_source, 'AC_ENGINE_CALL(ac_extensions_configure)').replace('AC_ENGINE_CALL(ac_extensions_configure)', 'void Backend()').replace('  AC_EXTENSIONS_CALL();', '  Call call;')
         code = r'''
@@ -129,13 +131,15 @@ int main() {
   assert(ok && error.empty());
   assert(pinned && files && withheld);
   base::DictValue invalid;
-  invalid.Set("id", "extension").Set("options", base::DictValue().Set("future", true));
+  invalid.Set("id", std::string(32, 'a')).Set("options", base::DictValue().Set("future", true));
   assert(!ExtensionConfiguration(invalid));
   invalid.Set("options", base::DictValue().Set("pinned", "true"));
   assert(!ExtensionConfiguration(invalid));
   invalid.Set("options", base::DictValue().Set("siteAccess", "unknown"));
   assert(!ExtensionConfiguration(invalid));
   invalid.Set("options", base::DictValue());
+  assert(!ExtensionConfiguration(invalid));
+  invalid.Set("id", "extension").Set("options", base::DictValue().Set("pinned", true));
   assert(!ExtensionConfiguration(invalid));
 }
 '''

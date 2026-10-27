@@ -26,6 +26,7 @@ chromium chromium-devtools-window-title.patch
 chromium chromium-devtools-control-token.patch
 chromium chromium-devtools-find-detach-keeps-selection.patch
 chromium chromium-extension-install-prompt-hook.patch
+chromium chromium-linux-action-popup-hook.patch linux
 chromium chromium-webstore-direct.patch
 chromium chromium-extension-updates.patch
 chromium chromium-component-updater-security-only.patch

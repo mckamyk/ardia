@@ -12,5 +12,5 @@ globalThis.window = {
   },
 };
 const { configureExtension } = await import("../../../packages/ardiacore/src/extensions.ts");
-await configureExtension("extension", "default", options);
+await configureExtension("a".repeat(32), "default", options);
 console.log(captured);
