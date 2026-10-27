@@ -514,3 +514,29 @@ test("a failed rejection after a failed warning is retried when the same attempt
   await assert.rejects(coordinator.accept({ ...main }), { code: "ERR_WINDOW_CLOSE_CANCELLED" });
   assert.deepEqual(log, ["reject", "reject"]);
 });
+
+test("a repeat request joins an undecided attempt's in-flight rejection instead of rejecting again", async () => {
+  const log = [];
+  const pending = [];
+  const coordinator = createWindowCloseCoordinator({
+    windowId: "main", utility: false,
+    decide: async () => { throw Object.assign(new Error("Too many pending dialogs"), { code: "ERR_DIALOG" }); },
+    suppress() {}, flush: async () => {},
+    request: async () => main,
+    beginDrain: async () => { log.push("begin"); return { accepted: true, endsSession: true }; },
+    reject: (request) => { log.push(`reject:${request.closeGeneration}`); return new Promise((resolve) => pending.push(resolve)); },
+    barrier: async () => { log.push("barrier"); }, cancelled: () => false,
+    report: (error) => log.push(`report:${error.message}`),
+  });
+  const first = coordinator.accept(main);
+  first.catch(() => {});
+  await tick();
+  const second = coordinator.accept(main);
+  second.catch(() => {});
+  await tick();
+  assert.deepEqual(log, ["reject:1"]);
+  for (const resolve of pending) resolve();
+  await assert.rejects(first, /Too many pending dialogs/);
+  await assert.rejects(second, { code: "ERR_WINDOW_CLOSE_CANCELLED" });
+  assert.deepEqual(log, ["reject:1"]);
+});
