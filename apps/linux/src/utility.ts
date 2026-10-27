@@ -1,10 +1,10 @@
 import { closeWindow, isDarkAppearance, onAppEvent, onCommand, setAppearance } from "@ardia/shell";
 import { Appearance } from "react-native";
 import { reportHostError, type ArdiaHost } from "./host";
-import { useBrowser } from "../../browser/src/store/browser";
-import { openImport, openSettings, useSettingsNav, type SettingsPlace } from "../../browser/src/components/settings/windows";
+import { useBrowser } from "../../browser/src/state/browser/store";
+import { goToSettingsPane, openImport, openSettings, type SettingsPlace } from "../../browser/src/state/settings/settingsWindows";
 import { PANES } from "../../browser/src/components/settings/settingsIndex";
-import { focusSettingsSearch } from "../../browser/src/components/settings/searchState";
+import { focusSettingsSearch } from "../../browser/src/state/settings/searchState";
 import { menuShown } from "./menus";
 import { startUtilityNavigation } from "./utilityNavigation";
 import { setPreferredImportSource } from "./settingsWindows";
@@ -15,8 +15,7 @@ function setNavigation(value: unknown) {
   const importSource = (value as { importSource?: unknown }).importSource;
   if (typeof importSource === "string") setPreferredImportSource(importSource);
   if (!PANES.some((pane) => pane.id === place.pane)) return;
-  const nav = useSettingsNav.getState();
-  nav.go(place.pane, typeof place.profileId === "string" ? place.profileId : null, typeof place.detail === "string" ? place.detail : null);
+  goToSettingsPane(place.pane, typeof place.profileId === "string" ? place.profileId : null, typeof place.detail === "string" ? place.detail : null);
 }
 
 export function startUtility(host: ArdiaHost) {

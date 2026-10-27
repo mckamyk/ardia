@@ -1,7 +1,7 @@
-import { startBookmarks } from "../../browser/src/lib/bookmarks";
-import { startHistory } from "../../browser/src/lib/history";
-import { startFavicons } from "../../browser/src/lib/favicons";
-import { startProfileDataCleanup } from "../../browser/src/lib/profileData";
+import { startBookmarks } from "../../browser/src/state/bookmarks/engineSync";
+import { startHistory } from "../../browser/src/state/history/engineSync";
+import { startFavicons } from "../../browser/src/state/favicons/favicons";
+import { startProfileDataCleanup } from "../../browser/src/state/profiles/profileData";
 
 export function startHostData() {
   const stops = [startFavicons(), startHistory(), startBookmarks(), startProfileDataCleanup()];

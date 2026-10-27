@@ -1,5 +1,5 @@
-import type { BrowserState } from "../../browser/src/store/browser";
-import type { Tab } from "../../browser/src/store/types";
+import type { BrowserState } from "../../browser/src/state/browser/store";
+import type { Tab } from "../../browser/src/state/browser/types";
 import type { ArdiaHost } from "./host";
 import { invokeHost, reportHostError } from "./host.ts";
 

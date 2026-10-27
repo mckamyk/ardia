@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createUtilitySessionSnapshot, initialLinuxSession } from "./session.ts";
 import { startHostPersistence } from "./hostSession.ts";
-import { useBrowser } from "../../browser/src/store/browser.ts";
+import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { mergeSession } from "./hostSessionMerge.ts";
 
 const host = (windowId = "main") => ({ bootstrap: { windowId, profileId: "default", startup: false } });
