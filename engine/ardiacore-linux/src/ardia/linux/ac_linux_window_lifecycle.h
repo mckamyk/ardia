@@ -16,7 +16,7 @@ struct OpenIntent {
 };
 
 enum class Presentation { kActivate, kInactive };
-enum class Activation { kNone, kActivate };
+enum class Activation { kNone, kShowInactive, kActivate };
 
 class FocusLedger {
  public:
@@ -27,6 +27,7 @@ class FocusLedger {
   Activation Focus(int window);
   Activation Ready(int window);
   bool Observe(int window, bool active);
+  void PointerPressed() { ++epoch_; }
   void Forget(int window);
 
   bool pending(int window) const { return pending_.contains(window); }

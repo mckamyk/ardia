@@ -23,13 +23,14 @@ Presentation FocusLedger::Create(int window, const OpenIntent& intent) {
 
 Activation FocusLedger::Reuse(int window, const OpenIntent& intent,
                               bool own_renderer) {
+  if (!may_activate_ && intent.utility) return Activation::kShowInactive;
   if (!Wants(intent) || (own_renderer && !intent.utility)) return Activation::kNone;
   Request(window);
   return Activation::kActivate;
 }
 
 Activation FocusLedger::Focus(int window) {
-  if (!may_activate_) return Activation::kNone;
+  if (!may_activate_) return Activation::kShowInactive;
   Request(window);
   return Activation::kActivate;
 }
