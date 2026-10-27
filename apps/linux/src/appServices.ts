@@ -14,35 +14,54 @@ import { trackAppVersion } from "../../browser/src/state/releaseNotes/releaseNot
 import { openReleaseNotesAfterUpdate, openReleaseNotesPage } from "../../browser/src/state/releaseNotes/releaseNotesPage";
 import { showToast } from "../../browser/src/state/splits/actions";
 import type { LinuxCapabilities } from "./hostCapabilities.ts";
+import { hostSupports, invokeHost, type ArdiaHost } from "./host.ts";
 
 export const APP_LAUNCH_LOCK = "ardia.linux.app-launch";
-export const APP_LAUNCH_MARK = "ardia.linux.app-launch";
 export const ONBOARDING_DOCUMENT = "onboarding.json";
+export const FRESH_PROFILE_DOCUMENT = "linux-fresh-profile.json";
+export const LAUNCH_STEPS = ["version", "onboarding", "releaseNotes", "defaultBrowserOffer"] as const;
 
-export type LaunchLocks = {
-  request(name: string, options: { ifAvailable: true }, callback: (lock: unknown) => Promise<void> | void): Promise<unknown>;
-};
-export type LaunchMarks = { getItem(key: string): string | null; setItem(key: string, value: string): void };
-export type LaunchClaim = "ran" | "notStartup" | "alreadyRan" | "heldElsewhere" | "unavailable";
+export type LaunchStep = (typeof LAUNCH_STEPS)[number] | "versionUpdated";
+export type LaunchLocks = { request(name: string, callback: () => Promise<void>): Promise<unknown> };
+export type LaunchRecord = { done(): Promise<ReadonlySet<string>>; complete(step: LaunchStep): Promise<unknown> };
+export type LaunchClaim = "ran" | "alreadyDone" | "failed" | "unavailable";
+export type DocumentPresence = "present" | "absent" | "unknown";
+export type OnboardingEvidence = { onboarding: DocumentPresence; freshProfile: DocumentPresence; savedSession: boolean };
+export type StoredDocumentReader = (name: string) => Promise<string | null>;
 
 const report = (error: unknown) => console.warn("[ardia linux] app services", error);
 
-export function claimAppLaunch(options: { startup: boolean; locks?: LaunchLocks; marks?: LaunchMarks; run: () => void }): Promise<LaunchClaim> {
-  const { startup, locks, marks, run } = options;
+export function hostLaunchRecord(host: ArdiaHost): LaunchRecord | undefined {
+  if (!hostSupports("ArdiaShell.launchSteps", host) || !hostSupports("ArdiaShell.completeLaunchStep", host)) return undefined;
+  return {
+    done: async () => {
+      const steps = await invokeHost<unknown>("ArdiaShell.launchSteps", { args: [] }, host);
+      return new Set(Array.isArray(steps) ? steps.filter((step): step is string => typeof step === "string") : []);
+    },
+    complete: (step) => invokeHost("ArdiaShell.completeLaunchStep", { args: [step] }, host),
+  };
+}
+
+export const hostStoredDocument = (host: ArdiaHost): StoredDocumentReader => async (name) => {
+  const contents = await invokeHost<unknown>("ArdiaShell.readDocument", { args: [name] }, host);
+  if (contents === null || typeof contents === "string") return contents;
+  throw new Error(`Unexpected stored document reply for ${name}`);
+};
+
+export function claimAppLaunch(options: { locks?: LaunchLocks; record?: LaunchRecord; run: (done: ReadonlySet<string>) => Promise<void> }): Promise<LaunchClaim> {
+  const { locks, record, run } = options;
   return new Promise((resolve) => {
-    if (!startup) return resolve("notStartup");
-    if (marks?.getItem(APP_LAUNCH_MARK)) return resolve("alreadyRan");
-    if (!locks) return resolve("unavailable");
-    locks.request(APP_LAUNCH_LOCK, { ifAvailable: true }, (lock) => {
-      if (!lock) return resolve("heldElsewhere");
-      marks?.setItem(APP_LAUNCH_MARK, "1");
+    if (!locks || !record) return resolve("unavailable");
+    locks.request(APP_LAUNCH_LOCK, async () => {
+      const done = await record.done();
+      if (LAUNCH_STEPS.every((step) => done.has(step))) return resolve("alreadyDone");
       try {
-        run();
+        await run(done);
+        resolve("ran");
       } catch (error) {
         report(error);
+        resolve("failed");
       }
-      resolve("ran");
-      return new Promise<void>(() => {});
     }).catch((error: unknown) => {
       report(error);
       resolve("unavailable");
@@ -50,24 +69,82 @@ export function claimAppLaunch(options: { startup: boolean; locks?: LaunchLocks;
   });
 }
 
-export function runLaunchServices(windowId: string, existingProfile: boolean, capabilities: LinuxCapabilities) {
-  const updated = trackAppVersion();
-  if (existingProfile && readDocument(ONBOARDING_DOCUMENT) === null) finishOnboarding();
-  else maybeStartOnboarding();
-  const onboarding = useOnboarding.getState().windowId;
-  if (onboarding && onboarding !== windowId) useOnboarding.setState({ windowId });
-  if (updated) openReleaseNotesAfterUpdate();
-  if (!capabilities.defaultBrowser) return;
-  afterFirstWindow(() => {
-    void offerDefaultBrowserAgain({
-      read: readDocument,
-      save: saveDocument,
-      testInstance: systemInfo().isolatedInstance !== false,
-      onboarding: !onboardingCompletedAt() || useOnboarding.getState().windowId !== null,
-      isDefault: isDefaultBrowser,
-      setDefault: setAsDefaultBrowser,
-    }).catch(report);
-  });
+export function onboardingAction(evidence: OnboardingEvidence): "shared" | "complete" | "skip" {
+  if (evidence.onboarding === "unknown" || evidence.freshProfile === "unknown") return "skip";
+  if (evidence.onboarding === "present") return "shared";
+  if (evidence.freshProfile === "present" || !evidence.savedSession) return "shared";
+  return "complete";
+}
+
+async function storedPresence(name: string, readStored: StoredDocumentReader): Promise<DocumentPresence> {
+  try {
+    return (await readStored(name)) === null ? "absent" : "present";
+  } catch (error) {
+    report(error);
+    return "unknown";
+  }
+}
+
+async function onboardingPresence(readStored: StoredDocumentReader): Promise<DocumentPresence> {
+  const stored = await storedPresence(ONBOARDING_DOCUMENT, readStored);
+  const snapshot = readDocument(ONBOARDING_DOCUMENT) !== null;
+  if (stored === "present" && !snapshot) return "unknown";
+  return stored === "absent" && snapshot ? "present" : stored;
+}
+
+export async function recordFreshProfile(save: (name: string, contents: string) => Promise<void> = saveDocument) {
+  try {
+    await save(FRESH_PROFILE_DOCUMENT, JSON.stringify({ version: 1, createdAt: Date.now() }));
+  } catch (error) {
+    report(error);
+  }
+}
+
+export async function runLaunchServices(options: {
+  windowId: string;
+  savedSession: boolean;
+  capabilities: LinuxCapabilities;
+  done: ReadonlySet<string>;
+  complete: (step: LaunchStep) => Promise<unknown>;
+  readStored: StoredDocumentReader;
+}) {
+  const { windowId, savedSession, capabilities, done, complete, readStored } = options;
+  const updatedNow = trackAppVersion();
+  const updated = done.has("version") ? done.has("versionUpdated") : updatedNow;
+  if (!done.has("version")) {
+    if (updated) await complete("versionUpdated");
+    await complete("version");
+  }
+  if (!done.has("onboarding")) {
+    const evidence = { onboarding: await onboardingPresence(readStored), freshProfile: await storedPresence(FRESH_PROFILE_DOCUMENT, readStored), savedSession };
+    const action = onboardingAction(evidence);
+    if (action === "complete") finishOnboarding();
+    if (action === "shared") {
+      maybeStartOnboarding();
+      const onboarding = useOnboarding.getState().windowId;
+      if (onboarding && onboarding !== windowId) useOnboarding.setState({ windowId });
+    }
+    await complete("onboarding");
+  }
+  if (!done.has("releaseNotes")) {
+    if (updated) openReleaseNotesAfterUpdate();
+    await complete("releaseNotes");
+  }
+  if (!done.has("defaultBrowserOffer")) {
+    if (capabilities.defaultBrowser) {
+      afterFirstWindow(() => {
+        void offerDefaultBrowserAgain({
+          read: readDocument,
+          save: saveDocument,
+          testInstance: systemInfo().isolatedInstance !== false,
+          onboarding: !onboardingCompletedAt() || useOnboarding.getState().windowId !== null,
+          isDefault: isDefaultBrowser,
+          setDefault: setAsDefaultBrowser,
+        }).catch(report);
+      });
+    }
+    await complete("defaultBrowserOffer");
+  }
 }
 
 const unavailable = (windowId: string, feature: string) => showToast(windowId, "Not available on Linux yet", `${feature} isn't available in this Linux build.`);
@@ -131,15 +208,19 @@ export function startAppCommands(windowId: string, capabilities: LinuxCapabiliti
 }
 
 export function startLinuxAppServices(options: {
+  host: ArdiaHost;
   windowId: string;
-  startup: boolean;
-  existingProfile: boolean;
+  savedSession: boolean;
   capabilities: LinuxCapabilities;
   locks?: LaunchLocks;
-  marks?: LaunchMarks;
 }) {
-  const { windowId, startup, existingProfile, capabilities, locks, marks } = options;
+  const { host, windowId, savedSession, capabilities, locks } = options;
   const commands = startAppCommands(windowId, capabilities);
-  const launch = claimAppLaunch({ startup, locks, marks, run: () => runLaunchServices(windowId, existingProfile, capabilities) });
+  const record = hostLaunchRecord(host);
+  const launch = claimAppLaunch({
+    locks,
+    record,
+    run: (done) => runLaunchServices({ windowId, savedSession, capabilities, done, complete: record!.complete, readStored: hostStoredDocument(host) }),
+  });
   return { commands, launch };
 }

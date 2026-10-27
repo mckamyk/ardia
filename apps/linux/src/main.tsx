@@ -13,7 +13,7 @@ import { usePages } from "../../browser/src/state/tabs/pageState";
 import { adoptParkedPins } from "../../browser/src/state/pins/parkedPins";
 import { decideLastTabClose, decideWindowClose } from "../../browser/src/state/windows/windowClose";
 import { firstWindowCommitted } from "../../browser/src/lib/afterFirstWindow";
-import { startAppCommands, startLinuxAppServices, UTILITY_APP_COMMANDS } from "./appServices";
+import { recordFreshProfile, startAppCommands, startLinuxAppServices, UTILITY_APP_COMMANDS } from "./appServices";
 import { linuxCapabilities } from "./hostCapabilities";
 import { ardiaHost, invokeHost } from "./host";
 import { startHostPersistence } from "./hostSession";
@@ -65,17 +65,17 @@ async function start() {
     const persistence = startHostPersistence(ardiaHost, useBrowser, saved ?? {});
     setSessionFlush(persistence.flush);
     setSessionDeparture(persistence);
+    if (!saved) await recordFreshProfile();
     await persistence.flush();
     startTabPages();
     startNativeSync();
     startHostDownloads(ardiaHost, useBrowser);
     startLinuxAppServices({
+      host: ardiaHost,
       windowId,
-      startup: ardiaHost.bootstrap.startup === true,
-      existingProfile: !!saved,
+      savedSession: !!saved,
       capabilities: linuxCapabilities(ardiaHost),
       locks: navigator.locks,
-      marks: sessionStorage,
     });
   }
   createRoot(document.getElementById("root")!, { onUncaughtError: (error) => console.error("[ardia linux] crashed", error) }).render(

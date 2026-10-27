@@ -22,6 +22,7 @@
 #include "ardia/linux/ac_linux_files.h"
 #include "ardia/linux/ac_linux_launch_config.h"
 #include "ardia/linux/ac_linux_page_commands.h"
+#include "ardia/linux/ac_linux_launch_steps.h"
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/linux/ac_linux_window_lifecycle.h"
@@ -1463,7 +1464,8 @@ base::DictValue ShellHostView::Bootstrap() const {
   base::ListValue capabilities = base::ListValue().Append("ArdiaWebView.call")
       .Append("ArdiaShell.windowIdentity").Append("ArdiaShell.beginDialog")
       .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain")
-      .Append("ArdiaSearch.suggest");
+      .Append("ArdiaSearch.suggest").Append("ArdiaShell.launchSteps")
+      .Append("ArdiaShell.completeLaunchStep");
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
   for (const auto& route : ardiacore::linux_contract::kRoutes)
     capabilities.Append(route.name);
@@ -3520,6 +3522,21 @@ void ShellHostView::Invoke(
           .Set("hasRoot", true).Set("translucent", false));
     }
     return std::move(done).Run(true, base::Value(std::move(windows)));
+  }
+  if (method == "ArdiaShell.launchSteps" || method == "ArdiaShell.completeLaunchStep") {
+    static base::NoDestructor<std::map<base::FilePath, ardia::linux_launch::LaunchSteps>> records;
+    if (!profile() || profile()->IsOffTheRecord())
+      return std::move(done).Run(false, base::Value("Launch steps need the regular profile"));
+    auto& steps = (*records)[profile()->GetPath()];
+    if (method == "ArdiaShell.launchSteps") {
+      base::ListValue list;
+      for (const auto& step : steps.List()) list.Append(step);
+      return std::move(done).Run(true, base::Value(std::move(list)));
+    }
+    if (values.size() != 1 || !values[0].is_string() ||
+        !ardia::linux_launch::ValidStep(values[0].GetString()))
+      return std::move(done).Run(false, base::Value("Unknown launch step"));
+    return std::move(done).Run(true, base::Value(steps.Complete(values[0].GetString())));
   }
   if (method == "ArdiaShell.windowIds") {
     base::ListValue ids;

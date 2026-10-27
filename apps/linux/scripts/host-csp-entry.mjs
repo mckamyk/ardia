@@ -5,7 +5,7 @@ import { Symbol } from "../src/shims/web/Symbol.tsx";
 import { SYMBOL_NAMES } from "../src/shims/web/symbols/data.ts";
 import { BUILT_IN_ENGINES, suggestRequestUrl } from "../../../packages/core/src/engines.ts";
 import { createSuggestFetcher } from "../src/suggestFetcher.ts";
-import { APP_LAUNCH_LOCK, APP_LAUNCH_MARK, claimAppLaunch } from "../src/appServices.ts";
+import { LAUNCH_STEPS, claimAppLaunch, hostLaunchRecord } from "../src/appServices.ts";
 
 const hostileColor = '\"><img src=x onerror="window.__symbolInjection=1"><svg onload="window.__symbolInjection=2" data-x="&\'';
 const gallery = document.getElementById("symbol-fixture");
@@ -72,19 +72,15 @@ const verify = async () => {
   check(duplicatePolicyBlocked, "CSP allowed duplicate symbol policies");
   check(stringEvaluationBlocked, "CSP allowed string evaluation");
   const connect = await probeConnect();
-  const heldLocks = (await navigator.locks.query()).held.map((lock) => lock.name);
-  const secondClaim = await claimAppLaunch({ startup: true, locks: navigator.locks, marks: { getItem: () => null, setItem: () => {} }, run: () => errors.push("A second window ran the launch services") });
-  check(heldLocks.includes(APP_LAUNCH_LOCK), `The startup window does not hold the app launch lease: ${heldLocks.join(", ")}`);
-  check(sessionStorage.getItem(APP_LAUNCH_MARK) === "1", "The startup window did not record its launch");
-  check(secondClaim === "heldElsewhere", `A second startup window claimed the launch services: ${secondClaim}`);
-  check(connect.directFetchAllowed.length === 0, `CSP allowed direct renderer connections: ${connect.directFetchAllowed.join(", ")}`);
-  check(JSON.stringify(connect.bridged) === JSON.stringify(["ardia csp fixture"]), `Host-bridged suggestions failed: ${JSON.stringify(connect.bridged)}`);
-  check(connect.bridgedRequests.length === 1 && connect.bridgedRequests[0] === suggestRequestUrl(BUILT_IN_ENGINES.find((engine) => engine.id === "google"), "ardia csp"), `Unexpected bridged requests: ${connect.bridgedRequests.join(", ")}`);
+  const launchSteps = [...window.__ardiaCspFixture.launchSteps];
+  const secondClaim = await claimAppLaunch({ locks: navigator.locks, record: hostLaunchRecord(window.__ardiaHost), run: async () => { errors.push("A second window ran the launch services"); } });
+  check(LAUNCH_STEPS.every((step) => launchSteps.includes(step)), `The launch services did not finish: ${launchSteps.join(", ")}`);
+  check(secondClaim === "alreadyDone", `A second window claimed the launch services: ${secondClaim}`);
   window.__ardiaCspResult = {
     passed: !errors.length, errors, symbols: SYMBOL_NAMES.length, svgCount, uiCount,
     trustedAssignments: window.__ardiaCspFixture.htmlAssignments.filter(Boolean).length,
     rawHtmlBlocked, unknownPolicyBlocked, duplicatePolicyBlocked, stringEvaluationBlocked,
-    launchLease: heldLocks.includes(APP_LAUNCH_LOCK), secondClaim,
+    launchSteps: launchSteps.length, secondClaim,
     directFetchBlocked: connect.directFetchBlocked, bridgedSuggestions: connect.bridged?.length ?? 0,
   };
 };

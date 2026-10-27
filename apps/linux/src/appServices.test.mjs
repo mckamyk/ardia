@@ -1,33 +1,59 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { appInfo, docs } from "../../browser/src/test-native/index.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { useOnboarding, onboardingCompletedAt } from "../../browser/src/state/onboarding/onboarding.ts";
 import { useToasts } from "../../browser/src/state/splits/actions.ts";
-import { APP_LAUNCH_LOCK, APP_LAUNCH_MARK, UTILITY_APP_COMMANDS, claimAppLaunch, runAppCommand, runLaunchServices, startAppCommands } from "./appServices.ts";
+import { APP_LAUNCH_LOCK, FRESH_PROFILE_DOCUMENT, LAUNCH_STEPS, UTILITY_APP_COMMANDS, claimAppLaunch, hostLaunchRecord, onboardingAction, recordFreshProfile, runAppCommand, runLaunchServices, startAppCommands } from "./appServices.ts";
 
 const capabilities = { defaultBrowser: false, launchAtLogin: false, thinScrollBars: false, webkit: false, cliControl: false, externalLinks: false, performanceRecording: false, taskManager: false };
 
 function lockManager() {
-  const held = new Set();
-  const requests = [];
+  const queue = [];
+  let holder = null;
+  const grant = () => {
+    if (holder || !queue.length) return;
+    holder = queue.shift();
+    Promise.resolve().then(() => holder.callback()).then(holder.resolve, holder.reject).finally(() => {
+      if (holder?.alive) { holder = null; grant(); }
+    });
+  };
   return {
-    held,
-    requests,
-    release: (name) => held.delete(name),
-    request(name, options, callback) {
-      requests.push({ name, options });
-      if (held.has(name)) return Promise.resolve(callback(null));
-      held.add(name);
-      return Promise.resolve(callback({ name }));
+    requests: () => queue.length + (holder ? 1 : 0),
+    holderWindow: () => holder?.window ?? null,
+    killHolder() {
+      if (!holder) return;
+      holder.alive = false;
+      holder = null;
+      grant();
+    },
+    forWindow(window) {
+      return {
+        request(name, callback) {
+          assert.equal(name, APP_LAUNCH_LOCK);
+          return new Promise((resolve, reject) => {
+            queue.push({ window, callback, resolve, reject, alive: true });
+            grant();
+          });
+        },
+      };
     },
   };
 }
 
-function marks() {
-  const values = new Map();
-  return { values, getItem: (key) => values.get(key) ?? null, setItem: (key, value) => void values.set(key, value) };
+function launchRecord(initial = []) {
+  const done = new Set(initial);
+  const completions = [];
+  return {
+    done: async () => new Set(done),
+    complete: async (step) => { completions.push(step); done.add(step); },
+    steps: done,
+    completions,
+  };
 }
+
+const stored = (files) => async (name) => files[name] ?? null;
 
 function twoWindows() {
   useBrowser.setState(useBrowser.getInitialState(), true);
@@ -38,70 +64,166 @@ function twoWindows() {
   return { first, second };
 }
 
+const launch = (windowId, overrides = {}) => {
+  const record = overrides.record ?? launchRecord();
+  return runLaunchServices({
+    windowId,
+    savedSession: false,
+    capabilities,
+    done: overrides.done ?? new Set(),
+    complete: record.complete,
+    readStored: stored(Object.fromEntries(docs)),
+    ...overrides,
+  }).then(() => record);
+};
+
 const toast = (windowId) => useToasts.getState().toasts[windowId];
 
-test("app launch services run once across native windows and never in later or reloaded windows", async () => {
-  const locks = lockManager();
-  let runs = 0;
-  const run = () => runs++;
-  const owner = marks();
-  assert.equal(await claimAppLaunch({ startup: true, locks, marks: owner, run }), "ran");
-  assert.equal(await claimAppLaunch({ startup: true, locks, marks: marks(), run }), "heldElsewhere");
-  assert.equal(await claimAppLaunch({ startup: false, locks, marks: marks(), run }), "notStartup");
-  assert.equal(runs, 1);
-  assert.deepEqual(locks.requests.map((r) => [r.name, r.options]), [[APP_LAUNCH_LOCK, { ifAvailable: true }], [APP_LAUNCH_LOCK, { ifAvailable: true }]]);
-  assert.equal(owner.values.get(APP_LAUNCH_MARK), "1");
-  locks.release(APP_LAUNCH_LOCK);
-  assert.equal(await claimAppLaunch({ startup: true, locks, marks: owner, run }), "alreadyRan");
-  assert.equal(runs, 1);
+test("onboarding decisions use evidence that predates this launch and never guess", () => {
+  const action = (onboarding, freshProfile, savedSession) => onboardingAction({ onboarding, freshProfile, savedSession });
+  assert.equal(action("present", "absent", true), "shared");
+  assert.equal(action("absent", "absent", false), "shared");
+  assert.equal(action("absent", "present", true), "shared");
+  assert.equal(action("absent", "absent", true), "complete");
+  assert.equal(action("unknown", "present", true), "skip");
+  assert.equal(action("absent", "unknown", true), "skip");
 });
 
-test("without an election primitive no window claims the app-wide services", async () => {
-  let runs = 0;
-  assert.equal(await claimAppLaunch({ startup: true, marks: marks(), run: () => runs++ }), "unavailable");
-  const failing = { request: () => Promise.reject(new Error("locks unavailable")) };
-  assert.equal(await claimAppLaunch({ startup: true, locks: failing, marks: marks(), run: () => runs++ }), "unavailable");
-  assert.equal(runs, 0);
-});
-
-test("a launch task that throws still reports the claim and keeps the lease", async () => {
-  const locks = lockManager();
-  assert.equal(await claimAppLaunch({ startup: true, locks, marks: marks(), run: () => { throw new Error("boom"); } }), "ran");
-  assert.ok(locks.held.has(APP_LAUNCH_LOCK));
-});
-
-test("a fresh profile starts onboarding once, in the owning window", () => {
+test("a fresh profile whose first launch never recorded onboarding is still onboarded on the next launch", async () => {
   const { second } = twoWindows();
-  appInfo.appVersion = "2.0";
-  runLaunchServices(second, false, capabilities);
+  docs.set(FRESH_PROFILE_DOCUMENT, JSON.stringify({ version: 1, createdAt: 1 }));
+  await launch(second, { savedSession: true });
   assert.equal(useOnboarding.getState().windowId, second);
-  const saved = JSON.parse(docs.get("onboarding.json"));
-  assert.equal(saved.completedAt, null);
-  assert.equal(typeof saved.startedAt, "number");
-  assert.equal(saved.step, "intro");
-  assert.equal(JSON.parse(docs.get("release-notes.json")).lastVersion, "2.0");
+  assert.equal(onboardingCompletedAt(), null);
 });
 
-test("an existing Linux profile without onboarding history is marked complete instead of onboarded", () => {
+test("the fresh-profile marker is saved before the first session flush and only for a profile with no saved session", async () => {
+  const writes = [];
+  await recordFreshProfile(async (name, contents) => { writes.push([name, JSON.parse(contents)]); });
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0][0], FRESH_PROFILE_DOCUMENT);
+  assert.equal(writes[0][1].version, 1);
+  await recordFreshProfile(async () => { throw new Error("disk full"); });
+  const main = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+  const marker = main.indexOf("if (!saved) await recordFreshProfile();");
+  assert.ok(marker > 0 && marker < main.indexOf("await persistence.flush();"));
+});
+
+test("an onboarding record dropped from the bootstrap snapshot is never overwritten or restarted", async () => {
   const { first } = twoWindows();
-  runLaunchServices(first, true, capabilities);
+  const record = JSON.stringify({ completedAt: null, startedAt: 5, defaultBrowserTrialStartedAt: 9, version: 1 });
+  await launch(first, { savedSession: true, readStored: stored({ "onboarding.json": record }) });
+  assert.equal(docs.has("onboarding.json"), false);
+  assert.equal(useOnboarding.getState().windowId, null);
+  await launch(first, { savedSession: true, readStored: async () => { throw new Error("read failed"); } });
+  assert.equal(docs.has("onboarding.json"), false);
+});
+
+test("a pre-existing Linux profile with no onboarding history is marked complete only when the record is truly absent", async () => {
+  const { first } = twoWindows();
+  await launch(first, { savedSession: true });
   assert.equal(useOnboarding.getState().windowId, null);
   assert.equal(typeof onboardingCompletedAt(), "number");
 });
 
-test("completed onboarding stays finished and an interrupted one resumes in the owning window", () => {
+test("a fresh profile starts onboarding once, in the owning window, and records each launch step", async () => {
+  const { second } = twoWindows();
+  appInfo.appVersion = "2.0";
+  const record = await launch(second);
+  assert.equal(useOnboarding.getState().windowId, second);
+  const saved = JSON.parse(docs.get("onboarding.json"));
+  assert.equal(saved.completedAt, null);
+  assert.equal(typeof saved.startedAt, "number");
+  assert.equal(JSON.parse(docs.get("release-notes.json")).lastVersion, "2.0");
+  assert.deepEqual(record.completions, ["version", "onboarding", "releaseNotes", "defaultBrowserOffer"]);
+});
+
+test("completed onboarding stays finished and an interrupted one resumes in the owning window", async () => {
   const { first, second } = twoWindows();
-  runLaunchServices(first, false, capabilities);
+  await launch(first);
   const started = docs.get("onboarding.json");
   useOnboarding.setState({ windowId: null });
-  runLaunchServices(second, true, capabilities);
+  await launch(second, { savedSession: true });
   assert.equal(useOnboarding.getState().windowId, second);
-  assert.equal(onboardingCompletedAt(), null);
   assert.equal(JSON.parse(docs.get("onboarding.json")).startedAt, JSON.parse(started).startedAt);
   docs.set("onboarding.json", JSON.stringify({ completedAt: 1, startedAt: 1, version: 1 }));
   useOnboarding.setState({ windowId: null });
-  runLaunchServices(first, false, capabilities);
+  await launch(first);
   assert.equal(useOnboarding.getState().windowId, null);
+});
+
+test("launch services run once per process even with several windows and reloads", async () => {
+  const locks = lockManager();
+  const record = launchRecord();
+  let runs = 0;
+  const run = async (done) => { runs++; for (const step of LAUNCH_STEPS) if (!done.has(step)) await record.complete(step); };
+  const claims = await Promise.all(["a", "b", "c"].map((window) => claimAppLaunch({ locks: locks.forWindow(window), record, run })));
+  assert.deepEqual(claims.sort(), ["alreadyDone", "alreadyDone", "ran"]);
+  assert.equal(runs, 1);
+  assert.equal(await claimAppLaunch({ locks: locks.forWindow("a-reloaded"), record, run }), "alreadyDone");
+  assert.equal(runs, 1);
+});
+
+test("if the owning window closes mid-launch another window finishes only the remaining steps", async () => {
+  const locks = lockManager();
+  const record = launchRecord();
+  const ran = [];
+  let reached;
+  const reachedVersion = new Promise((resolve) => { reached = resolve; });
+  const owner = claimAppLaunch({
+    locks: locks.forWindow("startup"),
+    record,
+    run: async () => { ran.push(["startup", "version"]); await record.complete("version"); reached(); await new Promise(() => {}); },
+  });
+  const survivor = claimAppLaunch({
+    locks: locks.forWindow("restored"),
+    record,
+    run: async (done) => { for (const step of LAUNCH_STEPS) if (!done.has(step)) { ran.push(["restored", step]); await record.complete(step); } },
+  });
+  await reachedVersion;
+  assert.equal(locks.holderWindow(), "startup");
+  locks.killHolder();
+  assert.equal(await survivor, "ran");
+  assert.deepEqual(ran, [["startup", "version"], ["restored", "onboarding"], ["restored", "releaseNotes"], ["restored", "defaultBrowserOffer"]]);
+  void owner;
+});
+
+test("a takeover window restores the pending release-notes postcard and opens notes still due", async () => {
+  const { first } = twoWindows();
+  appInfo.appVersion = "3.0";
+  docs.set("release-notes.json", JSON.stringify({ lastVersion: "3.0", pending: null, version: 1 }));
+  docs.set("onboarding.json", JSON.stringify({ completedAt: 1, version: 1 }));
+  const record = await launch(first, { done: new Set(["version", "versionUpdated"]), savedSession: true });
+  assert.deepEqual(record.completions, ["onboarding", "releaseNotes", "defaultBrowserOffer"]);
+});
+
+test("without an election primitive or launch record no window claims the app-wide services", async () => {
+  let runs = 0;
+  assert.equal(await claimAppLaunch({ record: launchRecord(), run: async () => { runs++; } }), "unavailable");
+  assert.equal(await claimAppLaunch({ locks: lockManager().forWindow("a"), run: async () => { runs++; } }), "unavailable");
+  const failing = { request: () => Promise.reject(new Error("locks unavailable")) };
+  assert.equal(await claimAppLaunch({ locks: failing, record: launchRecord(), run: async () => { runs++; } }), "unavailable");
+  assert.equal(runs, 0);
+});
+
+test("a launch step that throws releases the lease for a retry instead of reporting success", async () => {
+  const locks = lockManager();
+  assert.equal(await claimAppLaunch({ locks: locks.forWindow("a"), record: launchRecord(), run: async () => { throw new Error("boom"); } }), "failed");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(locks.requests(), 0);
+});
+
+test("the host launch record reads and completes steps through the native host", async () => {
+  const calls = [];
+  const host = {
+    bootstrap: { windowId: "w", profileId: "default", capabilities: ["ArdiaShell.launchSteps", "ArdiaShell.completeLaunchStep"] },
+    invoke: async (method, args) => { calls.push([method, args]); return method === "ArdiaShell.launchSteps" ? ["version"] : true; },
+  };
+  const record = hostLaunchRecord(host);
+  assert.deepEqual([...(await record.done())], ["version"]);
+  await record.complete("onboarding");
+  assert.deepEqual(calls, [["ArdiaShell.launchSteps", { args: [] }], ["ArdiaShell.completeLaunchStep", { args: ["onboarding"] }]]);
+  assert.equal(hostLaunchRecord({ bootstrap: { capabilities: [] } }), undefined);
 });
 
 test("app commands run only in the window that issued them", () => {
