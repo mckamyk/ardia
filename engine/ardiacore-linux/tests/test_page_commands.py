@@ -26,6 +26,12 @@ bool FixtureDevToolsDispatch(content::WebContents* contents, ardiacore::LinuxDev
     std::shared_ptr<ardiacore::LinuxDevToolsLease> lease, base::OnceClosure ready) {
   if (!lease->Matches(contents)) return false;
   auto* tools = DevToolsWindow::GetInstanceForInspectedWebContents(contents);
+  if (action == ardiacore::LinuxDevToolsAction::kAdopt) {
+    if (!tools || !tools->quarantined) return false;
+    tools->quarantined = false;
+    tools->adoptions++;
+    return true;
+  }
   if (action == ardiacore::LinuxDevToolsAction::kToggle && tools && tools->IsDocked()) {
     tools->frontend.DispatchBeforeUnload(false);
     return true;
@@ -513,6 +519,33 @@ int main(int argc, char** argv) {
     assert(f.right.saves == 0 && f.right.prints == 0 && f.right.basics == 0);
     return 0;
   }
+  if (mode == "adopt") {
+    Joined f;
+    f.host.AdoptDevTools(f.host.Binding(8));
+    assert(!f.host.Binding(8)->page_commands);
+    DevToolsWindow::OpenDevToolsWindow(&f.right, DevToolsToggleAction::Show(), DevToolsOpenedByAction::kMainMenuOrMainShortcut);
+    auto* tools = DevToolsWindow::GetInstanceForInspectedWebContents(&f.right);
+    tools->quarantined = true;
+    f.host.Bind(8, &f.right, "right-2");
+    f.host.AdoptDevTools(f.host.Binding(8));
+    assert(f.host.Binding(8)->page_commands && tools->adoptions == 1 && !tools->quarantined);
+    assert(!DevToolsWindow::GetInstanceForInspectedWebContents(&f.left));
+    f.host.AdoptDevTools(f.host.Binding(7));
+    assert(!f.host.Binding(7)->page_commands);
+    tools->quarantined = true;
+    f.host.Bind(8, &f.right, "right-3");
+    f.host.Binding(8)->claim.clear();
+    f.host.AdoptDevTools(f.host.Binding(8));
+    assert(!f.host.Binding(8)->page_commands && tools->adoptions == 1);
+    Joined background;
+    ardiacore::background = true;
+    DevToolsWindow::OpenDevToolsWindow(&background.right, DevToolsToggleAction::Show(), DevToolsOpenedByAction::kMainMenuOrMainShortcut);
+    auto* hidden = DevToolsWindow::GetInstanceForInspectedWebContents(&background.right);
+    hidden->quarantined = true;
+    background.host.AdoptDevTools(background.host.Binding(8));
+    assert(hidden->quarantined && hidden->adoptions == 0);
+    return 0;
+  }
   if (mode == "reset") {
     Joined f;
     f.Ok(8, "right", "showDevTools");
@@ -575,7 +608,9 @@ def joined_source():
     methods = '\n'.join(method(host, signature) for signature in [
         'TabBinding* ShellHostView::PageCommandBinding(',
         'void ShellHostView::EmitPageCommandEvent(',
+        'ardiacore::LinuxPageCommands* ShellHostView::EnsurePageCommands(',
         'void ShellHostView::PageCommand(',
+        'void ShellHostView::AdoptDevTools(',
     ]) + '\n' + prologue + '  std::move(done).Run(true, base::Value("legacy"));\n}\n'
     fixture = HOST_FIXTURE.read_text().replace('#pragma once\n', '').replace('#include "page_commands_fixture.h"\n', '')
     fixture = fixture.replace('ARDIA_RESET_PAGE_COMMANDS', method(host, 'void TabBinding::ResetPageCommands('))
@@ -702,6 +737,9 @@ class JoinedDispatchTests(unittest.TestCase):
     def test_unknown_page_commands_reject_with_stable_codes(self):
         self.run_case('unsupported')
 
+    def test_reclaim_readopts_only_quarantined_devtools_of_a_current_claim(self):
+        self.run_case('adopt')
+
     def test_reset_is_terminal_reentrant_and_deferred(self):
         self.run_case('reset')
 
@@ -733,9 +771,12 @@ class JoinedHostSourceTests(unittest.TestCase):
         host = self.host
         command = method(host, 'void ShellHostView::TabCommand(')
         self.assertBefore(command, 'return PageCommand(binding, command, values, std::move(done));', 'content::WebContents* contents = binding->contents();')
-        page = method(host, 'void ShellHostView::PageCommand(')
+        page = method(host, 'ardiacore::LinuxPageCommands* ShellHostView::EnsurePageCommands(')
         self.assertIn('!ardiacore::BackgroundInstance()', page)
         self.assertNotIn('getenv', page)
+        self.assertIn('EnsurePageCommands(binding)', method(host, 'void ShellHostView::PageCommand('))
+        self.assertBefore(method(host, 'void ShellHostView::CreateTab('), 'binding->claim = claim;', 'AdoptDevTools(binding);')
+        self.assertBefore(method(host, 'void ShellHostView::OnTabStripModelChanged('), 'binding->ResetPageCommands();', 'LayoutPane(binding.get());')
         start = method(host, 'void StartLinuxHost()')
         self.assertIn('DevToolsWindow::RegisterLinuxDevToolsLifecycle();', start)
         self.assertIn('g_ardia_devtools_dock_changed = ', start)

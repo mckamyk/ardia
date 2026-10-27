@@ -1,6 +1,6 @@
 # Lane B handoff: page-commands host join (#11 F01)
 
-Branch `t3/linux-page-commands-join`, based on `linux` at `4b3d21e0`. It carries the five unpublished F01 helper commits from `t3/linux-page-commands` (cherry-picked unchanged, in order) and joins them to the Linux host. The helper contract is in [f01-page-commands-handoff.md](f01-page-commands-handoff.md); this file covers only what the join adds. The page-command parts of that document's "parent integration changes" are now done.
+Branch `t3/linux-page-commands-join`, rebased onto `linux` at `52d72e78` (after #67). It carries the five unpublished F01 helper commits from `t3/linux-page-commands` (cherry-picked unchanged, in order) and joins them to the Linux host. The helper contract is in [f01-page-commands-handoff.md](f01-page-commands-handoff.md); this file covers only what the join adds. The page-command parts of that document's "parent integration changes" are now done.
 
 ## What the join does
 
@@ -41,7 +41,14 @@ The helper's own profile and DevTools-browser checks run on top of this. The che
 - `TabBinding::WebContentsDestroyed`.
 - `OnTabStripModelChanged` when a helper's contents is no longer in the strip.
 
-A failed reclaim returns before any reset, so the existing committed authority survives.
+A failed reclaim returns before any reset, so the existing committed authority survives. When a helper is reset because its contents left the tab strip, the pane is re-laid out at once, so a quarantined docked frontend doesn't leave a blank split behind.
+
+After `CreateTab` grants a claim (reclaim after release, renderer replacement, or a transfer into another window), `AdoptDevTools(binding)` runs. If the contents has a DevTools frontend that a revoked Ardia lease quarantined, the new helper re-adopts it under a fresh lease and native action `kAdopt`. The adoption never steals focus:
+
+- A docked frontend is re-announced with `UpdateBrowserWindow()`, so the dock hook lays it out in its pane.
+- An undocked window is shown with `ShowInactive()`.
+
+Chrome-owned frontends, and frontends whose lease is still current, are never adopted. Background instances never adopt. This is the answer to the moved-tab question: DevTools follows its tab, as in Chrome and Dia. A page paused at a breakpoint therefore becomes visible again as soon as the same contents is reclaimed. A released tab that is never reclaimed keeps its frontend hidden until Chrome closes it with the inspected contents.
 
 ### DevTools presentation
 
@@ -55,10 +62,20 @@ The hook and the `Presentation` callback both post `PresentDevTools`, which re-r
 - Hosts the frontend in a second per-binding `ViewportView` with its own clipped shapes, so shared overlays still cut through it.
 - Detaches the frontend from Chrome's own `ContentsContainerView::devtools_web_view()` if Chrome attached it there.
 - Orders the two views by `hide_inspected_contents()`.
-- Focuses the frontend when it is newly attached.
+- Re-shows the frontend's native window if it is hidden. A revoked lease hides it while it may still be attached, and re-attaching the same contents at the same bounds would not show it again.
+- Moves focus into the frontend only on the first attach of a *new* frontend. Each binding keeps a `DevToolsFrontendWatch` (a `WebContentsObserver` on the frontend). A move or a renderer replacement keeps the same frontend, and does not count as new.
+- When a pane is hidden (tab switch), it remembers whether the frontend had focus. Re-showing the same frontend restores that focus, and otherwise leaves focus where the tab's restoration put it.
+- When the watched frontend is destroyed, the watch posts a re-layout through `Hosts()`. This finds the binding even after a move, and also covers a quarantined frontend whose destruction never fires the dock hook. `TabBinding::WebContentsDestroyed` hides the DevTools view and re-lays out the pane too.
 - On close (no docked frontend), hides the DevTools view, restores the full page rectangle, and moves focus back to the page if the frontend had it.
 
-An undocked frontend keeps Chrome's own window and lifecycle.
+An undocked frontend keeps Chrome's own window and lifecycle, apart from the quarantine and re-adoption described above.
+
+### Patch behaviour changed in review round 1
+
+- Toggle closes a docked frontend only when it is not quarantined (`LinuxDevToolsState::Quarantined()`: Ardia-owned with a revoked lease). Toggle on a quarantined frontend behaves as Show: it re-adopts the same frontend and un-hides its native view, so console state survives. A Chrome-owned docked frontend still closes on toggle.
+- `BindLinuxDevToolsLease` un-hides the native view when a current lease takes over a quarantined frontend.
+- The Linux ready callback lives in its own slot, `linux_load_completed_callback_`. Revocation clears only that slot. Chrome's single `load_completed_callback_` (also used by app-window DevTools) is never overwritten or dropped, and it still runs once even when the load completes under a revoked lease.
+- A stale frontend-close reply that overlaps an intercepted inspected-page close now passes the frontend's *actual* answer to Chromium's page branch. `RenderFrameHostImpl::DispatchBeforeUnload` coalesces a second dispatch while one is pending, so a single reply answers both the stale close and the page interception. Approval continues the page close, and a veto cancels it. The previous code forced a veto, which cancelled tab closes nobody had vetoed. The stale close itself still never closes the frontend, and a newer close retry is still posted.
 
 ### Build and patch series
 
@@ -77,16 +94,32 @@ No adapter change was needed. `HostWebView` already forwards the five methods th
 
 The pinned excerpts were copied read-only from `~/ardia-linux-build-156/chromium_git/chromium/src` into `/tmp/ardia-f01-156`; their hashes match the pins. Heavy runs used `nice -n 10`. `node_modules` were installed with the repo's pinned pnpm 11.1.3 from the local store under `flock /tmp/ac-pod.lockf`. `scripts/agent/locked` needs macOS `lockf`, which is missing on Linux. The lockfile is unchanged.
 
-- `test_page_commands.py`: 21 pass. That is the original 12, plus 5 compiled joined-dispatch cases that splice the real `ac_linux_host.cc` methods into the fixture under ASan/UBSan (two panes, stale claim/generation/document/handler/strip/utility, background refusal, unknown/unsupported `runPageCommand`, terminal and reentrant reset), plus 4 source and manifest checks (reset ordering, dispatch registration, GN targets, series selection). Two hand mutations were each killed: dropping the captured-claim check, and ignoring background mode.
-- `test_devtools_authority.py` with `ARDIA_F01_PINNED_SOURCE=/tmp/ardia-f01-156`: 31 pass, now including the BUILD.gn hunk.
-- Full native suite (`python3 -m unittest discover -s engine/ardiacore-linux/tests`): 171 run, 166 pass. The 5 failures are the pre-existing close-fixture ones listed below; the `linux` baseline has the same 5 plus the extension-contract test, which only passes with `node_modules` installed.
+- `test_page_commands.py`: 22 pass. That is the original 12; 6 compiled joined-dispatch cases that splice the real `ac_linux_host.cc` methods into the fixture under ASan/UBSan (two panes, stale claim/generation/document/handler/strip/utility, background refusal, unknown/unsupported `runPageCommand`, re-adoption only of quarantined frontends of a current claim, terminal and reentrant reset); and 4 source and manifest checks (reset ordering, dispatch/adoption/strip relayout registration, GN targets, series selection). Two hand mutations were each killed: dropping the captured-claim check, and ignoring background mode.
+- `test_pane_layout.py` (new): 6 pass. It compiles and runs the real `ShellHostView::LayoutPane`, `TabBinding::WebContentsDestroyed` and `DevToolsFrontendWatch` against mock views, aura and DevTools. Cases: split and z-order, focus policy, destroyed frontend, destroyed frontend after a move, destroyed inspected contents, hidden native frontend. Five hand mutations, each reverting one round-1 fix, were all killed.
+- `test_devtools_authority.py` with `ARDIA_F01_PINNED_SOURCE=/tmp/ardia-f01-156`: 35 pass, including the BUILD.gn hunk and zero-fuzz/zero-offset application of every changed hunk.
+- Full native suite (`python3 -m unittest discover -s engine/ardiacore-linux/tests`): 269 pass. Since #67, the close-fixture suites pass too.
 - `engine/patches/build/tests`: 19 pass. Before the series entry, the existing manifest check failed with `patches missing from series`.
 - `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs`: 7 pass.
 - `pnpm --filter @ardia/linux test:host`: 206 pass, including the 4 page-command cases.
 - `pnpm --filter @ardia/linux typecheck`: passes.
 - `pnpm --filter @ardia/linux build`: passes, 1199 modules.
 
-The failures that remain also fail on `linux` itself (checked by running the suite on a `git archive` of `linux`). `test_chromium_close.ChromiumCloseTests`, `test_document_close_{admission,cap,stage}` and `test_chromium_close...test_minimal_target_and_linux_gated_dependencies` all fail because `chromium-linux-document-close.patch` (rebased in #60) no longer applies to the frozen `chromium156-close.tar.xz` fixture at `unload_controller.{h,cc}`. That belongs to the owner of the close patch or fixture, not this lane.
+pnpm ran as `npm exec --yes --package=pnpm@11.1.3 -- pnpm`, and the lockfile is unchanged.
+
+## Review round 1 (independent Opus review)
+
+Each finding was reproduced by a failing test before the fix:
+
+1. Focus stolen on every re-show. Failing before: `test_pane_layout ...test_reshow_restores_the_tabs_previous_focus_and_only_new_frontends_take_focus`.
+2. Toggle closed a quarantined frontend. Failing before: `test_devtools_authority ...test_toggle_readopts_a_quarantined_frontend_instead_of_closing_it`.
+3. A hidden undocked window was never re-shown. Failing before: `...test_reclaim_readopts_quarantined_frontends_without_focus` (against a stub `AdoptDevTools()`).
+4. Empty DevTools split left after a frontend or inspected contents died. Failing before: `test_pane_layout ...test_destroyed_frontend_hides_its_panel_and_restores_the_page` and `...test_destroyed_inspected_contents_hides_the_panel`.
+5. Hidden native frontend left blank. Failing before: `test_pane_layout ...test_presenting_reshows_a_hidden_native_frontend`.
+6. A stale close reply vetoed an inspected-tab close. Failing before: `test_devtools_authority ...test_stale_close_reply_cannot_veto_an_inspected_page_close`. The earlier `page-overlap-*-allow` and `page-cancel-new-owner` cases asserted the wrong veto; they now assert that approval continues the page close and a veto cancels it.
+7. Chrome's load-completed callback was overwritten or dropped. Failing before: `test_devtools_authority ...test_chrome_load_completed_callback_is_preserved`.
+
+None of the findings were disputed.
+
 
 ## Still needs native runtime acceptance
 
@@ -97,6 +130,11 @@ None of this has been compiled against real Chromium 156 headers or run. Another
 - Save Page writes the page, and PDF save works.
 - Show, Toggle, Inspect and Console are visible and usable when docked (bottom, right and left), when undocked, and with `hide_inspected_contents`. This includes splitter drags updating the layout, overlays and occlusions cutting through the frontend, focus moving in and coming back after close, a beforeunload veto keeping the frontend, and native modal keyboard ownership.
 - A background instance refuses all native UI.
+- Round-1 behaviours:
+  - Switching tabs keeps focus where the tab left it.
+  - Moving a tab with docked or undocked DevTools to another window, or reloading the shell, brings the same frontend back without focus. This includes a page paused at a breakpoint.
+  - Toggle after a move re-shows the frontend with its console state.
+  - Closing a tab while a DevTools close is pending completes, unless the frontend itself vetoes.
 - `gn gen` and `gn check` pass with the new `//ardia/linux:devtools_authority` edge from `//chrome/browser/devtools`.
 
 Also open:

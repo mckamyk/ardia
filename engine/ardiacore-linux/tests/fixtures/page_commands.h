@@ -385,6 +385,8 @@ class DevToolsWindow {
   content::WebContents frontend;
   DevToolsToggleAction::Type action = DevToolsToggleAction::kShow;
   int opens = 0;
+  int adoptions = 0;
+  bool quarantined = false;
   std::function<void()> loaded;
   static inline std::map<content::WebContents*, std::unique_ptr<DevToolsWindow>> windows;
 };

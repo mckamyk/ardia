@@ -97,8 +97,10 @@ class ShellHostView {
 ARDIA_AUTHORITY
   static TabBinding* PageCommandBinding(const PageCommandAuthority& authority);
   static void EmitPageCommandEvent(const PageCommandAuthority& authority, base::DictValue event);
+  ardiacore::LinuxPageCommands* EnsurePageCommands(TabBinding* binding);
   void PageCommand(TabBinding* binding, const std::string& command, const base::ListValue& values,
                    base::OnceCallback<void(bool, base::Value)> done);
+  void AdoptDevTools(TabBinding* binding);
   void TabCommand(const base::DictValue& args, base::OnceCallback<void(bool, base::Value)> done);
   void PresentDevTools(content::WebContents* inspected) { presentations.push_back(inspected); }
   bool is_utility() const { return utility; }

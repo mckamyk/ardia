@@ -26,6 +26,7 @@ class NativeCallbackTests(unittest.TestCase):
         prelude = r'''
         #include <cassert>
         #include <map>
+        #include <memory>
         #include <string>
         #include <string_view>
         #include <utility>
@@ -78,6 +79,8 @@ class NativeCallbackTests(unittest.TestCase):
         struct ShellHostView {
           std::vector<std::pair<int, base::DictValue>> events;
           int removed_views = 0;
+          int layouts = 0;
+          void LayoutPane(TabBinding*) { ++layouts; }
           void OfferTab(content::WebContents*) {}
           void ReportTab(int id, base::DictValue event) { events.emplace_back(id, std::move(event)); }
           void RemoveChildViewT(views::WebView*) { ++removed_views; }
@@ -92,6 +95,8 @@ class NativeCallbackTests(unittest.TestCase):
           int cancelled_auto_pip_until = 0;
           int requested_auto_pip_until = 0;
           bool pane_visible = false;
+          bool devtools_had_focus = false;
+          std::unique_ptr<int> devtools_watch;
           int resets = 0;
           void RememberPendingAutoPictureInPicture() {}
           void ResetPageCommands() { ++resets; }
@@ -196,8 +201,10 @@ class NativeCallbackTests(unittest.TestCase):
           content::WebContents direct{30, &profile};
           views::WebView direct_view;
           TabBinding direct_binding(&first, &direct, &direct_view);
+          direct_binding.devtools_watch = std::make_unique<int>(1);
           direct.Destroy();
           assert(direct_view.detachments == 1);
+          assert(!direct_binding.devtools_watch && first.layouts == 1);
           assert(first.events.size() == 1);
           assert(first.events.front().second.strings.at("type") == "windowClose");
         }
