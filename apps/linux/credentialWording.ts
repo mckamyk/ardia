@@ -69,6 +69,8 @@ export function credentialWording(): Plugin {
     },
     buildEnd(error) {
       if (!building || error) return;
+      const settingsPanes = [...this.getModuleIds()].some((id) => id.includes(`${marker}components/settings/panes/`));
+      if (!settingsPanes) return;
       const missing = CREDENTIAL_WORDING.map((entry) => entry.file).filter((file) => !applied.has(file));
       if (missing.length) this.error(`credentialWording.ts never reworded ${missing.join(", ")}; update apps/linux/credentialWording.ts`);
     },
