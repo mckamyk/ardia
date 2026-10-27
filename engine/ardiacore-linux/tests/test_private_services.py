@@ -46,7 +46,8 @@ class PrivateServiceHelperTests(unittest.TestCase):
         self.assertIn('page && host_->HostsProfile(profile)', zoom)
         self.assertIn('page && page->ShutdownStarted()', zoom)
         self.assertIn('prepared->args.Set(ardiacore::linux_private_services::kOffTheRecordKey, true);', zoom)
-        self.assertIn('(private_session ? page->GetOriginalProfile() : page)->GetPath().value()', zoom)
+        self.assertIn('const std::string path = page->GetOriginalProfile()->GetPath().value();', zoom)
+        self.assertLess(zoom.index('page->GetOriginalProfile()'), zoom.index('ResolveLinuxProfile(profile,'))
         generic = request[request.index('const auto* route = ardiacore::linux_contract::FindRoute(name);'):]
         generic = generic[:generic.index('ardiacore::ResolveLinuxProfile(profile,')]
         self.assertIn('ProfileError::kPrivateService', generic)
