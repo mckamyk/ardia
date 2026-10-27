@@ -21,5 +21,12 @@
     "content/public/browser/navigation_handle.h": "37401a3fc93d88fe978079e8501cde1ba9d157752a726c0483b3f922057e6785",
     "content/public/browser/render_frame_host.h": "ab2bedd9488d2c88d82d44b5ed09a3e34ab4a3d82c3c51573be800e19feeb780",
     "content/public/browser/weak_document_ptr.h": "38c51bde0eaaace8d19f95336e1e610db16c3d2d7d7f753b92293ba3e93dbb61"
+  },
+  "helium": {
+    "version": "0.20.1",
+    "commit": "f29a25968e483f8bb85e47829ccd487bbe229199",
+    "patch": "patches/ungoogled-chromium/add-flag-for-close-confirmation.patch",
+    "fixture": "helium-0.20.1-close-confirmation.patch",
+    "sha256": "557c581f07b5bc0fa8005b7ee421868771134426a9d548b2046e0851570dd6b6"
   }
 }

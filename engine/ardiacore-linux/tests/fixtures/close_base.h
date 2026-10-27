@@ -380,6 +380,7 @@ class UnloadController {
   UnloadListenerSet tabs_needing_unload_fired_;
   base::RepeatingCallback<void(bool)> on_close_confirmed_;
   CancelDownloadConfirmationState cancel_download_confirmation_state_ = CancelDownloadConfirmationState::kNotPrompted;
+  CancelDownloadConfirmationState close_multitab_confirmation_state_ = CancelDownloadConfirmationState::kNotPrompted;
   WarnBeforeClosingCallback warn_before_closing_callback_;
   bool force_skip_warning_user_on_close_ = false;
   bool warn = false;
