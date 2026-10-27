@@ -583,6 +583,10 @@ void DeferredHang() {
   assert(Named(*m.state->CreationState()->FindDict("snapshot"),"responsive") && restarts==1);
   other.page.destroying=true;other.state->Retire();assert(DeferredLinuxHangs(&other.page)==1);
   ForgetDeferredLinuxHangs(&other.page);assert(DeferredLinuxHangs(&other.page)==0 && restarts==1);
+  Profile profile;auto unclaimed=std::make_unique<content::WebContents>(&profile);content::WebContents* gone_tab=unclaimed.get();
+  assert(DeferLinuxHang(gone_tab,&still,restart) && DeferredLinuxHangs(gone_tab)==1);
+  assert(DeferLinuxHang(gone_tab,&widget,restart) && DeferredLinuxHangs(gone_tab)==2);
+  unclaimed.reset();assert(DeferredLinuxHangs(gone_tab)==0 && restarts==1);
 }
 
 void Popups() {

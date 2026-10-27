@@ -1,5 +1,6 @@
 #include "ardia/linux/ac_linux_page_status.h"
 
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -25,10 +26,25 @@ constexpr size_t kMaxDeferredHangs = 64;
 using HangId = std::pair<int, int>;
 using Hangs = std::map<HangId, base::RepeatingClosure>;
 
-std::map<const content::WebContents*, Hangs>& Deferred() {
-  static base::NoDestructor<std::map<const content::WebContents*, Hangs>> deferred;
+class DeferredHangs;
+
+std::map<const content::WebContents*, std::unique_ptr<DeferredHangs>>& Deferred() {
+  static base::NoDestructor<std::map<const content::WebContents*, std::unique_ptr<DeferredHangs>>> deferred;
   return *deferred;
 }
+
+class DeferredHangs : public content::WebContentsObserver {
+ public:
+  explicit DeferredHangs(content::WebContents* contents) : content::WebContentsObserver(contents) {}
+  Hangs hangs;
+
+ private:
+  void WebContentsDestroyed() override {
+    const content::WebContents* contents = web_contents();
+    Observe(nullptr);
+    Deferred().erase(contents);
+  }
+};
 
 std::optional<HangId> WidgetId(content::RenderWidgetHost* host) {
   if (!host || !host->GetProcess()) return std::nullopt;
@@ -37,11 +53,12 @@ std::optional<HangId> WidgetId(content::RenderWidgetHost* host) {
 
 void PruneDeferred() {
   for (auto contents = Deferred().begin(); contents != Deferred().end();) {
-    for (auto hang = contents->second.begin(); hang != contents->second.end();) {
+    Hangs& hangs = contents->second->hangs;
+    for (auto hang = hangs.begin(); hang != hangs.end();) {
       if (content::RenderWidgetHost::FromID(hang->first.first, hang->first.second)) ++hang;
-      else hang = contents->second.erase(hang);
+      else hang = hangs.erase(hang);
     }
-    if (contents->second.empty()) contents = Deferred().erase(contents);
+    if (hangs.empty()) contents = Deferred().erase(contents);
     else ++contents;
   }
 }
@@ -73,7 +90,9 @@ bool DeferLinuxHang(content::WebContents* contents, content::RenderWidgetHost* h
   const auto id = WidgetId(host);
   if (!contents || !id) return false;
   PruneDeferred();
-  Hangs& hangs = Deferred()[contents];
+  auto& entry = Deferred()[contents];
+  if (!entry) entry = std::make_unique<DeferredHangs>(contents);
+  Hangs& hangs = entry->hangs;
   if (!hangs.contains(*id) && hangs.size() >= kMaxDeferredHangs) return false;
   hangs[*id] = std::move(restarter);
   return true;
@@ -82,8 +101,8 @@ bool DeferLinuxHang(content::WebContents* contents, content::RenderWidgetHost* h
 bool ResolveDeferredLinuxHang(content::WebContents* contents, content::RenderWidgetHost* host) {
   const auto id = WidgetId(host);
   const auto found = Deferred().find(contents);
-  if (!id || found == Deferred().end() || !found->second.erase(*id)) return false;
-  if (found->second.empty()) Deferred().erase(found);
+  if (!id || found == Deferred().end() || !found->second->hangs.erase(*id)) return false;
+  if (found->second->hangs.empty()) Deferred().erase(found);
   return true;
 }
 
@@ -93,7 +112,7 @@ void ForgetDeferredLinuxHangs(content::WebContents* contents) {
 
 size_t DeferredLinuxHangs(content::WebContents* contents) {
   const auto found = Deferred().find(contents);
-  return found == Deferred().end() ? 0 : found->second.size();
+  return found == Deferred().end() ? 0 : found->second->hangs.size();
 }
 
 LinuxPageStatus::LinuxPageStatus(base::WeakPtr<LinuxPageLease> lease)
@@ -140,7 +159,7 @@ bool LinuxPageStatus::Present(std::string name, base::Value data) {
 void LinuxPageStatus::AdoptDeferredHangs() {
   const auto found = Deferred().find(web_contents());
   if (found == Deferred().end()) return;
-  Hangs hangs = std::move(found->second);
+  Hangs hangs = std::move(found->second->hangs);
   Deferred().erase(found);
   for (auto& [id, restarter] : hangs) {
     auto* host = content::RenderWidgetHost::FromID(id.first, id.second);
