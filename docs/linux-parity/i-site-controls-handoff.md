@@ -1,0 +1,120 @@
+# Lane I handoff: site permissions, data clearing and the content blocker (#16 F06)
+
+Branch `t3/linux-site-controls`, based on `linux` at `2376f370`. Source-level implementation, tracked by #94. Runtime acceptance stays with #16 and the #81 suite. Nothing here was built into Chromium 156 or run natively: I could not build Chromium on this machine, and the 156 output tree lacks the generated extension mojom headers needed for even a syntax-only compile of the service.
+
+## What was done
+
+Before this lane, `sites.*` reached the engine through the generic route table with no argument checks. `profiles.clearBrowsingData` and every `contentBlocker.*` call answered `ERR_UNKNOWN_CALL`, so Settings showed a null blocker and the site panel's blocker toggle did nothing.
+
+### Native host
+
+- **Intercept.** `ac_linux_host.cc` checks `LinuxSiteControlsHandles(name)` at the top of `engine.call`, before the generic default-profile gate and the route table, and hands the call to `LinuxSiteControlsCall`. The `sites.*` routes are removed from `ac_linux_contract.h`. The remaining hunks:
+  - `ShellHostView::Initialize` calls `StartLinuxContentBlocker(profile())`.
+  - `StartLinuxHost` calls `StartLinuxSiteControls(...)`, which sets the restricted-component hook and the change sink. The sink sends `contentBlocker.changed` to every window whose original profile matches.
+- **Pure helper.** `ac_linux_site_controls.{h,cc}` needs only `base/values.h`. It holds:
+  - which calls the lane owns;
+  - the profile decision, `ResolveProfile`;
+  - strict validation of origins, setting types and values, browsing-data types and `since`, blocker hosts and list ids;
+  - engine-reply mapping;
+  - the blocker state normaliser, ported from `ArdiaContentBlocker.mm`, including its `Category` mapping;
+  - the per-profile `BlockerQueue`: tickets, a 20 s deadline plus 2 s grace, 40 retries 250 ms apart, the retriable-error list from `ArdiaContentBlockerCalls.mm`, a 30 s idle close and a cap of 64 queued calls.
+- **Service.** `ac_linux_site_controls_service.{h,cc}`:
+  - `SiteControlsProfile` is the one function that picks the profile; see Profile resolution below.
+  - Site and browsing-data calls run the existing `ac_site_settings_get/set/origins/reset`, `ac_site_data_clear` and `ac_browsing_data_clear` services through `ac_engine_call`, with the window's regular profile path.
+  - `LinuxContentBlocker` exists once per regular profile and observes `ProfileObserver`. On start it inspects `extensions/ublock` beside the executable, or `--ardia-content-blocker-dir`, off the UI thread. After `ExtensionSystem::ready()` it loads that directory as a component extension through `ComponentLoader::AddOrReplace`, exactly as `ardiacore_profile.mm` does. If the extension it gets back isn't `fajbdaomknpkicfjcpipdmcpoamdmilh`, it removes that extension and reports the blocker as failed.
+  - Calls run in a hidden `WebContents`: view type `kTabContents`, with the extension WebContents observer attached, showing `chrome-extension://fajbdaomknpkicfjcpipdmcpoamdmilh/ardia-linux-bridge.html`.
+  - Chromium `CHECK`s against main-world `ExecuteJavaScript` on extension pages. The browser therefore sets a `data-ardia-request` attribute from `ISOLATED_WORLD_ID_CHROME_INTERNAL` and polls `data-ardia-reply` every 25 ms.
+  - Every script runs only while the committed URL and origin are the bridge page's. Renderer loss, a failed load or a navigation elsewhere resets the page and retries. Late callbacks are discarded by a page generation counter.
+  - A successful mutation queues a state read and broadcasts its `stats` as `contentBlocker.changed`.
+- **Bridge page.** `engine/ardiacore-linux/content-blocker/ardia-linux-bridge.{html,js}`:
+  - It loads uBlock's own `js/vapi.js`, `vapi-common.js` and `vapi-client.js`, then the bridge.
+  - The bridge ports the macOS prelude: waiting for readiness, `settlePending`, `applyLists` with the `ardiaReloadPending` marker, `covers`, the off directive and the dev fail-next flag.
+  - It exposes only five fixed operations: `state`, `setEnabled`, `setList`, `isAllowed` and `setAllowed`. Nothing is evaluated from the request.
+- **Restricted component.** `g_ardia_restricted_component_extension` is set in the browser process, so uBlock's component status doesn't grant script-everywhere access to `chrome://` pages, including the shell. That's the same hook macOS sets.
+
+### Packaging
+
+- `scripts/linux/fetch-ubo.sh` runs the unchanged `packages/ardiacore/scripts/ubo.sh`, with `flock` and `sha256sum` standing in for `lockf` and `shasum`. The result is the same pinned, patched uBlock Origin 1.75.0 build macOS embeds.
+- `scripts/linux/package.py --content-blocker <dir>` copies it to `lib/ardia/extensions/ublock` without `_metadata` and adds the bridge files. It refuses a build that has no manifest key, isn't MV2, or lacks the messaging scripts. Without the option the package has no blocker, and the host says so.
+
+## Contract
+
+| Call | Arguments (exact) | Reply | Errors |
+| --- | --- | --- | --- |
+| `sites.settings` | `{origin, engine?: "chromium"}` | `SiteSettings`, known types only | `ERR_SITE_REQUEST`, `ERR_UNKNOWN_CALL` (other engines), `ERR_ENGINE`, `ERR_BAD_REPLY` |
+| `sites.setSetting` | `{origin, type, value, engine?}` | `null` | as above |
+| `sites.origins` | `{}` | `string[]`, valid http(s) origins only | |
+| `sites.reset` / `sites.clearData` | `{origin}` | `null` / `{cookies: number \| false, storage: boolean}` | |
+| `profiles.clearBrowsingData` | `{types: 1–4 unique of history, siteData, cache, downloads; since?: null \| ms ≥ 0}` | `null` once the engine finishes | `ERR_CLEAR_INCOMPLETE` when a type fails |
+| `contentBlocker.state` | `{}` | `ContentBlockerState`. When not installed, not loaded, timed out or the profile is gone: `{enabled: false, lists: [], allowedHosts: [], stats: {ready: false, error}}`, the macOS shape | |
+| `contentBlocker.setEnabled` | `{enabled}` | `null` | `ERR_CONTENT_BLOCKER_UNAVAILABLE` with the bridge's message, `ERR_CONTENT_BLOCKER_REQUEST`, `ERR_CONTENT_BLOCKER_BUSY` |
+| `contentBlocker.setListEnabled` | `{id: [A-Za-z0-9._-]{1,128}, enabled}` | `null` | as above |
+| `contentBlocker.isAllowed` / `setAllowed` | `{host}` / `{host, allowed}`, host-name syntax only, lowercased | `boolean` / `null` | as above |
+| `contentBlocker.devFailNextMessage` | `{}` | `null`; the next call fails with `… failed (dev)` | |
+| `contentBlocker.devDelayNextLoad` | any | | `ERR_CONTENT_BLOCKER_UNAVAILABLE` |
+| event `ArdiaContentBlocker`/`contentBlocker` | `{name: "contentBlocker.changed", data: ContentBlockerStats}` | | |
+
+- **Validation.** Origins must be `http(s)://host[:port]` with no path, user, query or fragment, at most 2048 bytes. The host must be lowercase labels, an IPv4 address or a bracketed IPv6 address. A host that contains `/` (the off directive), `#`, `*` or spaces is refused.
+- **Profile resolution.** `SiteControlsProfile` is the single function to re-point at #62's registry.
+  - `""` and `"default"` use the window's original regular profile.
+  - Ids starting with `incognito:` or containing `@` get `ERR_PROFILE_PRIVATE`.
+  - Any other id gets `ERR_PROFILE_UNAVAILABLE`.
+  - A private window gets `ERR_PROFILE_PRIVATE` for `sites.*` and `profiles.clearBrowsingData`.
+  - `contentBlocker.*` is app-level, as on macOS (`kProfile = ""`): from a private window it acts on the original profile's blocker.
+- **Not in this lane.** `sites.zoomLevels` and `sites.setZoom` belong to the page-state lane (#63, `PrepareLinuxZoomDomain`). The contract defines no cancellation or progress for clearing. Cancelling is the shared dialog's Cancel, which the acceptance scenario covers.
+
+## Tests run
+
+All runs are on this branch after the last change.
+
+- `python3 -m unittest discover -s engine/ardiacore-linux/tests`: 232 tests, OK. That includes 8 new tests in `test_site_controls.py`:
+  - The pure helper fixture, under ASan and UBSan: profile decisions, origin edge cases, a permission grant/revoke/reset round trip against a fake settings map, scoped clears, blocker requests and states, the bridge scripts and the queue state machine.
+  - The real service compiled against stub Chromium interfaces:
+    - site-setting round trips through `ac_engine_call`;
+    - private and isolated refusals that never reach the engine;
+    - component load, including the wrong-id case;
+    - restricted-hook behaviour;
+    - bridge URL, view type and observer;
+    - renderer crash and retry;
+    - dropped reply and timeout;
+    - not-ready retries;
+    - foreign navigation, with no request sent to it;
+    - the dev fail-next flag;
+    - idle close;
+    - the 64-call cap;
+    - profile destruction with 64 calls pending and before load.
+  - The bridge under node against a simulated uBlock dashboard (8 cases).
+  - Wiring checks on the host, GN and the restricted hook.
+- `pnpm --filter @ardia/linux test:host`: 236 passed, including 4 new in `hostSiteControls.test.mjs`. They drive the shared `@ardia/ardiacore` functions through the Linux module resolver and the real bootstrap transport.
+- `pnpm --filter @ardia/linux typecheck` and `pnpm --filter @ardia/linux build`: pass.
+- `pnpm --filter @ardia/linux acceptance:self-test`: 50 passed. That includes the new stock-Chromium 155 test: the helper's exact send and poll scripts, read from `ac_linux_site_controls.cc`, drive the real bridge page from an isolated world, with an MV3 stand-in for uBlock's messaging.
+- `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs`: 7 passed.
+- `python3 -m unittest discover -s engine/patches/build/tests`: OK, including the new packaging test.
+- I also ran the shims on this machine: `fetch-ubo.sh` with its paths redirected to `/tmp` downloaded, verified and patched uBlock 1.75.0. I checked that build's `vapi-client.js`, its privileged-origin rule and the bundled EasyList rule the scenario relies on.
+- Nothing shared under `apps/browser` or `packages/` changed, so the browser suite wasn't rerun.
+
+## Needs native runtime acceptance on a Chromium 156 build
+
+These can only be checked on a built engine:
+
+- **Build.** The host and service compile and link, and `gn check` passes for the new `//chrome/browser/extensions` dependency (`ComponentLoader`).
+- **Restrictions.** `ExtensionsBrowserClient::CreateExtensionWebContentsObserver` and `SetViewType` on a hidden `WebContents` are enough for uBlock's `runtime.connect` from the bridge page to be privileged (`PRIVILEGED_ORIGIN`).
+- **Component load.** uBlock MV2 loads as a component extension in the Helium 156 tree, including under the suite's `--disable-extensions`, which normally still allows component extensions.
+- **The F06 scenario** (`--only F06`) against a package built with `--content-blocker`:
+  - permissions seen by the page after reload and restart;
+  - per-site and `since`-scoped clears;
+  - the dialog's Cancel and Clear Data;
+  - an EasyList-matched image never reaching the fixture server;
+  - the exception, restart, Block Again, off/on and EasyList off/on.
+- **Manual:**
+  - The site panel and Privacy settings show the same state.
+  - Real-device permission prompts work.
+
+## Follow-ups and open risks
+
+- **#106 Navigation hold.** For non-default profiles, and for the default profile while Lite settings are pending, macOS holds navigations until uBlock's rulesets are in force. Linux has no hold, so requests made in the first seconds after the first launch may go unfiltered. This matches macOS for the default profile.
+- **#107 Restricted-component hook in child processes.** The hook is set in the browser process only. macOS sets it in every process from its main delegate. uBlock's content scripts match only http(s), so they never reach `chrome://` pages, but renderer-side permission checks don't see the hook.
+- **#108 Settings for isolated profiles.** Once #62 lands, macOS's `FollowDefault` copies the default profile's lists and exceptions into every other profile. Linux would load uBlock per isolated profile with uBlock's own defaults.
+- **Timeouts.** The bootstrap rejects any native request after 30 s. A blocker call queued behind several slow ones can time out in JavaScript while it still runs natively. Its reply is then dropped and the next state read shows the true state.
+- **Blocking file IO on the UI thread.** `ComponentLoader::AddOrReplace` reads the manifest on the UI thread, as on macOS. Thread restrictions only check this in DCHECK builds.
+- **Parsing assumption.** The scenario's permission checks rely on headless Chromium answering `navigator.permissions.query` for camera from content settings without a device. Calibrate this on the first run (#91).
