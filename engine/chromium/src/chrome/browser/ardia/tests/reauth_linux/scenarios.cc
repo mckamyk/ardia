@@ -81,7 +81,7 @@ void Reset() {
   base::TimeTicks::now_ms += 3600000;
 }
 
-void ExpectCheck(const dbus::SentCall& call, const std::string& cancellation) {
+void ExpectCheck(const dbus::SentCall& call) {
   assert(call.service == "org.freedesktop.PolicyKit1");
   assert(call.path == "/org/freedesktop/PolicyKit1/Authority");
   assert(call.interface == "org.freedesktop.PolicyKit1.Authority");
@@ -100,7 +100,7 @@ void ExpectCheck(const dbus::SentCall& call, const std::string& cancellation) {
   assert(call.body[1].text == "dev.ardia.linux.reauthenticate");
   assert(call.body[2].kind == dbus::Node::Kind::kArray && call.body[2].children.empty());
   assert(call.body[3].kind == dbus::Node::Kind::kUint32 && call.body[3].number == 1);
-  assert(call.body[4].text == cancellation);
+  assert(call.body[4].text.starts_with("ardia-reauth-") && call.body[4].text.size() > 13);
 }
 
 void ExpectCancel(const dbus::SentCall& call, const std::string& cancellation) {
@@ -144,7 +144,7 @@ void GrantIsRememberedOnlyWithinValidity() {
   Pump();
   assert(dbus::sent_calls.size() == 1);
   dbus::SentCall check = Take(0);
-  ExpectCheck(check, "ardia-reauth-1");
+  ExpectCheck(check);
   Reply(check, true, false);
   assert(first.runs == 1 && first.granted == true);
   assert(LastResult() == "granted");
@@ -249,7 +249,7 @@ void TimeoutCancelsTheAgentPrompt() {
   Fail(check, "org.freedesktop.DBus.Error.NoReply");
   assert(result.granted == false && LastResult() == "expired");
   assert(dbus::sent_calls.size() == 2);
-  ExpectCancel(dbus::sent_calls[1], "ardia-reauth-1");
+  ExpectCancel(dbus::sent_calls[1], check.body[4].text);
 }
 
 void NewerRequestSupersedesAndStaleRepliesAreIgnored() {
@@ -263,11 +263,12 @@ void NewerRequestSupersedesAndStaleRepliesAreIgnored() {
   Request(profile, second);
   assert(first.runs == 1 && first.granted == false);
   assert(LastResult() == "cancelled");
-  ExpectCancel(dbus::sent_calls[1], "ardia-reauth-1");
+  ExpectCancel(dbus::sent_calls[1], first_check.body[4].text);
   Pump();
   assert(dbus::sent_calls.size() == 3);
   dbus::SentCall second_check = Take(2);
-  ExpectCheck(second_check, "ardia-reauth-3");
+  ExpectCheck(second_check);
+  assert(second_check.body[4].text != first_check.body[4].text);
   Reply(first_check, true, false);
   assert(first.runs == 1 && first.granted == false && !second.granted);
   Reply(second_check, true, false);
@@ -309,6 +310,26 @@ void ReentrantRequestFromSupersededCallback() {
   assert(inner.granted == true && outer.runs == 1);
 }
 
+void TwoProfilesPromptWithDistinctCancellations() {
+  Reset();
+  Profile work;
+  Profile home;
+  Result work_result;
+  Result home_result;
+  Request(work, work_result);
+  Request(home, home_result);
+  Pump();
+  assert(dbus::sent_calls.size() == 2);
+  dbus::SentCall work_check = Take(0);
+  dbus::SentCall home_check = Take(1);
+  ExpectCheck(work_check);
+  ExpectCheck(home_check);
+  assert(work_check.body[4].text != home_check.body[4].text);
+  Reply(home_check, true, false);
+  Reply(work_check, false, false);
+  assert(home_result.granted == true && work_result.granted == false);
+}
+
 void UnconnectedBusIsUnavailable() {
   Reset();
   dbus_thread_linux::system_bus->connects = false;
@@ -330,7 +351,7 @@ void ProfileTeardownDropsPendingPrompt() {
   for (auto& [key, state] : profile.states) {
     static_cast<ardia::ProfileState*>(state.get())->WillBeDestroyed();
   }
-  ExpectCancel(dbus::sent_calls[1], "ardia-reauth-1");
+  ExpectCancel(dbus::sent_calls[1], check.body[4].text);
   Reply(check, true, false);
   assert(result.runs == 0);
   Result after;
@@ -420,6 +441,7 @@ int main(int argc, char**) {
   NewerRequestSupersedesAndStaleRepliesAreIgnored();
   SupersededBeforeTheBusName();
   ReentrantRequestFromSupersededCallback();
+  TwoProfilesPromptWithDistinctCancellations();
   UnconnectedBusIsUnavailable();
   ProfileTeardownDropsPendingPrompt();
   ProbeNeverPromptsAndExplainsUnavailability();

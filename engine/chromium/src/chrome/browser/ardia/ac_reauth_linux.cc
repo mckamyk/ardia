@@ -29,6 +29,11 @@ namespace {
 
 using reauth_linux::Outcome;
 
+std::string NextCancellation() {
+  static uint64_t next = 0;
+  return "ardia-reauth-" + base::NumberToString(++next);
+}
+
 int64_t NowMs() {
   return (base::TimeTicks::Now() - base::TimeTicks()).InMilliseconds();
 }
@@ -159,7 +164,7 @@ class ReauthState : public ProfileState {
     done_ = std::move(done);
     purpose_ = purpose;
     validity_ = validity;
-    cancellation_ = "ardia-reauth-" + base::NumberToString(generation);
+    cancellation_ = NextCancellation();
     bus_ = dbus_thread_linux::GetSharedSystemBus();
     if (!bus_) {
       return Finish(generation, Outcome::kUnavailable);
