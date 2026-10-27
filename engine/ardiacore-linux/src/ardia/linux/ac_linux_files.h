@@ -36,6 +36,10 @@ class LinuxShellWebView : public views::WebView {
   base::WeakPtrFactory<LinuxShellWebView> weak_factory_{this};
 };
 
+bool LinuxDownloadsHandles(std::string_view name);
+void LinuxDownloadsCall(Profile* profile, const std::string& name, const base::DictValue& input,
+                        base::OnceCallback<void(bool, base::Value)> done);
+
 bool LinuxFilesHandles(std::string_view method);
 void LinuxFilesInvoke(Profile* profile, LinuxShellWebView* shell, const std::string& method,
                       const base::ListValue& values,

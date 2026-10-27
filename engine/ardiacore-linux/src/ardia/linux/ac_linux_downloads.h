@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <ctime>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,12 +14,28 @@ namespace ardia::linux_downloads {
 
 inline constexpr size_t kMaxPathBytes = 4096;
 inline constexpr size_t kMaxStatusPaths = 64;
+inline constexpr size_t kMaxKeptDownloads = 100;
+inline constexpr const char* kFileCapabilities[] = {"ArdiaSystem.fileStatus", "ArdiaFileDrop.takeDrop",
+                                                     "ArdiaFileDrag.begin"};
 
 bool ValidDownloadId(std::string_view id);
 bool ValidLocalPath(std::string_view path);
 std::string ValidateRequest(std::string_view name, const base::DictValue& input);
 std::string FileUrl(std::string_view path);
 std::string BaseName(std::string_view path);
+
+std::optional<base::ListValue> FilterSnapshot(const base::Value& reply);
+std::vector<std::string> KeptIds(const base::DictValue& input);
+double ClearCutoff(const base::DictValue& input);
+
+bool IconPathAllowed(std::string_view path, const std::vector<std::string>& targets);
+std::vector<bool> ListedPaths(const std::vector<std::string>& paths, const std::vector<std::string>& targets);
+
+enum class OpenBackend { kDesktop, kUnavailable };
+OpenBackend ChooseOpenBackend(bool xdg_open);
+
+enum class DragStart { kStart, kWindowClosed, kDragActive, kButtonReleased };
+DragStart ChooseDragStart(bool window, bool dragging, bool button_down);
 
 enum class RevealBackend { kDesktop, kUnavailable };
 RevealBackend ChooseRevealBackend(bool session_bus, bool xdg_open);

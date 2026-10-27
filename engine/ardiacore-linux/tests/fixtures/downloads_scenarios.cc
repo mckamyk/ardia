@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -92,6 +93,85 @@ void Requests() {
   assert(!ValidateRequest("downloads.setSettings", Dict({{"askWhereToSave", base::Value("yes")}})).empty());
   assert(!ValidateRequest("downloads.setSettings", Dict({{"managed", base::Value(false)}})).empty());
   assert(ValidateRequest("history.query", Dict({{"anything", base::Value(1)}})).empty());
+}
+
+base::Value Entry(const std::string& id, std::optional<bool> off_the_record) {
+  base::DictValue entry = Dict({{"id", base::Value(id)}, {"path", base::Value("/d/" + id)}});
+  if (off_the_record) entry.Set("offTheRecord", base::Value(*off_the_record));
+  return base::Value(std::move(entry));
+}
+
+void Snapshots() {
+  const std::string a = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+  const std::string b = "3f2504e0-4f89-41d3-9a0c-0305e82c3302";
+  const std::string c = "3f2504e0-4f89-41d3-9a0c-0305e82c3303";
+  base::ListValue list;
+  list.Append(Entry(a, std::nullopt));
+  list.Append(Entry(b, true));
+  list.Append(Entry(c, false));
+  list.Append(Entry("saved-1", false));
+  list.Append(base::Value("not an entry"));
+  base::DictValue reply;
+  reply.Set("downloads", base::Value(std::move(list)));
+  const auto filtered = FilterSnapshot(base::Value(std::move(reply)));
+  assert(filtered && filtered->size() == 2);
+  assert(*(*filtered)[0].GetDict().FindString("id") == a);
+  assert(*(*filtered)[1].GetDict().FindString("id") == c);
+  assert(!FilterSnapshot(base::Value("x")));
+  assert(!FilterSnapshot(base::Value(Dict({{"downloads", base::Value(7)}}))));
+}
+
+void Clears() {
+  const std::string id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+  base::ListValue keep;
+  keep.Append(base::Value(id));
+  base::DictValue ok;
+  ok.Set("keep", base::Value(std::move(keep)));
+  ok.Set("before", base::Value(1700000000000.0));
+  assert(ValidateRequest("downloads.clear", ok).empty());
+  base::DictValue ints;
+  ints.Set("keep", base::Value(base::ListValue()));
+  ints.Set("before", base::Value(5));
+  assert(ValidateRequest("downloads.clear", ints).empty());
+  assert(!ValidateRequest("downloads.clear", Dict({})).empty());
+  assert(!ValidateRequest("downloads.clear", Dict({{"before", base::Value(1.0)}})).empty());
+  base::ListValue bad;
+  bad.Append(base::Value("saved-1"));
+  base::DictValue invalid;
+  invalid.Set("keep", base::Value(std::move(bad)));
+  invalid.Set("before", base::Value(1.0));
+  assert(!ValidateRequest("downloads.clear", invalid).empty());
+  base::ListValue many;
+  for (size_t n = 0; n <= kMaxKeptDownloads; ++n) many.Append(base::Value(id));
+  base::DictValue oversized;
+  oversized.Set("keep", base::Value(std::move(many)));
+  oversized.Set("before", base::Value(1.0));
+  assert(!ValidateRequest("downloads.clear", oversized).empty());
+  base::DictValue negative;
+  negative.Set("keep", base::Value(base::ListValue()));
+  negative.Set("before", base::Value(-1.0));
+  assert(!ValidateRequest("downloads.clear", negative).empty());
+  assert(KeptIds(ok) == std::vector<std::string>{id});
+}
+
+void FileGates() {
+  const std::vector<std::string> targets = {"/d/a.zip", "/d/b c.pdf"};
+  assert(IconPathAllowed("a.zip", targets));
+  assert(IconPathAllowed("file.bin", targets));
+  assert(IconPathAllowed("/d/a.zip", targets));
+  assert(!IconPathAllowed("/Applications/Arc.app", targets));
+  assert(!IconPathAllowed("dir/a.zip", targets));
+  assert(!IconPathAllowed("", targets));
+  assert(!IconPathAllowed(std::string("a\0b", 3), targets));
+  assert(ListedPaths({"/d/a.zip", "/etc/passwd", "/d/b c.pdf", "relative"}, targets) ==
+         (std::vector<bool>{true, false, true, false}));
+  assert(ChooseOpenBackend(true) == OpenBackend::kDesktop);
+  assert(ChooseOpenBackend(false) == OpenBackend::kUnavailable);
+  assert(ChooseDragStart(true, false, true) == DragStart::kStart);
+  assert(ChooseDragStart(true, false, false) == DragStart::kButtonReleased);
+  assert(ChooseDragStart(true, true, true) == DragStart::kDragActive);
+  assert(ChooseDragStart(false, false, true) == DragStart::kWindowClosed);
+  for (const char* capability : kFileCapabilities) std::printf("capability %s\n", capability);
 }
 
 void Reveal() {
@@ -205,6 +285,9 @@ int main(int argc, char** argv) {
   Paths();
   Requests();
   Reveal();
+  Snapshots();
+  Clears();
+  FileGates();
   Trash(argv[1]);
   Ledger();
   std::puts("downloads scenarios passed");

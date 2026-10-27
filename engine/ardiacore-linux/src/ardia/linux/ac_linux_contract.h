@@ -54,8 +54,6 @@ inline constexpr Route kRoutes[] = {
     {"downloads.pause", "ac_downloads_pause", "null"},
     {"downloads.resume", "ac_downloads_resume", "null"},
     {"downloads.keep", "ac_downloads_keep", "null"},
-    {"downloads.remove", "ac_downloads_remove", "null"},
-    {"downloads.list", "ac_downloads_list", "downloads"},
     {"history.query", "ac_history_query", ""},
     {"history.add", "ac_history_add", ""},
     {"history.import", "ac_history_import", ""},

@@ -1194,6 +1194,16 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       }
       if (const auto invalid = linux_downloads::ValidateRequest(name, input); !invalid.empty())
         return Fail(id, "ERR_DOWNLOAD_REQUEST", invalid);
+      if (LinuxDownloadsHandles(name)) {
+        return LinuxDownloadsCall(host_->profile(), name, input,
+            base::BindOnce([](base::WeakPtr<HostMessageHandler> handler, std::string id, bool ok, base::Value result) {
+              if (!handler) return;
+              if (ok) return handler->Resolve(id, std::move(result));
+              const std::string* code = result.is_dict() ? result.GetDict().FindString("code") : nullptr;
+              const std::string* message = result.is_dict() ? result.GetDict().FindString("message") : nullptr;
+              handler->Fail(id, code ? *code : "ERR_ENGINE", message ? *message : "Download request failed");
+            }, weak_factory_.GetWeakPtr(), id));
+      }
       const auto* route = ardiacore::linux_contract::FindRoute(name);
       if (!route) return Fail(id, "ERR_UNKNOWN_CALL", "This call is unavailable on Linux");
       const std::string path = host_->profile()->GetPath().value();
@@ -1394,6 +1404,10 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Set("updates", false);
   base::FilePath user_data_directory;
   base::PathService::Get(chrome::DIR_USER_DATA, &user_data_directory);
+  base::ListValue capabilities = base::ListValue().Append("ArdiaWebView.call")
+      .Append("ArdiaShell.windowIdentity").Append("ArdiaShell.beginDialog")
+      .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain");
+  for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
@@ -1402,10 +1416,7 @@ base::DictValue ShellHostView::Bootstrap() const {
                                 "ArdiaApp", base::DictValue().Set(
                                                 "systemInfo", std::move(info))))
       .Set("launchConfig", ardiacore::LinuxLaunchConfig(DocumentDirectory(profile()), user_data_directory))
-      .Set("capabilities", base::ListValue().Append("ArdiaWebView.call")
-          .Append("ArdiaShell.windowIdentity").Append("ArdiaShell.beginDialog")
-          .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain")
-          .Append("ArdiaSystem.fileStatus").Append("ArdiaFileDrop.takeDrop").Append("ArdiaFileDrag.begin"));
+      .Set("capabilities", std::move(capabilities));
   if (is_utility()) bootstrap.Set("utility", utility_.Clone());
   return bootstrap;
 }

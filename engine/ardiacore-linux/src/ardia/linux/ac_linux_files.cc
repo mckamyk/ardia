@@ -9,26 +9,33 @@
 #include <utility>
 #include <vector>
 
+#include "ardia/linux/ac_linux_download_service.h"
 #include "ardia/linux/ac_linux_downloads.h"
 #include "base/base64.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
-#include "base/task/single_thread_task_runner.h"
+#include "base/json/json_reader.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "chrome/browser/ardia/public/ac_engine.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/icon_loader.h"
 #include "chrome/browser/icon_manager.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/download/public/common/download_item.h"
+#include "components/download/public/common/download_source.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/drop_data.h"
+#include "extensions/browser/webstore_installer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/aura/env.h"
 #include "ui/base/clipboard/file_info.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
@@ -61,19 +68,49 @@ int64_t NowMs() {
   return base::Time::Now().InMillisecondsSinceUnixEpoch();
 }
 
-std::vector<std::string> DownloadTargets(Profile* profile, bool complete_only) {
-  std::vector<std::string> targets;
-  if (!profile || profile->IsOffTheRecord()) return targets;
-  content::DownloadManager* manager = profile->GetDownloadManager();
-  if (!manager) return targets;
-  content::DownloadManager::DownloadVector items;
-  manager->GetAllDownloads(&items);
-  for (download::DownloadItem* item : items) {
-    if (item->IsTransient() || item->IsDangerous() || item->IsInsecure()) continue;
-    if (complete_only && item->GetState() != download::DownloadItem::COMPLETE) continue;
-    targets.push_back(item->GetTargetFilePath().value());
+bool ListedDownload(download::DownloadItem* item) {
+  if (item->IsTransient() || item->GetDownloadSource() == download::DownloadSource::EXTENSION_INSTALLER ||
+      extensions::WebstoreInstaller::GetAssociatedApproval(*item)) {
+    return false;
   }
-  return targets;
+  content::BrowserContext* context = content::DownloadItemUtils::GetBrowserContext(item);
+  return !context || !download_crx_util::IsTrustedExtensionDownload(Profile::FromBrowserContext(context), *item);
+}
+
+content::DownloadManager* RegularDownloads(Profile* profile) {
+  return profile && !profile->IsOffTheRecord() ? profile->GetDownloadManager() : nullptr;
+}
+
+std::vector<std::string> DownloadTargets(Profile* profile, bool complete_only) {
+  return downloads::DownloadTargets(RegularDownloads(profile), &ListedDownload, complete_only);
+}
+
+struct ListReply {
+  Done done;
+};
+
+void ListReplied(void* context, const char* json) {
+  std::unique_ptr<ListReply> reply(static_cast<ListReply*>(context));
+  const auto value = json ? base::JSONReader::Read(json, base::JSON_PARSE_RFC) : std::nullopt;
+  if (value && value->is_dict()) {
+    if (const std::string* error = value->GetDict().FindString("error"))
+      return Fail(std::move(reply->done), "ERR_ENGINE", *error);
+  }
+  auto list = value ? downloads::FilterSnapshot(*value) : std::nullopt;
+  if (!list) return Fail(std::move(reply->done), "ERR_BAD_REPLY", "The download list is not valid");
+  std::move(reply->done).Run(true, base::Value(std::move(*list)));
+}
+
+void ListWhenReady(Profile* profile, Done done, bool ready) {
+  if (!ready) return Fail(std::move(done), "ERR_DOWNLOADS_UNAVAILABLE", "Download history is unavailable");
+  const std::string path = profile->GetPath().value();
+  ac_engine_call("ac_downloads_list", path.c_str(), "{}", &ListReplied, new ListReply{std::move(done)});
+}
+
+void ClearWhenReady(Profile* profile, std::vector<std::string> keep, double before, Done done, bool ready) {
+  if (!ready) return Fail(std::move(done), "ERR_DOWNLOADS_UNAVAILABLE", "Download history is unavailable");
+  const size_t removed = downloads::ClearDownloads(RegularDownloads(profile), &ListedDownload, keep, before);
+  std::move(done).Run(true, base::Value(static_cast<int>(removed)));
 }
 
 std::optional<std::string> PathArgument(const base::ListValue& values, size_t count) {
@@ -112,12 +149,17 @@ downloads::TrashOutcome Trash(const std::string& path) {
   return downloads::MoveToTrash(path, downloads::TrashDirectory(data.c_str(), home.c_str()), std::time(nullptr));
 }
 
-base::ListValue FileStatus(const std::vector<std::string>& paths) {
+base::ListValue FileStatus(const std::vector<std::string>& paths, const std::vector<bool>& listed) {
   base::ListValue result;
-  for (const auto& path : paths) {
-    result.Append(downloads::ValidLocalPath(path) && base::PathExists(base::FilePath(path)));
+  for (size_t index = 0; index < paths.size(); ++index) {
+    result.Append(listed[index] && base::PathExists(base::FilePath(paths[index])));
   }
   return result;
+}
+
+bool XdgOpenAvailable() {
+  auto environment = base::Environment::Create();
+  return base::ExecutableExistsInPath(environment.get(), "xdg-open");
 }
 
 IconLoader::IconSize IconSize(double size) {
@@ -134,10 +176,20 @@ void ReplyIcon(Done done, gfx::Image image) {
   std::move(done).Run(true, base::Value("data:image/png;base64," + base::Base64Encode(*png)));
 }
 
-void StartDrag(base::WeakPtr<LinuxShellWebView> shell, std::string path) {
-  if (!shell) return;
-  views::Widget* widget = shell->GetWidget();
-  if (!widget || widget->dragged_view() || !widget->GetRootView()) return;
+void StartDrag(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done) {
+  views::Widget* widget = shell ? shell->GetWidget() : nullptr;
+  switch (downloads::ChooseDragStart(widget && widget->GetRootView(), widget && widget->dragged_view(),
+                                     aura::Env::GetInstance()->IsLeftMouseButtonDown())) {
+    case downloads::DragStart::kWindowClosed:
+      return Fail(std::move(done), "ERR_WINDOW_CLOSED", "The window closed");
+    case downloads::DragStart::kDragActive:
+      return Fail(std::move(done), "ERR_DRAG_ACTIVE", "A drag is already in progress");
+    case downloads::DragStart::kButtonReleased:
+      return Fail(std::move(done), "ERR_DRAG_RELEASED", "The mouse button was released before the drag started");
+    case downloads::DragStart::kStart:
+      break;
+  }
+  std::move(done).Run(true, base::Value(true));
   auto data = std::make_unique<ui::OSExchangeData>();
   data->SetFilename(base::FilePath(path));
   gfx::Point location = display::Screen::Get()->GetCursorScreenPoint();
@@ -147,8 +199,12 @@ void StartDrag(base::WeakPtr<LinuxShellWebView> shell, std::string path) {
                           ui::mojom::DragEventSource::kMouse);
 }
 
-void Open(Profile* profile, const std::string& path, Done done) {
-  platform_util::OpenItem(profile, base::FilePath(path), platform_util::OPEN_FILE,
+void Open(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, bool xdg_open) {
+  if (!shell || !shell->GetBrowserContext()) return Fail(std::move(done), "ERR_WINDOW_CLOSED", "The window closed");
+  if (downloads::ChooseOpenBackend(xdg_open) == downloads::OpenBackend::kUnavailable)
+    return Fail(std::move(done), "ERR_OPEN_UNAVAILABLE", "xdg-open is not available to open files");
+  platform_util::OpenItem(Profile::FromBrowserContext(shell->GetBrowserContext()), base::FilePath(path),
+                          platform_util::OPEN_FILE,
       base::BindOnce([](Done done, platform_util::OpenOperationResult result) {
         switch (result) {
           case platform_util::OPEN_SUCCEEDED:
@@ -186,6 +242,28 @@ bool LinuxShellWebView::CanDragEnter(content::WebContents* source, const content
 BEGIN_METADATA(LinuxShellWebView)
 END_METADATA
 
+bool LinuxDownloadsHandles(std::string_view name) {
+  return name == "downloads.list" || name == "downloads.remove" || name == "downloads.clear";
+}
+
+void LinuxDownloadsCall(Profile* profile, const std::string& name, const base::DictValue& input, Done done) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  content::DownloadManager* manager = RegularDownloads(profile);
+  if (!manager) return Fail(std::move(done), "ERR_PROFILE", "Only the default regular profile is supported");
+  if (name == "downloads.remove") {
+    const std::string* id = input.FindString("id");
+    const std::string error = id ? downloads::RemoveDownload(manager, &ListedDownload, *id) : "no such download";
+    if (!error.empty()) return Fail(std::move(done), "ERR_ENGINE", error);
+    return std::move(done).Run(true, base::Value());
+  }
+  if (name == "downloads.clear") {
+    return downloads::DownloadsReady::Wait(manager,
+        base::BindOnce(&ClearWhenReady, base::Unretained(profile), downloads::KeptIds(input),
+                       downloads::ClearCutoff(input), std::move(done)));
+  }
+  downloads::DownloadsReady::Wait(manager, base::BindOnce(&ListWhenReady, base::Unretained(profile), std::move(done)));
+}
+
 bool LinuxFilesHandles(std::string_view method) {
   for (const auto handled : {"ArdiaSystem.fileStatus", "ArdiaSystem.openFile", "ArdiaSystem.revealFile",
                              "ArdiaSystem.moveToTrash", "ArdiaSystem.fileIcon", "ArdiaFileDrop.takeDrop",
@@ -210,8 +288,9 @@ void LinuxFilesInvoke(Profile* profile, LinuxShellWebView* shell, const std::str
         return Fail(std::move(done), "ERR_FILE_PATH", "Paths must be strings");
       paths.push_back(path.GetString());
     }
+    std::vector<bool> listed = downloads::ListedPaths(paths, DownloadTargets(profile, false));
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, kFileReads,
-        base::BindOnce(&FileStatus, std::move(paths)),
+        base::BindOnce(&FileStatus, std::move(paths), std::move(listed)),
         base::BindOnce([](Done done, base::ListValue result) {
           std::move(done).Run(true, base::Value(std::move(result)));
         }, std::move(done)));
@@ -222,6 +301,8 @@ void LinuxFilesInvoke(Profile* profile, LinuxShellWebView* shell, const std::str
         values[0].GetString().size() > downloads::kMaxPathBytes ||
         values[0].GetString().find('\0') != std::string::npos || !(values[1].is_int() || values[1].is_double()))
       return Fail(std::move(done), "ERR_FILE_PATH", "A file name and icon size are required");
+    if (!downloads::IconPathAllowed(values[0].GetString(), DownloadTargets(profile, false)))
+      return Fail(std::move(done), "ERR_FILE_NOT_ALLOWED", "Icons are only available for downloads and file names");
     IconManager* icons = g_browser_process ? g_browser_process->icon_manager() : nullptr;
     if (!icons) return std::move(done).Run(true, base::Value());
     float scale = 1.0f;
@@ -253,7 +334,11 @@ void LinuxFilesInvoke(Profile* profile, LinuxShellWebView* shell, const std::str
   if (!downloads::PathListed(*path, DownloadTargets(profile, !reveal)))
     return Fail(std::move(done), "ERR_FILE_NOT_ALLOWED", reveal ? "Only downloaded files can be shown"
                                                                 : "Only finished downloads can be used");
-  if (method == "ArdiaSystem.openFile") return Open(profile, *path, std::move(done));
+  if (method == "ArdiaSystem.openFile") {
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, kFileReads, base::BindOnce(&XdgOpenAvailable),
+                                                 base::BindOnce(&Open, weak, *path, std::move(done)));
+    return;
+  }
   if (reveal) {
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, kFileReads,
         base::BindOnce(&CheckReveal, *path),
@@ -282,12 +367,7 @@ void LinuxFilesInvoke(Profile* profile, LinuxShellWebView* shell, const std::str
         base::BindOnce(&RegularFile, *path),
         base::BindOnce([](base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, bool regular) {
           if (!regular) return Fail(std::move(done), "ERR_FILE_MISSING", "The download is no longer a file");
-          views::Widget* widget = shell ? shell->GetWidget() : nullptr;
-          if (!widget) return Fail(std::move(done), "ERR_WINDOW_CLOSED", "The window closed");
-          if (widget->dragged_view()) return Fail(std::move(done), "ERR_DRAG_ACTIVE", "A drag is already in progress");
-          base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
-              base::BindOnce(&StartDrag, shell, std::move(path)));
-          std::move(done).Run(true, base::Value(true));
+          StartDrag(shell, std::move(path), std::move(done));
         }, weak, *path, std::move(done)));
     return;
   }

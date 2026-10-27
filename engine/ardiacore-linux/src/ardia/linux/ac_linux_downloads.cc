@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -115,6 +116,19 @@ std::string ValidateRequest(std::string_view name, const base::DictValue& input)
   if (verb == "list" || verb == "settings") {
     return input.size() == 0 ? std::string() : "This download request takes no arguments";
   }
+  if (verb == "clear") {
+    const base::Value* keep = input.Find("keep");
+    const base::Value* before = input.Find("before");
+    if (input.size() != 2 || !keep || !before || !keep->is_list() || !(before->is_int() || before->is_double()))
+      return "Clearing downloads requires the kept ids and a cutoff";
+    if (keep->GetList().size() > kMaxKeptDownloads) return "Too many kept downloads";
+    for (const auto& id : keep->GetList()) {
+      if (!id.is_string() || !ValidDownloadId(id.GetString())) return "Kept downloads need valid ids";
+    }
+    const double cutoff = before->GetDouble();
+    if (!std::isfinite(cutoff) || cutoff < 0) return "The clearing cutoff must be a time";
+    return {};
+  }
   if (verb == "setSettings") {
     const base::Value* folder = input.Find("folder");
     const base::Value* ask = input.Find("askWhereToSave");
@@ -135,6 +149,60 @@ std::string FileUrl(std::string_view path) {
 std::string BaseName(std::string_view path) {
   const size_t slash = path.rfind('/');
   return std::string(slash == std::string_view::npos ? path : path.substr(slash + 1));
+}
+
+std::optional<base::ListValue> FilterSnapshot(const base::Value& reply) {
+  if (!reply.is_dict()) return std::nullopt;
+  const base::Value* downloads = reply.GetDict().Find("downloads");
+  if (!downloads || !downloads->is_list()) return std::nullopt;
+  base::ListValue kept;
+  for (const auto& entry : downloads->GetList()) {
+    if (!entry.is_dict()) continue;
+    const std::string* id = entry.GetDict().FindString("id");
+    const base::Value* off_the_record = entry.GetDict().Find("offTheRecord");
+    if (!id || !ValidDownloadId(*id)) continue;
+    if (off_the_record && (!off_the_record->is_bool() || off_the_record->GetBool())) continue;
+    kept.Append(entry.Clone());
+  }
+  return kept;
+}
+
+std::vector<std::string> KeptIds(const base::DictValue& input) {
+  std::vector<std::string> ids;
+  const base::Value* keep = input.Find("keep");
+  if (!keep || !keep->is_list()) return ids;
+  for (const auto& id : keep->GetList()) {
+    if (id.is_string() && ValidDownloadId(id.GetString())) ids.push_back(id.GetString());
+  }
+  return ids;
+}
+
+double ClearCutoff(const base::DictValue& input) {
+  const base::Value* before = input.Find("before");
+  return before && (before->is_int() || before->is_double()) ? before->GetDouble() : 0;
+}
+
+bool IconPathAllowed(std::string_view path, const std::vector<std::string>& targets) {
+  if (path.empty() || path.size() > kMaxPathBytes || path.find('\0') != std::string_view::npos) return false;
+  if (path.find('/') == std::string_view::npos) return true;
+  return PathListed(path, targets);
+}
+
+std::vector<bool> ListedPaths(const std::vector<std::string>& paths, const std::vector<std::string>& targets) {
+  std::vector<bool> listed;
+  listed.reserve(paths.size());
+  for (const auto& path : paths) listed.push_back(PathListed(path, targets));
+  return listed;
+}
+
+OpenBackend ChooseOpenBackend(bool xdg_open) {
+  return xdg_open ? OpenBackend::kDesktop : OpenBackend::kUnavailable;
+}
+
+DragStart ChooseDragStart(bool window, bool dragging, bool button_down) {
+  if (!window) return DragStart::kWindowClosed;
+  if (dragging) return DragStart::kDragActive;
+  return button_down ? DragStart::kStart : DragStart::kButtonReleased;
 }
 
 RevealBackend ChooseRevealBackend(bool session_bus, bool xdg_open) {
