@@ -492,6 +492,36 @@ int main(int argc, char** argv) {
            moved.left.prints == 0 && moved.right.prints == 0);
     return 0;
   }
+  if (mode == "migration") {
+    Joined f;
+    content::WebContents fresh{&f.profile};
+    find_in_page::FindTabHelper find_fresh{&fresh};
+    f.Ok(8, "right", "find", Joined::Needle());
+    const int old = f.find_right.request;
+    f.Ok(8, "right", "showDevTools", ListValue().Append("inspect"));
+    f.browser.strip.tabs = {&f.left, &fresh};
+    tab_ids[&fresh] = 9;
+    auto moved = std::move(f.host.bindings_[8]);
+    f.host.bindings_.erase(8);
+    moved->page_.reset();
+    moved->ResetPageCommands();
+    moved->contents_ = &fresh;
+    moved->page_ = std::make_shared<ardiacore::FakePage>(&f.handler, 9, moved->claim);
+    f.host.bindings_[9] = std::move(moved);
+    assert(!f.host.Binding(9)->page_commands && !f.host.Binding(9)->page_command_request);
+    f.find_right.Reply(old, 5, 5, true);
+    assert(f.handler.events.empty() && f.find_right.observers.empty());
+    f.Ok(9, "right", "find", Joined::Needle());
+    assert(find_fresh.starts == 1 && f.find_right.starts == 1);
+    find_fresh.Reply(find_fresh.request, 2, 1, true);
+    assert(f.handler.events.size() == 1 && f.handler.events.back().event == "9");
+    f.Ok(9, "right", "showDevTools", ListValue().Append("inspect"));
+    assert(DevToolsWindow::GetInstanceForInspectedWebContents(&fresh));
+    f.Fails("ERR_PAGE_STALE_TARGET", 8, "right", "find", Joined::Needle());
+    f.host.bindings_.clear();
+    f.Drain();
+    return 0;
+  }
   if (mode == "envelope") {
     Joined f;
     f.Ok(8, "right", "find", Joined::Needle());
@@ -754,6 +784,9 @@ class JoinedDispatchTests(unittest.TestCase):
 
     def test_captured_claim_generation_document_handler_and_strip_reject_stale_authority(self):
         self.run_case('stale')
+
+    def test_contents_migration_resets_and_rebuilds_find_and_devtools_for_the_new_tab(self):
+        self.run_case('migration')
 
     def test_find_results_travel_through_the_captured_page_request(self):
         self.run_case('envelope')
