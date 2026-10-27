@@ -112,6 +112,12 @@ class PageStateTests(unittest.TestCase):
     def test_blocked_popups_review_open_and_stale_documents(self):
         self.run_case('popups')
 
+    def test_snapshot_producers_append_after_core_state(self):
+        self.run_case('producers')
+
+    def test_snapshot_producer_retire_reentrancy_and_bounds(self):
+        self.run_case('producer-lifetimes')
+
 
 if __name__ == '__main__':
     unittest.main()

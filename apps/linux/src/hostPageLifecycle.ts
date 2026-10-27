@@ -19,6 +19,7 @@ const RESTORED: Record<string, Partial<PageState>> = {
   contentBlocked: { blocked: 0 },
   passwordPrompt: { passwordPrompt: null },
   autofillPrompt: { autofillPrompt: null },
+  mediaAccess: { mediaAccess: null },
 };
 
 export function resetHostPage(tabId: string, reason: PageResetReason, replaced: ReadonlySet<string> = new Set()) {

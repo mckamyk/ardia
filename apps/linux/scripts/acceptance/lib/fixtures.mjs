@@ -7,6 +7,41 @@ import { TRUSTED_HOSTS, UNTRUSTED_HOSTS } from "./tls.mjs";
 export const PIXEL_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 export const SUGGEST_HOST = "suggestqueries.google.com";
 export const FIND_WORD = "needle";
+export const MEDIA_TITLE = "Acceptance tone";
+
+export function toneWav({ seconds = 1, rate = 8000, frequency = 440 } = {}) {
+  const samples = Math.round(seconds * rate);
+  const wav = Buffer.alloc(44 + samples * 2);
+  wav.write("RIFF", 0, "ascii");
+  wav.writeUInt32LE(36 + samples * 2, 4);
+  wav.write("WAVEfmt ", 8, "ascii");
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(rate, 24);
+  wav.writeUInt32LE(rate * 2, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36, "ascii");
+  wav.writeUInt32LE(samples * 2, 40);
+  for (let i = 0; i < samples; i++) wav.writeInt16LE(Math.round(Math.sin((2 * Math.PI * frequency * i) / rate) * 12000), 44 + i * 2);
+  return wav;
+}
+
+const MEDIA_SCRIPT = `
+const audio = document.getElementById("tone");
+window.mediaLog = [];
+navigator.mediaSession.metadata = new MediaMetadata({ title: ${JSON.stringify(MEDIA_TITLE)}, artist: "Ardia", album: "Fixture", artwork: [{ src: "/pixel.png", sizes: "1x1", type: "image/png" }] });
+for (const action of ["play", "pause", "nexttrack", "previoustrack", "seekto"]) {
+  navigator.mediaSession.setActionHandler(action, (details) => {
+    window.mediaLog.push(action);
+    if (action === "play") audio.play();
+    if (action === "pause") audio.pause();
+    if (action === "seekto") audio.currentTime = details.seekTime;
+  });
+}
+window.startTone = () => audio.play().then(() => true, (error) => String(error));
+`;
 
 const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
@@ -64,6 +99,8 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     }
     if (url.pathname === "/print") return html("Print fixture", "<h1>Ardia print fixture</h1><p>Printable text.</p>");
     if (url.pathname === "/zoom") return html("Zoom fixture", "<h1>Zoom fixture</h1>");
+    if (url.pathname === "/media") return html("Media fixture", `<h1>Media fixture</h1><audio id="tone" src="/tone.wav" loop></audio><form><input id="field" name="field" autocomplete="off"></form><script>${MEDIA_SCRIPT}</script>`);
+    if (url.pathname === "/tone.wav") return send(200, "audio/wav", toneWav());
     if (url.pathname === "/pixel.png") return send(200, "image/png", PIXEL_PNG);
     if (url.pathname.startsWith("/ads/banners/")) return send(200, "image/png", PIXEL_PNG);
     if (url.pathname === "/storage") {
@@ -161,6 +198,7 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     busy: (run = "") => `http://plain.ardia.test:${ports.http}/busy?run=${encodeURIComponent(run)}`,
     favicon: (label, host = "icons.ardia.test") => `http://${host}:${ports.http}/favicon/${label}`,
     icon: (name, host = "icons.ardia.test") => `http://${host}:${ports.http}/icon/${name}.png`,
+    media: (run = "") => `http://media.ardia.test:${ports.http}/media${run ? `?run=${encodeURIComponent(run)}` : ""}`,
   };
   const chromiumArgs = [
     `--host-resolver-rules=MAP *.ardia.test 127.0.0.1, MAP ${SUGGEST_HOST} 127.0.0.1:${ports.https}, MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1`,
