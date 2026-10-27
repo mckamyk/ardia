@@ -183,6 +183,7 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
     if (follows) raw->follows_ = follows->weak_factory_.GetWeakPtr();
     if (controls::ShouldHoldNavigations(raw->leader_, profile->IsNewProfile())) {
       raw->holding_ = true;
+      raw->hold_until_copy_ = controls::HoldUntilFirstCopy(raw->leader_, profile->IsNewProfile());
       HoldLinuxNavigations(profile);
     }
     raw->Start();
@@ -243,10 +244,11 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
   }
 
   void Loaded() {
-    if (!leader_) return Inherit();
-    if (!holding_) return;
-    Call(Internal(controls::BlockerOp::kSettings),
-         base::BindOnce(&LinuxContentBlocker::Probed, weak_factory_.GetWeakPtr()));
+    if (holding_ && !hold_until_copy_) {
+      Call(Internal(controls::BlockerOp::kSettings),
+           base::BindOnce(&LinuxContentBlocker::Probed, weak_factory_.GetWeakPtr()));
+    }
+    if (!leader_) Inherit();
   }
 
   void Probed(bool ok, base::Value result) {
@@ -564,6 +566,7 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
   base::WeakPtr<LinuxContentBlocker> follows_;
   bool leader_ = false;
   bool holding_ = false;
+  bool hold_until_copy_ = false;
   int inherit_attempts_ = 0;
   base::FilePath root_;
   Load load_ = Load::kInspecting;

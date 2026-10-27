@@ -352,9 +352,16 @@ void FollowDefault() {
   auto completed = CompleteBlockerCall(read_request, &read, nullptr, "1.75.0");
   assert(!AsFailure(completed));
   assert(ParseBlockerSettings(std::get<base::Value>(completed)));
-  base::Value bad(base::DictValue().Set("lists", TextList({"../x"})).Set("whitelist", TextList({})).Set("autoUpdate", base::Value(true)));
-  assert(!ParseBlockerSettings(bad));
-  assert(AsFailure(CompleteBlockerCall(read_request, &bad, nullptr, "1.75.0")));
+  base::Value imported(base::DictValue()
+                           .Set("lists", TextList({"easylist", "https://example.com/filters.txt", "../x"}))
+                           .Set("whitelist", TextList({"news.example"}))
+                           .Set("autoUpdate", base::Value(true)));
+  std::optional<BlockerSettings> kept = ParseBlockerSettings(imported);
+  assert(kept && kept->lists == std::vector<std::string>{"easylist"});
+  assert((kept->whitelist == std::vector<std::string>{"news.example"}));
+  assert(!AsFailure(CompleteBlockerCall(read_request, &imported, nullptr, "1.75.0")));
+  base::Value not_lists(base::DictValue().Set("lists", base::Value(3)).Set("whitelist", TextList({})).Set("autoUpdate", base::Value(true)));
+  assert(AsFailure(CompleteBlockerCall(read_request, &not_lists, nullptr, "1.75.0")));
   const std::string failed = "uBlock Origin never started";
   assert(AsFailure(CompleteBlockerCall(read_request, nullptr, &failed, "1.75.0"))->code == kUnavailableCode);
   assert(!AsFailure(CompleteBlockerCall(follow, nullptr, nullptr, "1.75.0")));
@@ -381,6 +388,9 @@ void NavigationHoldPolicy() {
   assert(ShouldHoldNavigations(false, true));
   assert(ShouldHoldNavigations(true, true));
   assert(!ShouldHoldNavigations(true, false));
+  assert(HoldUntilFirstCopy(false, true));
+  assert(!HoldUntilFirstCopy(false, false));
+  assert(!HoldUntilFirstCopy(true, true) && !HoldUntilFirstCopy(true, false));
   assert(kHoldDeadlineMs == 10000);
   assert(kInheritAttempts == 6);
   int64_t total = 0;

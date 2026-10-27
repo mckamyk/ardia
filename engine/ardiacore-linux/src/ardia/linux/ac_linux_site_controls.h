@@ -68,6 +68,7 @@ inline constexpr int kInheritAttempts = 6;
 
 bool HoldsNavigationTo(std::string_view scheme);
 bool ShouldHoldNavigations(bool leader, bool new_profile);
+bool HoldUntilFirstCopy(bool leader, bool new_profile);
 int64_t InheritRetryDelayMs(int attempt);
 
 std::variant<BlockerRequest, Failure> PrepareBlockerCall(std::string_view name,

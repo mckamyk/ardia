@@ -404,9 +404,7 @@ std::optional<BlockerSettings> ParseBlockerSettings(const base::Value& value) {
   std::optional<std::vector<std::string>> whitelist = StringList(dict, "whitelist", kMaxFollowedDirectives);
   const std::optional<bool> auto_update = Bool(dict, "autoUpdate");
   if (!lists || !whitelist || !auto_update) return std::nullopt;
-  for (const std::string& id : *lists) {
-    if (!ValidListId(id)) return std::nullopt;
-  }
+  std::erase_if(*lists, [](const std::string& id) { return !ValidListId(id); });
   for (const std::string& directive : *whitelist) {
     if (!ValidDirective(directive)) return std::nullopt;
   }
@@ -429,6 +427,10 @@ bool HoldsNavigationTo(std::string_view scheme) {
 
 bool ShouldHoldNavigations(bool leader, bool new_profile) {
   return !leader || new_profile;
+}
+
+bool HoldUntilFirstCopy(bool leader, bool new_profile) {
+  return !leader && new_profile;
 }
 
 int64_t InheritRetryDelayMs(int attempt) {
