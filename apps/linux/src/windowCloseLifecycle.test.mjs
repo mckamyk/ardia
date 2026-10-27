@@ -427,3 +427,98 @@ test("with the real dialog adapter, allow suspends dialogs for the drain and con
   assert.deepEqual(await after, { confirmed: true, suppressed: false });
   f.dialogs.retire();
 });
+
+function failingWarning(invoke, { prepare } = {}) {
+  const log = [];
+  let generation = 0;
+  const host = {
+    bootstrap: { windowId: "main", profileId: "default" },
+    onEvent() { return () => {}; },
+    onBeforeClose() { return () => {}; },
+    async invoke(method, data) {
+      if (method === "ArdiaShell.windowIdentity") return { windowId: "main", rendererGeneration: "9007199254740993" };
+      return invoke(method, data, log);
+    },
+  };
+  let n = 0;
+  const dialogs = createHostDialogs(host, () => `dialog:warning-failure-${++n}`);
+  prepare?.(dialogs);
+  const rejections = [];
+  const coordinator = createWindowCloseCoordinator({
+    windowId: "main",
+    utility: false,
+    decide: (windowId, _reason, ask) => ask({ title: "Close 2 tabs?", suppression: "Don’t ask me again", windowId })
+      .then(({ confirmed, suppressed }) => ({ decision: confirmed ? "allow" : "cancel", suppressWarning: suppressed })),
+    ask: (options, signal) => dialogs.abortableConfirm(options, signal),
+    suppress: () => log.push("suppress"),
+    flush: async () => {},
+    request: async () => ({ ...main, closeGeneration: String(++generation) }),
+    beginDrain: async () => { log.push("begin"); return { accepted: true, endsSession: true }; },
+    reject: async (value) => { rejections.push(value.closeGeneration); log.push("reject"); },
+    barrier: async () => { log.push("barrier"); },
+    cancelled: () => false,
+    suspendDialogs: () => dialogs.suspend(),
+    resumeDialogs: (suspension) => dialogs.resume(suspension),
+    report: () => {},
+  });
+  return { log, rejections, coordinator, dialogs };
+}
+
+test("a warning refused by native begin rejects exactly that attempt, and the next close starts a fresh attempt", async () => {
+  let refuse = true;
+  const f = failingWarning(async (method) => {
+    if (method === "ArdiaShell.beginDialog" && refuse) throw Object.assign(new Error("Dialog requester is not current"), { code: "ERR_DIALOG" });
+    return method === "ArdiaShell.beginDialog" ? { accepted: true } : null;
+  });
+  await assert.rejects(f.coordinator.close("window"), /Dialog requester is not current/);
+  assert.deepEqual(f.rejections, ["1"]);
+  assert.equal(f.log.includes("begin"), false);
+  await assert.rejects(f.coordinator.accept({ ...main, closeGeneration: "1" }));
+  assert.deepEqual(f.rejections, ["1"]);
+  refuse = false;
+  const next = f.coordinator.close("window");
+  await tick(); await tick();
+  assert.deepEqual(f.rejections, ["1"]);
+  void next.catch(() => {});
+  f.dialogs.retire();
+});
+
+test("a warning that cannot queue because the dialog queue is full rejects the attempt instead of hanging", async () => {
+  const f = failingWarning(async () => ({ accepted: true }), { prepare: (dialogs) => { for (let i = 0; i < 16; i++) void dialogs.confirm({ title: `page dialog ${i}` }).catch(() => {}); } });
+  await assert.rejects(f.coordinator.accept(main), /Too many pending dialogs/);
+  assert.deepEqual(f.rejections, ["1"]);
+  assert.equal(f.log.includes("begin"), false);
+  f.dialogs.retire();
+});
+
+test("a warning refused because dialogs are suspended rejects the attempt instead of hanging", async () => {
+  const f = failingWarning(async () => ({ accepted: true }), { prepare: (dialogs) => dialogs.suspend() });
+  await assert.rejects(f.coordinator.accept(main), /suspended/);
+  assert.deepEqual(f.rejections, ["1"]);
+  f.dialogs.retire();
+});
+
+test("a failed rejection after a failed warning is retried when the same attempt is requested again", async () => {
+  let failReject = true;
+  const log = [];
+  const coordinator = createWindowCloseCoordinator({
+    windowId: "main",
+    utility: false,
+    decide: async () => { throw new Error("Invalid native dialog window identity"); },
+    suppress() {},
+    flush: async () => {},
+    request: async () => main,
+    beginDrain: async () => { log.push("begin"); return { accepted: true }; },
+    reject: async () => { log.push("reject"); if (failReject) throw new Error("transport timeout"); },
+    barrier: async () => {},
+    cancelled: () => false,
+    report: () => {},
+  });
+  await assert.rejects(coordinator.accept(main), /Invalid native dialog window identity/);
+  assert.deepEqual(log, ["reject"]);
+  failReject = false;
+  await assert.rejects(coordinator.accept({ ...main }), { code: "ERR_WINDOW_CLOSE_CANCELLED" });
+  assert.deepEqual(log, ["reject", "reject"]);
+  await assert.rejects(coordinator.accept({ ...main }), { code: "ERR_WINDOW_CLOSE_CANCELLED" });
+  assert.deepEqual(log, ["reject", "reject"]);
+});
