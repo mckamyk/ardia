@@ -42,6 +42,7 @@ def apply_patch(root, patch):
 def patched_sources(root):
     with tarfile.open(FIXTURES / 'chromium156-close.tar.xz') as archive:
         archive.extractall(root, filter='data')
+    apply_patch(root, (FIXTURES / 'helium-0.20.1-close-confirmation.patch').read_text())
     hosted = (REPO / 'engine/patches/chromium-window-hosted.patch').read_text()
     apply_patch(root, hosted[hosted.index('--- a/chrome/browser/ui/unload_controller.cc'):])
     initial = (REPO / 'engine/patches/chromium-initial-document-access.patch').read_text()
@@ -354,6 +355,9 @@ class ChromiumCloseSourceTests(unittest.TestCase):
             self.assertIn('virtual base::WeakPtr<BrowserWindowInterface> GetWeakPtr() = 0;', browser)
             tab_contents = archive.extractfile('chrome/browser/tab_contents/BUILD.gn').read().decode()
             self.assertIn('"//content/public/browser"', method(tab_contents, 'source_set("tab_contents")'))
+        helium = metadata['helium']
+        self.assertEqual(helium['commit'], 'f29a25968e483f8bb85e47829ccd487bbe229199')
+        self.assertEqual(hashlib.sha256((FIXTURES / helium['fixture']).read_bytes()).hexdigest(), helium['sha256'])
 
     def test_linux_selection_preserves_exact_mac_manifest(self):
         sys.path.insert(0, str(REPO / 'engine/patches/build'))
