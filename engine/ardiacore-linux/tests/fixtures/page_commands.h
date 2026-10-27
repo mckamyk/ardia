@@ -115,6 +115,8 @@ class Value {
   Value(DictValue v);
   bool is_string() const { return std::holds_alternative<std::string>(value_); }
   bool is_bool() const { return std::holds_alternative<bool>(value_); }
+  bool is_dict() const { return std::holds_alternative<std::shared_ptr<DictValue>>(value_); }
+  DictValue& GetMutableDict() { return *std::get<std::shared_ptr<DictValue>>(value_); }
   const std::string& GetString() const { return std::get<std::string>(value_); }
   bool GetBool() const { return std::get<bool>(value_); }
   int GetInt() const { return std::get<int>(value_); }
@@ -126,6 +128,15 @@ class DictValue {
  public:
   DictValue& Set(std::string key, Value value) { values_[key] = std::move(value); return *this; }
   const Value& at(std::string key) const { return values_.at(key); }
+  bool contains(std::string key) const { return values_.contains(key); }
+  const std::string* FindString(std::string_view key) const {
+    auto found = values_.find(std::string(key));
+    return found != values_.end() && found->second.is_string() ? &found->second.GetString() : nullptr;
+  }
+  DictValue* FindDict(std::string_view key) {
+    auto found = values_.find(std::string(key));
+    return found != values_.end() && found->second.is_dict() ? &found->second.GetMutableDict() : nullptr;
+  }
  private:
   std::map<std::string, Value> values_;
 };

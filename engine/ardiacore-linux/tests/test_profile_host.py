@@ -147,6 +147,18 @@ int main() {
         self.assertIn('ProfileError::kPrivateService', files)
         self.assertIn('LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done))', files)
 
+    def test_site_zoom_uses_the_window_page_profile_and_refuses_private_windows(self):
+        request = method(self.source, '  void Request(const base::ListValue& arguments) {')
+        zoom = request[request.index('if (ardiacore::IsLinuxZoomDomainRoute(name)) {'):]
+        zoom = zoom[:zoom.index('\n      }\n') + 8]
+        self.assertIn('Profile* page = host_->page_profile();', zoom)
+        self.assertIn('page->IsOffTheRecord()', zoom)
+        self.assertIn('ProfileError::kPrivateService', zoom)
+        self.assertIn('!host_->HostsProfile(profile)', zoom)
+        self.assertIn('ProfileError::kWindowMismatch', zoom)
+        self.assertIn('const std::string path = page->GetPath().value();', zoom)
+        self.assertNotIn('host_->profile()', zoom)
+
     def test_window_openings_are_profile_bound_and_bounded(self):
         open_window = branch(self.source, '  if (method == "ArdiaShell.openWindow") {')
         self.assertIn('OpeningWindows().Begin(id, profile_name->id, reply)', open_window)

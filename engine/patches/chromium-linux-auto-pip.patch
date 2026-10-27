@@ -17,7 +17,7 @@
 +  std::string ardia_features =
 +      ardia_command->GetSwitchValueASCII(switches::kEnableFeatures);
 +  if (!ardia_features.empty()) ardia_features += ",";
-+  ardia_features += "BrowserInitiatedAutomaticPictureInPicture";
++  ardia_features += "BrowserInitiatedAutomaticPictureInPicture,WebContentsDiscard";
 +  ardia_command->AppendSwitchASCII(switches::kEnableFeatures, ardia_features);
 +#endif
  #if BUILDFLAG(IS_CHROMEOS)

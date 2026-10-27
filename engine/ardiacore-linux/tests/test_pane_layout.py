@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
     assert(views::focus_manager.focused == p.binding->viewport() && p.page.focuses == 1);
     assert(p.host.events.empty());
     p.page.Focus();
-    assert(p.host.events.size() == 1 && p.host.events.front() == std::make_pair(7, std::string("pageFocus")));
+    assert(p.host.events.size() == 1 && p.host.events.front() == std::make_pair(7, std::string("focus")));
     return 0;
   }
   if (mode == "frontend-destroyed") {

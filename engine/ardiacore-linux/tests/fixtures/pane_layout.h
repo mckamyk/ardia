@@ -248,6 +248,18 @@ class TabBinding {
   views::WebView* devtools_viewport() const { return devtools_viewport_; }
   void SetDevToolsViewport(views::WebView* view) { devtools_viewport_ = view; }
   void ResetPageCommands() { resets++; }
+  struct Page {
+    TabBinding* binding;
+    bool EmitClosed();
+  };
+  std::unique_ptr<Page> page_ = std::make_unique<Page>(Page{this});
+  void RetirePage() { page_.reset(); }
+  void ReportPresentation(std::string name, base::DictValue data);
+  struct Weak {
+    TabBinding* binding;
+    explicit operator bool() const { return binding; }
+  };
+  Weak GetWeakPtr() { return {this}; }
   void WebContentsDestroyed();
   void FocusFromHost();
   void OnWebContentsFocused(void*);
@@ -282,10 +294,6 @@ class ShellHostView : public views::View {
             if (binding->contents() == contents.get()) host->LayoutPane(binding.get());
           }
         }, GetWeakPtr(), inspected->GetWeakPtr()));
-  }
-  void ReportTab(int id, base::DictValue event) {
-    if (event.type == "windowClose") closes.push_back(id);
-    else events.emplace_back(id, event.type);
   }
   views::FocusManager* GetFocusManager() { return &views::focus_manager; }
   template <typename T> T* AddChildView(std::unique_ptr<T> view) {
@@ -343,6 +351,14 @@ inline std::map<int, ShellHostView*>& Hosts() {
 inline ShellHostView::ShellHostView() { Hosts()[static_cast<int>(Hosts().size()) + 1] = this; }
 inline ShellHostView::~ShellHostView() {
   std::erase_if(Hosts(), [this](const auto& entry) { return entry.second == this; });
+}
+
+inline bool TabBinding::Page::EmitClosed() {
+  binding->owner_->closes.push_back(TabId(binding->contents_));
+  return true;
+}
+inline void TabBinding::ReportPresentation(std::string name, base::DictValue) {
+  if (page_) owner_->events.emplace_back(TabId(contents_), std::move(name));
 }
 
 ARDIA_HOST_METHODS

@@ -104,6 +104,7 @@ struct AutoPictureInPictureTabHelper {
   }
   void OnTabActivatedChanged(bool visible) { events.emplace_back(contents->id, visible); }
 };
+namespace base { template<class C, class V> bool Contains(const C& container, const V& value) { for (const auto& item : container) if (item == value) return true; return false; } }
 struct TabBinding {
   content::WebContents value;
   std::string claim = "current";
@@ -113,6 +114,7 @@ struct TabBinding {
   bool presentation_attached = false;
   bool presentation_departed = false;
   int cancelled_auto_pip_until = 0;
+  std::vector<int> replaced_ids;
   void RememberPendingAutoPictureInPicture() {}
   content::WebContents* contents() { return &value; }
 };

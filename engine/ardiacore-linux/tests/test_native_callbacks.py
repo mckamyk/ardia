@@ -77,13 +77,16 @@ class NativeCallbackTests(unittest.TestCase):
           const std::string& spec() const { return url; }
         };
         struct ShellHostView {
-          std::vector<std::pair<int, base::DictValue>> events;
           int removed_views = 0;
           int layouts = 0;
           void LayoutPane(TabBinding*) { ++layouts; }
-          void OfferTab(content::WebContents*) {}
-          void ReportTab(int id, base::DictValue event) { events.emplace_back(id, std::move(event)); }
+          int offered = 0;
+          void OfferTab(content::WebContents*) { ++offered; }
           void RemoveChildViewT(views::WebView*) { ++removed_views; }
+        };
+        struct FakePage {
+          std::vector<std::string>* log;
+          bool EmitClosed() { log->push_back("closed"); return true; }
         };
         int TabId(content::WebContents* contents) { return contents->id; }
         class TabBinding {
@@ -98,6 +101,15 @@ class NativeCallbackTests(unittest.TestCase):
           bool devtools_had_focus = false;
           std::unique_ptr<int> devtools_watch;
           int resets = 0;
+          int contents_generation_ = 1;
+          std::vector<std::string> log;
+          std::vector<std::pair<std::string, base::DictValue>> presentations;
+          std::unique_ptr<FakePage> page_;
+          void Attach() { page_ = std::make_unique<FakePage>(FakePage{&log}); }
+          void RetirePage() { if (page_) { page_.reset(); log.push_back("retired"); } }
+          void ReportPresentation(std::string name, base::DictValue data) { if (page_) presentations.emplace_back(std::move(name), std::move(data)); }
+          struct Weak { TabBinding* binding; explicit operator bool() const { return binding; } };
+          Weak GetWeakPtr() { return {this}; }
           void RememberPendingAutoPictureInPicture() {}
           void ResetPageCommands() { ++resets; }
           void RemoveViewports();
@@ -131,6 +143,7 @@ class NativeCallbackTests(unittest.TestCase):
           content::WebContents private_target{13, &other_profile};
           content::WebContents invalid{0, &profile};
           TabBinding binding(&host, &source);
+          binding.Attach();
           const std::vector<std::pair<WindowOpenDisposition, std::string>> supported = {
             {WindowOpenDisposition::NEW_FOREGROUND_TAB, "foreground"},
             {WindowOpenDisposition::NEW_BACKGROUND_TAB, "background"},
@@ -138,26 +151,29 @@ class NativeCallbackTests(unittest.TestCase):
             {WindowOpenDisposition::NEW_WINDOW, "window"},
           };
           for (const auto& [disposition, expected] : supported) {
-            host.events.clear();
+            binding.presentations.clear();
             binding.DidOpenRequestedURL(&target, nullptr, {"https://example.test/new"}, {}, disposition, ui::PAGE_TRANSITION_LINK, false, true);
-            assert(host.events.size() == 1);
-            const auto& [id, event] = host.events.front();
-            assert(id == 11);
-            assert(event.strings.at("type") == "openWindow");
-            const auto& value = event.objects.at("value");
+            assert(binding.presentations.size() == 1);
+            const auto& [name, value] = binding.presentations.front();
+            assert(name == "openWindow");
+            assert(!value.strings.contains("type"));
             assert(value.strings.at("disposition") == expected);
             assert(value.strings.at("adoptId") == "tab:12");
             assert(value.strings.at("url") == "https://example.test/new");
             assert(value.strings.at("profile").empty());
           }
-          host.events.clear();
+          binding.presentations.clear();
           for (auto disposition : {WindowOpenDisposition::CURRENT_TAB, WindowOpenDisposition::OFF_THE_RECORD, WindowOpenDisposition::SAVE_TO_DISK}) {
             binding.DidOpenRequestedURL(&target, nullptr, {"https://example.test"}, {}, disposition, ui::PAGE_TRANSITION_LINK, false, true);
           }
           for (auto* opened : {&private_target, &invalid, static_cast<content::WebContents*>(nullptr)}) {
             binding.DidOpenRequestedURL(opened, nullptr, {"https://example.test"}, {}, WindowOpenDisposition::NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_LINK, false, true);
           }
-          assert(host.events.empty());
+          assert(binding.presentations.empty());
+          binding.RetirePage();
+          const int offered = host.offered;
+          binding.DidOpenRequestedURL(&target, nullptr, {"https://example.test"}, {}, WindowOpenDisposition::NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_LINK, false, true);
+          assert(binding.presentations.empty() && host.offered == offered + 1);
         }
         void TestClose() {
           ShellHostView first;
@@ -169,35 +185,35 @@ class NativeCallbackTests(unittest.TestCase):
           views::WebView tools;
           tools.contents = &original;
           TabBinding binding(&first, &original, &viewport, &tools);
+          binding.Attach();
           binding.Rebind(&replacement);
           assert(binding.resets == 1 && !tools.visible && !tools.contents);
+          assert(binding.log == std::vector<std::string>{"retired"} && binding.contents_generation_ == 2);
           original.Destroy();
-          assert(first.events.empty());
+          assert(binding.log.size() == 1);
           binding.presented = true;
           binding.presentation_applied = true;
           binding.presentation_attached = true;
           binding.presentation_departed = true;
           binding.pane_visible = true;
+          binding.Attach();
           binding.MoveTo(&second);
           assert(binding.resets == 2 && !binding.pane_visible);
           assert(!binding.devtools_viewport_.get());
+          assert(binding.log.size() == 2 && binding.log.back() == "retired");
           assert(!binding.presented);
           assert(!binding.presentation_applied);
           assert(!binding.presentation_attached);
           assert(!binding.presentation_departed);
-          assert(first.events.empty());
-          assert(second.events.empty());
           assert(first.removed_views == 2);
           assert(binding.viewport_.get() == nullptr);
+          binding.Attach();
           replacement.Destroy();
           assert(binding.resets == 3);
-          assert(first.events.empty());
-          assert(second.events.size() == 1);
-          assert(second.events.front().first == 20);
-          assert(second.events.front().second.strings.at("type") == "windowClose");
+          assert((binding.log == std::vector<std::string>{"retired", "retired", "closed", "retired"}));
           assert(binding.contents_.get() == nullptr);
           replacement.Destroy();
-          assert(second.events.size() == 1);
+          assert(binding.log.size() == 4);
           content::WebContents direct{30, &profile};
           views::WebView direct_view;
           TabBinding direct_binding(&first, &direct, &direct_view);
@@ -205,8 +221,8 @@ class NativeCallbackTests(unittest.TestCase):
           direct.Destroy();
           assert(direct_view.detachments == 1);
           assert(!direct_binding.devtools_watch && first.layouts == 1);
-          assert(first.events.size() == 1);
-          assert(first.events.front().second.strings.at("type") == "windowClose");
+          assert(direct_binding.log.empty());
+          assert(direct_binding.contents_.get() == nullptr);
         }
         int main(int argc, char** argv) {
           if (argc == 1 || std::string(argv[1]) == "open") TestOpen();

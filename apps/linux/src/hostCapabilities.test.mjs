@@ -83,6 +83,17 @@ test("the native bootstrap advertises every contract route, so engine capabiliti
   assert.equal(advertised.performanceRecording, ["engine.beginTracing", "engine.endTracing", "engine.isTracing"].every((name) => routes.includes(name)));
 });
 
+test("the native bootstrap advertises the intercepted site zoom routes from the same list the dispatcher uses", () => {
+  const host = nativeSource("ac_linux_host.cc");
+  const bootstrap = host.slice(host.indexOf("base::DictValue ShellHostView::Bootstrap() const {"), host.indexOf("void ShellHostView::LayoutOverlay()"));
+  assert.match(bootstrap, /for \(const char\* route : ardiacore::kLinuxZoomDomainRoutes\)\s*capabilities\.Append\(route\);/);
+  assert.match(host, /if \(ardiacore::IsLinuxZoomDomainRoute\(name\)\) \{/);
+  const zoom = nativeSource("ac_linux_history_zoom.h");
+  const routes = [...zoom.slice(zoom.indexOf("kLinuxZoomDomainRoutes[]"), zoom.indexOf("};", zoom.indexOf("kLinuxZoomDomainRoutes[]"))).matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(routes, ["sites.zoomLevels", "sites.setZoom"]);
+  for (const route of routes) assert.ok(!contractRoutes().includes(route));
+});
+
 test("Task Manager and tracing follow the advertised contract rather than the mere presence of a host", () => {
   assert.equal(linuxCapabilities(fakeHost().host).taskManager, false);
   assert.equal(linuxCapabilities(fakeHost(["engine.openTaskManager"]).host).taskManager, true);
