@@ -6,10 +6,16 @@ import { ardiaHost, reportHostError } from "../../host";
 import { HostPageEvents } from "../../hostPageEvents";
 import { applyHostPageThemeState, resetHostPageState } from "../../hostPageHooks";
 import { HostTab, type HostPageFactory, type HostTabEvent } from "../../hostTab";
+import { extensionViewsSupported } from "../../hostExtensionView";
+import { HostExtensionWebView } from "./HostExtensionWebView";
 import { hostOverlayBlocked, watchTabViewport } from "../../hostViewport";
 import { menuShown } from "../../menus";
 
 export const HostWebView = forwardRef<WebViewHandle, WebViewProps>(function HostWebView(props, ref) {
+  return props.extensionHost && extensionViewsSupported(ardiaHost) ? <HostExtensionWebView ref={ref} {...props} /> : <HostTabWebView ref={ref} {...props} />;
+});
+
+const HostTabWebView = forwardRef<WebViewHandle, WebViewProps>(function HostTabWebView(props, ref) {
   const latest = useRef(props);
   latest.current = props;
   const element = useRef<HTMLDivElement>(null);

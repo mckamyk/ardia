@@ -15,6 +15,8 @@ import { decideLastTabClose, decideWindowClose } from "../../browser/src/state/w
 import { firstWindowCommitted } from "../../browser/src/lib/afterFirstWindow";
 import { recordFreshProfile, startAppCommands, startLinuxAppServices, UTILITY_APP_COMMANDS } from "./appServices";
 import { linuxCapabilities } from "./hostCapabilities";
+import { useExtensions } from "../../browser/src/state/extensions/store";
+import { openExtensionFromMenu } from "../../browser/src/state/extensions/bridge";
 import { ardiaHost, invokeHost } from "./host";
 import { startHostPersistence } from "./hostSession";
 import { startHostData } from "./hostData";
@@ -31,7 +33,7 @@ import { startUtility } from "./utility";
 import { installProfileWindows } from "./hostWindowProfiles";
 import { focus } from "../../browser/src/state/browser/actions";
 
-Object.assign(globalThis, { ardiaLinux: { store: useBrowser, emitCommand } });
+Object.assign(globalThis, { ardiaLinux: { store: useBrowser, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu } });
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme });
 setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
 
