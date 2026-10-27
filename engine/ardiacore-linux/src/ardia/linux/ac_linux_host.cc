@@ -23,6 +23,7 @@
 #include "ardia/linux/ac_linux_close_hooks.h"
 #include "ardia/linux/ac_linux_credential_service.h"
 #include "ardia/linux/ac_linux_credentials.h"
+#include "ardia/linux/ac_linux_sync_service.h"
 #include "ardia/linux/ac_linux_dialog_views.h"
 #include "ardia/linux/ac_linux_document_service.h"
 #include "ardia/linux/ac_linux_downloads.h"
@@ -1803,6 +1804,7 @@ base::DictValue ShellHostView::Bootstrap() const {
   for (const char* route : ardiacore::kLinuxPageMessageRoutes)
     capabilities.Append(route);
   capabilities.Append("engine.systemState");
+  AppendLinuxSyncCapabilities(capabilities);
   AppendLinuxSiteControlsCapabilities(capabilities);
   for (const char* capability : linux_import::kImportCapabilities) capabilities.Append(capability);
   capabilities.Append("favicons.fetch");
@@ -4049,6 +4051,11 @@ void ShellHostView::Invoke(
   }
   if (LinuxCredentialsInvokes(method)) {
     return LinuxCredentialsInvoke(!page_profile() || page_profile()->IsOffTheRecord(), shell_, method, values, std::move(done));
+  }
+  if (LinuxSyncInvokes(method)) {
+    return LinuxSyncInvoke({base::NumberToString(id_) + "#" + base::NumberToString(renderer_generation_),
+                            !private_window_.empty(), is_utility()},
+                           profile(), shell_, method, values, std::move(done));
   }
   if (LinuxExtensionSurfaces::Handles(method)) {
     return ExtensionSurfaces()->Invoke(method, args, page_profile(), renderer_generation_,
