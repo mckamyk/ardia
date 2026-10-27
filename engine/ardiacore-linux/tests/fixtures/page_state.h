@@ -161,6 +161,7 @@ namespace ui { class BaseWindow {}; }
 namespace views { class Widget { public: base::WeakPtr<Widget> GetWeakPtr() { return weak_.GetWeakPtr(); } private: base::WeakPtrFactory<Widget> weak_{this}; }; }
 class Profile {
  public: base::WeakPtr<Profile> GetWeakPtr() { return weak_.GetWeakPtr(); }
+  static Profile* FromBrowserContext(Profile* context) { return context; }
  private: base::WeakPtrFactory<Profile> weak_{this};
 };
 namespace net {

@@ -1359,11 +1359,16 @@ class HostMessageHandler : public content::WebUIMessageHandler,
             }, weak_factory_.GetWeakPtr(), id));
       }
       if (ardiacore::IsLinuxZoomDomainRoute(name)) {
+        Profile* page = host_->page_profile();
+        if (!page || page->IsOffTheRecord()) return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
+        if (profile_name->kind != ardiacore::linux_profiles::ProfileKind::kDefault && !host_->HostsProfile(profile)) {
+          return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kWindowMismatch);
+        }
         auto prepared = ardiacore::PrepareLinuxZoomDomain(name, input);
         if (!prepared) return Fail(id, "ERR_ENGINE", "Invalid site zoom request");
         const auto serialized = base::WriteJson(prepared->args);
         if (!serialized) return Fail(id, "ERR_BAD_REPLY", "Site zoom arguments are not JSON");
-        const std::string path = host_->profile()->GetPath().value();
+        const std::string path = page->GetPath().value();
         ac_engine_call(prepared->service.c_str(), path.c_str(), serialized->c_str(), Replied,
                        new EngineReply{name, weak_factory_.GetWeakPtr(), id});
         return;

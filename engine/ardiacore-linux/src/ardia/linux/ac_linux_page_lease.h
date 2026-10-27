@@ -46,6 +46,7 @@ class LinuxPageMountAuthority {
  private:
   base::WeakPtr<BrowserWindowInterface> browser_;
   base::WeakPtr<Profile> profile_;
+  base::WeakPtr<Profile> shell_profile_;
   base::WeakPtr<content::WebContents> contents_;
   base::WeakPtr<content::WebContents> shell_;
   content::WeakDocumentPtr shell_document_;

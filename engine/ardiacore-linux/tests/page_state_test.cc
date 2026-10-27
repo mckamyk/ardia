@@ -65,6 +65,18 @@ void Authority() {
   LinuxPageMountAuthority authority(browser.get(),h.window.GetWeakPtr(),&page,&shell,{7,"key","a",1,1,1,1});assert(authority.Valid());browser.reset();assert(!authority.Valid());
 }
 
+void SplitProfiles() {
+  Profile app,page;views::Widget window;BrowserWindowInterface browser{&page};
+  content::WebContents shell{&app},tab{&page};browser.strip.tabs.push_back(&tab);
+  LinuxPageMountAuthority authority(&browser,window.GetWeakPtr(),&tab,&shell,{7,"key","claim",1,1,1,1});
+  assert(authority.Valid() && authority.contents()==&tab);
+  Profile other;shell.profile=&other;assert(!authority.Valid());shell.profile=&app;assert(authority.Valid());
+  tab.profile=&app;assert(!authority.Valid());tab.profile=&page;assert(authority.Valid());
+  auto gone=std::make_unique<Profile>();content::WebContents temporary_shell{gone.get()};
+  LinuxPageMountAuthority temporary(&browser,window.GetWeakPtr(),&tab,&temporary_shell,{7,"key","claim",1,1,1,1});
+  assert(temporary.Valid());gone.reset();assert(!temporary.Valid());
+}
+
 void Documents() {
   Harness h;auto first=h.lease->Capture();content::RenderFrameHost next;h.page.primary=&next;
   assert(first->document.AsRenderFrameHostIfValid() && !first->Valid());h.Boundary();assert(!first->Valid());
@@ -388,5 +400,5 @@ void Rebinding() {
 
 int main(int argc,char** argv) {
   assert(argc==2);std::string mode=argv[1];
-  if(mode=="authority") Authority();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
+  if(mode=="authority") Authority();else if(mode=="split-profiles") SplitProfiles();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else return 2;
 }

@@ -20,6 +20,8 @@ LinuxPageMountAuthority::LinuxPageMountAuthority(
     : identity(std::move(captured)),
       browser_(browser ? browser->GetWeakPtr() : nullptr),
       profile_(browser ? browser->GetProfile()->GetWeakPtr() : nullptr),
+      shell_profile_(shell ? Profile::FromBrowserContext(shell->GetBrowserContext())->GetWeakPtr()
+                           : nullptr),
       contents_(contents ? contents->GetWeakPtr() : nullptr),
       shell_(shell ? shell->GetWeakPtr() : nullptr),
       shell_document_(shell && shell->GetPrimaryMainFrame()
@@ -30,7 +32,7 @@ LinuxPageMountAuthority::LinuxPageMountAuthority(
 LinuxPageMountAuthority::~LinuxPageMountAuthority() { Invalidate(); }
 
 bool LinuxPageMountAuthority::Valid() const {
-  if (!active_ || !browser_ || !profile_ || !contents_ || !shell_ || !window_ ||
+  if (!active_ || !browser_ || !profile_ || !shell_profile_ || !contents_ || !shell_ || !window_ ||
       identity.native_id <= 0 || identity.key.empty() || identity.claim.empty() ||
       !identity.renderer_generation || !identity.binding_generation ||
       !identity.native_generation || !identity.handler_identity) return false;
@@ -40,7 +42,7 @@ bool LinuxPageMountAuthority::Valid() const {
   if (browser_->GetProfile() != profile_.get() ||
       browser_->GetWindow() != browser_window_ ||
       contents_->GetBrowserContext() != profile_.get() ||
-      shell_->GetBrowserContext() != profile_.get()) return false;
+      shell_->GetBrowserContext() != shell_profile_.get()) return false;
   auto* strip = browser_->GetTabStripModel();
   if (!strip) return false;
   if (strip->ContainsIndex(strip_index_) && strip->GetWebContentsAt(strip_index_) == contents_.get())

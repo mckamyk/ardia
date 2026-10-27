@@ -94,6 +94,9 @@ class PageStateTests(unittest.TestCase):
     def test_membership_checks_reuse_the_last_strip_index(self):
         self.run_case('strip-lookups')
 
+    def test_shell_in_the_app_profile_and_tabs_in_the_page_profile(self):
+        self.run_case('split-profiles')
+
 
 if __name__ == '__main__':
     unittest.main()
