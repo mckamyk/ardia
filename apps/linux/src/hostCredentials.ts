@@ -75,7 +75,11 @@ async function domainCall(host: ArdiaHost, domain: "passwords" | "autofill", ver
     return JSON.stringify({ password: typeof reply?.password === "string" ? reply.password : null });
   }
   if (name === "passwords.export") {
-    const reply = await typed<{ status?: unknown; path?: unknown }>(host, "ArdiaPasswords.export", [owner]);
+    const reply = await typed<{ status?: unknown; path?: unknown }>(host, "ArdiaPasswords.export", [owner]).catch((error: unknown) => {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === "ERR_REAUTH_UNAVAILABLE" || code === "ERR_REAUTH_DENIED") return { status: "reauthFailed" } as { status?: unknown; path?: unknown };
+      throw error;
+    });
     const status = typeof reply?.status === "string" ? reply.status : "writeFailed";
     return JSON.stringify(typeof reply?.path === "string" && status === "succeeded" ? { status, path: reply.path } : { status });
   }

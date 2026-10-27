@@ -56,7 +56,7 @@ function invoke(method, args) {
       if (args[3] !== null) entry.username = args[3];
       return [true, { ok: true }];
     }
-    case "ArdiaPasswords.export": return [true, granted ? { status: "succeeded", path: "/tmp/scratch/Ardia Passwords.csv" } : { status: "reauthFailed" }];
+    case "ArdiaPasswords.export": return native.auth === "unavailable" ? [false, { code: "ERR_REAUTH_UNAVAILABLE", message: "System authentication is off in background instances, so secrets stay hidden" }] : [true, granted ? { status: "succeeded", path: "/tmp/scratch/Ardia Passwords.csv" } : { status: "reauthFailed" }];
     case "ArdiaAutofill.saveCard": native.cards.push({ id: "card-2", network: "visa", last4: args[2].slice(-4), number: args[2] }); return [true, { id: "card-2" }];
     case "ArdiaAutofill.cardNumber": return [true, { number: granted ? native.cards.find((c) => c.id === args[1])?.number ?? null : null, authenticated: granted }];
     default: return [false, { code: "ERR_UNKNOWN_CALL", message: "unknown" }];
@@ -180,6 +180,9 @@ test("unavailable stores reject distinctly from an empty vault", async () => {
   native.auth = "unavailable";
   native.mode = "ready";
   await assert.rejects(passwords.unlockPasswords(""), { code: "ERR_REAUTH_UNAVAILABLE" });
+  assert.deepEqual(await passwords.exportPasswords(""), { status: "reauthFailed" });
+  native.mode = "locked";
+  await assert.rejects(passwords.exportPasswords(""), { code: "ERR_PASSWORDS_UNAVAILABLE" });
 });
 
 test("status drives an honest notice", async () => {
