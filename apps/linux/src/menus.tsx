@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import type { MenuItem } from "@ardia-real/shell";
 import { useBrowser } from "../../browser/src/state/browser/store";
 import { Symbol } from "./shims/web/Symbol";
+import { formatShortcut } from "./shortcutFormat";
+import { primaryModifiers } from "./clickModifiers";
 
 type OpenMenu = { items: MenuItem[]; x: number; y: number; resolve: (id: string | null) => void };
 
@@ -26,11 +28,11 @@ if (typeof window !== "undefined") {
     (e) => {
       pointer.x = e.clientX;
       pointer.y = e.clientY;
-      commandHeld = e.metaKey;
+      commandHeld = primaryModifiers(e).metaKey;
     },
     true,
   );
-  for (const type of ["keydown", "keyup"] as const) window.addEventListener(type, (e) => (commandHeld = e.metaKey), true);
+  for (const type of ["keydown", "keyup"] as const) window.addEventListener(type, (e) => (commandHeld = primaryModifiers(e).metaKey), true);
 }
 
 export function showMenu(items: MenuItem[]): Promise<string | null> {
@@ -43,8 +45,6 @@ const close = (id: string | null) => {
   publish(null);
   menu?.resolve(id);
 };
-
-const KEYS: Record<string, string> = { command: "Ctrl+", shift: "Shift+", option: "Alt+", control: "Super+" };
 
 type MenuAnchor = { x: number; y: number } | { row: HTMLElement };
 
@@ -84,7 +84,7 @@ function MenuList({ items, anchor }: { items: MenuItem[]; anchor: MenuAnchor }) 
     };
   }, [anchor, command, items]);
   useEffect(() => {
-    const track = (e: KeyboardEvent | PointerEvent) => setCommand(e.metaKey);
+    const track = (e: KeyboardEvent | PointerEvent) => setCommand(primaryModifiers(e).metaKey);
     const events = ["keydown", "keyup", "pointermove"] as const;
     for (const type of events) document.addEventListener(type, track);
     return () => {
@@ -109,7 +109,7 @@ function MenuList({ items, anchor }: { items: MenuItem[]; anchor: MenuAnchor }) 
             {item.symbol ? <Symbol name={item.symbol} size={12} color="currentColor" style={{ width: 16, height: 16, marginRight: 6 }} /> : null}
             {item.swatch ? <span className="ardia-menu-swatch" style={{ background: item.swatch }} /> : null}
             <span className="ardia-menu-title">{item.title}</span>
-            <span className="ardia-menu-key">{item.children ? "›" : item.key ? `${(item.modifiers ?? []).map((m) => KEYS[m]).join("")}${item.key.toUpperCase()}` : ""}</span>
+            <span className="ardia-menu-key">{item.children ? "›" : item.key ? formatShortcut({ key: item.key, modifiers: item.modifiers ?? [] }) : ""}</span>
             {sub?.item === item && item.children ? <MenuList items={item.children} anchor={{ row: sub.row }} /> : null}
           </div>
         );
