@@ -30,6 +30,7 @@ class LinuxPageState {
   bool EmitPresentation(std::string name, base::Value data);
   bool EmitNavigation();
   bool EmitClosed();
+  bool EmitRebind(base::DictValue creation);
   base::Value SecurityInfo();
   bool GoToOffset(const base::ListValue& args);
   bool ZoomStep(const base::ListValue& args);

@@ -14,6 +14,8 @@ function nativeHost({ snapshot = true } = {}) {
   let active = "";
   let sequence = 0;
   let epoch = 1;
+  let binding = "5";
+  let channel = "7";
   let securityReply = security;
   let beforeSecurityReply;
   const host = {
@@ -23,7 +25,7 @@ function nativeHost({ snapshot = true } = {}) {
       requests.push({ method, args });
       if (method === "tab.create") {
         active = args.claim;
-        const metadata = lease(args.claim, { documentEpoch: String(epoch), type: "pageLease", sequence: ++sequence });
+        const metadata = lease(args.claim, { bindingGeneration: binding, documentEpoch: String(epoch), type: "pageLease", sequence: ++sequence });
         emit({ type: "navigation", state: { ...navigation, title: "legacy" } });
         return { browserId: 7, chromeTabId: 7, state: navigation,
           ...(snapshot ? { lease: metadata, snapshot: { watermark: sequence, events: [{ name: "navigation", data: navigation }, { name: "security", data: security }, { name: "zoom", data: { zoom: 1.2, host: "example.test", isDefault: false, pinchScale: 1 } }] } } : {}) };
@@ -36,10 +38,18 @@ function nativeHost({ snapshot = true } = {}) {
       return null;
     },
   };
-  function emit(payload, id = "7") { for (const listener of [...listeners]) listener("ArdiaWebView", id, payload); }
-  const page = (name, data) => emit({ ...lease(active, { documentEpoch: String(epoch) }), type: "pageEvent", sequence: ++sequence, event: { name, data } });
-  const reset = (reason) => { if (reason === "document") epoch++; emit({ ...lease(active, { documentEpoch: String(epoch) }), type: "pageLifecycle", sequence: ++sequence, action: "reset", reason }); };
-  return { host, requests, emit, page, reset, active: () => active, listeners,
+  function emit(payload, id = channel) { for (const listener of [...listeners]) listener("ArdiaWebView", id, payload); }
+  const current = () => lease(active, { bindingGeneration: binding, documentEpoch: String(epoch) });
+  const page = (name, data) => emit({ ...current(), type: "pageEvent", sequence: ++sequence, event: { name, data } });
+  const reset = (reason) => { if (reason === "document") epoch++; emit({ ...current(), type: "pageLifecycle", sequence: ++sequence, action: "reset", reason }); };
+  const rebind = (browserId, { nextBinding = String(Number(binding) + 1), claim = active, events = [{ name: "navigation", data: { ...navigation, title: "Discarded" } }] } = {}) => {
+    const notice = { ...current(), type: "pageLifecycle", sequence: ++sequence, action: "rebind",
+      creation: { browserId, chromeTabId: browserId, state: navigation, lease: lease(claim, { bindingGeneration: nextBinding, documentEpoch: "1", type: "pageLease", sequence: 1 }), snapshot: { watermark: 1, events } } };
+    const previous = channel;
+    if (claim === active) { binding = nextBinding; channel = String(browserId); epoch = 1; sequence = 1; }
+    emit(notice, previous);
+  };
+  return { host, requests, emit, page, reset, rebind, active: () => active, listeners, channel: () => channel,
     setSecurityReply(value) { securityReply = value; }, onSecurityRequest(callback) { beforeSecurityReply = callback; } };
 }
 
@@ -58,7 +68,7 @@ function mount(native, options = {}) {
   };
   const ready = [];
   const tab = new HostTab(native.host, { key: options.key ?? "stable" }, (event) => ready.push(event),
-    (claim, nativeId) => new HostPageEvents(claim, nativeId, () => props, (reason) => calls.push(["reset", reason]), () => {}));
+    (claim, nativeId, rebound) => new HostPageEvents(claim, nativeId, () => props, (reason) => calls.push(["reset", reason]), () => {}, rebound));
   return { tab, calls, ready };
 }
 
@@ -144,5 +154,55 @@ test("replacement routes events only to the newest claim's receiver", async () =
   assert.deepEqual(second.calls.at(-1), ["progress", 0.7]);
   first.tab.dispose();
   second.tab.dispose();
+  await settle();
+});
+
+test("a discard rebind notice re-installs the fresh lease and moves commands to the new native id", async () => {
+  const native = nativeHost();
+  const { tab, calls } = mount(native);
+  await tab.ready;
+  calls.length = 0;
+  native.rebind(11);
+  assert.deepEqual(calls.map(([name]) => name), ["reset", "navigation"]);
+  assert.equal(calls[1][1].title, "Discarded");
+  assert.equal(tab.identity.browserId, 11);
+  native.page("progress", { progress: 0.3 });
+  assert.deepEqual(calls.at(-1), ["progress", 0.3]);
+  const delivered = calls.length;
+  native.emit({ ...lease(native.active()), type: "pageEvent", sequence: 50, event: { name: "progress", data: { progress: 0.9 } } }, "7");
+  native.emit({ ...lease(native.active()), type: "pageEvent", sequence: 51, event: { name: "progress", data: { progress: 0.9 } } }, "11");
+  assert.equal(calls.length, delivered);
+  await tab.command("zoomStep", [1]);
+  assert.equal(native.requests.at(-1).args.id, 11);
+  tab.dispose();
+  await settle();
+  assert.equal(native.requests.at(-1).method, "tab.release");
+  assert.equal(native.requests.at(-1).args.id, 11);
+});
+
+test("a rebind during an in-flight security request drops the stale result", async () => {
+  const native = nativeHost();
+  const { tab } = mount(native);
+  await tab.ready;
+  native.onSecurityRequest(() => native.rebind(12));
+  assert.equal(await tab.pageResult("getSecurityInfo"), null);
+  native.onSecurityRequest(undefined);
+  assert.deepEqual(await tab.pageResult("getSecurityInfo"), security);
+  assert.equal(native.requests.at(-1).args.id, 12);
+  tab.dispose();
+  await settle();
+});
+
+test("rebind notices for another claim or an older binding are rejected", async () => {
+  const native = nativeHost();
+  const { tab, calls } = mount(native);
+  await tab.ready;
+  const before = calls.length;
+  native.rebind(13, { claim: "intruder" });
+  native.rebind(13, { nextBinding: "4" });
+  native.rebind(13, { nextBinding: "5" });
+  assert.equal(calls.length, before);
+  assert.equal(tab.identity.browserId, 7);
+  tab.dispose();
   await settle();
 });

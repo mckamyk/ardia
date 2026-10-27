@@ -196,6 +196,17 @@ std::optional<base::DictValue> LinuxPageLease::CreationState(const LinuxPageRequ
            .Set("events", std::move(events)));
 }
 
+bool LinuxPageLease::EmitRebind(base::DictValue creation) {
+  auto envelope = Metadata("pageLifecycle");
+  if (!envelope) return false;
+  envelope->Set("action", "rebind");
+  envelope->Set("creation", std::move(creation));
+  auto weak = GetWeakPtr();
+  Send(std::move(*envelope));
+  if (weak) Reset();
+  return true;
+}
+
 void LinuxPageLease::Control(std::string reason) {
   auto envelope = Envelope("pageLifecycle");
   if (!envelope) return;

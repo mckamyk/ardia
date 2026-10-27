@@ -12,7 +12,8 @@ export type HostPageReceiver = {
   captureRequest(): (() => boolean) | null;
   dispose(): void;
 };
-export type HostPageFactory = (claim: string, nativeId: () => number | undefined) => HostPageReceiver;
+export type HostPageFactory = (claim: string, nativeId: () => number | undefined,
+  rebound: (identity: { browserId: number; chromeTabId: number }) => void) => HostPageReceiver;
 export type TabViewport = { rect: { x: number; y: number; width: number; height: number }; visible: boolean };
 
 const claims = new WeakMap<ArdiaHost, Map<string, HostTab>>();
@@ -32,7 +33,11 @@ export class HostTab {
   constructor(host: ArdiaHost, options: HostTabOptions, onEvent: (event: HostTabEvent) => void, page?: HostPageFactory) {
     this.host = host;
     this.key = options.key;
-    this.page = page?.(this.claim, () => this.identity?.browserId);
+    this.page = page?.(this.claim, () => this.identity?.browserId, (identity) => {
+      if (this.disposed || !this.identity || claims.get(host)?.get(this.key) !== this) return;
+      this.identity = { ...this.identity, browserId: identity.browserId, chromeTabId: identity.chromeTabId };
+      this.lastViewport = "";
+    });
     const owners = claims.get(host) ?? new Map<string, HostTab>();
     claims.set(host, owners);
     const early: { id: string; event: HostTabEvent }[] = [];
@@ -86,10 +91,10 @@ export class HostTab {
   }
 
   async command<T = unknown>(command: string, args: unknown[] = []): Promise<T> {
-    const { browserId } = await this.ready;
+    await this.ready;
     return enqueueTab(this.host, this.key, async () => {
-      if (this.disposed || claims.get(this.host)?.get(this.key) !== this) throw new Error(`Ardia tab released: ${this.key}`);
-      return invokeHost<T>("tab.command", { id: browserId, claim: this.claim, command, args }, this.host);
+      if (this.disposed || !this.identity || claims.get(this.host)?.get(this.key) !== this) throw new Error(`Ardia tab released: ${this.key}`);
+      return invokeHost<T>("tab.command", { id: this.identity.browserId, claim: this.claim, command, args }, this.host);
     });
   }
 

@@ -10,11 +10,14 @@ export type PageLeaseMetadata = {
   documentEpoch: string;
 };
 export type PageDelivery = PageLeaseMetadata & { type: "pageEvent"; sequence: number; event: PageEvent };
+export type PageCreationState = { lease: PageLeaseMetadata; snapshot: { watermark: number; events: PageEvent[] } };
+export type PageRebinding = PageCreationState & { browserId: number; chromeTabId: number };
 export type PageLifecycle = PageLeaseMetadata & { type: "pageLifecycle"; sequence: number } & (
   { action: "reset"; reason: "document" | "provisional" } |
-  { action: "snapshot"; events: PageEvent[] }
+  { action: "snapshot"; events: PageEvent[] } |
+  { action: "rebind"; creation: PageRebinding }
 );
-export type PageCreationState = { lease: PageLeaseMetadata; snapshot: { watermark: number; events: PageEvent[] } };
+export type PageRebound = (identity: { browserId: number; chromeTabId: number }) => void;
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const generation = (value: unknown): value is string => typeof value === "string" && /^[1-9][0-9]{0,19}$/.test(value) && BigInt(value) <= 18446744073709551615n;
@@ -24,13 +27,22 @@ const events = (value: unknown): value is PageEvent[] => Array.isArray(value) &&
 const metadata = (value: unknown): value is PageLeaseMetadata & Record<string, unknown> => record(value) && typeof value.claim === "string" && value.claim.length > 0 && value.claim.length <= 256 &&
   generation(value.rendererGeneration) && generation(value.bindingGeneration) && generation(value.documentEpoch);
 
+const nativeId = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0;
+const creation = (value: unknown): value is PageCreationState => record(value) && metadata(value.lease) &&
+  record(value.snapshot) && sequence(value.snapshot.watermark) && events(value.snapshot.events);
+const rebinding = (value: unknown): value is PageRebinding => record(value) && nativeId(value.browserId) && nativeId(value.chromeTabId) && creation(value);
+
 function delivery(value: unknown): value is PageDelivery | PageLifecycle {
   if (!record(value)) return false;
   if (!metadata(value) || !sequence(value["sequence"])) return false;
   if (value.type === "pageEvent") return event(value.event);
   if (value.type !== "pageLifecycle") return false;
+  if (value.action === "rebind") return rebinding(value.creation);
   return value.action === "reset" ? value.reason === "document" || value.reason === "provisional" : value.action === "snapshot" && events(value.events);
 }
+
+const leaseOf = (value: PageLeaseMetadata): PageLeaseMetadata =>
+  ({ claim: value.claim, rendererGeneration: value.rendererGeneration, bindingGeneration: value.bindingGeneration, documentEpoch: value.documentEpoch });
 
 function appEvent(value: PageEvent): PageEvent {
   if (value.name !== "navigation" || !record(value.data)) return value;
@@ -49,6 +61,7 @@ export class HostPageEvents {
   private installed = false;
   private applying = false;
   private boundary = 0;
+  private boundaries = 0;
   private provisional = false;
   private pending: (PageDelivery | PageLifecycle)[] = [];
   private claim: string;
@@ -56,6 +69,7 @@ export class HostPageEvents {
   private props: () => WebViewProps;
   private reset: (reason: PageResetReason) => void;
   private applyTheme: (state: NavigationState) => void;
+  private rebound: PageRebound | undefined;
 
   constructor(
     claim: string,
@@ -63,7 +77,9 @@ export class HostPageEvents {
     props: () => WebViewProps,
     reset: (reason: PageResetReason) => void,
     applyTheme: (state: NavigationState) => void,
+    rebound?: PageRebound,
   ) {
+    this.rebound = rebound;
     this.claim = claim;
     this.nativeId = nativeId;
     this.props = props;
@@ -90,14 +106,13 @@ export class HostPageEvents {
   }
 
   install(value: unknown): boolean {
-    if (!this.active || this.installed || !record(value) || !metadata(value.lease) || value.lease.claim !== this.claim ||
-        !record(value.snapshot) || !sequence(value.snapshot.watermark) || !events(value.snapshot.events) ||
-        !Number.isSafeInteger(this.nativeId()) || this.nativeId()! <= 0) return false;
-    const lease = structuredClone(value.lease);
+    if (!this.active || this.installed || !creation(value) || value.lease.claim !== this.claim ||
+        !nativeId(this.nativeId())) return false;
+    const lease = leaseOf(value.lease);
     const snapshot = structuredClone(value.snapshot) as PageCreationState["snapshot"];
     this.lease = lease;
     this.watermark = snapshot.watermark;
-    this.boundary = snapshot.watermark;
+    this.boundary = ++this.boundaries;
     this.installed = true;
     this.applying = true;
     try {
@@ -138,10 +153,11 @@ export class HostPageEvents {
     if (value.type === "pageEvent" && value.documentEpoch !== lease.documentEpoch) return false;
     if (value.type === "pageEvent" && this.provisional && ["security", "popupBlocked", "pageMessage"].includes(value.event.name)) return false;
     if (value.type === "pageLifecycle" && value.action === "reset" && value.reason === "provisional" && value.documentEpoch !== lease.documentEpoch) return false;
+    if (value.type === "pageLifecycle" && value.action === "rebind") return this.rebind(lease, value.creation);
     this.lease = { ...lease, documentEpoch: value.documentEpoch };
     this.watermark = value.sequence;
     if (value.type === "pageLifecycle") {
-      this.boundary = value.sequence;
+      this.boundary = ++this.boundaries;
       this.provisional = value.action === "reset" && value.reason === "provisional";
     }
     this.applying = true;
@@ -149,6 +165,23 @@ export class HostPageEvents {
       if (value.type === "pageEvent") this.replay([value.event]);
       else if (value.action === "reset") this.reset(value.reason);
       else { this.reset("snapshot"); this.replay(value.events); }
+    } finally { this.applying = false; }
+    return true;
+  }
+
+  private rebind(lease: PageLeaseMetadata, next: PageRebinding): boolean {
+    if (next.lease.claim !== lease.claim || next.lease.rendererGeneration !== lease.rendererGeneration ||
+        BigInt(next.lease.bindingGeneration) <= BigInt(lease.bindingGeneration)) return false;
+    const snapshot = structuredClone(next.snapshot);
+    this.lease = leaseOf(next.lease);
+    this.watermark = snapshot.watermark;
+    this.boundary = ++this.boundaries;
+    this.provisional = false;
+    this.rebound?.({ browserId: next.browserId, chromeTabId: next.chromeTabId });
+    this.applying = true;
+    try {
+      this.reset("snapshot");
+      this.replay(snapshot.events);
     } finally { this.applying = false; }
     return true;
   }

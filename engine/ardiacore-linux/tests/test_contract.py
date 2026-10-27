@@ -34,6 +34,7 @@ class ContractTests(unittest.TestCase):
 #include "ardia/linux/ac_linux_contract.h"
 #include <cassert>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 namespace base {
@@ -54,23 +55,24 @@ struct TabBinding {
   int* value;
   std::string claim;
   int renderer_generation = 1;
+  int replaced_id = 0;
   int* contents() { return value; }
 };
 struct ShellHostView {
   bool handler_ = true;
   int renderer_generation_ = 1;
-  std::map<int, TabBinding*> bindings;
-  TabBinding* Binding(int id) { auto it = bindings.find(id); return it == bindings.end() ? nullptr : it->second; }
+  std::map<int, std::unique_ptr<TabBinding>> bindings_;
+  TabBinding* Binding(int id) { auto it = bindings_.find(id); return it == bindings_.end() ? nullptr : it->second.get(); }
   TabBinding* ClaimedBinding(const base::DictValue&);
 };
 ARDIA_NATIVE_GUARD
 using namespace ardiacore::linux_contract;
 int main() {
   int contents = 7;
-  TabBinding binding{&contents, "current"};
   ShellHostView owner;
   ShellHostView other;
-  owner.bindings[7] = &binding;
+  owner.bindings_[7] = std::make_unique<TabBinding>(TabBinding{&contents, "current"});
+  TabBinding& binding = *owner.bindings_[7];
   base::DictValue request;
   request.ints["id"] = 7;
   request.strings["claim"] = "current";
@@ -80,6 +82,18 @@ int main() {
   assert(!owner.ClaimedBinding(request));
   request.strings["claim"] = "replacement";
   assert(owner.ClaimedBinding(request) == &binding);
+  base::DictValue replaced;
+  replaced.ints["id"] = 5;
+  replaced.strings["claim"] = "replacement";
+  assert(!owner.ClaimedBinding(replaced));
+  binding.replaced_id = 5;
+  assert(owner.ClaimedBinding(replaced) == &binding);
+  replaced.strings["claim"] = "stale";
+  assert(!owner.ClaimedBinding(replaced));
+  replaced.ints["id"] = 0;
+  binding.replaced_id = 0;
+  replaced.strings["claim"] = "replacement";
+  assert(!owner.ClaimedBinding(replaced));
   binding.claim.clear();
   assert(!owner.ClaimedBinding(request));
   binding.claim = "replacement";

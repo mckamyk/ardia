@@ -59,6 +59,7 @@ class DictValue {
   Value* Find(std::string_view key) const { auto it=data_.find(std::string(key)); return it==data_.end()?nullptr:const_cast<Value*>(&it->second); }
   const std::string* FindString(std::string_view key) const { auto* v=Find(key); if (!v) return nullptr; try { return &v->GetString(); } catch (...) { return nullptr; } }
   std::optional<double> FindDouble(std::string_view key) const { auto* v=Find(key); return v && (v->is_int() || v->is_double()) ? std::optional<double>(v->GetDouble()):std::nullopt; }
+  std::optional<int> FindInt(std::string_view key) const { auto* v=Find(key); return v && v->is_int() ? std::optional<int>(static_cast<int>(v->GetDouble())):std::nullopt; }
   const DictValue* FindDict(std::string_view key) const { auto* v=Find(key); return v && v->is_dict() ? &v->GetDict():nullptr; }
   void Merge(DictValue v) { for (auto& [key,value] : v.data_) data_.insert_or_assign(key,std::move(value)); }
   DictValue Clone() const { DictValue v; for (const auto& [k,x]:data_) v.Set(k,x.Clone()); return v; }
@@ -224,6 +225,7 @@ class WebContentsObserver {
   virtual ~WebContentsObserver();
   void Observe(WebContents* contents);
   WebContents* web_contents() const { return contents_; }
+  void ResetWebContents() { Observe(nullptr); }
   virtual void PrimaryPageChanged(Page&) {}
   virtual void DidStartNavigation(NavigationHandle*) {}
   virtual void DidFinishNavigation(NavigationHandle*) {}
@@ -240,7 +242,7 @@ struct RenderWidgetHostView { RenderWidgetHostImpl widget; RenderWidgetHostImpl*
 class WebContents {
  public:
   explicit WebContents(Profile* p):profile(p) {}
-  ~WebContents() { auto copy=observers; for(auto* o:copy) if (std::find(observers.begin(),observers.end(),o)!=observers.end()) o->WebContentsDestroyed(); }
+  ~WebContents() { auto copy=observers; for(auto* o:copy) if (std::find(observers.begin(),observers.end(),o)!=observers.end()) o->WebContentsDestroyed(); copy=observers; for(auto* o:copy) o->ResetWebContents(); }
   base::WeakPtr<WebContents> GetWeakPtr() { return weak.GetWeakPtr(); }
   RenderFrameHost* GetPrimaryMainFrame() const { return primary; }
   Profile* GetBrowserContext() const { return profile; }

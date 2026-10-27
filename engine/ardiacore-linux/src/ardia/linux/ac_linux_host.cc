@@ -681,6 +681,8 @@ class TabBinding : public content::WebContentsObserver {
   uint64_t contents_generation() const { return contents_generation_; }
   void AttachPage(std::unique_ptr<ardiacore::LinuxPageState> page);
   void RetirePage();
+  std::unique_ptr<ardiacore::LinuxPageState> TakePage();
+  int replaced_id = 0;
   void ReportPresentation(std::string name, base::DictValue data);
   base::WeakPtr<TabBinding> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
   void MoveTo(ShellHostView* owner);
@@ -954,6 +956,7 @@ class ShellHostView : public views::View,
   ardiacore::linux_contract::LaunchDecision launch_decision_;
   TabBinding* BindingForKey(std::string_view key);
   std::unique_ptr<ardiacore::LinuxPageState> MountPage(TabBinding* binding);
+  void ReplaceTabContents(content::WebContents* old_contents, content::WebContents* contents);
   void CreateTab(const base::DictValue& args,
                  base::OnceCallback<void(bool, base::Value)> done);
   void TabCommand(const base::DictValue& args,
@@ -2517,7 +2520,12 @@ TabBinding* ShellHostView::Binding(int id) {
 }
 
 TabBinding* ShellHostView::ClaimedBinding(const base::DictValue& args) {
-  auto* binding = Binding(args.FindInt("id").value_or(0));
+  const int id = args.FindInt("id").value_or(0);
+  auto* binding = Binding(id);
+  for (auto& [current, candidate] : bindings_) {
+    if (binding || id <= 0) break;
+    if (candidate->replaced_id == id) binding = candidate.get();
+  }
   return handler_ && binding && binding->contents() && binding->renderer_generation == renderer_generation_ && ardiacore::linux_contract::OwnsClaim(binding->claim, String(args, "claim")) ? binding : nullptr;
 }
 
@@ -2848,10 +2856,51 @@ void ShellHostView::ReattachViewports() {
   }
 }
 
+void ShellHostView::ReplaceTabContents(content::WebContents* old_contents,
+                                       content::WebContents* contents) {
+  TabBinding* binding = nullptr;
+  int old_id = 0;
+  for (auto& [id, candidate] : bindings_) {
+    if (!old_contents || candidate->contents() != old_contents) continue;
+    binding = candidate.get();
+    old_id = id;
+    break;
+  }
+  const int id = contents ? TabId(contents) : 0;
+  if (!binding || id <= 0 || (id != old_id && bindings_.contains(id))) return;
+  auto previous = binding->TakePage();
+  binding->Rebind(contents);
+  if (id != old_id) {
+    auto owned = std::move(bindings_[old_id]);
+    bindings_.erase(old_id);
+    owned->replaced_id = old_id;
+    bindings_[id] = std::move(owned);
+  }
+  if (!previous) return;
+  binding->AttachPage(MountPage(binding));
+  auto created = binding->page() ? binding->page()->CreationState() : std::nullopt;
+  if (!created) {
+    binding->RetirePage();
+    previous->Retire();
+    return;
+  }
+  created->Set("browserId", id);
+  created->Set("chromeTabId", id);
+  created->Set("state", binding->Navigation());
+  previous->EmitRebind(std::move(*created));
+  previous->Retire();
+}
+
 void ShellHostView::OnTabStripModelChanged(
-    TabStripModel*, const TabStripModelChange&,
+    TabStripModel*, const TabStripModelChange& change,
     const TabStripSelectionChange&) {
   if (!browser_) return;
+  if (change.type() == TabStripModelChange::kReplaced) {
+    const auto* replace = change.GetReplace();
+    auto weak = GetWeakPtr();
+    ReplaceTabContents(replace->old_contents, replace->new_contents);
+    if (!weak) return;
+  }
   TabStripModel* model = browser_->GetTabStripModel();
   for (auto& [id, binding] : bindings_) {
     if (binding->page_commands && (!binding->contents() ||
@@ -2863,7 +2912,14 @@ void ShellHostView::OnTabStripModelChanged(
   for (int index = 0; index < model->count(); ++index) {
     content::WebContents* contents = model->GetWebContentsAt(index);
     TabBinding* binding = Binding(TabId(contents));
-    if (binding && binding->contents() != contents) binding->Rebind(contents);
+    if (!binding || binding->contents() == contents) continue;
+    if (!binding->contents()) {
+      binding->Rebind(contents);
+      continue;
+    }
+    auto weak = GetWeakPtr();
+    ReplaceTabContents(binding->contents(), contents);
+    if (!weak) return;
   }
   ReattachViewports();
   QueueTransaction(std::nullopt);
@@ -4079,6 +4135,10 @@ void TabBinding::ResetPageCommands() {
 void TabBinding::AttachPage(std::unique_ptr<ardiacore::LinuxPageState> page) {
   RetirePage();
   page_ = std::move(page);
+}
+
+std::unique_ptr<ardiacore::LinuxPageState> TabBinding::TakePage() {
+  return std::move(page_);
 }
 
 void TabBinding::RetirePage() {

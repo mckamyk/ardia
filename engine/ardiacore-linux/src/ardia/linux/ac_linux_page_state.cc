@@ -124,6 +124,10 @@ bool LinuxPageState::EmitClosed() {
   return !retired_ && lease_->EmitClosed();
 }
 
+bool LinuxPageState::EmitRebind(base::DictValue creation) {
+  return !retired_ && lease_->EmitRebind(std::move(creation));
+}
+
 base::Value LinuxPageState::SecurityInfo() {
   auto request = Capture();
   if (!request) return base::Value();

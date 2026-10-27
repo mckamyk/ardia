@@ -5,7 +5,7 @@ import type { WebViewHandle, WebViewProps } from "@ardia-real/ardiacore";
 import { ardiaHost, reportHostError } from "../../host";
 import { HostPageEvents } from "../../hostPageEvents";
 import { applyHostPageThemeState, resetHostPageState } from "../../hostPageHooks";
-import { HostTab, type HostTabEvent } from "../../hostTab";
+import { HostTab, type HostPageFactory, type HostTabEvent } from "../../hostTab";
 import { hostOverlayBlocked, watchTabViewport } from "../../hostViewport";
 import { menuShown } from "../../menus";
 
@@ -23,9 +23,9 @@ export const HostWebView = forwardRef<WebViewHandle, WebViewProps>(function Host
     if (!ready.current) latest.current.onReady?.();
     ready.current = true;
   };
-  const page = (claim: string, nativeId: () => number | undefined) => new HostPageEvents(claim, nativeId, () => latest.current,
+  const page: HostPageFactory = (claim, nativeId, rebound) => new HostPageEvents(claim, nativeId, () => latest.current,
     (reason) => { const tabId = latest.current.tabId; if (tabId) resetHostPageState(tabId, reason); },
-    (state) => { const tabId = latest.current.tabId; if (tabId) applyHostPageThemeState(tabId, state); });
+    (state) => { const tabId = latest.current.tabId; if (tabId) applyHostPageThemeState(tabId, state); }, rebound);
 
   useEffect(() => {
     const host = ardiaHost!;
