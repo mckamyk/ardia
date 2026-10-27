@@ -99,6 +99,8 @@ describe("Ardia launch plumbing and shell driver against a mock host", () => {
   it("builds headless, throwaway launch arguments and environment", () => {
     const args = launchArguments({ scratch: "/s", uiDir: "/ui", extraArgs: ["--x"] });
     for (const flag of ["--user-data-dir=/s", "--ozone-platform=headless", "--remote-debugging-port=0", "--ardia-ui-dir=/ui", "--x"]) assert.ok(args.includes(flag), flag);
+    assert.ok(args.includes("--disable-extensions"));
+    assert.ok(!launchArguments({ scratch: "/s", extensions: true }).includes("--disable-extensions"));
     const env = launchEnvironment({ scratch: "/s", base: { PATH: "/bin", ARDIA_SWITCHES: "a=1", XDG_ACTIVATION_TOKEN: "t", WAYLAND_DISPLAY: "wayland-1" } });
     assert.equal(env.ARDIA_BACKGROUND, "1");
     assert.equal(env.ARDIA_DATA_DIR, "/s");
