@@ -1,0 +1,298 @@
+#include "ardia/linux/ac_linux_sync_keystore.h"
+
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <cstring>
+#include <utility>
+
+namespace ardia::linux_sync {
+namespace {
+
+using GQuark = uint32_t;
+
+struct GError {
+  GQuark domain;
+  int code;
+  char* message;
+};
+
+struct SecretSchemaAttribute {
+  const char* name;
+  int type;
+};
+
+struct SecretSchema {
+  const char* name;
+  int flags;
+  SecretSchemaAttribute attributes[32];
+  int reserved;
+  void* reserved1;
+  void* reserved2;
+  void* reserved3;
+  void* reserved4;
+  void* reserved5;
+  void* reserved6;
+  void* reserved7;
+};
+
+using StoreFn = int (*)(const SecretSchema*, const char*, const char*, const char*, void*, GError**, ...);
+using LookupFn = char* (*)(const SecretSchema*, void*, GError**, ...);
+using ClearFn = int (*)(const SecretSchema*, void*, GError**, ...);
+using FreeFn = void (*)(char*);
+using ServiceFn = void* (*)(int, void*, GError**);
+using UnrefFn = void (*)(void*);
+using ErrorFreeFn = void (*)(GError*);
+using QuarkNameFn = const char* (*)(GQuark);
+
+constexpr int kSecretErrorIsLocked = 2;
+constexpr char kDefaultCollection[] = "default";
+
+const SecretSchema& Schema() {
+  static const SecretSchema schema = [] {
+    SecretSchema s{};
+    s.name = kSecretSchema;
+    s.flags = 0;
+    s.attributes[0] = {"account", 0};
+    s.attributes[1] = {nullptr, 0};
+    return s;
+  }();
+  return schema;
+}
+
+bool ValidAccount(std::string_view account) {
+  return IsTag(account);
+}
+
+class FileKeyStore final : public KeyStore {
+ public:
+  explicit FileKeyStore(std::string directory) : directory_(std::move(directory)) {}
+
+  std::string_view kind() const override { return "file"; }
+
+  KeyStatus Load(std::string_view account, Bytes* secret) override {
+    if (!ValidAccount(account)) return KeyStatus::kNotFound;
+    const int fd = open(PathOf(account).c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) return errno == ENOENT ? KeyStatus::kNotFound : KeyStatus::kUnavailable;
+    struct stat info;
+    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size > 1024) {
+      close(fd);
+      return KeyStatus::kUnavailable;
+    }
+    Bytes data(static_cast<size_t>(info.st_size));
+    size_t got = 0;
+    while (got < data.size()) {
+      const ssize_t n = read(fd, data.data() + got, data.size() - got);
+      if (n < 0 && errno == EINTR) continue;
+      if (n <= 0) break;
+      got += static_cast<size_t>(n);
+    }
+    close(fd);
+    if (got != data.size()) {
+      Wipe(data);
+      return KeyStatus::kUnavailable;
+    }
+    *secret = std::move(data);
+    return KeyStatus::kOk;
+  }
+
+  KeyStatus Save(std::string_view account, const Bytes& secret) override {
+    if (!ValidAccount(account)) return KeyStatus::kUnavailable;
+    if (mkdir(directory_.c_str(), 0700) != 0 && errno != EEXIST) return KeyStatus::kUnavailable;
+    struct stat info;
+    if (lstat(directory_.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) return KeyStatus::kUnavailable;
+    const std::string path = PathOf(account);
+    const std::string staging = path + ".staging";
+    unlink(staging.c_str());
+    const int fd = open(staging.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) return KeyStatus::kUnavailable;
+    size_t written = 0;
+    bool ok = true;
+    while (ok && written < secret.size()) {
+      const ssize_t n = write(fd, secret.data() + written, secret.size() - written);
+      if (n < 0 && errno == EINTR) continue;
+      ok = n > 0;
+      if (ok) written += static_cast<size_t>(n);
+    }
+    ok = ok && fsync(fd) == 0;
+    ok = close(fd) == 0 && ok;
+    ok = ok && rename(staging.c_str(), path.c_str()) == 0;
+    if (!ok) {
+      unlink(staging.c_str());
+      return KeyStatus::kUnavailable;
+    }
+    const int dir = open(directory_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dir >= 0) {
+      fsync(dir);
+      close(dir);
+    }
+    return KeyStatus::kOk;
+  }
+
+  KeyStatus Delete(std::string_view account) override {
+    if (!ValidAccount(account)) return KeyStatus::kNotFound;
+    if (unlink(PathOf(account).c_str()) == 0) return KeyStatus::kOk;
+    return errno == ENOENT ? KeyStatus::kNotFound : KeyStatus::kUnavailable;
+  }
+
+  KeyStatus Probe() override { return KeyStatus::kOk; }
+
+ private:
+  std::string PathOf(std::string_view account) const {
+    return directory_ + "/sync-key-" + std::string(account);
+  }
+
+  std::string directory_;
+};
+
+class SecretServiceKeyStore final : public KeyStore {
+ public:
+  explicit SecretServiceKeyStore(std::string library) {
+    handle_ = dlopen(library.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!handle_) return;
+    store_ = reinterpret_cast<StoreFn>(dlsym(handle_, "secret_password_store_sync"));
+    lookup_ = reinterpret_cast<LookupFn>(dlsym(handle_, "secret_password_lookup_sync"));
+    clear_ = reinterpret_cast<ClearFn>(dlsym(handle_, "secret_password_clear_sync"));
+    free_ = reinterpret_cast<FreeFn>(dlsym(handle_, "secret_password_free"));
+    service_ = reinterpret_cast<ServiceFn>(dlsym(handle_, "secret_service_get_sync"));
+    unref_ = reinterpret_cast<UnrefFn>(dlsym(handle_, "g_object_unref"));
+    error_free_ = reinterpret_cast<ErrorFreeFn>(dlsym(handle_, "g_error_free"));
+    quark_name_ = reinterpret_cast<QuarkNameFn>(dlsym(handle_, "g_quark_to_string"));
+  }
+
+  std::string_view kind() const override { return "secretService"; }
+
+  KeyStatus Load(std::string_view account, Bytes* secret) override {
+    if (!Loaded()) return KeyStatus::kUnavailable;
+    if (!ValidAccount(account)) return KeyStatus::kNotFound;
+    const std::string name(account);
+    GError* error = nullptr;
+    char* found = lookup_(&Schema(), nullptr, &error, "account", name.c_str(), nullptr);
+    if (error) return Classify(error);
+    if (!found) return KeyStatus::kNotFound;
+    std::string hex(found);
+    free_(found);
+    Bytes decoded;
+    const bool ok = HexDecode(hex, &decoded);
+    Wipe(hex);
+    if (!ok) return KeyStatus::kUnavailable;
+    *secret = std::move(decoded);
+    return KeyStatus::kOk;
+  }
+
+  KeyStatus Save(std::string_view account, const Bytes& secret) override {
+    if (!Loaded() || !ValidAccount(account)) return KeyStatus::kUnavailable;
+    const std::string name(account);
+    std::string hex = HexEncode(secret);
+    GError* error = nullptr;
+    const int stored =
+        store_(&Schema(), kDefaultCollection, kSecretLabel, hex.c_str(), nullptr, &error, "account", name.c_str(), nullptr);
+    Wipe(hex);
+    if (error) return Classify(error);
+    return stored ? KeyStatus::kOk : KeyStatus::kUnavailable;
+  }
+
+  KeyStatus Delete(std::string_view account) override {
+    if (!Loaded()) return KeyStatus::kUnavailable;
+    if (!ValidAccount(account)) return KeyStatus::kNotFound;
+    const std::string name(account);
+    GError* error = nullptr;
+    const int cleared = clear_(&Schema(), nullptr, &error, "account", name.c_str(), nullptr);
+    if (error) return Classify(error);
+    return cleared ? KeyStatus::kOk : KeyStatus::kNotFound;
+  }
+
+  KeyStatus Probe() override {
+    if (!Loaded()) return KeyStatus::kUnavailable;
+    GError* error = nullptr;
+    void* service = service_(0, nullptr, &error);
+    if (error) {
+      if (service) unref_(service);
+      return Classify(error);
+    }
+    if (!service) return KeyStatus::kUnavailable;
+    unref_(service);
+    return KeyStatus::kOk;
+  }
+
+ private:
+  bool Loaded() const {
+    return handle_ && store_ && lookup_ && clear_ && free_ && service_ && unref_ && error_free_ && quark_name_;
+  }
+
+  KeyStatus Classify(GError* error) {
+    const char* domain = quark_name_(error->domain);
+    const bool locked = domain && std::strcmp(domain, "secret-error") == 0 && error->code == kSecretErrorIsLocked;
+    error_free_(error);
+    return locked ? KeyStatus::kLocked : KeyStatus::kUnavailable;
+  }
+
+  void* handle_ = nullptr;
+  StoreFn store_ = nullptr;
+  LookupFn lookup_ = nullptr;
+  ClearFn clear_ = nullptr;
+  FreeFn free_ = nullptr;
+  ServiceFn service_ = nullptr;
+  UnrefFn unref_ = nullptr;
+  ErrorFreeFn error_free_ = nullptr;
+  QuarkNameFn quark_name_ = nullptr;
+};
+
+}
+
+std::string_view KeyStatusName(KeyStatus status) {
+  switch (status) {
+    case KeyStatus::kOk: return "ok";
+    case KeyStatus::kNotFound: return "notFound";
+    case KeyStatus::kLocked: return "locked";
+    case KeyStatus::kUnavailable: return "unavailable";
+  }
+  return "unavailable";
+}
+
+std::unique_ptr<KeyStore> MakeFileKeyStore(std::string directory) {
+  return std::make_unique<FileKeyStore>(std::move(directory));
+}
+
+std::unique_ptr<KeyStore> MakeSecretServiceKeyStore(std::string library) {
+  return std::make_unique<SecretServiceKeyStore>(std::move(library));
+}
+
+std::string HexEncode(const Bytes& data) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string out;
+  out.reserve(data.size() * 2);
+  for (const uint8_t byte : data) {
+    out.push_back(kHex[byte >> 4]);
+    out.push_back(kHex[byte & 15]);
+  }
+  return out;
+}
+
+bool HexDecode(std::string_view text, Bytes* out) {
+  if (text.size() % 2) return false;
+  auto nibble = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  Bytes decoded;
+  decoded.reserve(text.size() / 2);
+  for (size_t i = 0; i < text.size(); i += 2) {
+    const int high = nibble(text[i]);
+    const int low = nibble(text[i + 1]);
+    if (high < 0 || low < 0) {
+      Wipe(decoded);
+      return false;
+    }
+    decoded.push_back(static_cast<uint8_t>(high << 4 | low));
+  }
+  *out = std::move(decoded);
+  return true;
+}
+
+}
