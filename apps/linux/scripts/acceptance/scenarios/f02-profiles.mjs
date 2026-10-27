@@ -7,7 +7,7 @@ import { js, nonce, until } from "../lib/util.mjs";
 
 const COOKIE = "ardia_acceptance";
 
-async function profilePage(app, shell, url) {
+export async function profilePage(app, shell, url) {
   const tabId = await shell.newTab(url);
   await shell.waitTabUrl(tabId, (current) => current === url, { label: `${shell.windowId} to load ${url}` });
   const target = await app.pageTarget((t) => t.type === "page" && t.url === url, { label: `page ${url}` });
@@ -19,7 +19,7 @@ async function profilePage(app, shell, url) {
 const writeMarks = (session, value) => evaluate(session, `(() => { document.cookie = ${js(`${COOKIE}=${value}; max-age=3600; path=/`)}; localStorage.setItem('ardiaAcceptance', ${js(value)}); return { cookie: document.cookie, storage: localStorage.getItem('ardiaAcceptance') }; })()`);
 const readMarks = (session) => evaluate(session, `({ cookie: document.cookie.split('; ').find(c => c.startsWith(${js(`${COOKIE}=`)}))?.split('=')[1] ?? null, storage: localStorage.getItem('ardiaAcceptance') })`);
 
-async function openProfileWindow(app, shell, body, label) {
+export async function openProfileWindow(app, shell, body, label) {
   const before = await shell.windowIds();
   const windowId = await shell.state(body);
   if (typeof windowId !== "string") throw new Error(`${label} returned ${JSON.stringify(windowId)}`);
