@@ -390,8 +390,7 @@ Arg::Arg() = default;
 Arg::Arg(const Arg& other) = default;
 
 Arg::Arg(Arg&& other) noexcept
-    : type(other.type), text(std::move(other.text)), flag(other.flag), number(other.number),
-      object(std::move(other.object)) {
+    : type(other.type), text(other.text), flag(other.flag), number(other.number), object(std::move(other.object)) {
   Wipe(other.text);
 }
 
@@ -411,7 +410,7 @@ Arg& Arg::operator=(Arg&& other) noexcept {
   if (this != &other) {
     Wipe(text);
     type = other.type;
-    text = std::move(other.text);
+    text = other.text;
     Wipe(other.text);
     flag = other.flag;
     number = other.number;
@@ -424,11 +423,10 @@ Arg::~Arg() {
   Wipe(text);
 }
 
-Arg Arg::String(std::string value) {
+Arg Arg::String(std::string_view value) {
   Arg arg;
   arg.type = Type::kString;
-  arg.text = std::move(value);
-  Wipe(value);
+  arg.text.assign(value.data(), value.size());
   return arg;
 }
 

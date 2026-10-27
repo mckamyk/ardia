@@ -296,6 +296,21 @@ void Wiping() {
   Arg arg = Arg::String(std::string(64, 'p'));
   Arg taken(std::move(arg));
   assert(arg.text.empty() && taken.text.size() == 64);
+  Arg small = Arg::String("hunter2");
+  const char* small_bytes = small.text.data();
+  Arg small_taken(std::move(small));
+  assert(small.text.empty() && small_taken.text == "hunter2");
+  for (size_t i = 0; i < 7; ++i) {
+    assert(small_bytes[i] == 0);
+  }
+  Arg source = Arg::String("swordfish");
+  const char* source_bytes = source.text.data();
+  Arg target = Arg::String("x");
+  target = std::move(source);
+  assert(source.text.empty() && target.text == "swordfish");
+  for (size_t i = 0; i < 9; ++i) {
+    assert(source_bytes[i] == 0);
+  }
 }
 
 void ExportCleanup(const std::filesystem::path& scratch) {

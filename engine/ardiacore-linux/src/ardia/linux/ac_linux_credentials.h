@@ -57,7 +57,7 @@ struct Arg {
   Arg& operator=(Arg&& other) noexcept;
   ~Arg();
 
-  static Arg String(std::string text);
+  static Arg String(std::string_view text);
   static Arg Bool(bool flag);
   static Arg Number(double number);
   static Arg Null();
