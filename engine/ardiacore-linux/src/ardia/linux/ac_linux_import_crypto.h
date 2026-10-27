@@ -1,0 +1,87 @@
+#ifndef ARDIA_LINUX_AC_LINUX_IMPORT_CRYPTO_H_
+#define ARDIA_LINUX_AC_LINUX_IMPORT_CRYPTO_H_
+
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace ardia::linux_import {
+
+class SecretBytes {
+ public:
+  SecretBytes();
+  explicit SecretBytes(std::string value);
+  SecretBytes(SecretBytes&& other);
+  SecretBytes& operator=(SecretBytes&& other);
+  SecretBytes(const SecretBytes&) = delete;
+  SecretBytes& operator=(const SecretBytes&) = delete;
+  ~SecretBytes();
+
+  SecretBytes Copy() const;
+  const std::string& value() const { return value_; }
+  std::string& mutable_value() { return value_; }
+  bool empty() const { return value_.empty(); }
+  void Clear();
+
+ private:
+  std::string value_;
+};
+
+inline constexpr size_t kChromiumKeyBytes = 16;
+inline constexpr size_t kMaxMozLz4Bytes = 256u * 1024 * 1024;
+
+SecretBytes DeriveChromiumKey(std::string_view secret);
+
+enum class ValueDecrypt { kOk, kKeyring, kPortal, kFailed };
+ValueDecrypt DecryptChromiumBytes(std::string_view blob, const SecretBytes* keyring_key, std::string* plain);
+ValueDecrypt DecryptChromiumValue(std::string_view blob, const SecretBytes* keyring_key, std::string_view host_key,
+                                  std::string* plain);
+
+bool Sha256(std::string_view data, std::string* digest);
+
+struct DerNode {
+  uint8_t tag = 0;
+  std::string_view content;
+  std::vector<DerNode> children;
+
+  bool constructed() const { return (tag & 0x20) != 0; }
+  std::string Oid() const;
+  std::optional<uint64_t> Integer() const;
+};
+
+std::optional<DerNode> ParseDer(std::string_view data);
+
+inline constexpr std::string_view kOidPbes2 = "1.2.840.113549.1.5.13";
+inline constexpr std::string_view kOidPbkdf2 = "1.2.840.113549.1.5.12";
+inline constexpr std::string_view kOidHmacSha256 = "1.2.840.113549.2.9";
+inline constexpr std::string_view kOidSha1And3Des = "1.2.840.113549.1.12.5.1.3";
+inline constexpr std::string_view kOidAes256Cbc = "2.16.840.1.101.3.4.1.42";
+inline constexpr std::string_view kOid3DesCbc = "1.2.840.113549.3.7";
+inline constexpr size_t kMaxPbkdf2Iterations = 10'000'000;
+
+enum class PbeResult { kOk, kWrongPassword, kUnsupported, kMalformed };
+PbeResult DecryptFirefoxPbe(std::string_view der, std::string_view global_salt, std::string_view primary_password,
+                            SecretBytes* plain);
+
+struct FirefoxKeyRow {
+  std::string a11;
+  std::string a102;
+  std::string a3;
+};
+
+enum class FirefoxKey { kOk, kLocked, kUnsupported, kMalformed, kMissing };
+FirefoxKey FirefoxMasterKey(std::string_view global_salt, std::string_view password_check,
+                            const std::vector<FirefoxKeyRow>& rows, std::string_view primary_password, SecretBytes* key);
+
+bool Base64Decode(std::string_view text, std::string* out);
+bool DecryptFirefoxField(std::string_view base64, const SecretBytes& key, std::string* plain);
+
+bool DecompressMozLz4(std::string_view data, std::string* out);
+bool DecompressLz4Block(std::string_view source, size_t expected, std::string* out);
+
+}
+
+#endif

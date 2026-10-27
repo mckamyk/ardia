@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ardia/linux/ac_linux_import_crypto.h"
 #include "ardia/linux/ac_linux_import_formats.h"
 #include "base/values.h"
 
@@ -44,7 +45,9 @@ Environment MakeEnvironment(const char* home, const char* config_home, const cha
 std::string DataDirectory(const Environment& environment, const BrowserDefinition& browser);
 std::optional<std::string> ProfileDirectory(const Environment& environment, const BrowserDefinition& browser,
                                             std::string_view profile_id);
-base::ListValue ListBrowsers(const Environment& environment);
+class Keyring;
+
+base::ListValue ListBrowsers(const Environment& environment, Keyring* keyring = nullptr);
 
 enum class FileRead { kOk, kMissing, kTooLarge, kUnreadable };
 int RemoveStaleScratch(const std::string& temp_root, int64_t now, int64_t max_age_seconds);
@@ -66,7 +69,14 @@ class ImportObserver {
 struct ImportOptions {
   std::optional<int> history_limit;
   std::optional<double> history_since;
+  std::optional<SecretBytes> chromium_key;
+  std::optional<SecretBytes> firefox_primary_password;
+  double now_ms = 0;
 };
+
+struct ImportedCookie;
+struct ImportedAddress;
+struct ImportedCard;
 
 struct ImportOutcome {
   bool cancelled = false;
@@ -74,6 +84,14 @@ struct ImportOutcome {
   std::string error;
   base::DictValue result;
   std::vector<Credential> credentials;
+  std::vector<ImportedCookie> cookies;
+  std::vector<ImportedAddress> addresses;
+  std::vector<ImportedCard> cards;
+
+  ImportOutcome();
+  ImportOutcome(ImportOutcome&&);
+  ImportOutcome& operator=(ImportOutcome&&);
+  ~ImportOutcome();
 };
 
 ImportOutcome ReadBrowserProfile(const Environment& environment, std::string_view browser_id,

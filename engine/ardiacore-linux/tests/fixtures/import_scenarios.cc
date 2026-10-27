@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <cassert>
+#include <memory>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -8,8 +10,11 @@
 #include <string>
 #include <vector>
 
+#include "ardia/linux/ac_linux_import_crypto.h"
 #include "ardia/linux/ac_linux_import_formats.h"
+#include "ardia/linux/ac_linux_import_keyring.h"
 #include "ardia/linux/ac_linux_import_readers.h"
+#include "ardia/linux/ac_linux_import_secrets.h"
 #include "base/values.h"
 
 using namespace ardia::linux_import;
@@ -39,6 +44,167 @@ base::ListValue Rows(const std::vector<Credential>& credentials) {
     rows.Append(std::move(row));
   }
   return rows;
+}
+
+std::string Hex(std::string_view bytes) {
+  std::string out;
+  char buffer[3];
+  for (const char c : bytes) {
+    std::snprintf(buffer, sizeof(buffer), "%02x", static_cast<unsigned char>(c));
+    out += buffer;
+  }
+  return out;
+}
+
+std::string Unhex(std::string_view hex) {
+  std::string out;
+  for (size_t i = 0; i + 1 < hex.size(); i += 2) out.push_back(static_cast<char>(std::stoi(std::string(hex.substr(i, 2)), nullptr, 16)));
+  return out;
+}
+
+base::ListValue CookieRows(const std::vector<ImportedCookie>& cookies) {
+  base::ListValue rows;
+  for (const ImportedCookie& cookie : cookies) {
+    base::DictValue row;
+    row.Set("domain", cookie.domain);
+    row.Set("name", cookie.name);
+    row.Set("value", cookie.value.value());
+    row.Set("path", cookie.path);
+    row.Set("created", cookie.created);
+    row.Set("expires", cookie.expires);
+    row.Set("lastAccess", cookie.last_access);
+    row.Set("secure", cookie.secure);
+    row.Set("httpOnly", cookie.http_only);
+    row.Set("sameSite", cookie.same_site);
+    row.Set("priority", cookie.priority);
+    row.Set("partition", cookie.partitioned ? cookie.partition_site : std::string());
+    row.Set("sourceScheme", cookie.source_scheme);
+    row.Set("sourcePort", cookie.source_port);
+    rows.Append(std::move(row));
+  }
+  return rows;
+}
+
+base::ListValue AddressRows(const std::vector<ImportedAddress>& addresses) {
+  base::ListValue rows;
+  for (const ImportedAddress& a : addresses) {
+    base::DictValue row;
+    row.Set("name", a.name);
+    row.Set("organization", a.organization);
+    row.Set("street", a.street);
+    row.Set("city", a.city);
+    row.Set("state", a.state);
+    row.Set("postalCode", a.postal_code);
+    row.Set("country", a.country);
+    row.Set("phone", a.phone);
+    row.Set("email", a.email);
+    rows.Append(std::move(row));
+  }
+  return rows;
+}
+
+base::ListValue CardRows(const std::vector<ImportedCard>& cards) {
+  base::ListValue rows;
+  for (const ImportedCard& card : cards) {
+    base::DictValue row;
+    row.Set("name", card.name);
+    row.Set("number", card.number.value());
+    row.Set("expMonth", card.exp_month);
+    row.Set("expYear", card.exp_year);
+    row.Set("nickname", card.nickname);
+    rows.Append(std::move(row));
+  }
+  return rows;
+}
+
+std::string_view StatusName(KeyringStatus status) {
+  switch (status) {
+    case KeyringStatus::kOk:
+      return "ok";
+    case KeyringStatus::kMissing:
+      return "missing";
+    case KeyringStatus::kLocked:
+      return "locked";
+    case KeyringStatus::kDenied:
+      return "denied";
+    case KeyringStatus::kUnavailable:
+      return "unavailable";
+  }
+  return "unavailable";
+}
+
+void SecretUnits() {
+  const std::string token = "0000000000000000000000000000000a";
+  ImportedVault vault;
+  ImportedData data;
+  data.cookies.emplace_back();
+  data.cookies.back().value = SecretBytes("cookie-secret-value");
+  data.cards.emplace_back();
+  data.cards.back().number = SecretBytes("4111 1111 1111 1111");
+  assert(!vault.Put("w1", "bad", ImportedData{}, 0));
+  assert(vault.Put("w1", token, std::move(data), 0));
+  assert(!vault.Put("w2", token, ImportedData{}, 0));
+  assert(!vault.Take("w2", token, 1));
+  std::optional<ImportedData> taken = vault.Take("w1", token, 1);
+  assert(taken && taken->cookies.size() == 1 && taken->cookies[0].value.value() == "cookie-secret-value");
+  assert(!vault.Take("w1", token, 2));
+  base::DictValue clean;
+  clean.Set("cookieCount", 1);
+  clean.Set("name", "nothing secret");
+  assert(!ReplyLeaksImported(base::Value(std::move(clean)), taken->cookies, taken->cards));
+  base::DictValue cookie;
+  cookie.Set("note", "has cookie-secret-value inside");
+  assert(ReplyLeaksImported(base::Value(std::move(cookie)), taken->cookies, taken->cards));
+  base::DictValue card;
+  card.Set("note", "4111-1111-1111-1111");
+  assert(ReplyLeaksImported(base::Value(std::move(card)), taken->cookies, taken->cards));
+  assert(vault.Put("w1", token, ImportedData{}, 0));
+  assert(!vault.Take("w1", token, kVaultLifetimeMs));
+  for (int i = 0; i < 10; ++i) {
+    char buffer[33];
+    std::snprintf(buffer, sizeof(buffer), "%032x", i + 100);
+    assert(vault.Put("w1", buffer, ImportedData{}, 5));
+  }
+  assert(vault.size() == kVaultEntriesPerOwner);
+  vault.DiscardOwner("w1");
+  assert(vault.size() == 0);
+
+  UnlockedKeys keys;
+  keys.Set("w1", "chrome", SecretBytes("key-one"), 0);
+  keys.Set("w1", "chrome", SecretBytes("key-two"), 1);
+  keys.Set("w2", "chrome", SecretBytes("other"), 1);
+  assert(keys.size() == 2);
+  assert(keys.Copy("w1", "chrome", 2)->value() == "key-two");
+  assert(!keys.Copy("w1", "brave", 2));
+  assert(!keys.Copy("w1", "chrome", kVaultLifetimeMs + 2));
+  keys.Forget("w1");
+  assert(!keys.Copy("w1", "chrome", 3) && keys.Copy("w2", "chrome", 3));
+  keys.Expire(kVaultLifetimeMs + 5);
+  assert(keys.size() == 0);
+
+  SecretBytes moved("abc");
+  SecretBytes target(std::move(moved));
+  assert(moved.empty() && target.value() == "abc");
+  std::string digits;
+  assert(CardDigits("4111-1111 1111 1111", &digits) && digits == "4111111111111111");
+  assert(!CardDigits("4111x", &digits) && digits.empty());
+  assert(!CardDigits("123", &digits));
+  std::string site;
+  assert(FirefoxPartitionSite("(https,Example.com)", &site) && site == "https://example.com");
+  assert(FirefoxPartitionSite("(http,a.example,8080)", &site) && site == "http://a.example");
+  assert(!FirefoxPartitionSite("(ftp,a.example)", &site) && !FirefoxPartitionSite("(https,a b)", &site) &&
+         !FirefoxPartitionSite("(https,a.example,0)", &site) && !FirefoxPartitionSite("https,a", &site));
+  std::string json;
+  AppendJsonString("a\"b\\c\n\x01", &json);
+  assert(json == "\"a\\\"b\\\\c\\u000a\\u0001\"");
+  std::optional<SafeStorageItem> chrome = SafeStorageFor("chromeBeta");
+  assert(chrome && chrome->application == "chrome" && chrome->kwallet_folder == "Chrome Keys" &&
+         chrome->kwallet_key == "Chrome Safe Storage");
+  assert(SafeStorageFor("chromiumSnap")->application == "chromium");
+  assert(SafeStorageFor("braveFlatpak")->kwallet_key == "Brave Safe Storage");
+  assert(SafeStorageFor("edgeDev")->application == "microsoft-edge");
+  assert(!SafeStorageFor("firefox"));
+  std::printf("secret units passed\n");
 }
 
 void ReviewUnits() {
@@ -324,10 +490,57 @@ int main(int argc, char** argv) {
     std::printf("%d\n", RemoveStaleScratch(argv[2], std::atoll(argv[3]), std::atoll(argv[4])));
     return 0;
   }
+  if (command == "secrets") {
+    SecretUnits();
+    return 0;
+  }
+  if (command == "derive" && argc > 2) {
+    std::cout << Hex(DeriveChromiumKey(argv[2]).value()) << "\n";
+    return 0;
+  }
+  if (command == "mozlz4" && argc > 2) {
+    std::string out;
+    const bool ok = DecompressMozLz4(Slurp(argv[2]), &out);
+    std::cout << (ok ? "ok " + Hex(out) : std::string("failed")) << "\n";
+    return 0;
+  }
+  if (command == "firefoxfield" && argc > 3) {
+    SecretBytes key(Unhex(argv[3]));
+    std::string plain;
+    std::cout << (DecryptFirefoxField(argv[2], key, &plain) ? "ok " + plain : std::string("failed")) << "\n";
+    return 0;
+  }
+  if (command == "keyring" && argc > 3) {
+    std::optional<SafeStorageItem> item = SafeStorageFor(argv[2]);
+    if (!item) return 3;
+    std::unique_ptr<Keyring> keyring = SystemKeyring();
+    const int timeout = argc > 4 ? std::atoi(argv[4]) : kKeyringProbeTimeoutMs;
+    base::DictValue out;
+    if (std::string(argv[3]) == "exists") {
+      out.Set("status", StatusName(keyring->Exists(*item, timeout)));
+    } else {
+      KeyringLookup lookup = keyring->Read(*item, timeout);
+      out.Set("status", StatusName(lookup.status));
+      out.Set("backend", lookup.backend);
+      out.Set("secret", lookup.secret.value());
+      out.Set("key", lookup.secret.empty() ? std::string() : Hex(DeriveChromiumKey(lookup.secret.value()).value()));
+      out.Set("code", KeyringErrorCode(lookup.status));
+    }
+    out.Set("application", item->application);
+    out.Set("folder", item->kwallet_folder);
+    out.Set("entry", item->kwallet_key);
+    std::cout << base::ToJson(out) << "\n";
+    return 0;
+  }
   if (argc < 6) return 2;
   const Environment environment = MakeEnvironment(argv[2], argv[3], argv[4], argv[5]);
   if (command == "discover") {
     std::cout << base::ToJson(ListBrowsers(environment)) << "\n";
+    return 0;
+  }
+  if (command == "discover-keyring") {
+    std::unique_ptr<Keyring> keyring = SystemKeyring();
+    std::cout << base::ToJson(ListBrowsers(environment, keyring.get())) << "\n";
     return 0;
   }
   if (command == "extensions") {
@@ -339,12 +552,23 @@ int main(int argc, char** argv) {
     if (argc > 9 && std::atoi(argv[9]) > 0) options.history_limit = std::atoi(argv[9]);
     if (argc > 10 && std::atof(argv[10]) > 0) options.history_since = std::atof(argv[10]);
     Recorder recorder(argc > 11 ? std::atoi(argv[11]) : 0);
+    if (argc > 12 && std::string(argv[12]) != "-") options.chromium_key = SecretBytes(Unhex(argv[12]));
+    if (argc > 13 && std::string(argv[13]) != "-") options.firefox_primary_password = SecretBytes(argv[13]);
+    options.now_ms = argc > 14 ? std::atof(argv[14]) : 1700000000000.0;
     ImportOutcome outcome = ReadBrowserProfile(environment, argv[6], argv[7], Split(argv[8]), options, recorder);
     base::DictValue out;
     out.Set("cancelled", outcome.cancelled);
     out.Set("error", outcome.error_code);
     out.Set("result", std::move(outcome.result));
     out.Set("credentials", Rows(outcome.credentials));
+    out.Set("cookies", CookieRows(outcome.cookies));
+    out.Set("addresses", AddressRows(outcome.addresses));
+    out.Set("cards", CardRows(outcome.cards));
+    int dropped = 0;
+    out.Set("cookiesPayload", CookiesPayload(outcome.cookies, 0, outcome.cookies.size(), &dropped).value());
+    out.Set("cookiesDropped", dropped);
+    out.Set("autofillPayload", AutofillPayload(outcome.addresses, outcome.cards, 0,
+                                               std::max(outcome.addresses.size(), outcome.cards.size())).value());
     out.Set("progress", recorder.Take());
     std::cout << base::ToJson(out) << "\n";
     return 0;
