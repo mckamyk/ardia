@@ -306,6 +306,7 @@ class ShellHostView : public views::View {
     children.insert(children.begin() + std::min(index, children.size()), std::move(moved));
   }
   int profile() const { return 0; }
+  int page_profile() const { return 0; }
   base::WeakPtr<ShellHostView> GetWeakPtr() { return weak.GetWeakPtr(); }
   TabBinding* Bind(content::WebContents* contents, int id) {
     tab_ids[contents] = id;

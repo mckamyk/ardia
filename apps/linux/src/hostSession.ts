@@ -8,6 +8,7 @@ import { sessionStatePatch } from "./hostSessionState.ts";
 import { createWindowDeparture } from "./windowDeparture.ts";
 import { parkWindowPins } from "../../browser/src/state/pins/parkedPins";
 import { inPinnedContainer, newId, snapshotTab } from "../../browser/src/state/browser/model";
+import { withPrivateWindow } from "./hostWindowProfiles.ts";
 
 const CLOSED_WINDOW_LIMIT = 10;
 const inClosingOrder = <T extends { closedAt: number }>(entries: T[]) => [...entries].sort((a, b) => a.closedAt - b.closedAt).slice(-CLOSED_WINDOW_LIMIT);
@@ -37,6 +38,8 @@ export function initialHostSession(host: ArdiaHost, saved: HydrateData | null | 
   if (!windowId || !profileId || /[\\/\0]/.test(windowId + profileId)) throw new Error("Invalid Ardia host bootstrap IDs");
   if (host.bootstrap.startup !== false && saved?.settings?.restoreSession === false) saved = withoutRestoredWindows(saved, now);
   if (saved?.closedWindows) saved = { ...saved, closedWindows: inClosingOrder(saved.closedWindows) };
+  const privateSession = withPrivateWindow(host, saved ?? {});
+  if (privateSession) return privateSession;
   const profile = { id: profileId, name: "Personal", color: "plum" as const, icon: null, createdAt: now };
   const profiles = { ...saved?.profiles };
   profiles[profileId] ??= profile;

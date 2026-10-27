@@ -195,11 +195,57 @@ class SessionMerger {
   bool ok_ = true;
 };
 
+bool PrivateProfileId(const base::Value& value) {
+  return value.is_string() && value.GetString().starts_with("incognito:");
+}
+
+bool ContainsPrivateIdentity(const base::Value& value) {
+  if (value.is_list()) {
+    for (const base::Value& item : value.GetList()) {
+      if (ContainsPrivateIdentity(item)) return true;
+    }
+    return false;
+  }
+  if (!value.is_dict()) return false;
+  for (const auto& [key, item] : value.GetDict()) {
+    if ((key == "profileId" || key == "lastProfileId") && PrivateProfileId(item)) return true;
+    if (ContainsPrivateIdentity(item)) return true;
+  }
+  return false;
+}
+
+bool ContainsPrivateSessionData(const base::DictValue& session) {
+  for (const std::string_view table : {"profiles", "parkedPins", "pinChoices", "pinSync"}) {
+    const base::DictValue* entries = session.FindDict(table);
+    if (!entries) continue;
+    for (const auto& [key, value] : *entries) {
+      if (key.starts_with("incognito:")) return true;
+    }
+  }
+  if (const base::Value* order = session.Find("profileOrder"); order && order->is_list()) {
+    for (const base::Value& id : order->GetList()) {
+      if (PrivateProfileId(id)) return true;
+    }
+  }
+  if (const base::DictValue* windows = session.FindDict("windows")) {
+    for (const auto& [id, window] : *windows) {
+      if (!window.is_dict()) continue;
+      const base::Value* incognito = window.GetDict().Find("incognito");
+      if (incognito && incognito->is_bool() && incognito->GetBool()) return true;
+      if (window.GetDict().Find("originalProfileId")) return true;
+    }
+  }
+  for (const auto& [key, value] : session) {
+    if ((key == "lastProfileId" && PrivateProfileId(value)) || ContainsPrivateIdentity(value)) return true;
+  }
+  return false;
+}
+
 }
 
 bool ValidLinuxSession(const base::DictValue& session) {
   Budget budget{1, 0};
-  return ValidDictionary(session, 0, budget);
+  return ValidDictionary(session, 0, budget) && !ContainsPrivateSessionData(session);
 }
 
 std::optional<base::DictValue> MergeLinuxSession(

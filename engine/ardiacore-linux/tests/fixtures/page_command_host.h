@@ -106,6 +106,7 @@ ARDIA_AUTHORITY
   bool is_utility() const { return utility; }
   BrowserWindowInterface* browser() const { return browser_; }
   Profile* profile() const { return profile_; }
+  Profile* page_profile() const { return profile_; }
   content::WebContents* shell() { return &shell_contents; }
   bool OwnsHandler(HostMessageHandler* handler, uint64_t generation) const {
     return handler && handler == handler_ && generation == renderer_generation_;

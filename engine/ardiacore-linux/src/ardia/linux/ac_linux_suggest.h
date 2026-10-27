@@ -25,7 +25,7 @@ void NoteSuggestionsSetting(const base::FilePath& profile_path,
 base::OnceCallback<void(bool, base::Value)> NoteSuggestionsOnWrite(
     base::FilePath profile_path, base::OnceCallback<void(bool, base::Value)> done);
 
-bool CanFetchSuggestions(Profile* profile, const std::string& url);
+bool CanFetchSuggestions(Profile* setting_profile, Profile* network_profile, const std::string& url);
 
 class SuggestionClient {
  public:
@@ -34,8 +34,8 @@ class SuggestionClient {
   SuggestionClient& operator=(const SuggestionClient&) = delete;
   ~SuggestionClient();
 
-  void Fetch(Profile* profile, const std::string& id, const std::string& url,
-             SuggestionReply reply);
+  void Fetch(Profile* setting_profile, Profile* network_profile, const std::string& id,
+             const std::string& url, SuggestionReply reply);
   void Cancel(const std::string& id);
 
  private:

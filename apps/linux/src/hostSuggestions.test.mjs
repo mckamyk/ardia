@@ -172,8 +172,11 @@ test("private windows can get suggestions on their own partition, gated by the o
   const suggest = read("ac_linux_suggest.cc");
   const gate = suggest.slice(suggest.indexOf("bool CanFetchSuggestions("), suggest.indexOf("SuggestionClient::SuggestionClient()"));
   assert.doesNotMatch(gate, /IsOffTheRecord/);
-  assert.match(gate, /Settings\(\)\.find\(profile->GetOriginalProfile\(\)->GetPath\(\)\)/);
+  assert.match(gate, /Settings\(\)\.find\(setting_profile->GetOriginalProfile\(\)->GetPath\(\)\)/);
+  assert.match(suggest, /started->Load\(network_profile, GURL\(url\)\);/);
   assert.match(suggest, /profile->GetDefaultStoragePartition\(\)/);
+  const host = read("ac_linux_host.cc");
+  assert.match(host, /suggestions_->Fetch\(profile\(\), page_profile\(\), /);
   assert.match(suggest, /CredentialsMode::kOmit/);
 });
 
