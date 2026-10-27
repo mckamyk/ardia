@@ -68,6 +68,7 @@ class LinuxDialogController {
  public:
   static constexpr size_t kMaxPending = 16;
   static constexpr size_t kMaxRetiredGenerations = 1024;
+  static constexpr size_t kMaxSuspensions = 64;
 
   LinuxDialogController(std::string window_id,
                         std::string profile_identity,
@@ -87,7 +88,7 @@ class LinuxDialogController {
   void ParentDestroyed();
   LinuxDialogSuspension Suspend();
   bool Resume(const LinuxDialogSuspension& suspension);
-  bool suspended() const { return suspension_ != 0; }
+  bool suspended() const { return suspensions_exhausted_ || !suspensions_.empty(); }
   size_t pending() const { return entries_.size(); }
   base::WeakPtr<LinuxDialogController> GetWeakPtr();
 
@@ -116,7 +117,8 @@ class LinuxDialogController {
   bool pumping_ = false;
   uint64_t sequence_ = 0;
   uint64_t active_sequence_ = 0;
-  uint64_t suspension_ = 0;
+  std::set<uint64_t> suspensions_;
+  bool suspensions_exhausted_ = false;
   std::map<std::string, Entry> entries_;
   std::unique_ptr<LinuxDialogSurface> surface_;
   base::WeakPtrFactory<LinuxDialogController> weak_factory_{this};
