@@ -89,6 +89,19 @@ Site permissions, per-site data and browsing-data clearing go through `ac_linux_
 
 The content blocker is the same uBlock Origin component macOS loads. Each regular profile loads it from `lib/ardia/extensions/ublock` (or `--ardia-content-blocker-dir`) once its extension system is ready. The restricted-component hook stops it from scripting `chrome://` pages, including the shell. Calls run in a hidden extension page, `ardia-linux-bridge.html`, which exposes seven fixed operations. Chromium refuses main-world script on extension pages, so the browser passes requests through a DOM attribute from an isolated world and polls for the reply. Isolated-profile windows load their own copy, which copies the app profile's lists, exceptions and auto-update on first load and after every change. Until a fresh app profile's or an isolated profile's copy is ready, a Linux-only navigation throttle (`chromium-linux-navigation-hold-hook.patch`) holds that profile's page navigations, for at most 10 s. Contract, tests and open items are in `docs/linux-parity/i-site-controls-handoff.md` and `docs/linux-parity/S-handoff.md`.
 
+## Extensions: search providers, shortcuts and native messaging
+
+- **Search providers.** Chromium allows `chrome_settings_overrides` only on Windows and macOS. `chromium-linux-settings-overrides.patch` adds `linux` to that manifest feature, so an extension's `search_provider` reaches `search.engines` and Ardia's extension search engines, as on macOS.
+- **Keyboard shortcuts.** Each browser window keeps a `LinuxExtensionKeybindings` registry (`ac_linux_extension_keybindings.cc`). The window's key handler checks Ardia's own shortcut table first. A key that Ardia binds never reaches an extension, even where Ardia ignores it (text fields). Otherwise `_execute_action` (and the MV2 action aliases) sends `extensions.actionShortcut` for the active tab, and the shared toolbar opens the popup or side panel under Ardia's button. Named commands fire `chrome.commands.onCommand`. Global commands keep Chromium's own listener. Chromium 156 has no `_execute_side_panel` command: a manifest using that name gets an ordinary named command.
+- **Native messaging hosts.** Ardia looks for a host's manifest `<name>.json` in this order:
+  1. `<Ardia data dir>/NativeMessagingHosts` (by default `~/.config/ardia/NativeMessagingHosts`);
+  2. `~/.config/google-chrome/NativeMessagingHosts` (Helium's base patch; honours `CHROME_CONFIG_HOME`);
+  3. `~/.config/chromium/NativeMessagingHosts` (`chromium-linux-native-messaging-hosts.patch`; honours `CHROME_CONFIG_HOME`, then `XDG_CONFIG_HOME`);
+  4. `/etc/chromium/native-messaging-hosts`;
+  5. `/etc/opt/chrome/native-messaging-hosts`.
+
+  Hosts installed for Chrome or Chromium (1Password, Bitwarden, KeePassXC) are found without changes. The host's `allowed_origins` must list the extension, which holds for Web Store installs.
+
 ## Architecture and boundaries
 
 `ChromeBrowserMainParts::PostBrowserStart()` starts `ardia::StartLinuxHost()`. The Linux host serves the bundled UI at `chrome://ardia/`. Assets are loaded from `ardia-ui` beside the Chromium executable, or an explicit `--ardia-ui-dir` for development.
