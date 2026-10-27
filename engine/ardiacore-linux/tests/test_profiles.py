@@ -15,6 +15,7 @@ FIXTURE = r'''
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,17 @@ struct FakeBackend : ProfileRegistry<FakeProfile>::Backend {
   bool OffTheRecordProfile(FakeProfile* profile) const override { return profile && profile->otr; }
   std::vector<std::function<void()>> later;
   void Later(std::function<void()> task) override { later.push_back(std::move(task)); }
+  std::set<FakeProfile*> watched;
+  FakeProfile* refuse_watch = nullptr;
+  bool Watch(FakeProfile* profile) override {
+    if (!profile || profile->dying || profile == refuse_watch) return false;
+    watched.insert(profile);
+    return true;
+  }
+  void Destroy(ProfileRegistry<FakeProfile>& registry, FakeProfile* profile) {
+    profile->dying = true;
+    if (watched.erase(profile)) registry.Forget(profile);
+  }
   void RunLater() {
     auto tasks = std::move(later);
     later.clear();
@@ -377,28 +389,60 @@ void StartupProfilePinning() {
 }
 
 void PrivateWindowAccess() {
-  const WindowAccess regular{"main", "", ""};
-  const WindowAccess isolated{"w-work", "p-work", "main"};
-  const WindowAccess first{"w-p1", "incognito:w-p1@", "main"};
-  const WindowAccess second{"w-p2", "incognito:w-p2@p-work", "w-p1"};
-  for (const char* requester : {"main", "w-work", "w-p1", "w-p2", "w-new"}) {
-    assert(WindowVisibleTo(regular, requester) && WindowClosableBy(regular, requester));
-    assert(WindowVisibleTo(isolated, requester) && WindowClosableBy(isolated, requester));
+  const WindowAccess regular{"main", "", 1, 0, 0};
+  const WindowAccess isolated{"w-work", "p-work", 2, 1, 4};
+  const WindowAccess first{"w-p1", "incognito:w-p1@", 3, 1, 4};
+  const WindowAccess second{"w-p2", "incognito:w-p2@p-work", 5, 3, 7};
+  for (const WindowRequester requester : {WindowRequester{1, 4}, WindowRequester{2, 1}, WindowRequester{3, 7}, WindowRequester{9, 1}}) {
+    assert(WindowReachableBy(regular, requester));
+    assert(WindowReachableBy(isolated, requester));
   }
-  assert(WindowVisibleTo(first, "w-p1"));
-  assert(!WindowVisibleTo(first, "main"));
-  assert(!WindowVisibleTo(first, "w-p2"));
-  assert(!WindowVisibleTo(first, "w-new"));
-  assert(WindowClosableBy(first, "w-p1"));
-  assert(WindowClosableBy(first, "main"));
-  assert(!WindowClosableBy(first, "w-p2"));
-  assert(!WindowClosableBy(first, "w-new"));
-  assert(!WindowClosableBy(second, "main"));
-  assert(WindowClosableBy(second, "w-p1"));
-  const WindowAccess orphan{"w-p3", "incognito:w-p3@", ""};
-  assert(!WindowClosableBy(orphan, ""));
-  assert(!WindowVisibleTo(orphan, ""));
+  assert(WindowReachableBy(first, {3, 1}));
+  assert(WindowReachableBy(first, {3, 99}));
+  assert(WindowReachableBy(first, {1, 4}));
+  assert(!WindowReachableBy(first, {1, 5}));
+  assert(!WindowReachableBy(first, {5, 7}));
+  assert(!WindowReachableBy(first, {9, 4}));
+  assert(WindowReachableBy(second, {3, 7}));
+  assert(!WindowReachableBy(second, {1, 4}));
+  const WindowAccess orphan{"w-p3", "incognito:w-p3@", 6, 0, 0};
+  assert(WindowReachableBy(orphan, {6, 1}));
+  assert(!WindowReachableBy(orphan, {0, 0}));
+  assert(!WindowReachableBy(orphan, {1, 4}));
+  const WindowAccess malformed{"w-x", "../x", 8, 1, 4};
+  assert(!WindowReachableBy(malformed, {1, 5}));
   std::puts("private_window_access=ok");
+}
+
+void ChromeCreatedPrivateProfileIsObserved() {
+  FakeBackend backend;
+  backend.synchronous = true;
+  FakeProfile app{"Default"};
+  ProfileRegistry<FakeProfile> registry(backend);
+  registry.SetDefault(&app);
+  FakeProfile chrome_made{"Default OTR", true};
+  app.child = &chrome_made;
+  Result adopted;
+  registry.Resolve("incognito:w-chrome@", Into(adopted));
+  assert(adopted.profile == &chrome_made && adopted.error == ProfileError::kNone);
+  assert(backend.watched.contains(&chrome_made));
+  backend.Destroy(registry, &chrome_made);
+  app.child = nullptr;
+  assert(!registry.Lookup("incognito:w-chrome@"));
+  assert(registry.PrivateNames(&chrome_made) == 0);
+
+  FakeProfile refusing{"Default OTR 2", true};
+  app.child = &refusing;
+  backend.refuse_watch = &refusing;
+  Result waiting;
+  registry.Resolve("incognito:w-late@", Into(waiting));
+  assert(waiting.calls == 0 && backend.later.size() == 1);
+  backend.refuse_watch = nullptr;
+  app.child = nullptr;
+  backend.RunLater();
+  assert(waiting.calls == 1 && waiting.profile && waiting.profile != &refusing && backend.watched.contains(waiting.profile));
+  assert(backend.watched.contains(&app));
+  std::puts("chrome_created_otr_observed=ok");
 }
 
 struct Reply {
@@ -439,6 +483,7 @@ void OpeningLedgerBounds() {
 }
 
 int main() {
+  ChromeCreatedPrivateProfileIsObserved();
   PrivateWindowAccess();
   OpeningLedgerBounds();
   StartupProfilePinning();
@@ -468,7 +513,7 @@ class ProfileRegistryTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-            for marker in ('private_window_access=ok', 'opening_ledger=ok', 'startup_pinned=ok', 'reopen_after_ending=ok', 'ending_bounded=ok', 'parsing=ok', 'no_fallback=ok', 'private_lifetime=ok', 'release_during_resolution=ok',
+            for marker in ('chrome_created_otr_observed=ok', 'private_window_access=ok', 'opening_ledger=ok', 'startup_pinned=ok', 'reopen_after_ending=ok', 'ending_bounded=ok', 'parsing=ok', 'no_fallback=ok', 'private_lifetime=ok', 'release_during_resolution=ok',
                            'delete_during_load=ok', 'reentrancy=ok', 'destruction=ok'):
                 self.assertIn(marker, run.stdout)
 

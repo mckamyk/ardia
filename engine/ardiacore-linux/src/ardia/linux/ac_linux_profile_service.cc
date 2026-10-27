@@ -31,7 +31,7 @@ class ChromeProfiles : public Registry::Backend, public ProfileObserver {
  public:
   Registry& registry() { return registry_; }
 
-  bool Watch(Profile* profile) {
+  bool Watch(Profile* profile) override {
     if (!profile || profile->ShutdownStarted()) return false;
     if (!observations_.IsObservingSource(profile)) observations_.AddObservation(profile);
     return true;
@@ -46,11 +46,8 @@ class ChromeProfiles : public Registry::Backend, public ProfileObserver {
     if (user_data != manager->user_data_dir() || path.DirName() != user_data) return done(nullptr);
     manager->CreateProfileAsync(
         path, base::BindOnce(
-                  [](ChromeProfiles* self, std::function<void(Profile*)> done, Profile* profile) {
-                    if (profile) self->Watch(profile);
-                    done(profile);
-                  },
-                  base::Unretained(this), std::move(done)));
+                  [](std::function<void(Profile*)> done, Profile* profile) { done(profile); },
+                  std::move(done)));
   }
 
   Profile* ExistingOffTheRecord(Profile* original) override {
@@ -60,8 +57,7 @@ class ChromeProfiles : public Registry::Backend, public ProfileObserver {
 
   Profile* CreateOffTheRecord(Profile* original) override {
     if (!Usable(original) || original->IsOffTheRecord()) return nullptr;
-    Profile* otr = original->GetPrimaryOTRProfile(true);
-    return Watch(otr) ? otr : nullptr;
+    return original->GetPrimaryOTRProfile(true);
   }
 
   void Later(std::function<void()> task) override {
@@ -136,7 +132,7 @@ void PinStartupProfileFor(Profile* app) {
 }
 
 bool SetLinuxAppProfile(Profile* profile) {
-  if (!Profiles().Watch(profile) || !Profiles().registry().SetDefault(profile)) return false;
+  if (!Profiles().registry().SetDefault(profile)) return false;
   PinStartupProfileFor(profile);
   return true;
 }

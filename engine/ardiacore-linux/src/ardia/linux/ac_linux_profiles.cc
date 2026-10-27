@@ -98,13 +98,12 @@ bool PrivateWindow(const WindowAccess& window) {
   return !name || name->kind == ProfileKind::kPrivate;
 }
 
-bool WindowVisibleTo(const WindowAccess& window, std::string_view requester) {
-  return !PrivateWindow(window) || (!requester.empty() && requester == window.id);
-}
-
-bool WindowClosableBy(const WindowAccess& window, std::string_view requester) {
+bool WindowReachableBy(const WindowAccess& window, const WindowRequester& requester) {
   if (!PrivateWindow(window)) return true;
-  return !requester.empty() && (requester == window.id || requester == window.opener);
+  if (requester.host == 0) return false;
+  if (requester.host == window.host) return true;
+  return window.opener_host != 0 && requester.host == window.opener_host &&
+         requester.generation == window.opener_generation;
 }
 
 bool ProfileOpensWindow(const ProfileName& name, bool incognito, bool utility) {

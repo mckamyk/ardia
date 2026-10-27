@@ -49,7 +49,14 @@ struct StartupProfiles {
 struct WindowAccess {
   std::string id;
   std::string page_profile;
-  std::string opener;
+  int host = 0;
+  int opener_host = 0;
+  uint64_t opener_generation = 0;
+};
+
+struct WindowRequester {
+  int host = 0;
+  uint64_t generation = 0;
 };
 
 enum class OpeningAdmission { kStarted, kJoined, kMismatch };
@@ -61,8 +68,7 @@ struct OpeningTicket {
 
 std::optional<ProfileName> ParseProfileName(std::string_view value);
 bool PrivateWindow(const WindowAccess& window);
-bool WindowVisibleTo(const WindowAccess& window, std::string_view requester);
-bool WindowClosableBy(const WindowAccess& window, std::string_view requester);
+bool WindowReachableBy(const WindowAccess& window, const WindowRequester& requester);
 StartupProfiles PinnedStartupProfiles(const StartupProfiles& current, std::string_view app_directory);
 std::string ProfileDirectoryName(std::string_view isolated_id);
 std::string_view ProfileErrorCode(ProfileError error);
@@ -125,6 +131,7 @@ class ProfileRegistry {
     virtual bool Usable(P* profile) const = 0;
     virtual bool OffTheRecordProfile(P* profile) const = 0;
     virtual void Later(std::function<void()> task) = 0;
+    virtual bool Watch(P* profile) = 0;
   };
 
   explicit ProfileRegistry(Backend& backend) : backend_(backend) {}
@@ -135,6 +142,7 @@ class ProfileRegistry {
   bool SetDefault(P* profile) {
     if (!profile || backend_.OffTheRecordProfile(profile)) return false;
     if (default_ && default_ != profile) return false;
+    if (!backend_.Watch(profile)) return false;
     default_ = profile;
     regular_[""] = profile;
     return true;
@@ -239,7 +247,7 @@ class ProfileRegistry {
         loaded = nullptr;
         error = ProfileError::kDeleted;
       } else if (!loaded || !backend_.Usable(loaded) || backend_.OffTheRecordProfile(loaded) ||
-                 loaded == default_ || NameOf(loaded)) {
+                 loaded == default_ || NameOf(loaded) || !backend_.Watch(loaded)) {
         loaded = nullptr;
         error = ProfileError::kUnavailable;
       } else {
@@ -273,7 +281,7 @@ class ProfileRegistry {
       return FinishPrivate(id, nullptr, deleted_.contains(original_id) ? ProfileError::kDeleted : ProfileError::kUnavailable);
     }
     P* existing = backend_.ExistingOffTheRecord(original);
-    if (existing && !backend_.Usable(existing)) {
+    if (existing && (!backend_.Usable(existing) || !backend_.Watch(existing))) {
       if (attempts <= 0) return FinishPrivate(id, nullptr, ProfileError::kPrivateEnding);
       backend_.Later([this, alive = alive_, id, original_id, attempts] {
         if (*alive) AcquirePrivate(id, original_id, attempts - 1);
@@ -281,7 +289,8 @@ class ProfileRegistry {
       return;
     }
     P* otr = existing ? existing : backend_.CreateOffTheRecord(original);
-    if (!otr || otr == original || !backend_.Usable(otr) || !backend_.OffTheRecordProfile(otr)) {
+    if (!otr || otr == original || !backend_.Usable(otr) || !backend_.OffTheRecordProfile(otr) ||
+        !backend_.Watch(otr)) {
       return FinishPrivate(id, nullptr, ProfileError::kUnavailable);
     }
     private_[id] = otr;
