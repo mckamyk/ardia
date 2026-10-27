@@ -16,7 +16,7 @@ using ContentBlockerChanged = base::RepeatingCallback<void(Profile*, base::Value
 
 bool LinuxSiteControlsHandles(std::string_view name);
 void AppendLinuxSiteControlsCapabilities(base::ListValue& capabilities);
-void LinuxSiteControlsCall(Profile* app_profile, const std::string& name,
+void LinuxSiteControlsCall(Profile* app_profile, Profile* page_profile, const std::string& name,
                            const std::string& requested_profile, const base::Value* args,
                            SiteControlsDone done);
 

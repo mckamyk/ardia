@@ -125,7 +125,7 @@
 
     const setList = ({ id, enabled }) =>
       lists().then((l) => {
-        if (!l.available[id]) throw new Error(`no list ${id}`);
+        if (!Object.prototype.hasOwnProperty.call(l.available, id) || !l.available[id]) throw new Error(`no list ${id}`);
         const keep = selected(l).filter((x) => x !== id);
         return applyLists(enabled ? keep.concat([id]) : keep).then(() => null);
       });

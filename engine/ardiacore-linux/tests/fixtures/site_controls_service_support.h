@@ -192,6 +192,15 @@ inline std::vector<OnceClosure>& Tasks() {
 
 inline void PostTask(OnceClosure task) { Tasks().push_back(std::move(task)); }
 
+class SequencedTaskRunner {
+ public:
+  static SequencedTaskRunner* GetCurrentDefault() {
+    static SequencedTaskRunner runner;
+    return &runner;
+  }
+  template <class F> void PostTask(int, F task) { base::PostTask(OnceClosure(std::move(task))); }
+};
+
 inline void RunTasks() {
   for (int round = 0; round < 64 && !Tasks().empty(); ++round) {
     auto tasks = std::move(Tasks());
@@ -640,22 +649,35 @@ class WebContents {
   static std::unique_ptr<WebContents> Create(const CreateParams& params);
   explicit WebContents(const CreateParams& params);
   ~WebContents();
+  struct Notifying {
+    explicit Notifying(WebContents* contents) : contents(contents), alive(contents->alive) { ++contents->notifying; }
+    ~Notifying() {
+      if (*alive) --contents->notifying;
+    }
+    WebContents* contents;
+    std::shared_ptr<bool> alive;
+  };
+  int notifying = 0;
   NavigationController& GetController() { return controller_; }
   RenderFrameHost* GetPrimaryMainFrame() { return &frame_; }
   void Commit(const GURL& url) {
     frame_.url = url;
     frame_.live = true;
     Page page(frame_);
+    Notifying scope(this);
     if (observer) observer->PrimaryPageChanged(page);
   }
   void FinishLoad() {
+    Notifying scope(this);
     if (observer) observer->DidFinishLoad(&frame_, frame_.url);
   }
   void FailLoad(int code) {
+    Notifying scope(this);
     if (observer) observer->DidFailLoad(&frame_, frame_.url, code);
   }
   void Crash() {
     frame_.live = false;
+    Notifying scope(this);
     if (observer) observer->PrimaryMainFrameRenderProcessGone(base::TerminationStatus::TERMINATION_STATUS_PROCESS_CRASHED);
   }
   Profile* profile;
@@ -720,6 +742,7 @@ class ComponentLoader {
   std::vector<std::string> added;
   std::vector<std::string> removed;
   std::string id_for_path = "fajbdaomknpkicfjcpipdmcpoamdmilh";
+  bool enables = true;
   Profile* profile = nullptr;
 };
 
@@ -773,7 +796,7 @@ inline extensions::ComponentLoader* extensions::ComponentLoader::Get(Profile* pr
 inline extensions::ExtensionSystem* extensions::ExtensionSystem::Get(Profile* profile) { return &profile->system; }
 inline extensions::ExtensionId extensions::ComponentLoader::AddOrReplace(const base::FilePath& path) {
   added.push_back(path.value());
-  if (!id_for_path.empty()) profile->registry.enabled.extensions.push_back(std::make_unique<Extension>(id_for_path, path));
+  if (!id_for_path.empty() && enables) profile->registry.enabled.extensions.push_back(std::make_unique<Extension>(id_for_path, path));
   return id_for_path;
 }
 
@@ -890,6 +913,10 @@ inline content::WebContents::WebContents(const CreateParams& params) : profile(p
 }
 
 inline content::WebContents::~WebContents() {
+  if (notifying) {
+    std::fprintf(stderr, "CHECK failed: !observers_.is_notifying_observers()\n");
+    std::abort();
+  }
   *alive = false;
   if (observer) observer->observed = nullptr;
   ++Loads().pages_destroyed;

@@ -26,6 +26,7 @@
 #include "base/path_service.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -176,6 +177,7 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
   ~LinuxContentBlocker() override {
     Observe(nullptr);
     page_.reset();
+    retired_.clear();
     for (auto& call : queue_.Drain()) Respond(call, nullptr, "profile gone");
   }
 
@@ -193,6 +195,10 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
     if (!ticket) return Fail(std::move(done), "ERR_CONTENT_BLOCKER_BUSY", "Too many content blocker calls are waiting");
     waiting_.emplace(*ticket, std::move(done));
     Pump();
+  }
+
+  void Unavailable(controls::BlockerRequest request, SiteControlsDone done, const std::string& error) {
+    Reply(std::move(done), controls::CompleteBlockerCall(request, nullptr, &error, version_));
   }
 
  private:
@@ -230,7 +236,9 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
     if (!loaded || loaded->path() != root_) {
       extensions::ComponentLoader* loader = extensions::ComponentLoader::Get(profile_);
       const std::string id = loader ? loader->AddOrReplace(root_) : std::string();
-      if (id != controls::kExtensionId) {
+      const extensions::Extension* enabled =
+          registry ? registry->enabled_extensions().GetByID(std::string(controls::kExtensionId)) : nullptr;
+      if (id != controls::kExtensionId || !enabled || enabled->path() != root_) {
         if (loader && !id.empty()) loader->Remove(id);
         load_ = Load::kFailed;
         LOG(ERROR) << "Ardia's content blocker did not load from " << root_.value();
@@ -275,8 +283,8 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
   }
 
   void Pump() {
+    if (queue_.size()) EnsureTicking();
     if (load_ != Load::kLoaded) return;
-    EnsureTicking();
     switch (queue_.Next(NowMs())) {
       case controls::BlockerQueue::Step::kOpenPage: return OpenPage();
       case controls::BlockerQueue::Step::kSend: return SendCurrent();
@@ -304,8 +312,13 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
     ++page_generation_;
     awaiting_send_ = false;
     polling_ = false;
-    page_.reset();
+    if (!page_) return;
+    retired_.push_back(std::move(page_));
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&LinuxContentBlocker::DropRetired, weak_factory_.GetWeakPtr()));
   }
+
+  void DropRetired() { retired_.clear(); }
 
   content::RenderFrameHost* BridgeFrame() const {
     if (!page_) return nullptr;
@@ -439,6 +452,7 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
   Load load_ = Load::kInspecting;
   std::string version_;
   std::unique_ptr<content::WebContents> page_;
+  std::vector<std::unique_ptr<content::WebContents>> retired_;
   uint64_t page_generation_ = 0;
   bool awaiting_send_ = false;
   bool polling_ = false;
@@ -464,15 +478,20 @@ std::optional<base::DictValue> ParseArgs(const base::Value* args, std::optional<
   return std::move(*parsed).TakeDict();
 }
 
-void RunSiteControlsCall(const std::string& name, base::DictValue input, SiteControlsDone done,
-                         Profile* profile, std::optional<controls::Failure> failure) {
+void RunSiteControlsCall(const std::string& name, base::DictValue input, bool page_filtered,
+                         SiteControlsDone done, Profile* profile, std::optional<controls::Failure> failure) {
   if (!profile) return Fail(std::move(done), failure->code, failure->message);
   if (controls::IsContentBlockerCall(name)) {
     auto request = controls::PrepareBlockerCall(name, input);
     if (auto* invalid = std::get_if<controls::Failure>(&request))
       return Fail(std::move(done), invalid->code, invalid->message);
-    return LinuxContentBlocker::For(profile)->Call(std::move(std::get<controls::BlockerRequest>(request)),
-                                                   std::move(done));
+    auto& blocker_request = std::get<controls::BlockerRequest>(request);
+    LinuxContentBlocker* blocker = LinuxContentBlocker::For(profile);
+    if (!page_filtered && blocker_request.op != controls::BlockerOp::kFailNext) {
+      return blocker->Unavailable(std::move(blocker_request), std::move(done),
+                                  "the content blocker isn't available in this profile yet");
+    }
+    return blocker->Call(std::move(blocker_request), std::move(done));
   }
   auto request = controls::PrepareServiceCall(name, input);
   if (auto* invalid = std::get_if<controls::Failure>(&request))
@@ -495,15 +514,16 @@ void AppendLinuxSiteControlsCapabilities(base::ListValue& capabilities) {
   for (const std::string_view name : controls::Capabilities()) capabilities.Append(base::Value(name));
 }
 
-void LinuxSiteControlsCall(Profile* app_profile, const std::string& name,
+void LinuxSiteControlsCall(Profile* app_profile, Profile* page_profile, const std::string& name,
                            const std::string& requested_profile, const base::Value* args,
                            SiteControlsDone done) {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   std::optional<controls::Failure> failure;
   std::optional<base::DictValue> input = ParseArgs(args, &failure);
   if (!input) return Fail(std::move(done), failure->code, failure->message);
+  const bool page_filtered = page_profile && app_profile && page_profile->GetOriginalProfile() == app_profile;
   SiteControlsProfile(app_profile, name, requested_profile,
-                      base::BindOnce(&RunSiteControlsCall, name, std::move(*input), std::move(done)));
+                      base::BindOnce(&RunSiteControlsCall, name, std::move(*input), page_filtered, std::move(done)));
 }
 
 void StartLinuxSiteControls(ContentBlockerChanged changed) {

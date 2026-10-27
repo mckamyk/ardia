@@ -68,7 +68,7 @@ class SiteControlsWiringTests(unittest.TestCase):
         self.assertLess(request.index('if (name == "profiles.release")'), intercept)
         self.assertLess(intercept, request.index('ardiacore::linux_contract::FindRoute(name)'))
         self.assertLess(intercept, request.index('ardiacore::ResolveLinuxProfile(profile'))
-        self.assertIn('LinuxSiteControlsCall(host_->profile(), name, profile, args.Find("args")', request)
+        self.assertIn('LinuxSiteControlsCall(host_->profile(), host_->page_profile(), name, profile, args.Find("args")', request)
         contract = (LINUX / 'ac_linux_contract.h').read_text()
         for name in ['sites.settings', 'sites.setSetting', 'sites.origins', 'sites.reset', 'sites.clearData',
                      'profiles.clearBrowsingData', 'contentBlocker.']:
@@ -99,6 +99,19 @@ class SiteControlsWiringTests(unittest.TestCase):
         self.assertIn('ardiacore::ResolveLinuxProfile(requested', resolve)
         self.assertIn('IsOffTheRecord()) error = ProfileError::kPrivateService', resolve)
         self.assertEqual(service.count('SiteControlsProfile('), 2)
+
+    def test_every_linux_process_restricts_the_content_blocker_component(self):
+        patch = (ROOT.parents[0] / 'patches/chromium-ardia-linux-layer.patch').read_text()
+        hunk = patch[patch.index('--- a/chrome/app/chrome_main_delegate.cc'):]
+        self.assertIn('+#include "ardia/core/ac_content_hooks.h"  // nogncheck', hunk)
+        startup = hunk[hunk.index(' std::optional<int> ChromeMainDelegate::BasicStartupComplete() {'):]
+        self.assertTrue(startup.startswith(' std::optional<int> ChromeMainDelegate::BasicStartupComplete() {\n #if BUILDFLAG(IS_LINUX)\n'
+                                           '+  g_ardia_restricted_component_extension = &IsArdiaLinuxContentBlocker;\n'), startup[:300])
+        predicate = re.search(r'\+bool IsArdiaLinuxContentBlocker\(const extensions::ExtensionId& extension_id\) \{\n\+  return extension_id == "([a-p]{32})";', hunk)
+        helper = (LINUX / 'ac_linux_site_controls.h').read_text()
+        self.assertIsNotNone(predicate)
+        self.assertIn(f'kExtensionId = "{predicate.group(1)}"', helper)
+        self.assertNotRegex(hunk, r'\n\+[^\n]*//(?! nogncheck)')
 
     def test_gn_lists_the_helper_and_its_extension_dependency(self):
         build = (LINUX / 'BUILD.gn').read_text()

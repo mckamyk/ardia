@@ -202,6 +202,10 @@ test("enabling a list applies the selection and reloads filters, leaving no pend
   await call("setList", { id: "easylist", enabled: false });
   assert.equal(ublock.state.available.easylist.off, true);
   assert.equal((await call("setList", { id: "nope", enabled: true })).error, "no list nope");
+  for (const id of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    assert.equal((await call("setList", { id, enabled: true })).error, `no list ${id}`);
+  }
+  assert.equal(ublock.state.reloads, 2);
 });
 
 test("an interrupted list change is reloaded before the next call", async () => {

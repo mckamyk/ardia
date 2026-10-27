@@ -1277,7 +1277,7 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       }
       if (LinuxSiteControlsHandles(name)) {
         if (args.size() != 3) return Fail(id, "ERR_ENGINE", "Invalid engine transport request");
-        return LinuxSiteControlsCall(host_->profile(), name, profile, args.Find("args"),
+        return LinuxSiteControlsCall(host_->profile(), host_->page_profile(), name, profile, args.Find("args"),
             base::BindOnce([](base::WeakPtr<HostMessageHandler> handler, std::string id, bool ok, base::Value result) {
               if (!handler) return;
               if (ok) return handler->Resolve(id, std::move(result));

@@ -114,10 +114,10 @@ struct Result {
 };
 
 std::shared_ptr<Result> Call(Profile* profile, const std::string& name, const std::string& args,
-                             const std::string& requested = "default") {
+                             const std::string& requested = "default", Profile* page = nullptr) {
   auto result = std::make_shared<Result>();
   base::Value transported(args);
-  ardia::LinuxSiteControlsCall(profile, name, requested, &transported,
+  ardia::LinuxSiteControlsCall(profile, page ? page : profile, name, requested, &transported,
       ardia::SiteControlsDone([result](bool ok, base::Value value) {
         assert(!result->done);
         result->done = true;
@@ -216,7 +216,7 @@ void SitePermissionsThroughTheService(Profile& profile, Profile& incognito) {
   assert(not_json->code == "ERR_ENGINE");
   auto none = std::make_shared<Result>();
   base::Value no_args("{}");
-  ardia::LinuxSiteControlsCall(nullptr, "sites.origins", "", &no_args, ardia::SiteControlsDone([none](bool ok, base::Value value) {
+  ardia::LinuxSiteControlsCall(nullptr, nullptr, "sites.origins", "", &no_args, ardia::SiteControlsDone([none](bool ok, base::Value value) {
     none->done = true;
     none->ok = ok;
     none->code = *value.GetDict().FindString("code");
@@ -287,6 +287,50 @@ void WrongComponent(const std::filesystem::path& scratch) {
   assert(pending->code == "ERR_CONTENT_BLOCKER_UNAVAILABLE" && pending->message == "the content blocker didn't load");
   assert(profile.loader.removed.size() == 1 && profile.loader.removed[0] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   assert(Loads().pages_created == 0);
+}
+
+void ComponentNotEnabled(const std::filesystem::path& scratch) {
+  MakeBlocker(scratch / "disabled");
+  base::FakeExeDir() = base::FilePath((scratch / "disabled").string());
+  Profile profile("/profiles/Disabled");
+  profile.loader.enables = false;
+  auto pending = Call(&profile, "contentBlocker.setEnabled", R"({"enabled":true})");
+  base::RunTasks();
+  profile.system.ready_event.Signal();
+  Settle(pending, 1000);
+  assert(pending->code == "ERR_CONTENT_BLOCKER_UNAVAILABLE" && pending->message == "the content blocker didn't load");
+  assert(profile.loader.added.size() == 1 && profile.loader.removed.size() == 1);
+  assert(profile.loader.removed[0] == "fajbdaomknpkicfjcpipdmcpoamdmilh");
+  auto state = Settle(Call(&profile, "contentBlocker.state", "{}"), 100);
+  assert(state->ok && !Dict(state).FindDict("stats")->Find("ready")->GetBool());
+  assert(Loads().pages_created == 0);
+}
+
+void QueuedBeforeLoadExpires(const std::filesystem::path& scratch) {
+  MakeBlocker(scratch / "never");
+  base::FakeExeDir() = base::FilePath((scratch / "never").string());
+  Profile profile("/profiles/Never");
+  auto state = Call(&profile, "contentBlocker.state", "{}");
+  auto set = Call(&profile, "contentBlocker.setEnabled", R"({"enabled":false})");
+  Advance(20000);
+  assert(!state->done && !set->done);
+  Advance(3000);
+  assert(state->done && state->ok && *Dict(state).FindDict("stats")->FindString("error") == "the call timed out");
+  assert(set->done && set->code == "ERR_CONTENT_BLOCKER_UNAVAILABLE" && set->message == "the call timed out");
+  assert(Loads().pages_created == 0 && profile.loader.added.empty());
+}
+
+void OtherPageProfiles(Profile& app, Profile& work, Profile& incognito) {
+  EngineCalls().clear();
+  auto state = Settle(Call(&app, "contentBlocker.state", "{}", "work", &work), 200);
+  assert(state->ok && !Dict(state).FindDict("stats")->Find("ready")->GetBool());
+  assert(*Dict(state).FindDict("stats")->FindString("error") == "the content blocker isn't available in this profile yet");
+  auto set = Settle(Call(&app, "contentBlocker.setAllowed", R"({"host":"a.test","allowed":true})", "work", &work), 200);
+  assert(set->code == "ERR_CONTENT_BLOCKER_UNAVAILABLE");
+  auto from_private = Settle(Call(&app, "contentBlocker.devFailNextMessage", "{}", "incognito:w@default", &incognito), 200);
+  assert(from_private->ok);
+  auto sites = Settle(Call(&app, "sites.origins", "{}", "work", &work));
+  assert(sites->ok && EngineCalls().size() == 1 && EngineCalls()[0].profile == "/profiles/Work");
 }
 
 void WorkingBlocker(const std::filesystem::path& scratch) {
@@ -434,6 +478,9 @@ int main() {
   BrowsingDataThroughTheService(profile, incognito);
   MissingBlocker(scratch);
   WrongComponent(scratch);
+  ComponentNotEnabled(scratch);
+  QueuedBeforeLoadExpires(scratch);
+  OtherPageProfiles(profile, work, incognito);
   WorkingBlocker(scratch);
   DestroyedBeforeLoad(scratch);
   std::filesystem::remove_all(scratch);
