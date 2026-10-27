@@ -116,20 +116,17 @@ test("only the window holding the tab-policy lock runs the app-wide memory trim"
   });
 });
 
-test("battery saver toasts appear only in the focused window's renderer", () => {
+test("battery saver toasts appear only in the renderer that owns the focused window", () => {
   resetLinuxTabPoliciesForTests();
   assert.equal(policyToastTarget("w1"), "w1", "no window binding keeps the shared behaviour");
-  let focused = false;
-  const setup = deps({ windowId: "mine", focused: () => focused });
+  const setup = deps({ windowId: "mine" });
   startLinuxTabPolicies(setup.value);
   useToasts.setState({ toasts: {} });
   showToast("someone-else", "Battery Saver Mode Activated", "Busy background tabs are paused.", { icon: "battery.25" });
-  assert.deepEqual(useToasts.getState().toasts, {}, "an unfocused window stays quiet");
-  focused = true;
-  assert.equal(policyToastTarget("someone-else"), "mine");
-  showToast("someone-else", "Battery Saver Mode Activated", "Busy background tabs are paused.", { icon: "battery.25" });
+  assert.deepEqual(useToasts.getState().toasts, {}, "another window's renderer shows it");
+  assert.equal(policyToastTarget("mine"), "mine");
+  showToast("mine", "Battery Saver Mode Activated", "Busy background tabs are paused.", { icon: "battery.25" });
   assert.equal(useToasts.getState().toasts.mine?.title, "Battery Saver Mode Activated");
-  assert.equal(useToasts.getState().toasts["someone-else"], undefined);
 });
 
 test("engine.batterySaver is applied by the owner and shared with the other windows", async () => {
@@ -168,7 +165,7 @@ test("the Linux build routes tabLifecycle's toasts and battery saver through the
   assert.ok(vite.includes('[`${here("../browser/src/state/splits/actions.ts")}\\0${tabLifecycle}`, here("./src/policyToasts.ts")]'));
   assert.ok(vite.includes('[`${here("../browser/src/platform/performance.ts")}\\0${tabLifecycle}`, here("./src/policyPerformance.ts")]'));
   const main = source("./main.tsx");
-  for (const seam of ["locks: navigator.locks", "new BroadcastChannel(TAB_POLICY_CHANNEL)", "focused: () => document.hasFocus()", "watchHostInputActivity(requireNativeModule(\"ArdiaEngine\"), listener)"]) {
+  for (const seam of ["windowId, locks: navigator.locks", "new BroadcastChannel(TAB_POLICY_CHANNEL)", "watchHostInputActivity(requireNativeModule(\"ArdiaEngine\"), listener)"]) {
     assert.ok(main.includes(seam), seam);
   }
 });

@@ -95,7 +95,7 @@ async function start() {
     startHostDownloads(ardiaHost, useBrowser);
     startLinuxTabPolicies({
       target: window, provide: provideNativeModuleProvider, startLifecycle: startTabLifecycle, startTrim: startMemoryTrim,
-      windowId, focused: () => document.hasFocus(), locks: navigator.locks, channel: new BroadcastChannel(TAB_POLICY_CHANNEL),
+      windowId, locks: navigator.locks, channel: new BroadcastChannel(TAB_POLICY_CHANNEL),
       activity: (listener) => watchHostInputActivity(requireNativeModule("ArdiaEngine"), listener),
     });
     watchInstallPromptCancellations(ardiaHost, useExtensions);

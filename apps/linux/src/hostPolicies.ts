@@ -37,7 +37,6 @@ export type LinuxPolicyDeps = {
   startTrim: () => void;
   now?: () => number;
   windowId?: string;
-  focused?: () => boolean;
   activity?: (listener: () => void) => () => void;
   locks?: PolicyLocks;
   channel?: PolicyChannel;
@@ -48,7 +47,6 @@ type SaverReply = { mode: string; reply: unknown };
 let running: (() => void) | null = null;
 let owner = false;
 let ownWindow: string | undefined;
-let windowFocused: () => boolean = () => false;
 let channel: PolicyChannel | null = null;
 let ownerReply: SaverReply | null = null;
 const replyWaiters = new Set<(reply: SaverReply) => void>();
@@ -61,7 +59,6 @@ export function startLinuxTabPolicies(deps: LinuxPolicyDeps): () => void {
   const unprovide = deps.provide((name, method) => name === "ArdiaEngine" && method === "inputIdleSeconds" ? () => idle.seconds() : undefined);
   const unwatch = deps.activity?.(idle.note) ?? (() => {});
   ownWindow = deps.windowId;
-  windowFocused = deps.focused ?? (() => false);
   channel = deps.channel ?? null;
   channel?.addEventListener("message", ({ data }) => {
     if (owner || !isSaverReply(data)) return;
@@ -100,8 +97,7 @@ const isSaverReply = (value: unknown): value is SaverReply =>
   typeof value === "object" && value !== null && typeof (value as SaverReply).mode === "string" && "reply" in value;
 
 export function policyToastTarget(windowId: string): string | null {
-  if (!ownWindow) return windowId;
-  return windowFocused() ? ownWindow : null;
+  return !ownWindow || windowId === ownWindow ? windowId : null;
 }
 
 export async function sharedBatterySaver<T>(mode: string, apply: () => Promise<T>, waitMs = BATTERY_SAVER_WAIT_MS): Promise<T> {
@@ -128,7 +124,6 @@ export function resetLinuxTabPoliciesForTests() {
   running = null;
   owner = false;
   ownWindow = undefined;
-  windowFocused = () => false;
   channel = null;
   ownerReply = null;
   replyWaiters.clear();
