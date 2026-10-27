@@ -170,8 +170,8 @@ test("the native per-window cap and request id rules match the transport", () =>
 test("the native host refuses suggestions unless the profile's saved setting is on", () => {
   const read = (name) => readFileSync(new URL(`../../../engine/ardiacore-linux/src/ardia/linux/${name}`, import.meta.url), "utf8");
   const host = read("ac_linux_host.cc");
-  const write = host.slice(host.indexOf('if (method == "session.write")'), host.indexOf('if (method == "ArdiaShell.readDocument")'));
-  assert.match(write, /NoteSuggestionsSetting\(profile_path, result\.session\);/);
+  const hook = host.slice(host.indexOf("void ShellHostView::Invoke("), host.indexOf('  if (method == "session.write") {'));
+  assert.match(hook, /method == "session\.write" && proposed && profile\(\)\) \{\s*ardia::linux_suggest::NoteSuggestionsSetting\(profile\(\)->GetPath\(\), \*proposed\);/);
   const suggest = read("ac_linux_suggest.cc");
   const gate = suggest.slice(suggest.indexOf("bool CanFetchSuggestions("), suggest.indexOf("SuggestionClient::SuggestionClient()"));
   assert.match(gate, /Settings\(\)\.find\(profile->GetPath\(\)\)/);

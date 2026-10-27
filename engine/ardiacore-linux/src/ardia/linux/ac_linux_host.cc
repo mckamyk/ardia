@@ -3388,6 +3388,10 @@ void ShellHostView::Invoke(
             }, std::move(done)));
     return;
   }
+  if (const base::DictValue* proposed = args.FindDict("session");
+      method == "session.write" && proposed && profile()) {
+    ardia::linux_suggest::NoteSuggestionsSetting(profile()->GetPath(), *proposed);
+  }
   if (method == "session.write") {
     const base::DictValue* base = args.FindDict("base");
     const base::DictValue* local = args.FindDict("session");
@@ -3412,7 +3416,6 @@ void ShellHostView::Invoke(
               if (!result.ok) {
                 return std::move(done).Run(false, base::Value("Could not merge and persist the session"));
               }
-              ardia::linux_suggest::NoteSuggestionsSetting(profile_path, result.session);
               std::move(done).Run(true, base::Value(result.session.Clone()));
               if (result.previous == result.session) return;
               base::DictValue event = base::DictValue()
