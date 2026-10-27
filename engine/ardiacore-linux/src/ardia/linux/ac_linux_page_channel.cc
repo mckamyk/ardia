@@ -41,8 +41,8 @@ LinuxLinkGestureGate& Gate() {
 }
 
 LinuxInputActivity& Activity() {
-  static base::NoDestructor<LinuxInputActivity> activity;
-  return *activity;
+  static LinuxInputActivity activity;
+  return activity;
 }
 
 base::RepeatingClosure& ActivityListener() {
