@@ -12,6 +12,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -50,6 +51,7 @@
 #include "ardia/linux/ac_linux_favicons.h"
 #include "ardia/linux/ac_linux_page_status.h"
 #include "ardia/linux/ac_linux_suggest.h"
+#include "ardia/linux/ac_linux_typeahead.h"
 #include "ardia/linux/host_bootstrap.h"
 #include "base/auto_reset.h"
 #include "base/base_paths.h"
@@ -1053,6 +1055,7 @@ class ShellHostView : public views::View,
   void UnregisterAccelerators();
   void FocusShell();
   void OnKeyEvent(ui::KeyEvent* event) override;
+  void ReplayTypeahead();
   bool OwnsKeyboardEvent(const ui::KeyEvent& event) const;
   void OnWindowDestroying(aura::Window* window) override;
   void ArmWindowClose();
@@ -1184,6 +1187,8 @@ class ShellHostView : public views::View,
   bool app_operation_ = false;
   linux_window::GeometryLedger geometry_{GlobalScreenCoordinates()};
   base::OneShotTimer frame_timer_;
+  linux_window::Typeahead<ui::KeyEvent> typeahead_;
+  base::OneShotTimer typeahead_timer_;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
   base::ScopedObservation<aura::Window, aura::WindowObserver> input_observation_{this};
@@ -1686,6 +1691,11 @@ void ShellHostView::Initialize() {
       base::BindRepeating(&ShellHostView::OnKeyEvent, GetWeakPtr()));
   input_window->AddPreTargetHandler(input_handler_.get(), ui::EventTarget::Priority::kSystem);
   input_window->AddPreTargetHandler(&pointer_handler_, ui::EventTarget::Priority::kSystem);
+  if (!is_utility()) {
+    typeahead_.Start();
+    typeahead_timer_.Start(FROM_HERE, base::Seconds(10),
+                           base::BindOnce(&ShellHostView::ReplayTypeahead, base::Unretained(this)));
+  }
   if (is_utility()) {
     browser_view_->SetPreferredSize(kind_ == "settings" ? gfx::Size(720, 480)
                                                        : gfx::Size(640, 600));
@@ -1759,7 +1769,8 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain")
       .Append("ArdiaSearch.suggest").Append("ArdiaSearch.cancelSuggest")
       .Append("ArdiaShell.launchSteps")
-      .Append("ArdiaShell.completeLaunchStep");
+      .Append("ArdiaShell.completeLaunchStep")
+      .Append("ArdiaShell.typeaheadReady");
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
   for (const auto& route : ardiacore::linux_contract::kRoutes)
     capabilities.Append(route.name);
@@ -1842,7 +1853,26 @@ bool ShellHostView::OwnsKeyboardEvent(const ui::KeyEvent& event) const {
   return true;
 }
 
+void ShellHostView::ReplayTypeahead() {
+  typeahead_timer_.Stop();
+  std::vector<ui::KeyEvent> held = typeahead_.Release();
+  const auto weak = GetWeakPtr();
+  for (ui::KeyEvent& event : held) {
+    views::Widget* widget = GetWidget();
+    ui::InputMethod* input = widget ? widget->GetInputMethod() : nullptr;
+    if (!input) return;
+    std::ignore = input->DispatchKeyEvent(&event);
+    if (!weak) return;
+  }
+}
+
 void ShellHostView::OnKeyEvent(ui::KeyEvent* event) {
+  if (typeahead_.capturing() && OwnsKeyboardEvent(*event) &&
+      (event->type() == ui::EventType::kKeyPressed || event->type() == ui::EventType::kKeyReleased) &&
+      typeahead_.Hold(ui::KeyEvent(*event))) {
+    event->StopPropagation();
+    return;
+  }
   if (!CanHandleAccelerators() || !OwnsKeyboardEvent(*event) || !focus_manager_ || shortcut_recording_ ||
       focus_manager_->shortcut_handling_suspended() ||
       event->type() != ui::EventType::kKeyPressed) return;
@@ -4368,6 +4398,12 @@ void ShellHostView::Invoke(
       }
     }
     return std::move(done).Run(true, base::Value(std::move(windows)));
+  }
+  if (method == "ArdiaShell.typeaheadReady") {
+    if (is_utility()) return std::move(done).Run(false, base::Value("Typeahead is for browser windows"));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&ShellHostView::ReplayTypeahead, GetWeakPtr()));
+    return std::move(done).Run(true, base::Value());
   }
   if (method == "ArdiaShell.restoreFullScreen") {
     if (values.empty() || !values[0].is_list() || values.size() > 2 ||
