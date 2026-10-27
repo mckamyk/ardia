@@ -30,7 +30,7 @@ export async function applyPendingPasswords(
     return 0;
   }
   try {
-    return (await sink.write(pending.token, engineProfile(profileId))).imported;
+    return (await sink.write(pending.token, engineProfile(profileId))).added;
   } catch {
     onFailed?.("passwords");
     return 0;

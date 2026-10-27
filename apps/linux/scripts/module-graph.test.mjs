@@ -92,6 +92,10 @@ test("production graph uses current Linux adapters and one canonical shared stat
     assert.deepEqual(graph.get(wrapper).dynamicallyImportedIds, [eager]);
   }
 
+  const passwordsPane = graph.get(`${browser}components/settings/panes/Passwords.tsx`);
+  assert.ok(passwordsPane.importedIds.includes(`${linux}importedPasswordSave.ts`), "the Passwords pane saves imported handles through the Linux adapter");
+  assert.ok(!passwordsPane.importedIds.includes(`${browser}state/site/passwords.ts`));
+
   const outputs = Array.isArray(result) ? result : [result];
   const chunks = outputs.flatMap((output) => output.output).filter((entry) => entry.type === "chunk");
   for (const id of singletons) assert.equal(chunks.filter((chunk) => id in chunk.modules).length, 1, id);

@@ -7,7 +7,16 @@ import { js, nonce, until } from "../lib/util.mjs";
 
 const JOB_TIMEOUT = 45000;
 
-function runJob(shell, args, { cancelOnHistoryProgress = false } = {}) {
+function runJob(shell, args, options) {
+  return runRequest(shell, "ArdiaImport.startImport", args, options);
+}
+
+let writes = 0;
+function writeToken(shell, token, profile) {
+  return runRequest(shell, "ArdiaImport.writePasswords", [`write-${++writes}`, token, profile]);
+}
+
+function runRequest(shell, method, args, { cancelOnHistoryProgress = false } = {}) {
   return shell.eval(`new Promise((resolve) => {
     const jobId = ${js(args[0])};
     const progress = [];
@@ -28,7 +37,7 @@ function runJob(shell, args, { cancelOnHistoryProgress = false } = {}) {
       resolve({ ...payload, progress, cancelled });
     });
     timer = setTimeout(() => { stop(); resolve({ type: "timeout", progress }); }, ${JOB_TIMEOUT});
-    __ardiaHost.invoke("ArdiaImport.startImport", { args: ${js(args)} }).catch((error) => {
+    __ardiaHost.invoke(${js(method)}, { args: ${js(args)} }).catch((error) => {
       stop();
       clearTimeout(timer);
       resolve({ type: "rejected", code: error?.code ?? null, message: String(error?.message ?? error) });
@@ -54,8 +63,10 @@ export default {
   title: "Browser discovery and import of bookmarks, history and passwords from scratch profiles",
   deadline: 360000,
   manual: [
-    { name: "Import window click-through", steps: ["Open File › Import from Another Browser in a profile whose HOME holds a Chrome and a Firefox profile.", "Chrome is selected with Bookmarks, History and Passwords; Continue imports them; the Done step shows the same counts as the source.", "Settings › Passwords lists the imported Chrome passwords after unlocking (needs #17).", "Choosing Firefox offers Bookmarks and History only."], reason: "the import utility window needs a desktop session to click through" },
+    { name: "Import window click-through", steps: ["Open File › Import from Another Browser in a profile whose HOME holds a Chrome and a Firefox profile.", "Chrome is selected with Bookmarks, History and Passwords; Continue imports them; the Done step shows the same counts as the source.", "Settings › Passwords lists the imported Chrome passwords after unlocking.", "Choosing Firefox offers Bookmarks and History only."], reason: "the import utility window needs a desktop session to click through" },
     { name: "Native file chooser", steps: ["In the Import window press 'Bookmarks HTML File…': the portal or GTK chooser opens over the Import window.", "Cancel it: nothing is imported and the window stays on the chooser step.", "Choose an exported bookmarks.html: its folders appear under 'Imported from HTML File' with the right link count."], reason: "needs a desktop portal or GTK session" },
+    { name: "Passwords CSV import from Settings", steps: ["Settings › Passwords › Import, choose a CSV with three new logins and one duplicate row.", "The pane says 'Imported 3 passwords' and lists them; importing the same file again says 'Imported 0 passwords' and adds nothing."], reason: "needs the native chooser in a desktop session" },
+    { name: "Chromium's SQLite build reads real profiles", steps: ["Import from a current Chrome and Firefox profile copied from a real machine into a scratch HOME.", "History and bookmarks import with the source's counts: Chromium's SQLite build omits UPSERT, window functions and JSON, and the readers' queries must not need them on real schemas."], reason: "fixtures use the system SQLite; only a real build exercises Chromium's" },
     { name: "Keyring-protected Chrome passwords", steps: ["Import from a Chrome profile that uses the GNOME keyring or KWallet (v11).", "The Done step notes that the keyring-protected passwords weren't imported; nothing claims success for them."], reason: "keyring decryption is tracked as a follow-up; needs a real keyring session" },
   ],
   async run(t) {
@@ -98,12 +109,13 @@ export default {
     }, { critical: true });
 
     await t.check("imported passwords land in Chromium's own store once, and the token is single use", async () => {
-      const first = await invokeOk(shell, "ArdiaImport.writePasswords", [token, ""]);
-      if (first.imported !== fixtures.expected.chromePasswords) throw new Error(`first write ${JSON.stringify(first)}`);
-      const reused = await shell.invoke("ArdiaImport.writePasswords", { args: [token, ""] });
-      if (reused.ok || reused.code !== "expired") throw new Error(`reused token ${JSON.stringify(reused)}`);
+      const first = await writeToken(shell, token, "");
+      if (first.type !== "written" || first.added !== fixtures.expected.chromePasswords || first.existing !== 0) throw new Error(`first write ${JSON.stringify(first)}`);
+      const reused = await writeToken(shell, token, "");
+      if (reused.type !== "rejected" || reused.code !== "expired") throw new Error(`reused token ${JSON.stringify(reused)}`);
       const again = await runJob(shell, [`${run}-chrome-again`, "chrome", "Default", ["passwords"], {}]);
-      const second = await invokeOk(shell, "ArdiaImport.writePasswords", [again.result.passwords.token, ""]);
+      const second = await writeToken(shell, again.result.passwords.token, "");
+      if (second.type !== "written" || second.added !== 0 || second.existing !== fixtures.expected.chromePasswords) throw new Error(`duplicate write ${JSON.stringify(second)}`);
       const stored = await until(async () => {
         const rows = await savedLogins(join(scratch, "Default", "Login Data"), tmp);
         return rows.length >= fixtures.expected.chromePasswords ? rows : false;
@@ -112,26 +124,26 @@ export default {
       if (imported.length !== fixtures.expected.chromePasswords) throw new Error(`stored ${imported.length} rows after a duplicate import`);
       const matches = fixtures.secrets.slice(0, 3).every((secret) => imported.some((row) => row.password === secret));
       if (!matches) throw new Error("stored passwords don't match the source");
-      const bogus = await shell.invoke("ArdiaImport.writePasswords", { args: ["0".repeat(32), "work"] });
+      const bogus = await writeToken(shell, "0".repeat(32), "work");
       if (bogus.code !== "expired") throw new Error(`an unknown token resolved a profile: ${JSON.stringify(bogus)}`);
       return { first, second, stored: imported.length };
     });
 
     await t.check("passwords go into the chosen isolated profile and never into a private one", async () => {
       const privateRun = await runJob(shell, [`${run}-private`, "chrome", "Default", ["passwords"], {}]);
-      const refused = await shell.invoke("ArdiaImport.writePasswords", { args: [privateRun.result.passwords.token, "incognito:w1@"] });
-      const invalid = await shell.invoke("ArdiaImport.writePasswords", { args: [privateRun.result.passwords.token, "../escape"] });
+      const refused = await writeToken(shell, privateRun.result.passwords.token, "incognito:w1@");
+      const invalid = await writeToken(shell, privateRun.result.passwords.token, "../escape");
       if (refused.code !== "ERR_PROFILE_PRIVATE" || invalid.code !== "ERR_PROFILE_INVALID") throw new Error(`profile errors ${JSON.stringify({ refused, invalid })}`);
-      const discarded = await shell.invoke("ArdiaImport.writePasswords", { args: [privateRun.result.passwords.token, ""] });
+      const discarded = await writeToken(shell, privateRun.result.passwords.token, "");
       if (discarded.code !== "expired") throw new Error(`a refused token stayed usable: ${JSON.stringify(discarded)}`);
       const isolatedRun = await runJob(shell, [`${run}-isolated`, "chrome", "Default", ["passwords"], {}]);
-      const written = await invokeOk(shell, "ArdiaImport.writePasswords", [isolatedRun.result.passwords.token, "work"]);
+      const written = await writeToken(shell, isolatedRun.result.passwords.token, "work");
       const rows = await until(async () => {
         const found = (await savedLogins(join(scratch, "Profile work", "Login Data"), tmp)).filter((row) => row.origin.includes(".ardia.test"));
         return found.length >= fixtures.expected.chromePasswords ? found : false;
       }, { timeout: 20000, label: "the isolated profile's Login Data to hold the imported passwords" });
       const defaults = (await savedLogins(join(scratch, "Default", "Login Data"), tmp)).filter((row) => row.origin.includes(".ardia.test"));
-      if (written.imported !== fixtures.expected.chromePasswords || rows.length !== fixtures.expected.chromePasswords || defaults.length !== fixtures.expected.chromePasswords) {
+      if (written.added !== fixtures.expected.chromePasswords || rows.length !== fixtures.expected.chromePasswords || defaults.length !== fixtures.expected.chromePasswords) {
         throw new Error(`isolated ${rows.length}, default ${defaults.length}, written ${JSON.stringify(written)}`);
       }
       return { written, isolated: rows.length, default: defaults.length };
@@ -170,7 +182,7 @@ export default {
         setTimeout(() => { stop(); resolve({ ok: true, event: "no event" }); }, 8000);
         __ardiaHost.invoke("ArdiaImport.chooseImportFile", { args: ["${run}-choose", "bookmarksHTML"] }).catch((error) => { stop(); resolve({ ok: false, code: error?.code }); });
       })`, { timeout: 15000 });
-      const explicit = chooser.ok ? chooser.event?.type === "chosen" && chooser.event.path === null : /^ERR_FILE_CHOOSER_(UNAVAILABLE|DISABLED)$/.test(chooser.code ?? "");
+      const explicit = chooser.ok ? chooser.event?.type === "chosen" && chooser.event.path === null : chooser.code === "ERR_FILE_CHOOSER_DISABLED";
       if (!explicit) throw new Error(`a headless chooser must cancel or report unavailable, got ${JSON.stringify(chooser)}`);
       return { html: html.code, csv: csv.code, chooser };
     });

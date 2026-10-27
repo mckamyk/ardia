@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { CHOOSER_DEADLINE_MS, IMPORT_IDLE_MS, createHostImport, pendingPasswords } from "./hostImport.ts";
 import { applyPendingPasswords, applyResult, setImportPasswordSink } from "./importApply.ts";
+import { claimImportHandle, isImportHandle, issueImportHandles } from "./importHandles.ts";
+import { savePassword } from "./importedPasswordSave.ts";
 
 class ImportError extends Error {
   constructor(code, message) {
@@ -149,7 +151,7 @@ test("native failures, start errors and stalls reject with their codes and stop 
   assert.equal(stalled.listeners.size, 0);
 });
 
-test("cancelling an import cancels the native job and ignores its late result", async () => {
+test("cancelling an import cancels the native job and discards a password token that arrives late", async () => {
   const { api, calls, emit, listeners } = fixture();
   const controller = new AbortController();
   const running = api.importData("chrome", "Default", ["passwords"], { signal: controller.signal });
@@ -159,8 +161,10 @@ test("cancelling an import cancels the native job and ignores its late result", 
   await assert.rejects(running, { code: "cancelled" });
   await settle();
   assert.deepEqual(calls[1], { method: "ArdiaImport.cancelImport", args: [jobId] });
-  assert.equal(listeners.size, 0);
   emit({ jobId, type: "done", result: { passwords: { token: TOKEN, count: 1 } } });
+  await settle();
+  assert.deepEqual(calls[2], { method: "ArdiaImport.discardPasswords", args: [TOKEN] });
+  assert.equal(listeners.size, 0);
 
   const already = new AbortController();
   already.abort();
@@ -169,7 +173,7 @@ test("cancelling an import cancels the native job and ignores its late result", 
   assert.equal(calls.length, before);
 });
 
-test("the file chooser resolves the chosen path, null on cancel, and reports an unavailable chooser", async () => {
+test("the file chooser resolves the chosen path, null on cancel, and reports a policy-disabled chooser", async () => {
   const { api, calls, emit, fire, listeners } = fixture();
   const choosing = api.chooseImportFile("bookmarksHTML");
   await settle();
@@ -193,15 +197,18 @@ test("the file chooser resolves the chosen path, null on cancel, and reports an 
 
   const abandoned = api.chooseImportFile("bookmarksHTML");
   await settle();
+  const abandonedId = calls[3].args[0];
   fire(CHOOSER_DEADLINE_MS);
   assert.equal(await abandoned, null);
+  await settle();
+  assert.deepEqual(calls[4], { method: "ArdiaImport.cancelChooser", args: [abandonedId] });
 
   assert.equal(await api.chooseImportFile("safariExport"), null);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 5);
 
-  const unavailable = fixture({ replies: { "ArdiaImport.chooseImportFile": native("ERR_FILE_CHOOSER_UNAVAILABLE") } });
-  await assert.rejects(unavailable.api.chooseImportFile("bookmarksHTML"), { code: "ERR_FILE_CHOOSER_UNAVAILABLE" });
-  assert.equal(unavailable.listeners.size, 0);
+  const disabled = fixture({ replies: { "ArdiaImport.chooseImportFile": native("ERR_FILE_CHOOSER_DISABLED") } });
+  await assert.rejects(disabled.api.chooseImportFile("bookmarksHTML"), { code: "ERR_FILE_CHOOSER_DISABLED" });
+  assert.equal(disabled.listeners.size, 0);
 });
 
 test("bookmark HTML returns the parsed tree and passes native error codes through", async () => {
@@ -215,25 +222,56 @@ test("bookmark HTML returns the parsed tree and passes native error codes throug
   await assert.rejects(empty.api.importBookmarksHTML("/home/me/empty.html"), { code: "empty" });
 });
 
-test("password CSV rows only leave the host when the typed password save path exists", async () => {
-  const rows = [{ url: "https://a.example/", username: "a", password: "p" }];
-  const locked = fixture({ replies: { "ArdiaImport.importPasswordsCSV": { credentials: rows } } });
-  await assert.rejects(locked.api.importPasswordsCSV("/home/me/p.csv"), { code: "ERR_PASSWORDS_UNAVAILABLE" });
-  assert.deepEqual(locked.calls, []);
-  const typed = fixture({ capabilities: ["ArdiaPasswords.save"], replies: { "ArdiaImport.importPasswordsCSV": { credentials: rows, rows: 1, duplicates: 0, invalid: 0 } } });
-  assert.deepEqual(await typed.api.importPasswordsCSV("/home/me/p.csv"), rows);
+test("CSV passwords stay native: the pane gets one-time handles and the first save writes into its profile", async () => {
+  const reply = { passwords: { token: TOKEN, count: 3 }, entries: [
+    { url: "https://a.example/", username: "a" }, { url: "https://b.example/", username: "b" }, { url: "https://c.example/", username: "c" },
+  ], rows: 4, duplicates: 1, invalid: 0 };
+  const { api, calls, emit } = fixture({ replies: { "ArdiaImport.importPasswordsCSV": reply } });
+  const rows = await api.importPasswordsCSV("/home/me/p.csv");
+  assert.deepEqual(rows.map((r) => [r.url, r.username]), [["https://a.example/", "a"], ["https://b.example/", "b"], ["https://c.example/", "c"]]);
+  assert.ok(rows.every((r) => isImportHandle(r.password)));
+  assert.equal(new Set(rows.map((r) => r.password)).size, 3);
+  assert.equal(isImportHandle("hunter2"), false);
+  const claims = rows.map((r) => claimImportHandle(r.password, "work"));
+  await settle();
+  const writes = calls.filter((c) => c.method === "ArdiaImport.writePasswords");
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].args.slice(1), [TOKEN, "work"]);
+  emit({ jobId: writes[0].args[0], type: "written", added: 2, existing: 1, conflicts: 0, invalid: 0 });
+  assert.deepEqual(await Promise.all(claims), [true, true, false]);
+  assert.equal(await claimImportHandle(rows[0].password, "work"), false);
+  const none = fixture({ replies: { "ArdiaImport.importPasswordsCSV": { entries: [], rows: 1, duplicates: 0, invalid: 1 } } });
+  assert.deepEqual(await none.api.importPasswordsCSV("/home/me/bad.csv"), []);
 });
 
-test("password tokens are written into the profile store and discarded on request", async () => {
-  const { api, calls } = fixture({ replies: { "ArdiaImport.writePasswords": { imported: 4, conflicts: 1, invalid: "x" } } });
-  assert.deepEqual(await api.writePasswords(TOKEN, ""), { imported: 4, conflicts: 1, invalid: 0 });
-  assert.deepEqual(calls[0], { method: "ArdiaImport.writePasswords", args: [TOKEN, ""] });
+test("password tokens are written in event-completed chunks with added and existing counts", async () => {
+  const { api, calls, emit, fire, listeners } = fixture();
+  const writing = api.writePasswords(TOKEN, "");
+  await settle();
+  const [request, token, profile] = calls[0].args;
+  assert.equal(calls[0].method, "ArdiaImport.writePasswords");
+  assert.deepEqual([token, profile], [TOKEN, ""]);
+  emit({ jobId: request, type: "progress", kind: "passwords", phase: "progress", processed: 500, total: 7000 });
+  emit({ jobId: request, type: "written", added: 6000, existing: 990, conflicts: 10, invalid: "x" });
+  assert.deepEqual(await writing, { added: 6000, existing: 990, conflicts: 10, invalid: 0 });
+  assert.equal(listeners.size, 0);
   api.discardPasswords(TOKEN);
   api.forgetUnlockedKeys();
   await settle();
   assert.deepEqual(calls.slice(1).map((c) => c.method), ["ArdiaImport.discardPasswords", "ArdiaImport.forgetUnlockedKeys"]);
+
   const expired = fixture({ replies: { "ArdiaImport.writePasswords": native("expired") } });
   await assert.rejects(expired.api.writePasswords(TOKEN, ""), { code: "expired" });
+  const refused = fixture();
+  const refusing = refused.api.writePasswords(TOKEN, "work");
+  await settle();
+  refused.emit({ jobId: refused.calls[0].args[0], type: "failed", code: "ERR_PROFILE_UNAVAILABLE", message: "no" });
+  await assert.rejects(refusing, { code: "ERR_PROFILE_UNAVAILABLE" });
+  const stalled = fixture();
+  const stalling = stalled.api.writePasswords(TOKEN, "");
+  await settle();
+  stalled.fire(IMPORT_IDLE_MS);
+  await assert.rejects(stalling, { code: "timeout" });
 });
 
 test("Safari, Dia, cookies and autofill report unsupported instead of succeeding", async () => {
@@ -270,7 +308,7 @@ function sink(reply) {
 test("applyPendingPasswords writes requested passwords to the engine profile and fails closed elsewhere", async () => {
   const result = { passwords: { token: TOKEN, count: 2 } };
   const failed = [];
-  const written = sink({ imported: 2, conflicts: 0, invalid: 0 });
+  const written = sink({ added: 2, existing: 5, conflicts: 0, invalid: 0 });
   assert.equal(await applyPendingPasswords(written, "default", result, ["passwords"], (k) => failed.push(k)), 2);
   assert.deepEqual(written.log, [["write", TOKEN, ""]]);
 
@@ -295,7 +333,7 @@ test("applyPendingPasswords writes requested passwords to the engine profile and
 test("the Linux applyResult adds natively written passwords to the shared counts", async () => {
   const result = { browserId: "chrome", profileId: "Default", history: [], historyCount: 0, tabs: [], tabGroups: [], credentials: [],
     cookieCount: 0, addressCount: 0, cardCount: 0, spaces: [], favorites: [], favicons: [], failed: [], warnings: [], passwords: { token: TOKEN, count: 3 } };
-  const written = sink({ imported: 3, conflicts: 0, invalid: 0 });
+  const written = sink({ added: 3, existing: 0, conflicts: 0, invalid: 0 });
   setImportPasswordSink(written);
   try {
     const counts = await applyResult("default", result, "Google Chrome", ["passwords"]);
@@ -308,4 +346,15 @@ test("the Linux applyResult adds natively written passwords to the shared counts
   const counts = await applyResult("default", result, "Google Chrome", ["passwords"], (k) => failed.push(k));
   assert.equal(counts.passwords, 0);
   assert.deepEqual(failed, ["passwords"]);
+});
+
+test("the Passwords pane's savePassword claims import handles instead of saving them as passwords", async () => {
+  const writes = [];
+  const [row] = issueImportHandles(TOKEN, [{ url: "https://a.example/", username: "a" }], async (token, profile) => {
+    writes.push([token, profile]);
+    return { added: 1 };
+  });
+  assert.equal(await savePassword("work", "https://a.example", "a", row.password), true);
+  assert.deepEqual(writes, [[TOKEN, "work"]]);
+  assert.equal(await savePassword("work", "https://a.example", "a", row.password).catch(() => "shared"), "shared");
 });

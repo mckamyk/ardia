@@ -22,7 +22,12 @@ const replacements = new Map([
   [here("../browser/src/components/settings/panes/Autofill.tsx"), here("./src/LinuxAutofillPane.tsx")],
   [here("../browser/src/state/import/apply.ts"), here("./src/importApply.ts")],
 ]);
-const adapters = new Set([...replacements.values(), rawBookmarkAdapter.replacement]);
+const importedPasswordSave = {
+  source: here("../browser/src/state/site/passwords.ts"),
+  importer: here("../browser/src/components/settings/panes/Passwords.tsx"),
+  replacement: here("./src/importedPasswordSave.ts"),
+};
+const adapters = new Set([...replacements.values(), rawBookmarkAdapter.replacement, importedPasswordSave.replacement]);
 
 function linuxComponents(): Plugin {
   return {
@@ -36,6 +41,7 @@ function linuxComponents(): Plugin {
     async resolveId(source, importer, options) {
       if (!importer || adapters.has(importer)) return null;
       const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+      if (resolved?.id === importedPasswordSave.source && importer === importedPasswordSave.importer) return importedPasswordSave.replacement;
       return resolved ? resolveInputAdapter(resolved.id, importer) ?? replacements.get(resolved.id) ?? null : null;
     },
   };

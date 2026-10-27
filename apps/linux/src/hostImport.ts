@@ -1,19 +1,19 @@
 import type * as ImportApi from "../../../packages/import/src/index.ts";
 import type { ArdiaHost } from "./host";
-import { hostSupports, invokeHost, reportHostError } from "./host.ts";
+import { invokeHost, reportHostError } from "./host.ts";
+import { issueImportHandles } from "./importHandles.ts";
 
 type Api = typeof ImportApi;
 type ImportErrorClass = new (code: string, message: string) => Error & { code: string };
 type ImportEvent = { jobId?: unknown; type?: unknown; [key: string]: unknown };
 
 export type PendingPasswords = { token: string; count: number };
-export type WrittenPasswords = { imported: number; conflicts: number; invalid: number };
+export type WrittenPasswords = { added: number; existing: number; conflicts: number; invalid: number };
 
 export const IMPORT_MODULE = "ArdiaImport";
 export const IMPORT_EVENT = "onImportEvent";
 export const IMPORT_IDLE_MS = 120_000;
 export const CHOOSER_DEADLINE_MS = 30 * 60_000;
-export const PASSWORD_SAVE_CAPABILITY = "ArdiaPasswords.save";
 const HISTORY_CHUNK = 500;
 const TOKEN = /^[0-9a-f]{32}$/;
 
@@ -30,7 +30,7 @@ export function pendingPasswords(result: unknown): PendingPasswords | null {
 
 function writtenPasswords(reply: unknown): WrittenPasswords {
   const value = (reply ?? {}) as Record<string, unknown>;
-  return { imported: count(value.imported), conflicts: count(value.conflicts), invalid: count(value.invalid) };
+  return { added: count(value.added), existing: count(value.existing), conflicts: count(value.conflicts), invalid: count(value.invalid) };
 }
 
 export type HostImport = Pick<
@@ -108,9 +108,22 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
         run();
       };
       const cancel = () => void invoke("cancelImport", [jobId]).catch(reportHostError);
+      const discardLate = () =>
+        awaitEvents(
+          jobId,
+          (event) => {
+            if (event.type === "progress") return false;
+            const late = event.type === "done" ? pendingPasswords(event.result) : null;
+            if (late) void invoke("discardPasswords", [late.token]).catch(reportHostError);
+            return true;
+          },
+          IMPORT_IDLE_MS,
+          () => {},
+        );
       const abort = () => {
         cancel();
         finish(() => reject(failure("cancelled", "Import cancelled")));
+        discardLate();
       };
       const watch = awaitEvents(
         jobId,
@@ -150,6 +163,36 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
     });
   };
 
+  const writePasswords = (token: string, profile: string) => {
+    const requestId = nextId("write");
+    return new Promise<WrittenPasswords>((resolve, reject) => {
+      let settled = false;
+      const finish = (run: () => void) => {
+        if (settled) return;
+        settled = true;
+        watch.stop();
+        run();
+      };
+      const watch = awaitEvents(
+        requestId,
+        (event) => {
+          if (event.type === "written") {
+            finish(() => resolve(writtenPasswords(event)));
+            return true;
+          }
+          if (event.type === "failed") {
+            finish(() => reject(failure(typeof event.code === "string" ? event.code : "unreadable", typeof event.message === "string" ? event.message : "Saving passwords failed")));
+            return true;
+          }
+          return false;
+        },
+        IMPORT_IDLE_MS,
+        () => finish(() => reject(failure("timeout", "Saving the imported passwords stopped responding"))),
+      );
+      invoke("writePasswords", [requestId, token, profile]).catch((error) => finish(() => reject(error)));
+    });
+  };
+
   return {
     async listBrowsers() {
       const list = await invoke<unknown>("listBrowsers", []);
@@ -185,12 +228,13 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
       return reply.root;
     },
     async importPasswordsCSV(path) {
-      if (!hostSupports(PASSWORD_SAVE_CAPABILITY, host)) {
-        throw failure("ERR_PASSWORDS_UNAVAILABLE", "Saving imported passwords isn't available on Linux yet");
-      }
-      const reply = await invoke<{ credentials?: unknown }>("importPasswordsCSV", [path]);
-      if (!Array.isArray(reply?.credentials)) throw failure("unreadable", "The passwords file couldn't be read");
-      return reply.credentials as ImportApi.Credential[];
+      const reply = await invoke<{ passwords?: unknown; entries?: unknown }>("importPasswordsCSV", [path]);
+      const pending = pendingPasswords(reply);
+      const entries = Array.isArray(reply?.entries)
+        ? reply.entries.filter((e): e is { url: string; username: string } => !!e && typeof e.url === "string" && typeof e.username === "string")
+        : [];
+      if (!pending || !entries.length) return [];
+      return issueImportHandles(pending.token, entries, (token, profile) => writePasswords(token, profile));
     },
     async chooseImportFile(kind) {
       if (kind !== "bookmarksHTML" && kind !== "passwordsCSV") return null;
@@ -204,7 +248,7 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
           return true;
         },
         CHOOSER_DEADLINE_MS,
-        () => {},
+        () => void invoke("cancelChooser", [requestId]).catch(reportHostError),
       );
       try {
         await invoke("chooseImportFile", [requestId, kind]);
@@ -216,9 +260,7 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
       return chosen;
     },
     readDiaTabs: () => unsupported("Dia tab import"),
-    async writePasswords(token, profile) {
-      return writtenPasswords(await invoke("writePasswords", [token, profile]));
-    },
+    writePasswords,
     discardPasswords(token) {
       void invoke("discardPasswords", [token]).catch(reportHostError);
     },
