@@ -1,8 +1,14 @@
 import { navigateTab, startBrowser } from "../lib/flows.mjs";
+import { evaluate } from "../lib/cdp.mjs";
+import { openPage } from "../lib/pages.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
 import { AUTOPLAY_ARGS, mediaPage, startTone, viewCall } from "./f15-media.mjs";
 
 const discarded = (shell, tabId) => shell.eval(`!!ardiaLinux.lifecycle.state.getState().discarded[${js(tabId)}]`);
+
+export const POLICY_LOCK = "ardia.linux.tab-policies";
+
+const policyLocks = (shell) => shell.eval(`navigator.locks.query().then((q) => ({ held: q.held.filter((l) => l.name === ${js(POLICY_LOCK)}).length, pending: q.pending.filter((l) => l.name === ${js(POLICY_LOCK)}).length }))`);
 
 export default {
   id: "F18",
@@ -10,8 +16,8 @@ export default {
   title: "Tab sleep, freeze protections and battery-aware system state on Linux",
   deadline: 300000,
   manual: [
-    { name: "Battery transitions", steps: ["On a laptop with UPower, set Settings › Advanced › Battery Saver to When unplugged.", "Unplug: engine.systemState reports onBattery and one Battery Saver toast appears per focused window; plug in and it turns off."], reason: "needs a real battery and UPower on the system bus" },
-    { name: "Power profile", steps: ["Switch power-profiles-daemon to power-saver.", "Within 30 s lowPowerMode turns on and Battery Saver activates."], reason: "needs power-profiles-daemon" },
+    { name: "Battery transitions", steps: ["On a laptop with UPower, set Settings › Advanced › Battery Saver to When unplugged.", "Unplug: engine.systemState reports onBattery at once and one Battery Saver toast appears, in the focused window only; plug in and it turns off."], reason: "needs a real battery and UPower on the system bus" },
+    { name: "Power profile", steps: ["Switch power-profiles-daemon to power-saver.", "lowPowerMode turns on at once (no 30 s poll) and Battery Saver activates."], reason: "needs power-profiles-daemon" },
     { name: "Memory pressure", steps: ["Fill memory until MemAvailable drops under 10% of RAM.", "memoryPressure reports warning (under 5%: critical) and idle background tabs sleep on the next sweep."], reason: "needs real memory pressure" },
   ],
   async run(t) {
@@ -88,6 +94,29 @@ export default {
       const discard = await viewCall(shell, tone, "discard()");
       if (discard !== "refused") throw new Error(`discard=${discard}`);
       return { discard };
+    });
+
+    await t.check("keys typed into a page reach the shell's idle clock as native input activity", async () => {
+      await shell.eval("(() => { window.__ardiaActivity = 0; __ardiaHost.onEvent((module, _event, payload) => { if (module === 'ArdiaEngine' && payload?.name === 'engine.inputActivity') window.__ardiaActivity++; }); return true; })()");
+      const page = await openPage(shell, url.page(4, `${run}-activity`));
+      await evaluate(page.session, "document.body.tabIndex = 0, document.body.focus(), true");
+      for (let i = 0; i < 3; i++) {
+        await page.session.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", text: "a" });
+        await page.session.send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA" });
+      }
+      const seen = await until(() => shell.eval("window.__ardiaActivity || false"), { timeout: 8000, label: "engine.inputActivity in the shell" });
+      return { seen };
+    });
+
+    await t.check("with two windows open exactly one holds the tab-policy lock and the other waits", async () => {
+      const before = await shell.windowIds();
+      await shell.command("newWindow");
+      const windowId = await until(async () => (await shell.windowIds()).find((id) => !before.includes(id)) ?? false, { timeout: 20000, label: "the second window" });
+      const second = await state.app.shell(windowId, { timeout: 25000 });
+      const locks = await until(async () => { const l = await policyLocks(second); return l.held === 1 && l.pending === 1 ? l : false; }, { timeout: 15000, label: "one held and one pending tab-policy lock" });
+      const fromFirst = await policyLocks(shell);
+      if (fromFirst.held !== 1) throw new Error(`the first window sees ${JSON.stringify(fromFirst)}`);
+      return locks;
     });
   },
 };
