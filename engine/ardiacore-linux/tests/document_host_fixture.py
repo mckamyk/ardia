@@ -31,13 +31,15 @@ DIALOGS = r'''namespace ardia {
 struct LinuxDialogClient { std::string window_id; std::string profile_identity; std::string renderer_generation; bool authenticated_shell = false; bool default_regular_profile = false; };
 class LinuxDialogSuspension { public: uint64_t value = 0; explicit operator bool() const { return value != 0; } bool operator==(const LinuxDialogSuspension&) const = default; };
 struct LinuxDialogController {
+  static constexpr size_t kMaxSuspensions = 64;
   std::string generation;
   std::set<uint64_t> suspensions;
+  bool exhausted = false;
   std::vector<std::string> retired;
   bool ReplaceRenderer(const std::string& value) { generation = value; return true; }
   void RetireRenderer(const std::string& value) { if (value == generation) { retired.push_back(value); generation.clear(); } }
   bool Identify(const LinuxDialogClient& client, base::DictValue* identity) const {
-    if (!suspensions.empty() || (!generation.empty() && client.renderer_generation != generation) || !client.authenticated_shell || !client.default_regular_profile) return false;
+    if (exhausted || !suspensions.empty() || (!generation.empty() && client.renderer_generation != generation) || !client.authenticated_shell || !client.default_regular_profile) return false;
     identity->Set("windowId", client.window_id); identity->Set("rendererGeneration", client.renderer_generation); return true;
   }
   bool Begin(const LinuxDialogClient&, const base::DictValue&, base::OnceCallback<void(base::DictValue)>, std::string* error) { *error = "Unavailable"; return false; }
@@ -47,7 +49,11 @@ struct LinuxWindowDialogs {
   LinuxDialogController controller_;
   uint64_t next = 0;
   LinuxDialogController& controller() { return controller_; }
-  LinuxDialogSuspension Suspend() { LinuxDialogSuspension token; token.value = ++next; controller_.suspensions.insert(token.value); return token; }
+  LinuxDialogSuspension Suspend() {
+    LinuxDialogSuspension token;
+    if (controller_.suspensions.size() >= LinuxDialogController::kMaxSuspensions) { controller_.exhausted = true; return token; }
+    token.value = ++next; controller_.suspensions.insert(token.value); return token;
+  }
   bool Resume(const LinuxDialogSuspension& token) { return token && controller_.suspensions.erase(token.value) == 1; }
 };
 }'''
@@ -288,7 +294,7 @@ struct ShellHostView {
   std::set<std::string> storage_failures_;
   LinuxClose close_;
   std::unique_ptr<LinuxWindowDialogs> dialogs_ = std::make_unique<LinuxWindowDialogs>();
-  std::optional<std::pair<std::string, LinuxDialogSuspension>> close_dialogs_;
+  std::map<std::string, LinuxDialogSuspension> close_dialogs_;
   bool OwnsHandler(Handler* owner, uint64_t generation) const { return owner && owner == handler_ && generation == renderer_generation_; }
   std::optional<base::UnguessableToken> chrome_close_token_;
   LinuxDocumentClient close_client_;

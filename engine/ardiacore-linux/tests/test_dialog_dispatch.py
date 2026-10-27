@@ -238,11 +238,11 @@ int main(int argc, char** argv) {
     assert(BeginDialog(a, kId + "2")->first);
     assert(CloseCall(a, "ArdiaShell.beginWindowCloseDrain", next)->first);
     assert(Resolved(a).back() == kId + "2" && !Confirmed(a, kId + "2"));
-    assert(Identity(a).empty() && host.close_dialogs_ && host.close_dialogs_->second);
+    assert(Identity(a).empty() && host.close_dialogs_.size() == 1 && host.close_dialogs_.begin()->second);
     assert(CloseCall(a, "ArdiaShell.beginWindowCloseDrain", next)->first);
     CloseCall(a, "ArdiaShell.rejectWindowClose", next);
     Drain();
-    assert(host.close_.phase() == LinuxClose::Phase::kCancelled && !host.close_dialogs_);
+    assert(host.close_.phase() == LinuxClose::Phase::kCancelled && host.close_dialogs_.empty());
     assert(!Identity(a).empty() && BeginDialog(a, kId + "3")->first);
   }
   if (mode == "quit-two-windows") {
@@ -278,7 +278,7 @@ int main(int argc, char** argv) {
     assert(CloseCall(a, "ArdiaShell.beginWindowCloseDrain", request)->first);
     CloseCall(a, "ArdiaShell.rejectWindowClose", request);
     Drain();
-    assert(host.close_.phase() == LinuxClose::Phase::kCancelled && !host.close_dialogs_ && Identity(a).empty());
+    assert(host.close_.phase() == LinuxClose::Phase::kCancelled && host.close_dialogs_.empty() && Identity(a).empty());
   }
   if (mode == "queue-full") {
     ShellHostView host; Own(host); hosts[1] = &host;

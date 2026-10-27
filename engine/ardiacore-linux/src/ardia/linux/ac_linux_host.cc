@@ -851,7 +851,7 @@ class ShellHostView : public views::View,
   raw_ptr<HostMessageHandler> handler_ = nullptr;
   uint64_t renderer_generation_ = 0;
   std::unique_ptr<LinuxWindowDialogs> dialogs_;
-  std::optional<std::pair<std::string, LinuxDialogSuspension>> close_dialogs_;
+  std::map<std::string, LinuxDialogSuspension> close_dialogs_;
   content::WeakDocumentPtr renderer_document_;
   std::shared_ptr<DocumentAuthority> documents_;
   const std::string document_window_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
@@ -1259,7 +1259,7 @@ void ShellHostView::DetachBrowser() {
   weak_factory_.InvalidateWeakPtrs();
   handler_ = nullptr;
   renderer_document_ = content::WeakDocumentPtr();
-  close_dialogs_.reset();
+  close_dialogs_.clear();
   dialogs_.reset();
   UnregisterAccelerators();
   TabStripModelObserver::StopObservingAll(this);
@@ -1757,17 +1757,24 @@ void ShellHostView::DialogInvoke(const std::string& method, const base::ListValu
 }
 
 void ShellHostView::SuspendDialogsForClose(const std::string& close_generation) {
-  if (!dialogs_ || (close_dialogs_ && close_dialogs_->first == close_generation)) return;
+  if (!dialogs_ || close_dialogs_.contains(close_generation)) return;
+  if (close_dialogs_.size() >= LinuxDialogController::kMaxSuspensions) {
+    dialogs_->Suspend();
+    return;
+  }
   close_dialogs_.emplace(close_generation, LinuxDialogSuspension());
   auto alive = GetWeakPtr();
   auto token = dialogs_->Suspend();
-  if (alive && close_dialogs_ && close_dialogs_->first == close_generation) close_dialogs_->second = token;
+  if (!alive) return;
+  if (auto found = close_dialogs_.find(close_generation); found != close_dialogs_.end())
+    found->second = token;
 }
 
 void ShellHostView::ResumeDialogsForClose(const std::string& close_generation) {
-  if (!close_dialogs_ || close_dialogs_->first != close_generation) return;
-  const auto token = close_dialogs_->second;
-  close_dialogs_.reset();
+  const auto found = close_dialogs_.find(close_generation);
+  if (found == close_dialogs_.end()) return;
+  const auto token = found->second;
+  close_dialogs_.erase(found);
   if (dialogs_ && token) dialogs_->Resume(token);
 }
 
