@@ -237,6 +237,11 @@ inline void DrainPosted() {
 inline std::map<content::WebContents*, int> tab_ids;
 inline int TabId(content::WebContents* contents) { return tab_ids.contains(contents) ? tab_ids.at(contents) : 0; }
 
+namespace ardiacore {
+inline std::vector<content::WebContents*> forgotten_hangs;
+inline void ForgetDeferredLinuxHangs(content::WebContents* contents) { forgotten_hangs.push_back(contents); }
+}
+
 class ShellHostView;
 ARDIA_FRONTEND_WATCH
 
