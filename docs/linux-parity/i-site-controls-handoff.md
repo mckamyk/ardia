@@ -1,6 +1,6 @@
 # Lane I handoff: site permissions, data clearing and the content blocker (#16 F06)
 
-Branch `t3/linux-site-controls`, based on `linux` at `2376f370`. Source-level implementation, tracked by #94. Runtime acceptance stays with #16 and the #81 suite. Nothing here was built into Chromium 156 or run natively: I could not build Chromium on this machine, and the 156 output tree lacks the generated extension mojom headers needed for even a syntax-only compile of the service.
+Branch `t3/linux-site-controls`, rebased onto `linux` at `4fd0946e` (after #62, #63 and #68). Source-level implementation, tracked by #94. Runtime acceptance stays with #16 and the #81 suite. Nothing here was built into Chromium 156 or run natively: I could not build Chromium on this machine, and the 156 output tree lacks the generated extension mojom headers needed for even a syntax-only compile of the service.
 
 ## What was done
 
@@ -8,9 +8,9 @@ Before this lane, `sites.*` reached the engine through the generic route table w
 
 ### Native host
 
-- **Intercept.** `ac_linux_host.cc` checks `LinuxSiteControlsHandles(name)` at the top of `engine.call`, before the generic default-profile gate and the route table, and hands the call to `LinuxSiteControlsCall`. The `sites.*` routes are removed from `ac_linux_contract.h`. The remaining hunks:
-  - `ShellHostView::Initialize` calls `StartLinuxContentBlocker(profile())`.
-  - `StartLinuxHost` calls `StartLinuxSiteControls(...)`, which sets the restricted-component hook and the change sink. The sink sends `contentBlocker.changed` to every window whose original profile matches.
+- **Intercept.** `ac_linux_host.cc` checks `LinuxSiteControlsHandles(name)` in `engine.call` right after #62's profile-name gate and `profiles.release`, and before #63's zoom intercept, the route table and registry resolution. It hands the call to `LinuxSiteControlsCall` with the window's app profile. The `sites.*` routes are removed from `ac_linux_contract.h`, and `AppendLinuxSiteControlsCapabilities` adds the owned calls to the bootstrap capability list, which #68 builds from the route table. The remaining hunks:
+  - `ShellHostView::Initialize` calls `StartLinuxContentBlocker(profile())`, using the app profile.
+  - `StartLinuxHost` calls `StartLinuxSiteControls(...)`, which sets the restricted-component hook and the change sink. The sink sends `contentBlocker.changed` to every window whose app profile matches.
 - **Pure helper.** `ac_linux_site_controls.{h,cc}` needs only `base/values.h`. It holds:
   - which calls the lane owns;
   - the profile decision, `ResolveProfile`;
@@ -20,7 +20,7 @@ Before this lane, `sites.*` reached the engine through the generic route table w
   - the per-profile `BlockerQueue`: tickets, a 20 s deadline plus 2 s grace, 40 retries 250 ms apart, the retriable-error list from `ArdiaContentBlockerCalls.mm`, a 30 s idle close and a cap of 64 queued calls.
 - **Service.** `ac_linux_site_controls_service.{h,cc}`:
   - `SiteControlsProfile` is the one function that picks the profile; see Profile resolution below.
-  - Site and browsing-data calls run the existing `ac_site_settings_get/set/origins/reset`, `ac_site_data_clear` and `ac_browsing_data_clear` services through `ac_engine_call`, with the window's regular profile path.
+  - Site and browsing-data calls run the existing `ac_site_settings_get/set/origins/reset`, `ac_site_data_clear` and `ac_browsing_data_clear` services through `ac_engine_call`, with the resolved profile's path.
   - `LinuxContentBlocker` exists once per regular profile and observes `ProfileObserver`. On start it inspects `extensions/ublock` beside the executable, or `--ardia-content-blocker-dir`, off the UI thread. After `ExtensionSystem::ready()` it loads that directory as a component extension through `ComponentLoader::AddOrReplace`, exactly as `ardiacore_profile.mm` does. If the extension it gets back isn't `fajbdaomknpkicfjcpipdmcpoamdmilh`, it removes that extension and reports the blocker as failed.
   - Calls run in a hidden `WebContents`: view type `kTabContents`, with the extension WebContents observer attached, showing `chrome-extension://fajbdaomknpkicfjcpipdmcpoamdmilh/ardia-linux-bridge.html`.
   - Chromium `CHECK`s against main-world `ExecuteJavaScript` on extension pages. The browser therefore sets a `data-ardia-request` attribute from `ISOLATED_WORLD_ID_CHROME_INTERNAL` and polls `data-ardia-reply` every 25 ms.
@@ -55,12 +55,10 @@ Before this lane, `sites.*` reached the engine through the generic route table w
 | event `ArdiaContentBlocker`/`contentBlocker` | `{name: "contentBlocker.changed", data: ContentBlockerStats}` | | |
 
 - **Validation.** Origins must be `http(s)://host[:port]` with no path, user, query or fragment, at most 2048 bytes. The host must be lowercase labels, an IPv4 address or a bracketed IPv6 address. A host that contains `/` (the off directive), `#`, `*` or spaces is refused.
-- **Profile resolution.** `SiteControlsProfile` is the single function to re-point at #62's registry.
-  - `""` and `"default"` use the window's original regular profile.
-  - Ids starting with `incognito:` or containing `@` get `ERR_PROFILE_PRIVATE`.
-  - Any other id gets `ERR_PROFILE_UNAVAILABLE`.
-  - A private window gets `ERR_PROFILE_PRIVATE` for `sites.*` and `profiles.clearBrowsingData`.
-  - `contentBlocker.*` is app-level, as on macOS (`kProfile = ""`): from a private window it acts on the original profile's blocker.
+- **Profile resolution.** `SiteControlsProfile` is the single function that picks the profile. It now uses #62's registry.
+  - Every call first passes the host's `ParseProfileName` gate, so malformed ids are `ERR_PROFILE_INVALID`.
+  - `sites.*` and `profiles.clearBrowsingData`: an `incognito:` id is `ERR_PROFILE_PRIVATE` before any lookup. Other ids go through `ResolveLinuxProfile`, so `""`/`default` and isolated profiles each get their own settings and data. An off-the-record result is `ERR_PROFILE_PRIVATE`, and registry failures keep their codes (`ERR_PROFILE_DELETED`, `ERR_PROFILE_UNAVAILABLE`, …). Private windows never fall back to the regular profile.
+  - `contentBlocker.*` is app-level, as on macOS (`kProfile = ""`). Whatever the window's profile, private or isolated, it acts on the app profile's blocker. Isolated profiles therefore don't load a blocker yet; see #108.
 - **Not in this lane.** `sites.zoomLevels` and `sites.setZoom` belong to the page-state lane (#63, `PrepareLinuxZoomDomain`). The contract defines no cancellation or progress for clearing. Cancelling is the shared dialog's Cancel, which the acceptance scenario covers.
 
 ## Tests run
@@ -71,7 +69,7 @@ All runs are on this branch after the last change.
   - The pure helper fixture, under ASan and UBSan: profile decisions, origin edge cases, a permission grant/revoke/reset round trip against a fake settings map, scoped clears, blocker requests and states, the bridge scripts and the queue state machine.
   - The real service compiled against stub Chromium interfaces:
     - site-setting round trips through `ac_engine_call`;
-    - private and isolated refusals that never reach the engine;
+    - registry resolution: an isolated profile's calls carry its own path, deleted and unknown profiles keep the registry's codes, private ids and off-the-record results are refused without reaching the engine, and blocker calls never consult the registry;
     - component load, including the wrong-id case;
     - restricted-hook behaviour;
     - bridge URL, view type and observer;
@@ -114,7 +112,7 @@ These can only be checked on a built engine:
 
 - **#106 Navigation hold.** For non-default profiles, and for the default profile while Lite settings are pending, macOS holds navigations until uBlock's rulesets are in force. Linux has no hold, so requests made in the first seconds after the first launch may go unfiltered. This matches macOS for the default profile.
 - **#107 Restricted-component hook in child processes.** The hook is set in the browser process only. macOS sets it in every process from its main delegate. uBlock's content scripts match only http(s), so they never reach `chrome://` pages, but renderer-side permission checks don't see the hook.
-- **#108 Settings for isolated profiles.** Once #62 lands, macOS's `FollowDefault` copies the default profile's lists and exceptions into every other profile. Linux would load uBlock per isolated profile with uBlock's own defaults.
+- **#108 Blocker in isolated profiles.** #62 has landed, and isolated-profile windows currently load no blocker, because blocker calls are app-level. macOS loads uBlock into every regular profile, and `FollowDefault` copies the default profile's lists and exceptions into each one.
 - **Timeouts.** The bootstrap rejects any native request after 30 s. A blocker call queued behind several slow ones can time out in JavaScript while it still runs natively. Its reply is then dropped and the next state read shows the true state.
 - **Blocking file IO on the UI thread.** `ComponentLoader::AddOrReplace` reads the manifest on the UI thread, as on macOS. Thread restrictions only check this in DCHECK builds.
 - **Parsing assumption.** The scenario's permission checks rely on headless Chromium answering `navigator.permissions.query` for camera from content settings without a device. Calibrate this on the first run (#91).
