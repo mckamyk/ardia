@@ -19,6 +19,13 @@
 #include <vector>
 
 namespace base {
+template <class T> class NoDestructor {
+ public:
+  T& operator*() { return value_; }
+  T* operator->() { return &value_; }
+ private:
+  T value_;
+};
 class DictValue;
 class ListValue;
 class Value {

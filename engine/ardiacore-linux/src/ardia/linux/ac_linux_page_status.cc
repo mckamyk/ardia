@@ -3,6 +3,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "components/blocked_content/popup_blocker_tab_helper.h"
@@ -19,6 +20,31 @@ namespace ardiacore {
 namespace {
 
 constexpr size_t kMaxBlockedPopups = 100;
+constexpr size_t kMaxDeferredHangs = 64;
+
+using HangId = std::pair<int, int>;
+using Hangs = std::map<HangId, base::RepeatingClosure>;
+
+std::map<const content::WebContents*, Hangs>& Deferred() {
+  static base::NoDestructor<std::map<const content::WebContents*, Hangs>> deferred;
+  return *deferred;
+}
+
+std::optional<HangId> WidgetId(content::RenderWidgetHost* host) {
+  if (!host || !host->GetProcess()) return std::nullopt;
+  return HangId(host->GetProcess()->GetDeprecatedID(), host->GetRoutingID());
+}
+
+void PruneDeferred() {
+  for (auto contents = Deferred().begin(); contents != Deferred().end();) {
+    for (auto hang = contents->second.begin(); hang != contents->second.end();) {
+      if (content::RenderWidgetHost::FromID(hang->first.first, hang->first.second)) ++hang;
+      else hang = contents->second.erase(hang);
+    }
+    if (contents->second.empty()) contents = Deferred().erase(contents);
+    else ++contents;
+  }
+}
 
 base::DictValue PageEvent(std::string name, base::Value data) {
   return base::DictValue().Set("name", std::move(name)).Set("data", std::move(data));
@@ -40,6 +66,34 @@ std::string LinuxCrashReason(base::TerminationStatus status) {
     case base::TERMINATION_STATUS_LAUNCH_FAILED: return "launchFailed";
     default: return "unknown";
   }
+}
+
+bool DeferLinuxHang(content::WebContents* contents, content::RenderWidgetHost* host,
+                    base::RepeatingClosure restarter) {
+  const auto id = WidgetId(host);
+  if (!contents || !id) return false;
+  PruneDeferred();
+  Hangs& hangs = Deferred()[contents];
+  if (!hangs.contains(*id) && hangs.size() >= kMaxDeferredHangs) return false;
+  hangs[*id] = std::move(restarter);
+  return true;
+}
+
+bool ResolveDeferredLinuxHang(content::WebContents* contents, content::RenderWidgetHost* host) {
+  const auto id = WidgetId(host);
+  const auto found = Deferred().find(contents);
+  if (!id || found == Deferred().end() || !found->second.erase(*id)) return false;
+  if (found->second.empty()) Deferred().erase(found);
+  return true;
+}
+
+void ForgetDeferredLinuxHangs(content::WebContents* contents) {
+  Deferred().erase(contents);
+}
+
+size_t DeferredLinuxHangs(content::WebContents* contents) {
+  const auto found = Deferred().find(contents);
+  return found == Deferred().end() ? 0 : found->second.size();
 }
 
 LinuxPageStatus::LinuxPageStatus(base::WeakPtr<LinuxPageLease> lease)
@@ -83,9 +137,21 @@ bool LinuxPageStatus::Present(std::string name, base::Value data) {
          request->lease->EmitPresentation(*request, std::move(name), std::move(data));
 }
 
+void LinuxPageStatus::AdoptDeferredHangs() {
+  const auto found = Deferred().find(web_contents());
+  if (found == Deferred().end()) return;
+  Hangs hangs = std::move(found->second);
+  Deferred().erase(found);
+  for (auto& [id, restarter] : hangs) {
+    auto* host = content::RenderWidgetHost::FromID(id.first, id.second);
+    if (host && host->IsCurrentlyUnresponsive()) hung_[id] = std::move(restarter);
+  }
+}
+
 void LinuxPageStatus::AppendSnapshot(base::ListValue& events) {
   auto* contents = Live();
   if (!contents) return;
+  AdoptDeferredHangs();
   events.Append(PageEvent("fullscreen", base::Value(base::DictValue()
       .Set("fullscreen", contents->IsFullscreen()))));
   events.Append(PageEvent("status", base::Value(base::DictValue()
@@ -150,6 +216,17 @@ void LinuxPageStatus::ReleaseHang(bool restart) {
   if (!restart) return;
   for (auto& [id, restarter] : hung) {
     if (restarter) restarter.Run();
+  }
+}
+
+void LinuxPageStatus::DeferHangs() {
+  auto hung = std::move(hung_);
+  hung_.clear();
+  auto* contents = web_contents();
+  if (!contents || contents->IsBeingDestroyed()) return;
+  for (auto& [id, restarter] : hung) {
+    auto* host = content::RenderWidgetHost::FromID(id.first, id.second);
+    if (host && host->IsCurrentlyUnresponsive()) DeferLinuxHang(contents, host, std::move(restarter));
   }
 }
 
@@ -234,15 +311,14 @@ void LinuxPageStatus::WebContentsDestroyed() {
 }
 
 void LinuxPageStatus::Reset() {
-  const bool restart = web_contents() && !web_contents()->IsBeingDestroyed();
   weak_factory_.InvalidateWeakPtrs();
   StopObservingPopups();
   blocked_.clear();
   status_.clear();
   status_document_ = content::WeakDocumentPtr();
   lease_.reset();
+  DeferHangs();
   Observe(nullptr);
-  ReleaseHang(restart);
 }
 
 }

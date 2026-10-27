@@ -972,6 +972,13 @@ class ShellHostView : public views::View,
     }
     return nullptr;
   }
+  bool HoldsTab(content::WebContents* contents) const {
+    for (const auto& [id, binding] : bindings_) {
+      if (contents && binding->contents() == contents) return true;
+    }
+    return contents && browser_ &&
+           browser_->GetTabStripModel()->GetIndexOfWebContents(contents) != TabStripModel::kNoTab;
+  }
   void FetchFavicon(const GURL& url, ardiacore::LinuxFaviconReply reply) {
     ardiacore::FetchLinuxFavicon(page_profile(), url, std::move(reply));
   }
@@ -4823,6 +4830,7 @@ void TabBinding::DidStartNavigation(content::NavigationHandle* handle) {
 void TabBinding::Rebind(content::WebContents* contents) {
   if (auto* channel = contents_ ? ardiacore::LinuxPageChannel::FromWebContents(contents_) : nullptr) channel->Detach();
   RetirePage();
+  if (contents_ != contents) ardiacore::ForgetDeferredLinuxHangs(contents_);
   ++contents_generation_;
   ResetPageCommands();
   devtools_watch.reset();
@@ -4944,6 +4952,7 @@ void TabBinding::WebContentsDestroyed() {
   if (!weak) return;
   media.reset();
   RetirePage();
+  ardiacore::ForgetDeferredLinuxHangs(contents_);
   ResetPageCommands();
   contents_ = nullptr;
   devtools_watch.reset();
@@ -5159,16 +5168,19 @@ void StartLinuxHost() {
                                            const base::RepeatingClosure& restarter) {
     if (!widget || (widget->GetView() && widget->GetView()->IsHTMLFormPopup())) return false;
     for (const auto& [id, host] : Hosts()) {
-      if (auto* status = host->PageStatus(contents)) return status->Unresponsive(widget, restarter);
+      if (auto* status = host->PageStatus(contents); status && status->Unresponsive(widget, restarter)) return true;
+    }
+    for (const auto& [id, host] : Hosts()) {
+      if (host->HoldsTab(contents)) return ardiacore::DeferLinuxHang(contents, widget, restarter);
     }
     return false;
   };
   g_ardia_linux_renderer_responsive = [](content::WebContents* contents,
                                          content::RenderWidgetHost* widget) {
     for (const auto& [id, host] : Hosts()) {
-      if (auto* status = host->PageStatus(contents)) return status->Responsive(widget);
+      if (auto* status = host->PageStatus(contents); status && status->Responsive(widget)) return true;
     }
-    return false;
+    return ardiacore::ResolveDeferredLinuxHang(contents, widget);
   };
   g_ardia_linux_off_the_record_navigation = [](content::WebContents* contents, const GURL& url) {
     if (!contents || !url.is_valid()) return false;
