@@ -1,6 +1,6 @@
 # Lane D handoff: Linux UI-side gaps (F10, F26, F27)
 
-Branch `t3/linux-ui-services`, rebased onto `linux` at `52d72e78`. The changes are in `apps/linux`, plus one Linux-only native helper (`engine/ardiacore-linux`) for F10. Nothing in `apps/browser`, `packages/*`, `apps/demo` or macOS changed.
+Branch `t3/linux-ui-services`, rebased onto `linux` at `3ef048ba` (#61, #64 and #90 merged). The changes are in `apps/linux`, plus one Linux-only native helper (`engine/ardiacore-linux`) for F10. Nothing in `apps/browser`, `packages/*`, `apps/demo` or macOS changed.
 
 ## F10 search suggestions ([#20](https://github.com/mckamyk/ardia/issues/20))
 
@@ -19,7 +19,7 @@ Contract:
   - Each window's `ShellHostView` owns a `SuggestionClient`. A window keeps at most 4 fetches; a new request evicts the oldest instead of being refused, and a repeated id replaces its predecessor.
   - Evicted, cancelled and finished fetches are destroyed, which cancels their `SimpleURLLoader`, and their replies are posted to the weak handler callback. Closing a window destroys all of its fetches.
   - Requests use the regular profile's browser-process factory. Credentials are omitted (no cookies), redirects are refused (`RedirectMode::kError`), the cache is disabled and the timeout is 5 s. A `ProfileObserver` ends a fetch when the profile is destroyed.
-- Native gate for "suggestions off": the host records `settings.searchSuggestions`, per profile path, from every session the shell submits through `session.write`. This happens in a separate statement before the `session.write` branch, because native fixtures compile that branch on its own. A missing key means the shared default (on). Requests are refused while the setting is off or not yet known. The startup window always writes the session before it renders, so the value is known before the first request. Settings changes reach native through the normal debounced session write, so the JS check stays the primary gate.
+- Native gate for "suggestions off": `session.write` wraps its reply callback (`NoteSuggestionsOnWrite`). Only a successful merge and write records a setting, and what it records is the merged session it replies with. The setting is `settings.searchSuggestions`, keyed by the original profile's path; a missing key means the shared default (on). Requests are refused while the setting is off or not yet known. The startup window always writes the session before it renders, so the value is known before the first request. The wrap is a separate statement before the `session.write` branch, because native fixtures compile that branch on their own.
 - The traffic annotation `ardia_linux_search_suggestions` declares `user_data: USER_CONTENT`, `internal.contacts.owners: "//ardia/linux/OWNERS"` and `last_reviewed`. That OWNERS file contains only `*`, because Ardia has no named owners. **Owner decision:** replace the contact with a real team address if you have one.
 - In the UI, a Vite replacement for `packages/core/src/suggestFetcher.ts` (`apps/linux/src/suggestFetcher.ts`) keeps the shared fetcher's debounce, cache and generation checks, and swaps only its transport for `hostSuggestFetch`.
   - The transport gives each request its own id. When the shared fetcher aborts a request still in flight, it sends `cancelSuggest` (only if the host advertises it).
@@ -27,7 +27,7 @@ Contract:
   - It turns malformed or oversized replies into an empty failed response.
 - Extension search engines: an extension engine whose `suggestionsUrl` starts with a built-in endpoint does pass, but only to that endpoint and still without cookies. Other extension suggestion URLs get no remote suggestions.
 - Client certificates: `credentials_mode = kOmit` drops cookies and HTTP auth, but Chromium may still offer a client certificate on the TLS handshake unless the `kOmitCorsClientCert` feature is enabled. It is off by default and this lane does not change it.
-- Private windows: the Linux host attaches only regular-profile windows today, and the gate refuses off-the-record profiles. A future private-window shell that runs on the regular profile would need its own native gating, because the request would be indistinguishable.
+- Private windows: the gate accepts off-the-record profiles, as the acceptance suite expects. A private window fetches on its own storage partition, cookies are still omitted, and the original profile's setting gates it. The host still attaches no off-the-record windows; that work belongs to F02. A future private-window shell that runs on the regular profile would need its own native gating, because its requests would be indistinguishable.
 - `ac_linux_host.cc` changes:
   - includes;
   - a `suggestions_` member;
@@ -68,14 +68,17 @@ Service-authority contract (`appServices.ts`):
 | App-wide, once per process | These steps, in order: `version` (`trackAppVersion`, recording `versionUpdated`), `onboarding`, `releaseNotes` and `defaultBrowserOffer`. | Whichever browser window holds the Web Lock `ardia.linux.app-launch`. Every browser window queues for it in waiting mode. The native host records completed steps per process and profile (`ac_linux_launch_steps.h` via `ArdiaShell.launchSteps` / `ArdiaShell.completeLaunchStep`). The holder runs only unrecorded steps and records each before the next. When it releases the lock, by finishing or because its window closed, the next window continues the rest. Everyone after that finds every step done. Reloads are covered by the native record. A failed step releases the lock so the next window retries. Without Web Locks or the native record, nothing runs. |
 | Profile-wide writers | Session, documents, sync and memory policy. | Unchanged; F04, F13 and F18 own them. |
 
-- Fresh-profile evidence: a browser window whose profile has no saved session awaits `linux-fresh-profile.json` before its first session flush. The onboarding decision reads `onboarding.json` and that marker from disk (`ArdiaShell.readDocument`), not from the bootstrap snapshot:
+- Fresh-profile evidence: a browser window whose profile has no saved session awaits `linux-fresh-profile.json` before its first session flush. The marker is removed once a later launch finds `onboarding.json` on disk. The onboarding decision reads `onboarding.json` and the marker from disk, not from the bootstrap snapshot. `ArdiaShell.readDocument` returns null only for a missing file (`ENOENT`); permission errors, symlinks, directories and oversized files reject with `ERR_DOCUMENT_READ`, which counts as "unknown":
   - **Record present:** the shared flow (resume, or nothing if finished).
   - **Record absent, marker present (or no saved session):** start onboarding.
   - **Record absent, no marker, saved session:** a profile from before this change, so mark onboarding complete. This cannot overwrite anything, because the record is confirmed absent on disk.
   - **Record on disk but missing from the snapshot (128-document / 8 MB cap), or any read failure:** do nothing, because the shared code would write over it.
 - Remaining edge: if the marker write itself fails while the first session flush succeeds and the onboarding write is lost, the next launch treats the profile as pre-existing.
 - Onboarding that `maybeStartOnboarding` targets at another window is retargeted to the lock holder, the only renderer that draws it.
-- A takeover window calls `trackAppVersion` again. The version is already saved, so this only restores the pending postcard in its own renderer. Release notes still due come from the recorded `versionUpdated` step.
+- A takeover window calls `trackAppVersion` again. The version is already saved, so this only restores the pending postcard in its own renderer.
+  - Release notes are due when `versionUpdated` was recorded, or when `version` was not recorded and this run saw an update.
+  - Remaining case: `trackAppVersion` computes and saves the version in one shared call. A holder that dies after that save but before recording `versionUpdated` loses the release-notes page. The postcard still shows from the saved pending entry.
+- The renderer that runs launch steps sets `sessionStorage["ardia.linux.app-launch"] = "ran"`. This is evidence only, for the acceptance suite; nothing reads it.
 - Commands without a backend show a "Not available on Linux yet" toast: tracing, release-notes and video-tour URLs, and Task Manager failures. Send Feedback copies the report to the clipboard and says so.
 - Deliberately not started: AppleScript, Handoff, CLI control, watched user scripts, telemetry, kill switches (the build has no updater), translation, sync (F13) and memory trim (F18).
 - Still open:
@@ -85,21 +88,19 @@ Service-authority contract (`appServices.ts`):
 
 ## Tests run
 
-Review round 2, after rebasing onto `origin/linux` `52d72e78`:
-- `pnpm --filter @ardia/linux test:host`: 243/243 pass. This lane's files:
-  - `suggestionCsp` (3)
-  - `hostSuggestions` (11)
-  - `hostCapabilities` (7)
-  - `settingsCapabilities` (3)
-  - `appServices` (17)
-- `typecheck`, `build`, `test:graph` and `test:symbols` (4/4) pass.
+Review round 3, on `3ef048ba`:
+- `pnpm --filter @ardia/linux test:host`: 274/274 pass, including #61's and #64's host tests.
+- `typecheck`, `build`, `test:graph`, `test:symbols` (4/4) and `acceptance:self-test` (47/47) pass.
 - `pnpm --filter @ardia/linux fixture:csp:check` passes in headless `/usr/bin/chromium` under the policy parsed from `ac_linux_host.cc`. It checks:
   - Trusted Types
   - 13 of 13 direct fetches blocked
   - one host-bridged suggestion delivered
   - all four launch steps recorded
   - a second window gets `alreadyDone`
-- `python3 -m unittest discover -s engine/ardiacore-linux/tests`: 208/208 pass. This includes `test_suggest_policy`, `test_launch_steps`, and `test_session_merge` / `test_window_storage`, which compile the `session.write` branch.
+- `python3 -m unittest discover -s engine/ardiacore-linux/tests`: see the PR for the final count. The suite includes:
+  - this lane's `test_suggest_policy` and `test_launch_steps`;
+  - `test_host_policy` (stored-read classification);
+  - the fixtures that compile host branches: `test_document_host`, `test_session_merge`, `test_window_storage`, `test_window_lifecycle` and `test_downloads`.
 - `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs`: 7/7 pass.
 
 ## Needs native runtime acceptance on a Chromium 156 build
