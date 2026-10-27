@@ -53,6 +53,9 @@ inline constexpr Route kRoutes[] = {
     {"downloads.cancel", "ac_downloads_cancel", "null"},
     {"downloads.pause", "ac_downloads_pause", "null"},
     {"downloads.resume", "ac_downloads_resume", "null"},
+    {"downloads.keep", "ac_downloads_keep", "null"},
+    {"downloads.remove", "ac_downloads_remove", "null"},
+    {"downloads.list", "ac_downloads_list", "downloads"},
     {"history.query", "ac_history_query", ""},
     {"history.add", "ac_history_add", ""},
     {"history.import", "ac_history_import", ""},
@@ -101,7 +104,7 @@ inline const Route* FindRoute(std::string_view name) {
 }
 
 inline std::string_view EventName(std::string_view topic) {
-  for (const auto name : {"history.changed", "bookmarks.changed", "extensions.action", "extensions.sync", "downloads.changed"}) {
+  for (const auto name : {"history.changed", "bookmarks.changed", "extensions.action", "extensions.sync", "downloads.changed", "downloads.removed"}) {
     if (topic == name) return name;
   }
   return {};

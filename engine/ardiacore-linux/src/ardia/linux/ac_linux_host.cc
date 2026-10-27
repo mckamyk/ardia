@@ -18,6 +18,8 @@
 #include "ardia/linux/ac_linux_close_hooks.h"
 #include "ardia/linux/ac_linux_dialog_views.h"
 #include "ardia/linux/ac_linux_document_service.h"
+#include "ardia/linux/ac_linux_downloads.h"
+#include "ardia/linux/ac_linux_files.h"
 #include "ardia/linux/ac_linux_launch_config.h"
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/ac_linux_session.h"
@@ -912,7 +914,7 @@ class ShellHostView : public views::View,
 
   raw_ptr<BrowserWindowInterface> browser_;
   raw_ptr<BrowserView> browser_view_;
-  raw_ptr<views::WebView> shell_ = nullptr;
+  raw_ptr<LinuxShellWebView> shell_ = nullptr;
   raw_ptr<HostMessageHandler> handler_ = nullptr;
   uint64_t renderer_generation_ = 0;
   std::unique_ptr<LinuxWindowDialogs> dialogs_;
@@ -1190,6 +1192,8 @@ class HostMessageHandler : public content::WebUIMessageHandler,
             }, weak_factory_.GetWeakPtr(), id));
         return;
       }
+      if (const auto invalid = linux_downloads::ValidateRequest(name, input); !invalid.empty())
+        return Fail(id, "ERR_DOWNLOAD_REQUEST", invalid);
       const auto* route = ardiacore::linux_contract::FindRoute(name);
       if (!route) return Fail(id, "ERR_UNKNOWN_CALL", "This call is unavailable on Linux");
       const std::string path = host_->profile()->GetPath().value();
@@ -1297,7 +1301,7 @@ ShellHostView::ShellHostView(BrowserWindowInterface* browser, BrowserView* paren
       id_(browser->GetSessionID().id()), startup_(startup),
       window_id_(Hosts().empty() ? "main" : "window-" + base::NumberToString(id_)) {
   Hosts()[id_] = this;
-  shell_ = AddChildView(std::make_unique<views::WebView>(browser->GetProfile()));
+  shell_ = AddChildView(std::make_unique<LinuxShellWebView>(browser->GetProfile()));
   view_observation_.Observe(parent);
   browser->GetTabStripModel()->AddObserver(this);
 }
@@ -1400,7 +1404,8 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Set("launchConfig", ardiacore::LinuxLaunchConfig(DocumentDirectory(profile()), user_data_directory))
       .Set("capabilities", base::ListValue().Append("ArdiaWebView.call")
           .Append("ArdiaShell.windowIdentity").Append("ArdiaShell.beginDialog")
-          .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain"));
+          .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain")
+          .Append("ArdiaSystem.fileStatus").Append("ArdiaFileDrop.takeDrop").Append("ArdiaFileDrag.begin"));
   if (is_utility()) bootstrap.Set("utility", utility_.Clone());
   return bootstrap;
 }
@@ -2932,6 +2937,7 @@ void ShellHostView::Invoke(
     base::OnceCallback<void(bool, base::Value)> done) {
   if (!browser_) return std::move(done).Run(false, base::Value("The native browser window has closed"));
   const base::ListValue& values = Arguments(args);
+  if (LinuxFilesHandles(method)) return LinuxFilesInvoke(profile(), shell_, method, values, std::move(done));
   if (method == "ArdiaShell.windowIdentity") {
     const auto* supplied = args.Find("args");
     const auto client = DialogClient();
