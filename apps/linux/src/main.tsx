@@ -2,7 +2,7 @@ import "./base.css";
 import "./styles.css";
 import { createRoot } from "react-dom/client";
 import { unstable_batchedUpdates } from "react-native";
-import { emitCommand, menuShown } from "@ardia/shell";
+import { emitCommand, menuShown, setWindowCloseDecider } from "@ardia/shell";
 import { WindowRoot } from "../../browser/src/App";
 import { startNativeSync } from "../../browser/src/state/app/nativeSync";
 import { startTabPages } from "../../browser/src/state/tabs/tabPages";
@@ -10,6 +10,7 @@ import { setNewTabPrewarm } from "../../browser/src/platform/preload";
 import { setStoreBatching, useBrowser, type HydrateData } from "../../browser/src/state/browser/store";
 import { usePages } from "../../browser/src/state/tabs/pageState";
 import { adoptParkedPins } from "../../browser/src/state/pins/parkedPins";
+import { decideLastTabClose, decideWindowClose } from "../../browser/src/state/windows/windowClose";
 import { ardiaHost, invokeHost } from "./host";
 import { startHostPersistence } from "./hostSession";
 import { startHostData } from "./hostData";
@@ -18,10 +19,11 @@ import { setHostOverlayCheck } from "./hostViewport";
 import { MenuHost } from "./menus";
 import { startLinuxShortcuts } from "./shortcutsRuntime";
 import { TrafficLights } from "./TrafficLights";
-import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setSessionFlush } from "./session";
+import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setSessionDeparture, setSessionFlush } from "./session";
 import { startUtility } from "./utility";
 
 Object.assign(globalThis, { ardiaLinux: { store: useBrowser, emitCommand } });
+setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
 
 async function start() {
   if (!ardiaHost) throw new Error("The Linux desktop UI requires an Ardia native host");
@@ -51,6 +53,7 @@ async function start() {
     });
     const persistence = startHostPersistence(ardiaHost, useBrowser, saved ?? {});
     setSessionFlush(persistence.flush);
+    setSessionDeparture(persistence);
     await persistence.flush();
     startTabPages();
     startNativeSync();

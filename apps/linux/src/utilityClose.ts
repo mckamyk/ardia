@@ -9,12 +9,12 @@ export type CloseBarrierHooks = {
   resume(request: WindowCloseRequest): void;
 };
 
-const validCloseRequest = (request: WindowCloseRequest) => !!request && Object.keys(request).length === 3 &&
+export const validCloseRequest = (request: WindowCloseRequest) => !!request && Object.keys(request).length === 3 &&
   Object.keys(request).every((key) => key === "windowId" || key === "rendererGeneration" || key === "closeGeneration") &&
   typeof request.windowId === "string" && request.windowId.length > 0 && request.windowId.length <= 256 &&
   typeof request.rendererGeneration === "string" && /^[1-9][0-9]{0,19}$/.test(request.rendererGeneration) &&
   typeof request.closeGeneration === "string" && /^[1-9][0-9]{0,19}$/.test(request.closeGeneration);
-const closeIdentity = (request: WindowCloseRequest) => JSON.stringify([request.windowId, request.rendererGeneration, request.closeGeneration]);
+export const closeIdentity = (request: WindowCloseRequest) => JSON.stringify([request.windowId, request.rendererGeneration, request.closeGeneration]);
 const cancelledClose = () => Object.assign(new Error("Window close cancelled"), { code: "ERR_WINDOW_CLOSE_CANCELLED" });
 
 export function createWindowCloseBarrier(hooks: CloseBarrierHooks) {

@@ -16,6 +16,7 @@
 #include "ardia/linux/ac_linux_contract.h"
 #include "ardia/linux/ac_linux_close.h"
 #include "ardia/linux/ac_linux_close_hooks.h"
+#include "ardia/linux/ac_linux_dialog_views.h"
 #include "ardia/linux/ac_linux_document_service.h"
 #include "ardia/linux/ac_linux_launch_config.h"
 #include "ardia/core/ac_launch_switches.h"
@@ -55,6 +56,7 @@
 #include "base/values.h"
 #include "chrome/browser/ardia/public/ac_engine.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -671,7 +673,12 @@ class ShellHostView : public views::View,
     if (!weak || !committed || committed != weak->shell()->GetPrimaryMainFrame() || committed->GetWebUI() != ui) return 0;
     weak->handler_ = handler;
     weak->renderer_document_ = std::move(document);
-    return weak->renderer_generation_;
+    const uint64_t generation = weak->renderer_generation_;
+    if (weak->dialogs_ && !weak->dialogs_->controller().ReplaceRenderer(base::NumberToString(generation))) {
+      if (weak) weak->dialogs_.reset();
+    }
+    if (!weak || weak->handler_ != handler || weak->renderer_generation_ != generation) return 0;
+    return generation;
   }
   bool OwnsHandler(HostMessageHandler* handler, uint64_t generation) const {
     auto* frame = renderer_document_.AsRenderFrameHostIfValid();
@@ -684,7 +691,10 @@ class ShellHostView : public views::View,
     return true;
   }
   void RetireRenderer() {
-    if (!RetireDocuments()) return;
+    auto alive = GetWeakPtr();
+    if (dialogs_ && renderer_generation_)
+      dialogs_->controller().RetireRenderer(base::NumberToString(renderer_generation_));
+    if (!alive || !RetireDocuments()) return;
     ++renderer_generation_;
     renderer_document_ = content::WeakDocumentPtr();
     std::vector<int> temporary;
@@ -814,6 +824,19 @@ class ShellHostView : public views::View,
   bool EnsureDocumentClient();
   void CancelWindowClose(LinuxClose::Identity identity,
                          base::OnceCallback<void(bool, base::Value)> done);
+  void BeginWindowCloseDrain(const base::DictValue& request,
+                             base::OnceCallback<void(bool, base::Value)> done);
+  std::optional<LinuxDialogClient> DialogClient() const;
+  std::string DialogProfile() const;
+  void DialogInvoke(const std::string& method, const base::ListValue& values,
+                    base::OnceCallback<void(bool, base::Value)> done);
+  void SuspendDialogsForClose(const std::string& close_generation);
+  void CommitWindowDeparture(const std::string& close_generation);
+  static void PersistWindowDeparture(Profile* profile, std::string source_window,
+                                     base::DictValue departure);
+  void ResumeDialogsForClose(const std::string& close_generation);
+  bool AwaitingChromeHandoff() const;
+  bool ClosingEndsSession() const;
   void AcknowledgeWindowClose(const base::DictValue& request,
                               base::OnceCallback<void(bool, base::Value)> done);
   void OnWidgetClosing(views::Widget* widget) override;
@@ -830,6 +853,9 @@ class ShellHostView : public views::View,
   raw_ptr<views::WebView> shell_ = nullptr;
   raw_ptr<HostMessageHandler> handler_ = nullptr;
   uint64_t renderer_generation_ = 0;
+  std::unique_ptr<LinuxWindowDialogs> dialogs_;
+  std::map<std::string, LinuxDialogSuspension> close_dialogs_;
+  std::optional<std::pair<std::string, base::DictValue>> close_departure_;
   content::WeakDocumentPtr renderer_document_;
   std::shared_ptr<DocumentAuthority> documents_;
   const std::string document_window_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
@@ -887,6 +913,30 @@ class ShellHostView : public views::View,
 BEGIN_METADATA(ShellHostView)
 END_METADATA
 
+void ShellHostView::PersistWindowDeparture(Profile* profile, std::string source_window,
+                                           base::DictValue departure) {
+  const auto* base = departure.FindDict("base");
+  const auto* session = departure.FindDict("session");
+  if (!profile || !base || !session || !ValidLinuxSession(*base) || !ValidLinuxSession(*session)) return;
+  const base::FilePath profile_path = profile->GetPath();
+  FileRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&MergeAndWriteSession, DocumentDirectory(profile),
+                                base->Clone(), session->Clone()),
+      base::BindOnce(
+          [](base::FilePath departed_profile, std::string departed_window, SessionWriteResult result) {
+            if (!result.ok || result.previous == result.session) return;
+            for (const auto& [id, host] : Hosts()) {
+              Profile* peer = host->profile();
+              if (host->window_id() == departed_window || !peer || peer->IsOffTheRecord() ||
+                  peer->GetPath() != departed_profile) continue;
+              host->Event("ArdiaHost", "session", base::Value(base::DictValue()
+                  .Set("base", result.previous.Clone())
+                  .Set("session", result.session.Clone())
+                  .Set("sourceWindowId", departed_window)));
+            }
+          }, profile_path, std::move(source_window)));
+}
+
 ShellHostView* HostFor(content::WebContents* contents) {
   for (const auto& [id, host] : Hosts()) {
     if (host->shell() == contents) return host;
@@ -913,6 +963,7 @@ class HostMessageHandler : public content::WebUIMessageHandler,
     return host_ && host_->OwnsHandler(this, generation_) &&
            host_->Trusted(web_ui()) && IsJavascriptAllowed();
   }
+  base::WeakPtr<HostMessageHandler> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
  private:
   struct EngineReply {
@@ -1188,6 +1239,9 @@ ShellHostView::ShellHostView(BrowserWindowInterface* browser, BrowserView* paren
 
 ShellHostView::~ShellHostView() {
   weak_factory_.InvalidateWeakPtrs();
+  handler_ = nullptr;
+  renderer_document_ = content::WeakDocumentPtr();
+  dialogs_.reset();
   RetireDocuments();
   UnregisterAccelerators();
   Hosts().erase(id_);
@@ -1198,6 +1252,8 @@ ShellHostView::~ShellHostView() {
 
 void ShellHostView::Initialize() {
   documents_ = DocumentsFor(profile());
+  dialogs_ = std::make_unique<LinuxWindowDialogs>(window_id_, DialogProfile(), GetWidget(),
+                                                  ardiacore::BackgroundInstance());
   close_observation_.Observe(GetWidget());
   ArmWindowClose();
   focus_manager_ = GetFocusManager();
@@ -1229,6 +1285,10 @@ void ShellHostView::DetachViewports() {
 void ShellHostView::DetachBrowser() {
   if (!RetireDocuments()) return;
   weak_factory_.InvalidateWeakPtrs();
+  handler_ = nullptr;
+  renderer_document_ = content::WeakDocumentPtr();
+  close_dialogs_.clear();
+  dialogs_.reset();
   UnregisterAccelerators();
   TabStripModelObserver::StopObservingAll(this);
   view_observation_.Reset();
@@ -1270,7 +1330,9 @@ base::DictValue ShellHostView::Bootstrap() const {
                                 "ArdiaApp", base::DictValue().Set(
                                                 "systemInfo", std::move(info))))
       .Set("launchConfig", ardiacore::LinuxLaunchConfig(DocumentDirectory(profile()), user_data_directory))
-      .Set("capabilities", base::ListValue().Append("ArdiaWebView.call"));
+      .Set("capabilities", base::ListValue().Append("ArdiaWebView.call")
+          .Append("ArdiaShell.windowIdentity").Append("ArdiaShell.beginDialog")
+          .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain"));
   if (is_utility()) bootstrap.Set("utility", utility_.Clone());
   return bootstrap;
 }
@@ -1384,7 +1446,10 @@ bool ShellHostView::RetireDocuments() {
     if (closing && !coordinated) {
       authority->service.AsyncCall(&LinuxDocumentService::CancelSeal)
           .WithArgs(client, close_generation)
-          .Then(base::BindOnce([](LinuxDocumentResult) {}));
+          .Then(base::BindOnce([](base::WeakPtr<ShellHostView> host, std::string close_generation,
+                                  LinuxDocumentResult result) {
+            if (host && result.ok()) host->ResumeDialogsForClose(close_generation);
+          }, weak, close_generation));
     }
     authority->service.AsyncCall(&LinuxDocumentService::Retire).WithArgs(client);
   }
@@ -1397,6 +1462,7 @@ bool ShellHostView::RetireDocuments() {
     }
   } else {
     close_.Retire();
+    close_departure_.reset();
     close_client_ = {};
     close_browser_.reset();
     close_widget_.reset();
@@ -1627,17 +1693,121 @@ base::DictValue ShellHostView::RequestWindowClose() {
     close_widget_ = GetWidget()->GetWeakPtr();
     close_window_ = window_id_;
     close_error_.reset();
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, base::BindOnce(
-            [](base::WeakPtr<ShellHostView> host, LinuxClose::Identity identity) {
-              if (!host || !host->close_.Matches(identity, host->renderer_generation_)) return;
-              host->CancelWindowClose(identity, base::BindOnce([](bool, base::Value) {}));
-            }, GetWeakPtr(), *identity), base::Seconds(30));
   }
   if (close_.phase() == LinuxClose::Phase::kRequested)
     Event("ArdiaShell", "shell", base::Value(base::DictValue()
         .Set("name", "shell.closeRequested").Set("data", request.Clone())));
   return request;
+}
+
+void ShellHostView::BeginWindowCloseDrain(
+    const base::DictValue& request,
+    base::OnceCallback<void(bool, base::Value)> done) {
+  const LinuxClose::Identity identity{String(request, "rendererGeneration"),
+                                      String(request, "closeGeneration")};
+  const bool deciding = close_.phase() == LinuxClose::Phase::kRequested;
+  if (!handler_ || !handler_->Authorized() || request.size() != 3 ||
+      String(request, "windowId") != window_id_ || !documents_ ||
+      !close_.BeginDrain(identity, renderer_generation_))
+    return std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_WINDOW_CLOSE_STALE").Set("message", "Invalid close drain")));
+  if (deciding) {
+    auto alive = GetWeakPtr();
+    SuspendDialogsForClose(identity.close);
+    if (!alive) return;
+  }
+  if (deciding)
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce(
+            [](base::WeakPtr<ShellHostView> host, LinuxClose::Identity identity) {
+              if (!host || !host->close_.Matches(identity, host->renderer_generation_) ||
+                  !host->AwaitingChromeHandoff()) return;
+              host->CancelWindowClose(identity, base::BindOnce([](bool, base::Value) {}));
+            }, GetWeakPtr(), identity), base::Seconds(30));
+  std::move(done).Run(true, base::Value(base::DictValue()
+      .Set("accepted", base::Value(true))
+      .Set("endsSession", base::Value(ClosingEndsSession()))));
+}
+
+bool ShellHostView::AwaitingChromeHandoff() const {
+  const auto phase = close_.phase();
+  return phase == LinuxClose::Phase::kDraining || phase == LinuxClose::Phase::kSealing ||
+         (phase == LinuxClose::Phase::kSealed && !chrome_close_token_);
+}
+
+bool ShellHostView::ClosingEndsSession() const {
+  if (browser_shutdown::IsTryingToQuit()) return true;
+  for (const auto& [id, host] : Hosts()) {
+    if (host == this || host->is_utility() || !host->GetWidget() || host->GetWidget()->IsClosed()) continue;
+    const auto phase = host->close_.phase();
+    if (phase != LinuxClose::Phase::kIdle && phase != LinuxClose::Phase::kRequested &&
+        phase != LinuxClose::Phase::kCancelling && phase != LinuxClose::Phase::kCancelled) continue;
+    return false;
+  }
+  return true;
+}
+
+std::string ShellHostView::DialogProfile() const {
+  return documents_ ? documents_->scope : std::string();
+}
+
+std::optional<LinuxDialogClient> ShellHostView::DialogClient() const {
+  if (!handler_ || !handler_->Authorized() || !renderer_generation_ || !profile() || !documents_)
+    return std::nullopt;
+  return LinuxDialogClient{window_id_, DialogProfile(), base::NumberToString(renderer_generation_),
+                           true, profile()->IsRegularProfile()};
+}
+
+void ShellHostView::DialogInvoke(const std::string& method, const base::ListValue& values,
+                                 base::OnceCallback<void(bool, base::Value)> done) {
+  const auto client = DialogClient();
+  const auto refuse = [](base::OnceCallback<void(bool, base::Value)> done, std::string message) {
+    std::move(done).Run(false, base::Value(base::DictValue()
+        .Set("code", "ERR_DIALOG").Set("message", message)));
+  };
+  if (!client || !dialogs_) return refuse(std::move(done), "Dialog requester is not current");
+  if (method == "ArdiaShell.cancelDialog") {
+    if (values.size() != 1 || !values[0].is_string() ||
+        !dialogs_->controller().Cancel(*client, values[0].GetString()))
+      return refuse(std::move(done), "Invalid dialog cancellation");
+    return std::move(done).Run(true, base::Value());
+  }
+  if (values.size() != 1 || !values[0].is_dict()) return refuse(std::move(done), "Invalid dialog request");
+  std::string error;
+  auto completion = base::BindOnce(
+      [](base::WeakPtr<ShellHostView> host, base::WeakPtr<HostMessageHandler> origin,
+         uint64_t generation, base::DictValue envelope) {
+        if (!host || !origin || !host->OwnsHandler(origin.get(), generation) ||
+            !origin->Authorized()) return;
+        origin->SendEvent("ArdiaShell", "shell", base::Value(std::move(envelope)));
+      }, GetWeakPtr(), handler_->GetWeakPtr(), renderer_generation_);
+  auto alive = GetWeakPtr();
+  const bool begun = dialogs_->controller().Begin(*client, values[0].GetDict(), std::move(completion), &error);
+  if (!alive) return;
+  if (!begun) return refuse(std::move(done), error);
+  std::move(done).Run(true, base::Value(base::DictValue().Set("accepted", base::Value(true))));
+}
+
+void ShellHostView::SuspendDialogsForClose(const std::string& close_generation) {
+  if (!dialogs_ || close_dialogs_.contains(close_generation)) return;
+  if (close_dialogs_.size() >= LinuxDialogController::kMaxSuspensions) {
+    dialogs_->Suspend();
+    return;
+  }
+  close_dialogs_.emplace(close_generation, LinuxDialogSuspension());
+  auto alive = GetWeakPtr();
+  auto token = dialogs_->Suspend();
+  if (!alive) return;
+  if (auto found = close_dialogs_.find(close_generation); found != close_dialogs_.end())
+    found->second = token;
+}
+
+void ShellHostView::ResumeDialogsForClose(const std::string& close_generation) {
+  const auto found = close_dialogs_.find(close_generation);
+  if (found == close_dialogs_.end()) return;
+  const auto token = found->second;
+  close_dialogs_.erase(found);
+  if (dialogs_ && token) dialogs_->Resume(token);
 }
 
 void ShellHostView::RequestUtilityClose() {
@@ -1666,7 +1836,9 @@ LinuxCloseAdmission ShellHostView::AdmitChromeTeardown(
   if (!chrome_close_token_ || *chrome_close_token_ != token ||
       close_.Irreversible() || !ReadyForChromeClose(identity))
     return LinuxCloseAdmission::kRejected;
-  return CommitLinuxCloseTeardown(browser_, token, stage, base::BindOnce(
+  const auto weak = GetWeakPtr();
+  const auto close_generation = identity.close;
+  const auto admission = CommitLinuxCloseTeardown(browser_, token, stage, base::BindOnce(
       [](base::WeakPtr<ShellHostView> host,
          base::WeakPtr<BrowserWindowInterface> browser,
          LinuxClose::Identity identity, base::UnguessableToken token) {
@@ -1677,6 +1849,16 @@ LinuxCloseAdmission ShellHostView::AdmitChromeTeardown(
             !host->ReadyForChromeClose(identity)) return false;
         return host->close_.BeginTeardown(identity, host->renderer_generation_);
       }, GetWeakPtr(), close_browser_, std::move(identity), token));
+  if (admission == LinuxCloseAdmission::kCommitted && weak && weak->close_.Irreversible())
+    weak->CommitWindowDeparture(close_generation);
+  return admission;
+}
+
+void ShellHostView::CommitWindowDeparture(const std::string& close_generation) {
+  if (!close_departure_ || close_departure_->first != close_generation || !profile()) return;
+  auto departure = std::move(close_departure_->second);
+  close_departure_.reset();
+  PersistWindowDeparture(profile(), window_id_, std::move(departure));
 }
 
 void ShellHostView::ReplyChromeClose(
@@ -1821,6 +2003,8 @@ void ShellHostView::CancelDocumentSeal(LinuxClose::Identity identity, bool chrom
               return;
             }
             if (!host->close_.Cancelled(identity)) return;
+            host->close_departure_.reset();
+            host->ResumeDialogsForClose(identity.close);
             host->chrome_close_token_.reset();
             host->close_client_ = {};
             host->close_browser_.reset();
@@ -1857,8 +2041,11 @@ void ShellHostView::AcknowledgeWindowClose(
                                       String(request, "closeGeneration")};
   const auto watermark = request.FindInt("watermark");
   const auto phase = close_.phase();
-  if (!handler_ || !handler_->Authorized() ||
-      request.size() != 4 || String(request, "windowId") != window_id_ ||
+  const auto* departure = request.FindDict("departure");
+  const bool departure_valid = !departure || (departure->size() == 2 &&
+      departure->FindDict("base") && departure->FindDict("session"));
+  if (!handler_ || !handler_->Authorized() || !departure_valid ||
+      request.size() != (departure ? 5u : 4u) || String(request, "windowId") != window_id_ ||
       !watermark || !documents_ ||
       !close_.BeginSeal(identity, renderer_generation_, *watermark))
     return std::move(done).Run(false, base::Value(base::DictValue()
@@ -1871,6 +2058,8 @@ void ShellHostView::AcknowledgeWindowClose(
         .Set("code", "ERR_WINDOW_CLOSE_LIMIT").Set("message", "Too many close acknowledgments")));
   close_replies_.push_back(std::move(done));
   if (phase == LinuxClose::Phase::kSealing || close_.CanClose()) return;
+  if (departure) close_departure_.emplace(identity.close, departure->Clone());
+  else close_departure_.reset();
   documents_->service.AsyncCall(&LinuxDocumentService::Seal)
       .WithArgs(DocumentClient(), identity.close, *watermark, document_used_)
       .Then(base::BindOnce(
@@ -2599,14 +2788,20 @@ void ShellHostView::Invoke(
   const base::ListValue& values = Arguments(args);
   if (method == "ArdiaShell.windowIdentity") {
     const auto* supplied = args.Find("args");
+    const auto client = DialogClient();
+    base::DictValue identity;
     if (args.size() != 1 || !supplied || !supplied->is_list() || !values.empty() ||
-        !handler_ || !handler_->Authorized() || !renderer_generation_ ||
-        !profile() || !profile()->IsRegularProfile())
+        !client || !dialogs_ || !dialogs_->controller().Identify(*client, &identity))
       return std::move(done).Run(false, base::Value(base::DictValue()
           .Set("code", "ERR_WINDOW_IDENTITY").Set("message", "Committed window identity unavailable")));
-    return std::move(done).Run(true, base::Value(base::DictValue()
-        .Set("windowId", window_id_)
-        .Set("rendererGeneration", base::NumberToString(renderer_generation_))));
+    return std::move(done).Run(true, base::Value(std::move(identity)));
+  }
+  if (method == "ArdiaShell.beginDialog" || method == "ArdiaShell.cancelDialog") {
+    const auto* supplied = args.Find("args");
+    if (args.size() != 1 || !supplied || !supplied->is_list())
+      return std::move(done).Run(false, base::Value(base::DictValue()
+          .Set("code", "ERR_DIALOG").Set("message", "Invalid dialog request")));
+    return DialogInvoke(method, values, std::move(done));
   }
   if (method == "ArdiaShell.requestWindowClose") {
     if (values.size() != 1 || !values[0].is_string())
@@ -2619,6 +2814,11 @@ void ShellHostView::Invoke(
       return std::move(done).Run(true, base::Value(std::move(request)));
     }
     return std::move(done).Run(false, base::Value("No such native window"));
+  }
+  if (method == "ArdiaShell.beginWindowCloseDrain") {
+    if (values.size() != 1 || !values[0].is_dict())
+      return std::move(done).Run(false, base::Value("Close identity required"));
+    return BeginWindowCloseDrain(values[0].GetDict(), std::move(done));
   }
   if (method == "ArdiaShell.acknowledgeWindowClose" || method == "ArdiaShell.rejectWindowClose") {
     if (values.size() != 1 || !values[0].is_dict())

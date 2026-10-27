@@ -5,8 +5,12 @@ import type { ArdiaHost } from "./host";
 import { reportHostError } from "./host.ts";
 import { canonicalSessionValue, cloneSessionValue, equalSessionValue, mergeSession } from "./hostSessionMerge.ts";
 import { sessionStatePatch } from "./hostSessionState.ts";
+import { createWindowDeparture } from "./windowDeparture.ts";
 import { parkWindowPins } from "../../browser/src/state/pins/parkedPins";
 import { inPinnedContainer, newId, snapshotTab } from "../../browser/src/state/browser/model";
+
+const CLOSED_WINDOW_LIMIT = 10;
+const inClosingOrder = <T extends { closedAt: number }>(entries: T[]) => [...entries].sort((a, b) => a.closedAt - b.closedAt).slice(-CLOSED_WINDOW_LIMIT);
 
 function withoutRestoredWindows(saved: HydrateData, now: number): HydrateData {
   const source = { tabs: saved.tabs ?? {}, groups: saved.groups ?? {}, splits: saved.splits ?? {}, history: {} };
@@ -23,7 +27,7 @@ function withoutRestoredWindows(saved: HydrateData, now: number): HydrateData {
     closedAt: now,
   })).filter((c) => c.tabs.some((t) => t.url));
   return {
-    ...saved, parkedPins, closedWindows: [...(saved.closedWindows ?? []), ...closed].slice(-10),
+    ...saved, parkedPins, closedWindows: inClosingOrder([...(saved.closedWindows ?? []), ...closed]),
     windows: {}, windowOrder: [], tabs: {}, groups: {}, splits: {}, focusedWindowId: null,
   };
 }
@@ -32,6 +36,7 @@ export function initialHostSession(host: ArdiaHost, saved: HydrateData | null | 
   const { windowId, profileId } = host.bootstrap;
   if (!windowId || !profileId || /[\\/\0]/.test(windowId + profileId)) throw new Error("Invalid Ardia host bootstrap IDs");
   if (host.bootstrap.startup !== false && saved?.settings?.restoreSession === false) saved = withoutRestoredWindows(saved, now);
+  if (saved?.closedWindows) saved = { ...saved, closedWindows: inClosingOrder(saved.closedWindows) };
   const profile = { id: profileId, name: "Personal", color: "plum" as const, icon: null, createdAt: now };
   const profiles = { ...saved?.profiles };
   profiles[profileId] ??= profile;
@@ -212,7 +217,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
     const local = frozen ?? snapshotOf(state);
     canonical = session;
     const merged = mergeSession(base, local, session);
-    const runtime = { ...merged, settings: { ...state.settings, ...merged.settings } };
+    const runtime = { ...merged, ...(merged.closedWindows && { closedWindows: inClosingOrder(merged.closedWindows) }), settings: { ...state.settings, ...merged.settings } };
     const patch = sessionStatePatch(state, snapshotHostSession(state), runtime);
     applying = true;
     try {
@@ -281,5 +286,9 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
     window.removeEventListener("pagehide", final);
     document.removeEventListener("visibilitychange", onVisibility);
   };
-  return Object.assign(dispose, { flush: () => { queue(store.getState()); clearTimeout(timer); timer = undefined; return writer.drain(); } });
+  const departure = (windowId: string) => {
+    const state = store.getState();
+    return { base: snapshotOf(state), session: snapshotOf(createWindowDeparture(state, windowId)(state)) };
+  };
+  return Object.assign(dispose, { flush: () => { queue(store.getState()); clearTimeout(timer); timer = undefined; return writer.drain(); }, departure });
 }

@@ -19,6 +19,7 @@ struct Origin {
 };
 }
 namespace base {
+inline std::string NumberToString(uint64_t value) { return std::to_string(value); }
 struct DictValue {
   std::map<std::string, int> ints;
   std::map<std::string, std::string> strings;
@@ -103,6 +104,16 @@ struct TabBinding {
 };
 struct ShellHostView {
   HostMessageHandler* handler_ = nullptr;
+  struct Dialogs {
+    struct Controller {
+      std::vector<std::string> replaced;
+      std::vector<std::string> retired;
+      bool ReplaceRenderer(const std::string& generation) { replaced.push_back(generation); return true; }
+      void RetireRenderer(const std::string& generation) { retired.push_back(generation); }
+    } controller_;
+    Controller& controller() { return controller_; }
+  };
+  std::unique_ptr<Dialogs> dialogs_ = std::make_unique<Dialogs>();
   uint64_t renderer_generation_ = 0;
   content::WeakDocumentPtr renderer_document_;
   content::RenderFrameHost frame_;
