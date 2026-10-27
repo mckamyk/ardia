@@ -351,3 +351,28 @@ test("final pending write uses a coherent latest canonical pair and invalidates 
     stop(); restore();
   }
 });
+
+test("merged closed windows keep closing order and the reopen bound however the merge ordered them", async () => {
+  const restore = browserEvents();
+  const { initial } = sharedSession();
+  const native = nativeService(initial);
+  const b = stateStore(initial, "b");
+  const stop = startHostPersistence(native.client("b"), b, initial);
+  const entry = (id, closedAt) => ({ kind: "window", id, window: { profileId: "default", sidebarOpen: true, frame: null }, tabs: [{ url: `https://${id}.test/`, title: id, profileId: "default", active: true }], groups: [], closedAt });
+  try {
+    await flush();
+    native.external((session) => ({ ...session, closedWindows: [entry("cw-later", 200), entry("cw-earlier", 100)] }));
+    assert.deepEqual(b.getState().closedWindows.map((c) => c.id), ["cw-earlier", "cw-later"]);
+    native.external((session) => ({ ...session, closedWindows: Array.from({ length: 12 }, (_, i) => entry(`cw-${i}`, 1000 - i)) }));
+    assert.deepEqual(b.getState().closedWindows.map((c) => c.closedAt), Array.from({ length: 10 }, (_, i) => 991 + i));
+  } finally {
+    stop(); restore();
+  }
+});
+
+test("a cold launch restores closed windows in closing order", () => {
+  const saved = initialHostSession({ bootstrap: { windowId: "a", profileId: "default", startup: false } }, null);
+  const entry = (id, closedAt) => ({ kind: "window", id, window: { profileId: "default", sidebarOpen: true, frame: null }, tabs: [{ url: `https://${id}.test/`, title: id, profileId: "default", active: true }], groups: [], closedAt });
+  const session = initialHostSession({ bootstrap: { windowId: "b", profileId: "default", startup: true } }, { ...saved, closedWindows: [entry("cw-later", 200), entry("cw-earlier", 100)] });
+  assert.deepEqual(session.closedWindows.map((c) => c.id), ["cw-earlier", "cw-later"]);
+});
