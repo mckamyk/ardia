@@ -23,14 +23,14 @@ export const HostWebView = forwardRef<WebViewHandle, WebViewProps>(function Host
   const element = useRef<HTMLDivElement>(null);
   const tab = useRef<HostTab | null>(null);
   const navigation = useRef<NavigationState | null>(null);
-  const key = useRef(props.transferKey ?? `host_${crypto.randomUUID()}`);
+  const key = useRef(props.tabId ?? `host_${crypto.randomUUID()}`);
   const requestedUrl = useRef(props.url);
   const ready = useRef(false);
 
   const receive = (event: HostTabEvent) => {
     const p = latest.current;
     if (event.type === "ready") {
-      if (!ready.current) p.onReady?.(event.browserId as number, event.chromeTabId as number);
+      if (!ready.current) p.onReady?.();
       ready.current = true;
     } else if (event.type === "navigation") {
       const state = event.state as NavigationState;
@@ -60,7 +60,7 @@ export const HostWebView = forwardRef<WebViewHandle, WebViewProps>(function Host
 
   useEffect(() => {
     const host = ardiaHost!;
-    const current = new HostTab(host, { key: key.current, profile: props.profile, url: toEngineUrl(props.url ?? "about:blank"), ...(props.adoptId ? { adoptId: props.adoptId } : {}) }, receive);
+    const current = new HostTab(host, { key: key.current, temporary: !props.tabId, profile: props.profile, url: toEngineUrl(props.url ?? "about:blank"), ...(props.adoptId ? { adoptId: props.adoptId } : {}) }, receive);
     tab.current = current;
     void current.ready.catch((error) => {
       if (!current.disposed) latest.current.onLoadError?.({ url: latest.current.url ?? "", code: -2, text: String(error) });
@@ -109,7 +109,7 @@ export const HostWebView = forwardRef<WebViewHandle, WebViewProps>(function Host
     let retryAfter = 0;
     const stop = watchTabViewport(node, () => {
       const p = latest.current;
-      return p.visible !== false && !menuShown() && !hostOverlayBlocked(p.transferKey);
+      return p.visible !== false && !menuShown() && !hostOverlayBlocked(p.tabId);
     }, (viewport) => {
       const current = tab.current;
       if (!current?.identity) return;

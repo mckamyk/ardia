@@ -39,7 +39,9 @@
       pending.delete(id);
       clearTimeout(entry.timer);
       if (success) entry.resolve(result);
-      else entry.reject(new Error(typeof result === "string" ? result : "Native request failed"));
+      else entry.reject(Object.assign(new Error(typeof result === "string" ? result : result?.message ?? "Native request failed"), {
+        code: typeof result === "object" && result ? result.code ?? "ERR_ENGINE" : "ERR_ENGINE",
+      }));
     },
   });
 
