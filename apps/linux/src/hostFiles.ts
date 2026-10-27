@@ -1,7 +1,6 @@
 import type { ArdiaHost } from "./host";
 import { hostSupports, invokeHost, reportHostError } from "./host.ts";
 import { FILE_STATUS } from "./fileCapabilities.ts";
-import { showToast } from "../../browser/src/state/splits/actions";
 
 export const FILE_STATUS_FRESH_MS = 2000;
 const FILE_STATUS_BATCH_MS = 16;
@@ -21,6 +20,7 @@ const realClock: Clock = { now: () => Date.now(), schedule: (run, ms) => setTime
 export type HostFiles = {
   fileExists(path: string): boolean;
   expect(path: string): void;
+  setNotice(notice: Notice): void;
   openFile(path: string): Promise<boolean>;
   revealFile(path: string): Promise<boolean>;
   moveToTrash(path: string): Promise<boolean>;
@@ -32,6 +32,7 @@ export type HostFiles = {
 const localPath = (path: unknown): path is string => typeof path === "string" && path.startsWith("/") && path.length <= 4096 && !path.includes("\0");
 
 export function createHostFiles(host: ArdiaHost, clock: Clock = realClock, notice: Notice = () => {}): HostFiles {
+  let currentNotice = notice;
   const cache = new Map<string, { exists: boolean; at: number }>();
   const queued = new Set<string>();
   const inflight = new Set<string>();
@@ -82,7 +83,7 @@ export function createHostFiles(host: ArdiaHost, clock: Clock = realClock, notic
       ? invokeHost<unknown>(`ArdiaSystem.${method}`, { args: [path] }, host).then((reply) => reply === true, (error) => {
           reportHostError(error);
           const message = error instanceof Error && error.message ? error.message : "The desktop did not respond";
-          notice(FAILURE_TITLES[method] ?? "Couldn't Use the File", message);
+          currentNotice(FAILURE_TITLES[method] ?? "Couldn't Use the File", message);
           return false;
         })
       : Promise.resolve(false);
@@ -96,6 +97,9 @@ export function createHostFiles(host: ArdiaHost, clock: Clock = realClock, notic
         schedule();
       }
       return entry?.exists ?? false;
+    },
+    setNotice(next) {
+      currentNotice = next;
     },
     expect(path) {
       if (!localPath(path) || !hostSupports(FILE_STATUS, host) || cache.has(path)) return;
@@ -132,7 +136,7 @@ const perHost = new WeakMap<ArdiaHost, HostFiles>();
 
 export function hostFiles(host: ArdiaHost): HostFiles {
   let files = perHost.get(host);
-  if (!files) perHost.set(host, (files = createHostFiles(host, realClock, (title, message) => showToast(host.bootstrap.windowId, title, message))));
+  if (!files) perHost.set(host, (files = createHostFiles(host)));
   return files;
 }
 

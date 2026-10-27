@@ -2,6 +2,7 @@ import type { Download } from "../../../packages/ardiacore/src/module";
 import type { ArdiaHost } from "./host";
 import { callHost, reportHostError } from "./host.ts";
 import { hostFiles } from "./hostFiles.ts";
+import { showToast } from "../../browser/src/state/splits/actions";
 
 const DOWNLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STATES = new Set(["downloading", "finished", "failed", "cancelled"]);
@@ -87,6 +88,7 @@ export function startHostDownloads(host: ArdiaHost, store: DownloadStore) {
     },
   });
   const files = hostFiles(host);
+  files.setNotice((title, message) => showToast(host.bootstrap.windowId, title, message));
   const expectFinished = (d: { state?: unknown; path?: unknown } | null | undefined) => {
     if (d?.state === "finished" && typeof d.path === "string") files.expect(d.path);
   };
