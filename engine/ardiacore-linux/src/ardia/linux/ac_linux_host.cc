@@ -19,6 +19,8 @@
 #include "ardia/linux/ac_linux_contract.h"
 #include "ardia/linux/ac_linux_close.h"
 #include "ardia/linux/ac_linux_close_hooks.h"
+#include "ardia/linux/ac_linux_credential_service.h"
+#include "ardia/linux/ac_linux_credentials.h"
 #include "ardia/linux/ac_linux_dialog_views.h"
 #include "ardia/linux/ac_linux_document_service.h"
 #include "ardia/linux/ac_linux_downloads.h"
@@ -1373,6 +1375,17 @@ class HostMessageHandler : public content::WebUIMessageHandler,
                        new EngineReply{name, weak_factory_.GetWeakPtr(), id});
         return;
       }
+      if (LinuxCredentialsHandles(name)) {
+        Profile* page = host_->page_profile();
+        return LinuxCredentialsCall(profile, !page || page->IsOffTheRecord(), name, input,
+            base::BindOnce([](base::WeakPtr<HostMessageHandler> handler, std::string id, bool ok, base::Value result) {
+              if (!handler) return;
+              if (ok) return handler->Resolve(id, std::move(result));
+              const std::string* code = result.is_dict() ? result.GetDict().FindString("code") : nullptr;
+              const std::string* message = result.is_dict() ? result.GetDict().FindString("message") : nullptr;
+              handler->Fail(id, code ? *code : "ERR_ENGINE", message ? *message : "Credential request failed");
+            }, weak_factory_.GetWeakPtr(), id));
+      }
       const auto* route = ardiacore::linux_contract::FindRoute(name);
       if (!route) return Fail(id, "ERR_UNKNOWN_CALL", "This call is unavailable on Linux");
       if (profile_name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate) {
@@ -1610,6 +1623,7 @@ base::DictValue ShellHostView::Bootstrap() const {
     capabilities.Append(route.name);
   for (const char* route : ardiacore::kLinuxZoomDomainRoutes)
     capabilities.Append(route);
+  for (const char* capability : linux_credentials::kCapabilities) capabilities.Append(capability);
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
@@ -3575,6 +3589,9 @@ void ShellHostView::Invoke(
       return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kPrivateService));
     }
     return LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done));
+  }
+  if (LinuxCredentialsInvokes(method)) {
+    return LinuxCredentialsInvoke(!page_profile() || page_profile()->IsOffTheRecord(), shell_, method, values, std::move(done));
   }
   if (method == "ArdiaShell.windowIdentity") {
     const auto* supplied = args.Find("args");
