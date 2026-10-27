@@ -20,6 +20,7 @@ const replacements = new Map([
   [here("../browser/src/state/settings/paneData.ts"), here("./src/credentialPaneData.ts")],
   [here("../browser/src/components/settings/panes/Passwords.tsx"), here("./src/LinuxPasswordsPane.tsx")],
   [here("../browser/src/components/settings/panes/Autofill.tsx"), here("./src/LinuxAutofillPane.tsx")],
+  [here("../browser/src/state/import/apply.ts"), here("./src/importApply.ts")],
 ]);
 const adapters = new Set([...replacements.values(), rawBookmarkAdapter.replacement]);
 

@@ -1,0 +1,250 @@
+import type * as ImportApi from "../../../packages/import/src/index.ts";
+import type { ArdiaHost } from "./host";
+import { hostSupports, invokeHost, reportHostError } from "./host.ts";
+
+type Api = typeof ImportApi;
+type ImportErrorClass = new (code: string, message: string) => Error & { code: string };
+type ImportEvent = { jobId?: unknown; type?: unknown; [key: string]: unknown };
+
+export type PendingPasswords = { token: string; count: number };
+export type WrittenPasswords = { imported: number; conflicts: number; invalid: number };
+
+export const IMPORT_MODULE = "ArdiaImport";
+export const IMPORT_EVENT = "onImportEvent";
+export const IMPORT_IDLE_MS = 120_000;
+export const CHOOSER_DEADLINE_MS = 30 * 60_000;
+export const PASSWORD_SAVE_CAPABILITY = "ArdiaPasswords.save";
+const HISTORY_CHUNK = 500;
+const TOKEN = /^[0-9a-f]{32}$/;
+
+type Clock = { schedule(run: () => void, ms: number): unknown; cancel(handle: unknown): void };
+const realClock: Clock = { schedule: (run, ms) => setTimeout(run, ms), cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
+
+const count = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0);
+
+export function pendingPasswords(result: unknown): PendingPasswords | null {
+  const passwords = (result as { passwords?: unknown } | null)?.passwords as { token?: unknown; count?: unknown } | undefined;
+  if (!passwords || typeof passwords.token !== "string" || !TOKEN.test(passwords.token)) return null;
+  return { token: passwords.token, count: count(passwords.count) };
+}
+
+function writtenPasswords(reply: unknown): WrittenPasswords {
+  const value = (reply ?? {}) as Record<string, unknown>;
+  return { imported: count(value.imported), conflicts: count(value.conflicts), invalid: count(value.invalid) };
+}
+
+export type HostImport = Pick<
+  Api,
+  | "listBrowsers"
+  | "importData"
+  | "unlockBrowser"
+  | "isBrowserUnlocked"
+  | "forgetUnlockedKeys"
+  | "writeImported"
+  | "discardImported"
+  | "listExtensions"
+  | "importSafariExport"
+  | "safariHasFullDiskAccess"
+  | "openFullDiskAccessSettings"
+  | "importSafariDirect"
+  | "importBookmarksHTML"
+  | "importPasswordsCSV"
+  | "chooseImportFile"
+  | "readDiaTabs"
+> & {
+  writePasswords(token: string, profile: string): Promise<WrittenPasswords>;
+  discardPasswords(token: string): void;
+};
+
+export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass, clock: Clock = realClock): HostImport {
+  const families = new Map<string, string>();
+  let sequence = 0;
+  const failure = (code: string, message: string) => new ImportError(code, message);
+  const unsupported = (what: string) => Promise.reject(failure("unsupported", `${what} isn't available on Linux`));
+  const invoke = <T,>(method: string, args: unknown[]) =>
+    invokeHost<T>(`${IMPORT_MODULE}.${method}`, { args }, host).catch((error: { code?: string; message?: string }) => {
+      throw failure(error?.code && error.code !== "ERR_ENGINE" ? error.code : "unreadable", error?.message ?? String(error));
+    });
+  const nextId = (prefix: string) => `${prefix}-${host.bootstrap.windowId}-${++sequence}`.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 64);
+
+  function awaitEvents(id: string, onEvent: (event: ImportEvent) => boolean, idleMs: number, onIdle: () => void) {
+    let stop = () => {};
+    const done = new Promise<void>((resolve) => {
+      let timer: unknown;
+      const arm = () => {
+        if (timer !== undefined) clock.cancel(timer);
+        timer = clock.schedule(() => {
+          stop();
+          onIdle();
+        }, idleMs);
+      };
+      const unsubscribe = host.onEvent((module, name, payload) => {
+        if (module !== IMPORT_MODULE || name !== IMPORT_EVENT) return;
+        const event = payload as ImportEvent;
+        if (!event || event.jobId !== id) return;
+        arm();
+        if (onEvent(event)) stop();
+      });
+      stop = () => {
+        if (timer !== undefined) clock.cancel(timer);
+        unsubscribe();
+        resolve();
+      };
+      arm();
+    });
+    return { done, stop: () => stop() };
+  }
+
+  const importData: Api["importData"] = (browserId, profileId, kinds, options = {}) => {
+    if (options.signal?.aborted) return Promise.reject(failure("cancelled", "Import cancelled"));
+    const jobId = nextId("import");
+    return new Promise<ImportApi.ImportResult>((resolve, reject) => {
+      let settled = false;
+      const finish = (run: () => void) => {
+        if (settled) return;
+        settled = true;
+        options.signal?.removeEventListener("abort", abort);
+        watch.stop();
+        run();
+      };
+      const cancel = () => void invoke("cancelImport", [jobId]).catch(reportHostError);
+      const abort = () => {
+        cancel();
+        finish(() => reject(failure("cancelled", "Import cancelled")));
+      };
+      const watch = awaitEvents(
+        jobId,
+        (event) => {
+          if (event.type === "progress") {
+            const phase = event.phase;
+            if (typeof event.kind === "string" && (phase === "start" || phase === "progress" || phase === "end")) {
+              options.onProgress?.({ kind: event.kind as ImportApi.ImportKind, phase, processed: count(event.processed), total: typeof event.total === "number" ? event.total : undefined });
+            }
+            return false;
+          }
+          if (event.type === "done") {
+            const result = normalizeResult(event.result, browserId, profileId);
+            if (options.onHistoryChunk && result.history.length) {
+              const size = options.chunkSize && options.chunkSize > 0 ? options.chunkSize : HISTORY_CHUNK;
+              for (let start = 0; start < result.history.length; start += size) options.onHistoryChunk(result.history.slice(start, start + size));
+              result.history = [];
+            }
+            finish(() => resolve(result));
+            return true;
+          }
+          if (event.type === "failed") {
+            finish(() => reject(failure(typeof event.code === "string" ? event.code : "unreadable", typeof event.message === "string" ? event.message : "Import failed")));
+            return true;
+          }
+          return false;
+        },
+        IMPORT_IDLE_MS,
+        () => {
+          cancel();
+          finish(() => reject(failure("timeout", "The import stopped responding")));
+        },
+      );
+      options.signal?.addEventListener("abort", abort);
+      const native = { historyLimit: options.historyLimit, historySince: options.historySince };
+      invoke("startImport", [jobId, browserId, profileId, kinds, native]).catch((error) => finish(() => reject(error)));
+    });
+  };
+
+  return {
+    async listBrowsers() {
+      const list = await invoke<unknown>("listBrowsers", []);
+      if (!Array.isArray(list)) throw failure("unreadable", "The browser list is not a list");
+      const sources = list.filter((source): source is ImportApi.BrowserSource =>
+        !!source && typeof source.id === "string" && typeof source.name === "string" && Array.isArray(source.profiles) && (source.family === "chromium" || source.family === "firefox"));
+      families.clear();
+      for (const source of sources) families.set(source.id, source.family);
+      return sources;
+    },
+    importData,
+    async unlockBrowser(browserId) {
+      if (families.get(browserId) === "chromium") return;
+      throw failure("unsupported", "Passwords from this browser can't be imported on Linux yet");
+    },
+    isBrowserUnlocked: (browserId) => families.get(browserId) === "chromium",
+    forgetUnlockedKeys() {
+      void invoke("forgetUnlockedKeys", []).catch(reportHostError);
+    },
+    writeImported: () => unsupported("Importing cookies, addresses and cards"),
+    discardImported: () => {},
+    async listExtensions(browserId, profileId) {
+      const list = await invoke<unknown>("listExtensions", [browserId, profileId]);
+      return Array.isArray(list) ? list.filter((e) => e && typeof e.id === "string" && typeof e.name === "string" && typeof e.webStoreUrl === "string") : [];
+    },
+    importSafariExport: () => unsupported("Safari import"),
+    safariHasFullDiskAccess: () => false,
+    openFullDiskAccessSettings: () => unsupported("Full Disk Access"),
+    importSafariDirect: () => unsupported("Safari import"),
+    async importBookmarksHTML(path) {
+      const reply = await invoke<{ root?: ImportApi.BookmarkNode }>("importBookmarksHTML", [path]);
+      if (!reply?.root || reply.root.type !== "folder") throw failure("unreadable", "The bookmarks file couldn't be read");
+      return reply.root;
+    },
+    async importPasswordsCSV(path) {
+      if (!hostSupports(PASSWORD_SAVE_CAPABILITY, host)) {
+        throw failure("ERR_PASSWORDS_UNAVAILABLE", "Saving imported passwords isn't available on Linux yet");
+      }
+      const reply = await invoke<{ credentials?: unknown }>("importPasswordsCSV", [path]);
+      if (!Array.isArray(reply?.credentials)) throw failure("unreadable", "The passwords file couldn't be read");
+      return reply.credentials as ImportApi.Credential[];
+    },
+    async chooseImportFile(kind) {
+      if (kind !== "bookmarksHTML" && kind !== "passwordsCSV") return null;
+      const requestId = nextId("choose");
+      let chosen: string | null = null;
+      const watch = awaitEvents(
+        requestId,
+        (event) => {
+          if (event.type !== "chosen") return false;
+          chosen = typeof event.path === "string" && event.path.startsWith("/") ? event.path : null;
+          return true;
+        },
+        CHOOSER_DEADLINE_MS,
+        () => {},
+      );
+      try {
+        await invoke("chooseImportFile", [requestId, kind]);
+      } catch (error) {
+        watch.stop();
+        throw error;
+      }
+      await watch.done;
+      return chosen;
+    },
+    readDiaTabs: () => unsupported("Dia tab import"),
+    async writePasswords(token, profile) {
+      return writtenPasswords(await invoke("writePasswords", [token, profile]));
+    },
+    discardPasswords(token) {
+      void invoke("discardPasswords", [token]).catch(reportHostError);
+    },
+  };
+}
+
+function normalizeResult(value: unknown, browserId: string, profileId: string): ImportApi.ImportResult {
+  const result = (value && typeof value === "object" ? value : {}) as Partial<ImportApi.ImportResult> & Record<string, unknown>;
+  const list = <T,>(item: unknown) => (Array.isArray(item) ? (item as T[]) : []);
+  return {
+    ...result,
+    browserId: typeof result.browserId === "string" ? result.browserId : browserId,
+    profileId: typeof result.profileId === "string" ? result.profileId : profileId,
+    history: list(result.history),
+    historyCount: count(result.historyCount),
+    tabs: list(result.tabs),
+    tabGroups: list(result.tabGroups),
+    credentials: [],
+    cookieCount: 0,
+    addressCount: 0,
+    cardCount: 0,
+    vaultToken: undefined,
+    spaces: list(result.spaces),
+    favorites: list(result.favorites),
+    favicons: list(result.favicons),
+    failed: list(result.failed),
+    warnings: list(result.warnings),
+  };
+}
