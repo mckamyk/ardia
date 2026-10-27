@@ -14,6 +14,7 @@ export const IMPORT_MODULE = "ArdiaImport";
 export const IMPORT_EVENT = "onImportEvent";
 export const IMPORT_IDLE_MS = 120_000;
 export const CHOOSER_DEADLINE_MS = 30 * 60_000;
+export const UNLOCK_DEADLINE_MS = 150_000;
 const HISTORY_CHUNK = 500;
 const TOKEN = /^[0-9a-f]{32}$/;
 
@@ -26,6 +27,20 @@ export function pendingPasswords(result: unknown): PendingPasswords | null {
   const passwords = (result as { passwords?: unknown } | null)?.passwords as { token?: unknown; count?: unknown } | undefined;
   if (!passwords || typeof passwords.token !== "string" || !TOKEN.test(passwords.token)) return null;
   return { token: passwords.token, count: count(passwords.count) };
+}
+
+function writtenImported(reply: unknown): ImportApi.WrittenCounts {
+  const value = (reply ?? {}) as Record<string, unknown>;
+  const counts: ImportApi.WrittenCounts = {
+    cookies: count(value.cookies),
+    cookiesRejected: count(value.cookiesRejected),
+    cookiesExisting: count(value.cookiesExisting),
+    addresses: count(value.addresses),
+    cards: count(value.cards),
+  };
+  if (value.cookiesFailed === 1) counts.cookiesFailed = 1;
+  if (value.autofillFailed === 1) counts.autofillFailed = 1;
+  return counts;
 }
 
 function writtenPasswords(reply: unknown): WrittenPasswords {
@@ -58,6 +73,8 @@ export type HostImport = Pick<
 
 export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass, clock: Clock = realClock): HostImport {
   const families = new Map<string, string>();
+  const keychains = new Set<string>();
+  const unlocked = new Set<string>();
   let sequence = 0;
   const failure = (code: string, message: string) => new ImportError(code, message);
   const unsupported = (what: string) => Promise.reject(failure("unsupported", `${what} isn't available on Linux`));
@@ -163,6 +180,36 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
     });
   };
 
+  const finishByEvent = <T,>(method: string, args: unknown[], prefix: string, success: string, read: (event: ImportEvent) => T, idleMs: number, stalled: string) => {
+    const requestId = nextId(prefix);
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const finish = (run: () => void) => {
+        if (settled) return;
+        settled = true;
+        watch.stop();
+        run();
+      };
+      const watch = awaitEvents(
+        requestId,
+        (event) => {
+          if (event.type === success) {
+            finish(() => resolve(read(event)));
+            return true;
+          }
+          if (event.type === "failed") {
+            finish(() => reject(failure(typeof event.code === "string" ? event.code : "unreadable", typeof event.message === "string" ? event.message : stalled)));
+            return true;
+          }
+          return false;
+        },
+        idleMs,
+        () => finish(() => reject(failure("timeout", stalled))),
+      );
+      invoke(method, [requestId, ...args]).catch((error) => finish(() => reject(error)));
+    });
+  };
+
   const writePasswords = (token: string, profile: string) => {
     const requestId = nextId("write");
     return new Promise<WrittenPasswords>((resolve, reject) => {
@@ -200,20 +247,36 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
       const sources = list.filter((source): source is ImportApi.BrowserSource =>
         !!source && typeof source.id === "string" && typeof source.name === "string" && Array.isArray(source.profiles) && (source.family === "chromium" || source.family === "firefox"));
       families.clear();
-      for (const source of sources) families.set(source.id, source.family);
+      keychains.clear();
+      for (const source of sources) {
+        families.set(source.id, source.family);
+        if (source.family === "chromium" && source.needsKeychain === true) keychains.add(source.id);
+      }
       return sources;
     },
     importData,
-    async unlockBrowser(browserId) {
-      if (families.get(browserId) === "chromium") return;
-      throw failure("unsupported", "Passwords from this browser can't be imported on Linux yet");
+    async unlockBrowser(browserId, options = {}) {
+      const family = families.get(browserId);
+      if (family === "chromium" && !keychains.has(browserId)) return;
+      if (family !== "chromium" && family !== "firefox") throw failure("unsupported", "This browser can't be unlocked on Linux");
+      const primaryPassword = family === "firefox" && typeof options.primaryPassword === "string" ? options.primaryPassword : null;
+      await finishByEvent("unlockBrowser", [browserId, primaryPassword], "unlock", "unlocked", () => undefined, UNLOCK_DEADLINE_MS,
+        "The system keyring didn't answer");
+      unlocked.add(browserId);
     },
-    isBrowserUnlocked: (browserId) => families.get(browserId) === "chromium",
+    isBrowserUnlocked: (browserId) => unlocked.has(browserId) || (families.get(browserId) === "chromium" && !keychains.has(browserId)),
     forgetUnlockedKeys() {
+      unlocked.clear();
       void invoke("forgetUnlockedKeys", []).catch(reportHostError);
     },
-    writeImported: () => unsupported("Importing cookies, addresses and cards"),
-    discardImported: () => {},
+    async writeImported(token, profile, kinds) {
+      if (!TOKEN.test(token)) throw failure("expired", "The imported data is no longer available");
+      return finishByEvent("writeImported", [token, profile, kinds.filter((k) => k === "cookies" || k === "autofill")], "write", "importedWritten",
+        writtenImported, IMPORT_IDLE_MS, "Saving the imported data stopped responding");
+    },
+    discardImported(token) {
+      if (TOKEN.test(token)) void invoke("discardImported", [token]).catch(reportHostError);
+    },
     async listExtensions(browserId, profileId) {
       const list = await invoke<unknown>("listExtensions", [browserId, profileId]);
       return Array.isArray(list) ? list.filter((e) => e && typeof e.id === "string" && typeof e.name === "string" && typeof e.webStoreUrl === "string") : [];
@@ -279,10 +342,10 @@ function normalizeResult(value: unknown, browserId: string, profileId: string): 
     tabs: list(result.tabs),
     tabGroups: list(result.tabGroups),
     credentials: [],
-    cookieCount: 0,
-    addressCount: 0,
-    cardCount: 0,
-    vaultToken: undefined,
+    cookieCount: count(result.cookieCount),
+    addressCount: count(result.addressCount),
+    cardCount: count(result.cardCount),
+    vaultToken: typeof result.vaultToken === "string" && TOKEN.test(result.vaultToken) ? result.vaultToken : undefined,
     spaces: list(result.spaces),
     favorites: list(result.favorites),
     favicons: list(result.favicons),

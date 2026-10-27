@@ -73,7 +73,7 @@ test("listBrowsers keeps well-formed Linux sources and remembers which can decry
   assert.equal(api.isBrowserUnlocked("chrome"), true);
   assert.equal(api.isBrowserUnlocked("firefox"), false);
   await api.unlockBrowser("chrome");
-  await assert.rejects(api.unlockBrowser("firefox"), { code: "unsupported" });
+  await assert.rejects(api.unlockBrowser("safari"), { code: "unsupported" });
   const broken = fixture({ replies: { "ArdiaImport.listBrowsers": { not: "a list" } } });
   await assert.rejects(broken.api.listBrowsers(), { code: "unreadable" });
   const failing = fixture({ replies: { "ArdiaImport.listBrowsers": native("ERR_ENGINE", "Unsupported Linux host method") } });
@@ -274,10 +274,10 @@ test("password tokens are written in event-completed chunks with added and exist
   await assert.rejects(stalling, { code: "timeout" });
 });
 
-test("Safari, Dia, cookies and autofill report unsupported instead of succeeding", async () => {
+test("Safari and Dia report unsupported instead of succeeding", async () => {
   const { api, calls } = fixture();
   assert.equal(api.safariHasFullDiskAccess(), false);
-  for (const attempt of [api.importSafariExport("/x"), api.importSafariDirect(), api.openFullDiskAccessSettings(), api.readDiaTabs(), api.writeImported("t", "", ["cookies"])]) {
+  for (const attempt of [api.importSafariExport("/x"), api.importSafariDirect(), api.openFullDiskAccessSettings(), api.readDiaTabs()]) {
     await assert.rejects(attempt, { code: "unsupported" });
   }
   api.discardImported("t");
