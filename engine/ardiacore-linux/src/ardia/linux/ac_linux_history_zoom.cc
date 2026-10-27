@@ -46,7 +46,8 @@ std::optional<LinuxZoomDomainRequest> PrepareLinuxZoomDomain(
   auto* host = args.FindString("host");
   auto zoom = args.FindDouble("zoom");
   auto normalized = host ? Host(*host) : std::nullopt;
-  if (!normalized || !zoom || !std::isfinite(*zoom) || *zoom <= 0) return std::nullopt;
+  if (!normalized || !zoom || !std::isfinite(*zoom) || *zoom < blink::kMinimumBrowserZoomFactor ||
+      *zoom > blink::kMaximumBrowserZoomFactor) return std::nullopt;
   auto level = blink::ZoomFactorToZoomLevel(*zoom);
   if (!std::isfinite(level)) return std::nullopt;
   return LinuxZoomDomainRequest{"ac_zoom_set", base::DictValue()
@@ -61,12 +62,12 @@ std::optional<base::Value> CompleteLinuxZoomDomain(
   if (!levels) return std::nullopt;
   base::DictValue factors;
   for (const auto item : *levels) {
+    if (!item.second.is_double() && !item.second.is_int()) return std::nullopt;
     auto host = Host(item.first);
-    if (!host || (!item.second.is_double() && !item.second.is_int())) return std::nullopt;
     const double level = item.second.GetDouble();
-    const double factor = blink::ZoomLevelToZoomFactor(level);
-    const double rounded = std::round(factor * 100) / 100;
-    if (!std::isfinite(level) || !std::isfinite(rounded) || rounded <= 0) return std::nullopt;
+    if (!host || !std::isfinite(level)) continue;
+    const double rounded = std::round(blink::ZoomLevelToZoomFactor(level) * 100) / 100;
+    if (!std::isfinite(rounded) || rounded <= 0) continue;
     factors.Set(*host, rounded);
   }
   return base::Value(std::move(factors));

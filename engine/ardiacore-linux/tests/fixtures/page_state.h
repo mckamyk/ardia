@@ -287,6 +287,7 @@ class BrowserWindowInterface {
  private: base::WeakPtrFactory<BrowserWindowInterface> weak{this};
 };
 namespace security_state { inline std::unique_ptr<VisibleSecurityState> GetVisibleSecurityState(content::WebContents* contents) { return std::make_unique<VisibleSecurityState>(contents->security); } }
+namespace blink { inline constexpr double kMinimumBrowserZoomFactor=0.25,kMaximumBrowserZoomFactor=5.0; }
 namespace blink { inline double ZoomLevelToZoomFactor(double level) { return std::pow(1.2,level); } inline double ZoomFactorToZoomLevel(double factor) { return std::log(factor)/std::log(1.2); } }
 namespace zoom {
 class ZoomObserver;

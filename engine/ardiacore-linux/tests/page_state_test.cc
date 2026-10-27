@@ -164,7 +164,16 @@ void Domain() {
   auto factors=CompleteLinuxZoomDomain("sites.zoomLevels",base::DictValue().Set("levels",base::DictValue().Set("EXAMPLE.TEST",2.0).Set("other.test",0.5)));assert(factors && Number(factors->GetDict(),"example.test")==1.44 && Number(factors->GetDict(),"other.test")==1.10);
   assert(CompleteLinuxZoomDomain("sites.setZoom",base::DictValue())->is_none());
   assert(!CompleteLinuxZoomDomain("sites.zoomLevels",base::DictValue()));
-  assert(!CompleteLinuxZoomDomain("sites.zoomLevels",base::DictValue().Set("levels",base::DictValue().Set("a",std::numeric_limits<double>::infinity()))));
+  auto skipped=CompleteLinuxZoomDomain("sites.zoomLevels",base::DictValue().Set("levels",base::DictValue().Set("a",std::numeric_limits<double>::infinity()).Set("ok.test",2.0)));
+  assert(skipped && skipped->GetDict().size()==1 && Number(skipped->GetDict(),"ok.test")==1.44);
+  auto with_file=CompleteLinuxZoomDomain("sites.zoomLevels",base::DictValue().Set("levels",base::DictValue().Set("file:///home/user/page.html",2.0).Set("example.test",-2.0)));
+  assert(with_file && with_file->GetDict().size()==1 && !with_file->GetDict().Find("file:///home/user/page.html"));
+  assert(Number(with_file->GetDict(),"example.test")==0.69);
+  auto tiny=CompleteLinuxZoomDomain("sites.zoomLevels",base::DictValue().Set("levels",base::DictValue().Set("tiny.test",-40.0)));
+  assert(tiny && tiny->GetDict().empty());
+  assert(!CompleteLinuxZoomDomain("sites.zoomLevels",base::DictValue().Set("levels",base::DictValue().Set("a","2"))));
+  for(double bad:{0.24,5.01,1000.,1e-9}) assert(!PrepareLinuxZoomDomain("sites.setZoom",base::DictValue().Set("host","a").Set("zoom",bad)));
+  for(double good:{0.25,1.,5.}) assert(PrepareLinuxZoomDomain("sites.setZoom",base::DictValue().Set("host","a").Set("zoom",good)));
 }
 
 void Zoom() {
