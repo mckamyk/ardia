@@ -14,7 +14,9 @@ class SuggestPolicyTests(unittest.TestCase):
         if compiler is None:
             self.skipTest('C++ compiler is unavailable')
         code = r'''#include <cassert>
+#include <optional>
 #include <string>
+#include <vector>
 #include "ardia/linux/ac_linux_suggest_policy.h"
 int main() {
   using namespace ardia::linux_suggest_policy;
@@ -51,10 +53,30 @@ int main() {
   assert(!ReplyAcceptable(200, "[\"\xed\xa0\x80\"]"));
   assert(!ReplyAcceptable(200, "[\"\xc0\xaf\"]"));
   assert(!ReplyAcceptable(200, "[" + std::string(kMaxReplyBytes, ' ')));
-  assert(HasCapacity(0));
-  assert(HasCapacity(kMaxInFlight - 1));
-  assert(!HasCapacity(kMaxInFlight));
-  assert(!HasCapacity(-1));
+  assert(ValidRequestId("suggest-1"));
+  assert(ValidRequestId("A_z-09"));
+  assert(!ValidRequestId(""));
+  assert(!ValidRequestId("a b"));
+  assert(!ValidRequestId("a/b"));
+  assert(!ValidRequestId(std::string(65, 'a')));
+  SuggestionSlots window;
+  for (int i = 0; i < kMaxInFlightPerWindow; ++i) assert(window.Admit("r" + std::to_string(i)).empty());
+  assert(window.size() == static_cast<size_t>(kMaxInFlightPerWindow));
+  assert((window.Admit("newest") == std::vector<std::string>{"r0"}));
+  assert(window.Contains("newest"));
+  assert(!window.Contains("r0"));
+  assert((window.Admit("r2") == std::vector<std::string>{"r2"}));
+  assert(window.Contains("r2"));
+  assert(window.size() == static_cast<size_t>(kMaxInFlightPerWindow));
+  assert(window.Remove("r1"));
+  assert(!window.Remove("r1"));
+  SuggestionSlots other;
+  assert(other.Admit("r0").empty());
+  assert(window.size() == static_cast<size_t>(kMaxInFlightPerWindow) - 1);
+  assert(!Allowed(SuggestionsSetting::kUnknown));
+  assert(Allowed(SettingFrom(std::nullopt)));
+  assert(Allowed(SettingFrom(true)));
+  assert(!Allowed(SettingFrom(false)));
   assert(ValidUtf8("\xf0\x9f\x98\x80"));
   assert(!ValidUtf8("\xf0\x9f\x98"));
   assert(!ValidUtf8("\xf4\x90\x80\x80"));

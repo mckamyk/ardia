@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { BUILT_IN_ENGINES, suggestRequestUrl } from "../../../packages/core/src/engines.ts";
 import { createSuggestFetcher } from "../../../packages/core/src/suggestFetcher.ts";
-import { SUGGEST_METHOD, SUGGEST_REPLY_LIMIT, hostSuggestFetch, suggestionEndpoints, suggestionRequestAllowed } from "./hostSuggestions.ts";
+import { CANCEL_SUGGEST_METHOD, SUGGEST_METHOD, SUGGEST_REPLY_LIMIT, hostSuggestFetch, suggestionEndpoints, suggestionRequestAllowed } from "./hostSuggestions.ts";
 
 const nativePolicy = readFileSync(new URL("../../../engine/ardiacore-linux/src/ardia/linux/ac_linux_suggest_policy.h", import.meta.url), "utf8");
 const nativeEndpoints = [...nativePolicy.slice(nativePolicy.indexOf("kEndpoints[]"), nativePolicy.indexOf("};", nativePolicy.indexOf("kEndpoints[]"))).matchAll(/"([^"]+)"/g)].map((match) => match[1]);
@@ -12,11 +12,12 @@ const nativeReplyLimit = Number(/kMaxReplyBytes = (\d+) \* (\d+);/.exec(nativePo
 function fakeHost({ supports = true, reply } = {}) {
   const calls = [];
   const host = {
-    bootstrap: { windowId: "w1", profileId: "default", capabilities: supports ? [SUGGEST_METHOD] : [] },
+    bootstrap: { windowId: "w1", profileId: "default", capabilities: supports ? [SUGGEST_METHOD, CANCEL_SUGGEST_METHOD] : [] },
     invoke(method, args) {
       const call = { method, args };
       calls.push(call);
-      return reply ? reply(call, calls.length) : Promise.resolve({ body: JSON.stringify([args.args[0], ["linux parity"]]) });
+      if (method === CANCEL_SUGGEST_METHOD) return Promise.resolve(null);
+      return reply ? reply(call, calls.filter((c) => c.method === SUGGEST_METHOD).length) : Promise.resolve({ body: JSON.stringify([args.args[0], ["linux parity"]]) });
     },
     call: async () => "{}",
     onEvent: () => () => {},
@@ -70,7 +71,10 @@ test("the transport sends only the URL and returns the bounded body as text", as
   const response = await hostSuggestFetch(host)(url, { signal: new AbortController().signal });
   assert.equal(response.ok, true);
   assert.deepEqual(JSON.parse(await response.text()), [url, ["linux parity"]]);
-  assert.deepEqual(calls, [{ method: SUGGEST_METHOD, args: { args: [url] } }]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, SUGGEST_METHOD);
+  assert.equal(calls[0].args.args[0], url);
+  assert.match(calls[0].args.args[1], /^[A-Za-z0-9_-]{1,64}$/);
 });
 
 test("malformed or oversized host replies become an empty failed response", async () => {
@@ -118,4 +122,59 @@ test("with the shared fetcher, stale, failed, malformed and offline replies neve
   await settle();
   assert.deepEqual(results, [["linux", ["linux parity"]], ["arch", []]]);
   fetcher.cancel();
+});
+
+test("each request carries its own id and an abort cancels exactly that native fetch", async () => {
+  const pending = [deferred(), deferred()];
+  const { host, calls } = fakeHost({ reply: (_call, index) => pending[index - 1].promise });
+  const fetch = hostSuggestFetch(host);
+  const first = new AbortController();
+  const a = fetch(suggestRequestUrl(google, "a"), { signal: first.signal });
+  const b = fetch(suggestRequestUrl(google, "ab"), { signal: new AbortController().signal });
+  await settle();
+  const ids = calls.filter((call) => call.method === SUGGEST_METHOD).map((call) => call.args.args[1]);
+  assert.equal(new Set(ids).size, 2);
+  first.abort();
+  await assert.rejects(a, { name: "AbortError" });
+  await settle();
+  assert.deepEqual(calls.filter((call) => call.method === CANCEL_SUGGEST_METHOD).map((call) => call.args.args), [[ids[0]]]);
+  pending[1].resolve({ body: "[\"ab\",[\"abc\"]]" });
+  assert.equal(await (await b).text(), "[\"ab\",[\"abc\"]]");
+  pending[0].resolve({ body: "[]" });
+  assert.equal(calls.filter((call) => call.method === CANCEL_SUGGEST_METHOD).length, 1);
+});
+
+test("a completed request is not cancelled afterwards and a host without cancellation is never asked", async () => {
+  const { host, calls } = fakeHost();
+  const controller = new AbortController();
+  await hostSuggestFetch(host)(suggestRequestUrl(google, "done"), { signal: controller.signal });
+  controller.abort();
+  await settle();
+  assert.equal(calls.filter((call) => call.method === CANCEL_SUGGEST_METHOD).length, 0);
+  const pending = deferred();
+  const legacy = fakeHost({ reply: () => pending.promise });
+  legacy.host.bootstrap.capabilities = [SUGGEST_METHOD];
+  const aborting = new AbortController();
+  const request = hostSuggestFetch(legacy.host)(suggestRequestUrl(google, "x"), { signal: aborting.signal });
+  aborting.abort();
+  await assert.rejects(request, { name: "AbortError" });
+  await settle();
+  assert.equal(legacy.calls.filter((call) => call.method === CANCEL_SUGGEST_METHOD).length, 0);
+});
+
+test("the native per-window cap and request id rules match the transport", () => {
+  assert.match(nativePolicy, /kMaxInFlightPerWindow = \d+;/);
+  assert.match(nativePolicy, /id\.size\(\) > 64/);
+});
+
+test("the native host refuses suggestions unless the profile's saved setting is on", () => {
+  const read = (name) => readFileSync(new URL(`../../../engine/ardiacore-linux/src/ardia/linux/${name}`, import.meta.url), "utf8");
+  const host = read("ac_linux_host.cc");
+  const write = host.slice(host.indexOf('if (method == "session.write")'), host.indexOf('if (method == "ArdiaShell.readDocument")'));
+  assert.match(write, /NoteSuggestionsSetting\(profile_path, result\.session\);/);
+  const suggest = read("ac_linux_suggest.cc");
+  const gate = suggest.slice(suggest.indexOf("bool CanFetchSuggestions("), suggest.indexOf("SuggestionClient::SuggestionClient()"));
+  assert.match(gate, /Settings\(\)\.find\(profile->GetPath\(\)\)/);
+  assert.match(gate, /setting == Settings\(\)\.end\(\) \|\| !policy::Allowed\(setting->second\)/);
+  assert.match(suggest, /settings->FindBool\("searchSuggestions"\)/);
 });

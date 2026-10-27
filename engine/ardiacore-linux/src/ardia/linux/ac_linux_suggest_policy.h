@@ -1,8 +1,12 @@
 #ifndef ARDIA_LINUX_AC_LINUX_SUGGEST_POLICY_H_
 #define ARDIA_LINUX_AC_LINUX_SUGGEST_POLICY_H_
 
+#include <algorithm>
 #include <cstddef>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace ardia::linux_suggest_policy {
 
@@ -21,10 +25,60 @@ inline constexpr std::string_view kEndpoints[] = {
 inline constexpr size_t kMaxRequestLength = 2048;
 inline constexpr size_t kMaxReplyBytes = 64 * 1024;
 inline constexpr int kTimeoutSeconds = 5;
-inline constexpr int kMaxInFlight = 6;
+inline constexpr int kMaxInFlightPerWindow = 4;
 
-inline bool HasCapacity(int in_flight) {
-  return in_flight >= 0 && in_flight < kMaxInFlight;
+inline bool ValidRequestId(std::string_view id) {
+  if (id.empty() || id.size() > 64) {
+    return false;
+  }
+  for (const char c : id) {
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') || c == '-' || c == '_')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+class SuggestionSlots {
+ public:
+  std::vector<std::string> Admit(std::string_view id) {
+    std::vector<std::string> evicted;
+    if (Remove(id)) {
+      evicted.emplace_back(id);
+    }
+    order_.emplace_back(id);
+    while (order_.size() > static_cast<size_t>(kMaxInFlightPerWindow)) {
+      evicted.push_back(order_.front());
+      order_.erase(order_.begin());
+    }
+    return evicted;
+  }
+  bool Remove(std::string_view id) {
+    const auto found = std::find(order_.begin(), order_.end(), id);
+    if (found == order_.end()) {
+      return false;
+    }
+    order_.erase(found);
+    return true;
+  }
+  bool Contains(std::string_view id) const {
+    return std::find(order_.begin(), order_.end(), id) != order_.end();
+  }
+  size_t size() const { return order_.size(); }
+
+ private:
+  std::vector<std::string> order_;
+};
+
+enum class SuggestionsSetting { kUnknown, kOn, kOff };
+
+inline SuggestionsSetting SettingFrom(std::optional<bool> stored) {
+  return stored.value_or(true) ? SuggestionsSetting::kOn : SuggestionsSetting::kOff;
+}
+
+inline bool Allowed(SuggestionsSetting setting) {
+  return setting == SuggestionsSetting::kOn;
 }
 
 inline bool RequestAllowed(std::string_view url) {

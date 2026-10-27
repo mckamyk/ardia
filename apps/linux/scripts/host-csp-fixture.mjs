@@ -35,7 +35,7 @@ const closing = new Set();
 const folder = (id) => ({ id, k:'f', t:id, a:0, c:[] });
 const noops = new Set(['ArdiaShell.openWindow','ArdiaShell.setKeyboardShortcuts','ArdiaShell.setWindowTitle','ArdiaShell.setMenuState','ArdiaShell.setMenuBookmarks','ArdiaShell.cancelFocusMove','ArdiaShell.replyToTerminate','ArdiaCEF.setDisplayMediaPicker','ArdiaCEF.setSearchEngineName','ArdiaChromeUI.watchCastRoutes','ArdiaCEF.prepareTransfer','ArdiaCEF.releaseTransfer','ArdiaShell.writeDocument','ArdiaShell.removeDocument']);
 window.__ardiaHost = {
-  bootstrap: { windowId:'w_csp', profileId:'default', startup:true, documents:{}, nativeModules:{ArdiaApp:{}}, capabilities:['ArdiaSearch.suggest','ArdiaShell.launchSteps','ArdiaShell.completeLaunchStep'] },
+  bootstrap: { windowId:'w_csp', profileId:'default', startup:true, documents:{}, nativeModules:{ArdiaApp:{}}, capabilities:['ArdiaSearch.suggest','ArdiaSearch.cancelSuggest','ArdiaShell.launchSteps','ArdiaShell.completeLaunchStep'] },
   async call(name) {
     if(['ac_bookmarks_tree','bookmarks.tree'].includes(name))return JSON.stringify({bar:folder('bar'),other:folder('other')});
     if(['ac_history_query','history.query'].includes(name))return JSON.stringify({entries:[]});
@@ -49,6 +49,7 @@ window.__ardiaHost = {
     if(method==='ArdiaShell.launchSteps')return [...__ardiaCspFixture.launchSteps];
     if(method==='ArdiaShell.completeLaunchStep'){const fresh=!__ardiaCspFixture.launchSteps.includes(args.args[0]);if(fresh)__ardiaCspFixture.launchSteps.push(args.args[0]);return fresh;}
     if(method==='ArdiaShell.readDocument')return null;
+    if(method==='ArdiaSearch.cancelSuggest')return null;
     if(method==='ArdiaSearch.suggest'){__ardiaCspFixture.suggestRequests.push(args.args[0]);return {body:JSON.stringify(['ardia csp',['ardia csp fixture']])};}
     if(method==='session.read')return null;
     if(method==='session.write')return;

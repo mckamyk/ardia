@@ -1015,6 +1015,8 @@ class ShellHostView : public views::View,
   base::WeakPtr<content::WebContents> switcher_source_;
   int id_;
   bool startup_;
+  std::unique_ptr<ardia::linux_suggest::SuggestionClient> suggestions_ =
+      std::make_unique<ardia::linux_suggest::SuggestionClient>();
   std::string window_id_;
   std::string kind_;
   std::string title_;
@@ -1464,7 +1466,8 @@ base::DictValue ShellHostView::Bootstrap() const {
   base::ListValue capabilities = base::ListValue().Append("ArdiaWebView.call")
       .Append("ArdiaShell.windowIdentity").Append("ArdiaShell.beginDialog")
       .Append("ArdiaShell.cancelDialog").Append("ArdiaShell.beginWindowCloseDrain")
-      .Append("ArdiaSearch.suggest").Append("ArdiaShell.launchSteps")
+      .Append("ArdiaSearch.suggest").Append("ArdiaSearch.cancelSuggest")
+      .Append("ArdiaShell.launchSteps")
       .Append("ArdiaShell.completeLaunchStep");
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
   for (const auto& route : ardiacore::linux_contract::kRoutes)
@@ -3187,17 +3190,24 @@ void ShellHostView::Invoke(
     return std::move(done).Run(true, base::Value(std::move(identity)));
   }
   if (method == "ArdiaSearch.suggest") {
-    if (values.size() != 1 || !values[0].is_string() ||
+    if (values.size() != 2 || !values[0].is_string() || !values[1].is_string() ||
+        !ardia::linux_suggest_policy::ValidRequestId(values[1].GetString()) ||
         !ardia::linux_suggest::CanFetchSuggestions(profile(), values[0].GetString()))
       return std::move(done).Run(false, base::Value(base::DictValue()
           .Set("code", "ERR_SUGGEST_REFUSED").Set("message", "Search suggestion request refused")));
-    return ardia::linux_suggest::FetchSuggestions(profile(), values[0].GetString(), base::BindOnce(
+    return suggestions_->Fetch(profile(), values[1].GetString(), values[0].GetString(), base::BindOnce(
         [](base::OnceCallback<void(bool, base::Value)> done, std::optional<std::string> body) {
           if (!body) return std::move(done).Run(false, base::Value(base::DictValue()
               .Set("code", "ERR_SUGGEST").Set("message", "Search suggestions are unavailable")));
           std::move(done).Run(true, base::Value(base::DictValue().Set("body", std::move(*body))));
         },
         std::move(done)));
+  }
+  if (method == "ArdiaSearch.cancelSuggest") {
+    if (values.size() != 1 || !values[0].is_string())
+      return std::move(done).Run(false, base::Value("A suggestion request id is required"));
+    suggestions_->Cancel(values[0].GetString());
+    return std::move(done).Run(true, base::Value());
   }
   if (method == "ArdiaShell.beginDialog" || method == "ArdiaShell.cancelDialog") {
     const auto* supplied = args.Find("args");
@@ -3402,6 +3412,7 @@ void ShellHostView::Invoke(
               if (!result.ok) {
                 return std::move(done).Run(false, base::Value("Could not merge and persist the session"));
               }
+              ardia::linux_suggest::NoteSuggestionsSetting(profile_path, result.session);
               std::move(done).Run(true, base::Value(result.session.Clone()));
               if (result.previous == result.session) return;
               base::DictValue event = base::DictValue()
