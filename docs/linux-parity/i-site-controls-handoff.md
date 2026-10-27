@@ -58,7 +58,7 @@ Before this lane, `sites.*` reached the engine through the generic route table w
 - **Profile resolution.** `SiteControlsProfile` is the single function that picks the profile. It now uses #62's registry.
   - Every call first passes the host's `ParseProfileName` gate, so malformed ids are `ERR_PROFILE_INVALID`.
   - `sites.*` and `profiles.clearBrowsingData`: an `incognito:` id is `ERR_PROFILE_PRIVATE` before any lookup. Other ids go through `ResolveLinuxProfile`, so `""`/`default` and isolated profiles each get their own settings and data. An off-the-record result is `ERR_PROFILE_PRIVATE`, and registry failures keep their codes (`ERR_PROFILE_DELETED`, `ERR_PROFILE_UNAVAILABLE`, …). Private windows never fall back to the regular profile.
-  - `contentBlocker.*` is app-level, as on macOS (`kProfile = ""`). Whatever the window's profile, private or isolated, it acts on the app profile's blocker. Isolated profiles therefore don't load a blocker yet; see #108.
+  - `contentBlocker.*` is app-level, as on macOS (`kProfile = ""`). Whatever the window's profile, private or isolated, it acts on the app profile's blocker. Since #108, isolated profiles load their own blocker and follow the app profile's settings; see [S-handoff.md](S-handoff.md).
 - **Not in this lane.** `sites.zoomLevels` and `sites.setZoom` belong to the page-state lane (#63, `PrepareLinuxZoomDomain`). The contract defines no cancellation or progress for clearing. Cancelling is the shared dialog's Cancel, which the acceptance scenario covers.
 
 ## Tests run

@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { webShellConfig } from "./vite.shared";
 import { inputAdapters, rawBookmarkAdapter, resolveInputAdapter } from "./inputAdapters";
+import { credentialWording } from "./credentialWording";
 
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const replacements = new Map([
@@ -49,7 +50,7 @@ function linuxComponents(): Plugin {
 }
 
 export default webShellConfig({
-  plugins: [linuxComponents()],
+  plugins: [linuxComponents(), credentialWording()],
   aliases: [
     { find: /^@ardia\/shell$/, replacement: here("./src/shims/shell.tsx") },
     { find: /^@ardia\/ardiacore$/, replacement: here("./src/shims/ardiacore.tsx") },

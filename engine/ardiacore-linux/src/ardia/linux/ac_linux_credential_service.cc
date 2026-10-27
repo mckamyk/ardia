@@ -1,5 +1,6 @@
 #include "ardia/linux/ac_linux_credential_service.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -148,18 +149,31 @@ struct Probes {
   credentials::Probe autofill;
 };
 
+credentials::Protection ProtectionOf(const os_crypt_async::Encryptor& encryptor) {
+  if (!encryptor.IsEncryptionAvailable()) {
+    return credentials::Protection::kNone;
+  }
+  std::optional<std::vector<uint8_t>> ciphertext = encryptor.EncryptString(credentials::kProtectionProbeText);
+  if (!ciphertext) {
+    return credentials::Protection::kNone;
+  }
+  return credentials::ProtectionFromCiphertext(
+      std::string_view(reinterpret_cast<const char*>(ciphertext->data()), ciphertext->size()));
+}
+
 class EncryptionProbe {
  public:
-  using Ready = base::OnceCallback<void(bool encryption, bool decryption)>;
+  using Ready = base::OnceCallback<void(bool encryption, bool decryption, credentials::Protection protection)>;
 
   static void Run(Ready ready) {
     os_crypt_async::OSCryptAsync* os_crypt = g_browser_process ? g_browser_process->os_crypt_async() : nullptr;
     if (!os_crypt) {
-      return std::move(ready).Run(false, false);
+      return std::move(ready).Run(false, false, credentials::Protection::kNone);
     }
     auto* probe = new EncryptionProbe(std::move(ready));
     probe->timeout_.Start(FROM_HERE, kEncryptorTimeout,
-                          base::BindOnce(&EncryptionProbe::Finish, probe->weak_factory_.GetWeakPtr(), false, false));
+                          base::BindOnce(&EncryptionProbe::Finish, probe->weak_factory_.GetWeakPtr(), false, false,
+                                         credentials::Protection::kUnknown));
     os_crypt->GetInstance(base::BindOnce(&EncryptionProbe::Arrived, probe->weak_factory_.GetWeakPtr()));
   }
 
@@ -167,15 +181,18 @@ class EncryptionProbe {
   explicit EncryptionProbe(Ready ready) : ready_(std::move(ready)) {}
 
   void Arrived(scoped_refptr<os_crypt_async::Encryptor> encryptor) {
-    Finish(encryptor && encryptor->IsEncryptionAvailable(), encryptor && encryptor->IsDecryptionAvailable());
+    if (!encryptor) {
+      return Finish(false, false, credentials::Protection::kNone);
+    }
+    Finish(encryptor->IsEncryptionAvailable(), encryptor->IsDecryptionAvailable(), ProtectionOf(*encryptor));
   }
 
-  void Finish(bool encryption, bool decryption) {
+  void Finish(bool encryption, bool decryption, credentials::Protection protection) {
     weak_factory_.InvalidateWeakPtrs();
     timeout_.Stop();
     Ready ready = std::move(ready_);
     base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
-    std::move(ready).Run(encryption, decryption);
+    std::move(ready).Run(encryption, decryption, protection);
   }
 
   Ready ready_;
@@ -196,10 +213,12 @@ void WithProbes(Profile* profile, bool encryption, base::OnceCallback<void(Probe
     return std::move(then).Run(probes);
   }
   EncryptionProbe::Run(base::BindOnce(
-      [](Probes probes, base::OnceCallback<void(Probes)> then, bool encryption, bool decryption) {
+      [](Probes probes, base::OnceCallback<void(Probes)> then, bool encryption, bool decryption,
+         credentials::Protection protection) {
         for (credentials::Probe* probe : {&probes.passwords, &probes.autofill}) {
           probe->encryption = encryption;
           probe->decryption = decryption;
+          probe->protection = protection;
         }
         std::move(then).Run(probes);
       },
@@ -217,12 +236,19 @@ base::DictValue StatusEntry(const credentials::Availability& availability) {
 }
 
 base::Value Status(const Probes& probes, bool autofill, bool reauth, const std::string& reason) {
-  const std::string backend =
+  std::string backend =
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(password_manager::kPasswordStore);
+  if (backend.empty()) {
+    backend = "auto";
+  }
+  const credentials::Storage storage = credentials::DescribeStorage(backend, probes.passwords.protection);
   base::DictValue status = base::DictValue()
                                .Set("reauth", reauth)
                                .Set("reauthReason", reason)
-                               .Set("backend", backend.empty() ? std::string("auto") : backend);
+                               .Set("backend", backend)
+                               .Set("protection", storage.protection)
+                               .Set("protectionFallback", storage.fallback)
+                               .Set("storage", storage.label);
   if (!reauth) {
     status.Set("reauthMessage", credentials::ReauthMessage(reason));
   }

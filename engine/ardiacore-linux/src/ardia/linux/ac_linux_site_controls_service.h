@@ -21,7 +21,7 @@ void LinuxSiteControlsCall(Profile* app_profile, Profile* page_profile, const st
                            SiteControlsDone done);
 
 void StartLinuxSiteControls(ContentBlockerChanged changed);
-void StartLinuxContentBlocker(Profile* profile);
+void StartLinuxContentBlocker(Profile* app_profile, Profile* page_profile);
 
 }
 

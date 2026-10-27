@@ -64,6 +64,9 @@ def package(output, ui, destination, content_blocker=None):
         policy = root / 'share/polkit-1/actions/dev.ardia.linux.policy'
         policy.parent.mkdir(parents=True)
         shutil.copyfile(pathlib.Path(__file__).resolve().parent / 'dev.ardia.linux.policy', policy)
+        installer = root / 'install.sh'
+        shutil.copyfile(pathlib.Path(__file__).resolve().parent / 'install.sh', installer)
+        installer.chmod(0o755)
         icon = pathlib.Path(__file__).resolve().parents[2] / 'engine/chromium/src/chrome/app/theme/chromium/product_logo_256.png'
         if icon.is_file():
             target = root / 'share/icons/hicolor/256x256/apps/ardia.png'

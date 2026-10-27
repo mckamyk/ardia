@@ -472,6 +472,45 @@ const Arg* Arg::Find(std::string_view key) const {
   return nullptr;
 }
 
+Protection ProtectionFromCiphertext(std::string_view ciphertext) {
+  const std::string_view tag = ciphertext.substr(0, 3);
+  if (tag == "v10") {
+    return Protection::kObfuscated;
+  }
+  if (tag == "v11") {
+    return Protection::kKeyring;
+  }
+  if (tag == "v12") {
+    return Protection::kPortal;
+  }
+  return Protection::kUnknown;
+}
+
+Storage DescribeStorage(std::string_view backend, Protection protection) {
+  switch (protection) {
+    case Protection::kKeyring:
+      if (backend == "gnome-libsecret") {
+        return {"keyring", false, "the Secret Service keyring"};
+      }
+      if (backend == "kwallet" || backend == "kwallet5" || backend == "kwallet6") {
+        return {"keyring", false, "KWallet"};
+      }
+      return {"keyring", false, "your desktop keyring (Secret Service or KWallet)"};
+    case Protection::kPortal:
+      return {"portal", false, "your desktop's secret portal"};
+    case Protection::kObfuscated:
+      if (backend == "basic") {
+        return {"obfuscated", false, "Chromium's basic store, which only obfuscates"};
+      }
+      return {"obfuscated", true, "Chromium's built-in key, which only obfuscates"};
+    case Protection::kNone:
+      return {"none", false, "no encryption key"};
+    case Protection::kUnknown:
+      break;
+  }
+  return {"unknown", false, "an unknown key"};
+}
+
 Availability Assess(Store store, const Probe& probe) {
   const char* unavailable = store == Store::kPasswords ? "ERR_PASSWORDS_UNAVAILABLE" : "ERR_AUTOFILL_UNAVAILABLE";
   if (probe.private_profile) {
@@ -791,8 +830,8 @@ std::string ReauthMessage(std::string_view reason) {
     return "polkit isn't running, so saved passwords and card numbers can't be shown, changed or exported";
   }
   if (reason == "policyMissing") {
-    return "Ardia's polkit policy isn't installed, so saved passwords and card numbers can't be shown, changed or "
-           "exported";
+    return "Ardia's polkit policy isn't installed in /usr/share/polkit-1/actions (install Ardia from a package or run "
+           "its install.sh), so saved passwords and card numbers can't be shown, changed or exported";
   }
   if (reason == "notPermitted") {
     return "This session isn't allowed to authenticate, so saved passwords and card numbers can't be shown, "

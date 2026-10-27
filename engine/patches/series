@@ -85,6 +85,7 @@ chromium chromium-apple-passwords-host-skipped.patch mac
 chromium chromium-ardia-layer.patch mac
 chromium chromium-ardia-linux-layer.patch linux
 chromium chromium-linux-page-agent.patch linux
+chromium chromium-linux-navigation-hold-hook.patch linux
 chromium chromium-linux-branding.patch linux
 
 layer engine/chromium

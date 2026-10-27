@@ -1,8 +1,10 @@
 #include "ardia/linux/ac_linux_site_controls_service.h"
+#include "ardia/linux/ac_linux_navigation_hold.h"
 #include "ardia/linux/ac_linux_profile_service.h"
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <filesystem>
@@ -13,6 +15,7 @@
 #include <vector>
 
 bool (*g_ardia_restricted_component_extension)(const extensions::ExtensionId& extension_id) = nullptr;
+void (*g_ardia_linux_navigation_throttles)(content::NavigationThrottleRegistry& registry) = nullptr;
 
 std::map<std::string, Profile*>& Registry() {
   static std::map<std::string, Profile*> registry;
@@ -256,7 +259,7 @@ void BrowsingDataThroughTheService(Profile& profile, Profile& incognito) {
 void MissingBlocker(const std::filesystem::path& scratch) {
   base::FakeExeDir() = base::FilePath((scratch / "empty").string());
   Profile profile("/profiles/Missing");
-  ardia::StartLinuxContentBlocker(&profile);
+  ardia::StartLinuxContentBlocker(&profile, &profile);
   base::RunTasks();
   auto state = Settle(Call(&profile, "contentBlocker.state", "{}"));
   assert(state->ok);
@@ -270,7 +273,7 @@ void MissingBlocker(const std::filesystem::path& scratch) {
   MakeBlocker(scratch / "nobridge", false);
   base::FakeExeDir() = base::FilePath((scratch / "nobridge").string());
   Profile stale("/profiles/NoBridge");
-  ardia::StartLinuxContentBlocker(&stale);
+  ardia::StartLinuxContentBlocker(&stale, &stale);
   base::RunTasks();
   assert(Settle(Call(&stale, "contentBlocker.setListEnabled", R"({"id":"easylist","enabled":true})"))->code == "ERR_CONTENT_BLOCKER_UNAVAILABLE");
 }
@@ -338,9 +341,9 @@ void WorkingBlocker(const std::filesystem::path& scratch) {
   base::FakeExeDir() = base::FilePath((scratch / "working").string());
   auto profile = std::make_unique<Profile>("/profiles/Default2");
   Profile incognito("/profiles/Default2", true, profile.get());
-  ardia::StartLinuxContentBlocker(&incognito);
-  ardia::StartLinuxContentBlocker(profile.get());
-  ardia::StartLinuxContentBlocker(profile.get());
+  ardia::StartLinuxContentBlocker(&incognito, &incognito);
+  ardia::StartLinuxContentBlocker(profile.get(), &incognito);
+  ardia::StartLinuxContentBlocker(profile.get(), profile.get());
   base::RunTasks();
   assert(profile->loader.added.empty());
   auto early = Call(profile.get(), "contentBlocker.state", "{}");
@@ -451,6 +454,211 @@ void WorkingBlocker(const std::filesystem::path& scratch) {
   Bridge().mode = FakeBridge::Mode::kAnswer;
 }
 
+struct Navigation {
+  Navigation(Profile* profile, const std::string& url) : contents(content::WebContents::CreateParams(profile)) {
+    registry.handle.contents = &contents;
+    registry.handle.url = GURL(url);
+    g_ardia_linux_navigation_throttles(registry);
+    result = registry.throttles.empty() ? content::NavigationThrottle::PROCEED : registry.throttles[0]->WillStartRequest();
+  }
+  bool deferred() const { return result == content::NavigationThrottle::DEFER; }
+  int resumed() const { return registry.throttles.empty() ? 0 : registry.throttles[0]->resumed; }
+  content::WebContents contents;
+  content::NavigationThrottleRegistry registry;
+  content::NavigationThrottle::ThrottleCheckResult result = content::NavigationThrottle::PROCEED;
+};
+
+bool Has(const std::vector<std::string>& items, const std::string& item) {
+  return std::find(items.begin(), items.end(), item) != items.end();
+}
+
+void HoldsFirstLaunchNavigationsUntilReady(const std::filesystem::path& scratch) {
+  assert(g_ardia_linux_navigation_throttles);
+  MakeBlocker(scratch / "hold");
+  base::FakeExeDir() = base::FilePath((scratch / "hold").string());
+
+  Profile existing("/profiles/Existing");
+  ardia::StartLinuxContentBlocker(&existing, &existing);
+  assert(!ardia::LinuxNavigationsHeld(&existing));
+  Navigation unheld(&existing, "https://ads.test/banner.png");
+  assert(unheld.registry.throttles.empty() && !unheld.deferred());
+
+  Profile fresh("/profiles/Fresh");
+  fresh.new_profile = true;
+  Profile fresh_private("/profiles/Fresh", true, &fresh);
+  Bridges()[&fresh];
+  ardia::StartLinuxContentBlocker(&fresh, &fresh);
+  assert(ardia::LinuxNavigationsHeld(&fresh) && ardia::LinuxNavigationsHeld(&fresh_private));
+  Navigation page(&fresh, "https://ads.test/banner.png");
+  Navigation in_private(&fresh_private, "http://ads.test/");
+  Navigation shell(&fresh, "chrome://ardia/");
+  Navigation extension(&fresh, "chrome-extension://fajbdaomknpkicfjcpipdmcpoamdmilh/ardia-linux-bridge.html");
+  Navigation blank(&fresh, "about:blank");
+  assert(page.deferred() && in_private.deferred());
+  assert(!shell.deferred() && !extension.deferred() && !blank.deferred());
+  Navigation elsewhere(&existing, "https://ads.test/");
+  assert(!elsewhere.deferred());
+
+  Bridges()[&fresh].mode = FakeBridge::Mode::kNotReady;
+  base::RunTasks();
+  fresh.system.ready_event.Signal();
+  Advance(2000);
+  assert(ardia::LinuxNavigationsHeld(&fresh) && page.resumed() == 0);
+  Bridges()[&fresh].mode = FakeBridge::Mode::kAnswer;
+  Advance(500);
+  assert(!ardia::LinuxNavigationsHeld(&fresh));
+  assert(Has(Bridges()[&fresh].ops, "settings"));
+  assert(page.resumed() == 1 && in_private.resumed() == 1);
+  Navigation after(&fresh, "https://ads.test/");
+  assert(after.registry.throttles.empty());
+  Advance(31000);
+
+  Profile slow("/profiles/Slow");
+  slow.new_profile = true;
+  ardia::StartLinuxContentBlocker(&slow, &slow);
+  Navigation waiting(&slow, "https://ads.test/");
+  assert(waiting.deferred());
+  base::RunTasks();
+  Advance(9900);
+  assert(ardia::LinuxNavigationsHeld(&slow) && waiting.resumed() == 0);
+  Advance(200);
+  assert(!ardia::LinuxNavigationsHeld(&slow) && waiting.resumed() == 1);
+
+  base::FakeExeDir() = base::FilePath((scratch / "empty").string());
+  Profile missing("/profiles/MissingHold");
+  missing.new_profile = true;
+  ardia::StartLinuxContentBlocker(&missing, &missing);
+  Navigation not_installed(&missing, "https://ads.test/");
+  assert(not_installed.deferred());
+  base::RunTasks();
+  base::RunTasks();
+  assert(!ardia::LinuxNavigationsHeld(&missing) && not_installed.resumed() == 1);
+
+  auto gone = std::make_unique<Profile>("/profiles/GoneHold");
+  gone->new_profile = true;
+  MakeBlocker(scratch / "hold");
+  base::FakeExeDir() = base::FilePath((scratch / "hold").string());
+  ardia::StartLinuxContentBlocker(gone.get(), gone.get());
+  assert(ardia::LinuxNavigationsHeld(gone.get()));
+  gone.reset();
+  base::RunTasks();
+  Advance(10500);
+}
+
+void IsolatedProfilesFollowTheDefault(const std::filesystem::path& scratch) {
+  MakeBlocker(scratch / "follow");
+  base::FakeExeDir() = base::FilePath((scratch / "follow").string());
+  Profile lead("/profiles/Lead");
+  Profile iso("/profiles/Iso");
+  Profile iso_private("/profiles/Iso", true, &iso);
+  FakeBridge& leader = Bridges()[&lead];
+  leader.lists["fanboy-cookiemonster"] = true;
+  leader.lists["easyprivacy"] = false;
+  leader.whitelist = {"chrome-extension-scheme", "news.example"};
+  leader.auto_update = false;
+  FakeBridge& follower = Bridges()[&iso];
+
+  ardia::StartLinuxContentBlocker(&lead, &iso_private);
+  assert(!ardia::LinuxNavigationsHeld(&iso));
+  auto before = Settle(Call(&lead, "contentBlocker.state", "{}", "iso", &iso), 200);
+  assert(before->ok && *Dict(before).FindDict("stats")->FindString("error") == "the content blocker isn't available in this profile yet");
+
+  Profile fresh_iso("/profiles/FreshIso");
+  fresh_iso.new_profile = true;
+  FakeBridge& fresh_follower = Bridges()[&fresh_iso];
+  ardia::StartLinuxContentBlocker(&lead, &iso);
+  ardia::StartLinuxContentBlocker(&lead, &fresh_iso);
+  assert(ardia::LinuxNavigationsHeld(&iso) && ardia::LinuxNavigationsHeld(&fresh_iso) && !ardia::LinuxNavigationsHeld(&lead));
+  Navigation held(&iso, "https://ads.test/");
+  Navigation fresh_held(&fresh_iso, "https://ads.test/");
+  assert(held.deferred() && fresh_held.deferred());
+  base::RunTasks();
+  iso.system.ready_event.Signal();
+  fresh_iso.system.ready_event.Signal();
+  Advance(1000);
+  assert(!ardia::LinuxNavigationsHeld(&iso) && held.resumed() == 1);
+  assert(Has(follower.ops, "settings") && !Has(follower.ops, "follow"));
+  assert(ardia::LinuxNavigationsHeld(&fresh_iso) && fresh_held.resumed() == 0);
+  lead.system.ready_event.Signal();
+  Advance(1000);
+  assert(!ardia::LinuxNavigationsHeld(&fresh_iso) && fresh_held.resumed() == 1);
+  assert(fresh_follower.lists == leader.lists && Has(fresh_follower.whitelist, "news.example"));
+  assert(iso.loader.added.size() == 1);
+  assert(follower.lists == leader.lists && !follower.auto_update);
+  assert(Has(follower.whitelist, "news.example") && Has(follower.whitelist, "chrome-extension-scheme"));
+  assert(!Has(leader.ops, "follow") && Has(follower.ops, "follow"));
+
+  Events().clear();
+  auto allow = Settle(Call(&lead, "contentBlocker.setAllowed", R"({"host":"shop.example","allowed":true})", "iso", &iso));
+  assert(allow->ok);
+  Advance(1000);
+  assert(Has(leader.whitelist, "shop.example") && Has(follower.whitelist, "shop.example"));
+  assert(Events().size() == 1);
+  auto state = Settle(Call(&lead, "contentBlocker.state", "{}", "iso", &iso));
+  assert(Dict(state).FindDict("stats")->Find("ready")->GetBool());
+  auto from_private = Settle(Call(&lead, "contentBlocker.isAllowed", R"({"host":"a.shop.example"})", "incognito:i@iso", &iso_private));
+  assert(from_private->ok && from_private->value.GetBool());
+  assert(Settle(Call(&lead, "contentBlocker.setListEnabled", R"({"id":"easyprivacy","enabled":true})", "iso", &iso))->ok);
+  Advance(1000);
+  assert(follower.lists["easyprivacy"]);
+  assert(Settle(Call(&lead, "contentBlocker.setEnabled", R"({"enabled":true})"))->ok);
+  Advance(1000);
+  assert(follower.auto_update && leader.auto_update);
+
+  Profile retry("/profiles/Retry");
+  FakeBridge& retrying = Bridges()[&retry];
+  retrying.fail_follows = 2;
+  ardia::StartLinuxContentBlocker(&lead, &retry);
+  Navigation queued(&retry, "https://ads.test/");
+  base::RunTasks();
+  retry.system.ready_event.Signal();
+  Advance(500);
+  assert(!ardia::LinuxNavigationsHeld(&retry) && queued.resumed() == 1);
+  assert(!Has(retrying.whitelist, "shop.example"));
+  Advance(1100);
+  assert(!Has(retrying.whitelist, "shop.example") && retrying.fail_follows == 0);
+  Advance(2100);
+  assert(Has(retrying.whitelist, "shop.example") && retrying.lists == leader.lists);
+
+  Profile stuck("/profiles/Stuck");
+  Bridges()[&stuck].fail_follows = 100;
+  ardia::StartLinuxContentBlocker(&lead, &stuck);
+  base::RunTasks();
+  stuck.system.ready_event.Signal();
+  Advance(40000);
+  const int attempts = 100 - Bridges()[&stuck].fail_follows;
+  assert(attempts == 6);
+  Advance(40000);
+  assert(100 - Bridges()[&stuck].fail_follows == 6);
+
+  auto short_lead = std::make_unique<Profile>("/profiles/ShortLead");
+  Profile orphan("/profiles/Orphan");
+  Bridges()[short_lead.get()];
+  Bridges()[&orphan].fail_follows = 1;
+  ardia::StartLinuxContentBlocker(short_lead.get(), &orphan);
+  base::RunTasks();
+  short_lead->system.ready_event.Signal();
+  orphan.system.ready_event.Signal();
+  Advance(500);
+  assert(Bridges()[&orphan].fail_follows == 0 && !ardia::LinuxNavigationsHeld(&orphan));
+  const auto follows = [&] { return std::count(Bridges()[&orphan].ops.begin(), Bridges()[&orphan].ops.end(), "follow"); };
+  assert(follows() == 1);
+  short_lead.reset();
+  Advance(40000);
+  assert(follows() == 1);
+  auto orphan_state = Settle(Call(&lead, "contentBlocker.state", "{}", "orphan", &orphan));
+  assert(orphan_state->ok);
+
+  auto leaving = std::make_unique<Profile>("/profiles/Leaving");
+  Bridges()[leaving.get()].fail_follows = 1;
+  ardia::StartLinuxContentBlocker(&lead, leaving.get());
+  base::RunTasks();
+  leaving->system.ready_event.Signal();
+  Advance(300);
+  leaving.reset();
+  Advance(5000);
+}
+
 void DestroyedBeforeLoad(const std::filesystem::path& scratch) {
   MakeBlocker(scratch / "early");
   base::FakeExeDir() = base::FilePath((scratch / "early").string());
@@ -483,6 +691,8 @@ int main() {
   OtherPageProfiles(profile, work, incognito);
   WorkingBlocker(scratch);
   DestroyedBeforeLoad(scratch);
+  HoldsFirstLaunchNavigationsUntilReady(scratch);
+  IsolatedProfilesFollowTheDefault(scratch);
   std::filesystem::remove_all(scratch);
   std::puts("site controls service scenarios passed");
 }

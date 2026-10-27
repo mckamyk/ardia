@@ -17,8 +17,14 @@ import f24 from "./f24-favicons.mjs";
 import f26 from "./f26-platform-settings.mjs";
 import f27 from "./f27-app-services.mjs";
 import w78 from "./w78-page-fullscreen.mjs";
+import s102 from "./s102-key-provider.mjs";
+import s104 from "./s104-credential-wording.mjs";
+import s105 from "./s105-polkit-policy.mjs";
+import s106 from "./s106-blocker-hold.mjs";
+import s107 from "./s107-component-restriction.mjs";
+import s108 from "./s108-isolated-blocker.mjs";
 
-export const SCENARIOS = [f01, f02, f03, f06, f23, f07, f08, f09, f20, f10, f12, f22, f26, f27, f17, w78, f24, f15, f18];
+export const SCENARIOS = [f01, f02, f03, f06, f23, f07, f08, f09, f20, f10, f12, f22, f26, f27, f17, w78, f24, f15, f18, s102, s104, s105, s106, s107, s108];
 
 export function selectScenarios(only, scenarios = SCENARIOS) {
   if (!only?.length) return scenarios;

@@ -11,6 +11,7 @@
 #include "base/scoped_observation.h"
 #include "base/supports_user_data.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/ardia/public/ac_engine.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
@@ -32,6 +33,9 @@ class Reply {
   ~Reply();
 
   void Send(base::DictValue result);
+#if BUILDFLAG(IS_LINUX)
+  void SendSecret(base::DictValue result);
+#endif
   void Ok();
   void Error(std::string_view message);
 

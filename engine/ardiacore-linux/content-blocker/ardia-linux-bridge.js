@@ -138,7 +138,30 @@
         return send({ what: "setWhitelist", whitelist: (allowed ? kept.concat([host]) : kept).join("\n") }).then(() => null);
       });
 
-    const operations = { state, setEnabled, setList, isAllowed, setAllowed };
+    const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+    const strings = (value) => Array.isArray(value) && value.every((x) => typeof x === "string");
+
+    const settings = () =>
+      Promise.all([lists(), trusted()]).then(([l, t]) => ({
+        lists: selected(l).sort(),
+        whitelist: [...t.whitelist].sort(),
+        autoUpdate: l.autoUpdate !== false,
+      }));
+
+    const follow = (want) =>
+      Promise.all([lists(), trusted()]).then(([l, t]) => {
+        if (!strings(want.lists) || !strings(want.whitelist) || typeof want.autoUpdate !== "boolean")
+          throw new Error("no settings to copy");
+        let written = Promise.resolve(null);
+        if (!sameSet(selected(l), want.lists)) written = written.then(() => applyLists(want.lists));
+        if (!sameSet(t.whitelist, want.whitelist))
+          written = written.then(() => send({ what: "setWhitelist", whitelist: want.whitelist.join("\n") }));
+        if ((l.autoUpdate !== false) !== want.autoUpdate)
+          written = written.then(() => send({ what: "userSettings", name: "autoUpdate", value: want.autoUpdate }));
+        return written.then(() => null);
+      });
+
+    const operations = { state, setEnabled, setList, isAllowed, setAllowed, settings, follow };
     return { ready, settlePending, operations, left };
   };
 

@@ -9,6 +9,7 @@
 #include <variant>
 #include <vector>
 
+#include "ardia/linux/ac_linux_navigation_hold.h"
 #include "ardia/linux/ac_linux_profile_service.h"
 #include "ardia/linux/ac_linux_profiles.h"
 #include "ardia/linux/ac_linux_site_controls.h"
@@ -23,6 +24,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
+#include "base/one_shot_event.h"
 #include "base/path_service.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
@@ -157,17 +159,40 @@ BundledBlocker InspectBlocker(base::FilePath root) {
   return bundled;
 }
 
+std::string ErrorText(const base::Value& failure, std::string_view fallback) {
+  const std::string* message = failure.is_dict() ? failure.GetDict().FindString("message") : nullptr;
+  return message && !message->empty() ? *message : std::string(fallback);
+}
+
+controls::BlockerRequest Internal(controls::BlockerOp op) {
+  controls::BlockerRequest request;
+  request.op = op;
+  return request;
+}
+
 class LinuxContentBlocker : public ProfileObserver, public content::WebContentsObserver {
  public:
-  static LinuxContentBlocker* For(Profile* profile) {
-    auto& all = All();
-    auto found = all.find(profile);
-    if (found != all.end()) return found->second.get();
+  static LinuxContentBlocker* For(Profile* profile) { return Start(profile, nullptr); }
+
+  static LinuxContentBlocker* Start(Profile* profile, LinuxContentBlocker* follows) {
+    if (LinuxContentBlocker* found = Find(profile)) return found;
     auto blocker = std::make_unique<LinuxContentBlocker>(profile);
     LinuxContentBlocker* raw = blocker.get();
-    all.emplace(profile, std::move(blocker));
+    All().emplace(profile, std::move(blocker));
+    raw->leader_ = !follows;
+    if (follows) raw->follows_ = follows->weak_factory_.GetWeakPtr();
+    if (controls::ShouldHoldNavigations(raw->leader_, profile->IsNewProfile())) {
+      raw->holding_ = true;
+      raw->hold_until_copy_ = controls::HoldUntilFirstCopy(raw->leader_, profile->IsNewProfile());
+      HoldLinuxNavigations(profile);
+    }
     raw->Start();
     return raw;
+  }
+
+  static LinuxContentBlocker* Find(Profile* profile) {
+    auto found = All().find(profile);
+    return found == All().end() ? nullptr : found->second.get();
   }
 
   explicit LinuxContentBlocker(Profile* profile) : profile_(profile) {
@@ -178,6 +203,7 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
     Observe(nullptr);
     page_.reset();
     retired_.clear();
+    ReleaseHold("profile gone");
     for (auto& call : queue_.Drain()) Respond(call, nullptr, "profile gone");
   }
 
@@ -209,6 +235,88 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
     return *all;
   }
 
+  LinuxContentBlocker* Leader() const { return follows_ && follows_->leader_ ? follows_.get() : nullptr; }
+
+  void ReleaseHold(const std::string& why) {
+    if (!holding_) return;
+    holding_ = false;
+    ReleaseLinuxNavigations(profile_, why);
+  }
+
+  void Loaded() {
+    if (holding_ && !hold_until_copy_) {
+      Call(Internal(controls::BlockerOp::kSettings),
+           base::BindOnce(&LinuxContentBlocker::Probed, weak_factory_.GetWeakPtr()));
+    }
+    if (!leader_) Inherit();
+  }
+
+  void Probed(bool ok, base::Value result) {
+    ReleaseHold(ok ? std::string() : "uBlock Origin isn't ready: " + ErrorText(result, "no answer"));
+  }
+
+  void Inherit() {
+    LinuxContentBlocker* leader = Leader();
+    if (!leader || leader == this) return Inherited(false, "the default profile has no content blocker");
+    leader->Call(Internal(controls::BlockerOp::kSettings),
+                 base::BindOnce(&LinuxContentBlocker::Copy, weak_factory_.GetWeakPtr()));
+  }
+
+  void Copy(bool ok, base::Value settings) {
+    std::optional<controls::BlockerSettings> parsed = ok ? controls::ParseBlockerSettings(settings) : std::nullopt;
+    if (!parsed) return Inherited(false, ErrorText(settings, "no settings to copy"));
+    controls::BlockerRequest follow = Internal(controls::BlockerOp::kFollow);
+    follow.settings = std::move(*parsed);
+    Call(std::move(follow), base::BindOnce(&LinuxContentBlocker::Followed, weak_factory_.GetWeakPtr()));
+  }
+
+  void Followed(bool ok, base::Value result) { Inherited(ok, ok ? std::string() : ErrorText(result, "no answer")); }
+
+  void Inherited(bool ok, const std::string& error) {
+    ReleaseHold(ok ? std::string() : "the default profile's settings didn't apply: " + error);
+    if (ok || load_ != Load::kLoaded) return;
+    const int failed = inherit_attempts_++;
+    if (inherit_attempts_ >= controls::kInheritAttempts) {
+      LOG(WARNING) << "Ardia content blocker: an isolated profile didn't take the default profile's settings: "
+                   << error;
+      return;
+    }
+    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce(&LinuxContentBlocker::Inherit, weak_factory_.GetWeakPtr()),
+        base::Milliseconds(controls::InheritRetryDelayMs(failed)));
+  }
+
+  bool Follows(const LinuxContentBlocker* leader) const {
+    return !leader_ && follows_.get() == leader && load_ == Load::kLoaded;
+  }
+
+  void FollowAll() {
+    bool followers = false;
+    for (auto& [profile, blocker] : All()) followers = followers || blocker->Follows(this);
+    if (!followers) return;
+    Call(Internal(controls::BlockerOp::kSettings), base::BindOnce([](base::WeakPtr<LinuxContentBlocker> leader, bool ok,
+                                                                     base::Value settings) {
+      if (!leader) return;
+      std::optional<controls::BlockerSettings> parsed = ok ? controls::ParseBlockerSettings(settings) : std::nullopt;
+      if (!parsed) {
+        LOG(WARNING) << "Ardia content blocker: the default profile's settings can't be copied: "
+                     << ErrorText(settings, "no settings to copy");
+        return;
+      }
+      for (auto& [profile, blocker] : All()) {
+        if (!blocker->Follows(leader.get())) continue;
+        controls::BlockerRequest follow = Internal(controls::BlockerOp::kFollow);
+        follow.settings = *parsed;
+        blocker->Call(std::move(follow), base::BindOnce([](bool ok, base::Value result) {
+          if (!ok) {
+            LOG(WARNING) << "Ardia content blocker: an isolated profile didn't follow the default profile: "
+                         << ErrorText(result, "no answer");
+          }
+        }));
+      }
+    }, weak_factory_.GetWeakPtr()));
+  }
+
   void Start() {
     root_ = BlockerDirectory();
     base::ThreadPool::PostTaskAndReplyWithResult(
@@ -222,6 +330,7 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
     if (bundled.present) root_ = bundled.root;
     if (!bundled.present) {
       load_ = Load::kMissing;
+      ReleaseHold("the content blocker is not installed");
       return FailAll("the content blocker is not installed");
     }
     load_ = Load::kWaiting;
@@ -242,10 +351,12 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
         if (loader && !id.empty()) loader->Remove(id);
         load_ = Load::kFailed;
         LOG(ERROR) << "Ardia's content blocker did not load from " << root_.value();
+        ReleaseHold("the content blocker didn't load");
         return FailAll("the content blocker didn't load");
       }
     }
     load_ = Load::kLoaded;
+    Loaded();
     Pump();
   }
 
@@ -397,8 +508,12 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
     waiting_.erase(found);
     const bool failed = !value;
     const std::string* error_text = failed ? &error : nullptr;
+    const bool announce = !failed && controls::Mutates(call.request.op) && leader_;
     Reply(std::move(done), controls::CompleteBlockerCall(call.request, value, error_text, version_));
-    if (!failed && controls::Mutates(call.request.op)) AnnounceChange();
+    if (announce) {
+      AnnounceChange();
+      FollowAll();
+    }
   }
 
   void AnnounceChange() {
@@ -448,6 +563,11 @@ class LinuxContentBlocker : public ProfileObserver, public content::WebContentsO
   }
 
   raw_ptr<Profile> profile_;
+  base::WeakPtr<LinuxContentBlocker> follows_;
+  bool leader_ = false;
+  bool holding_ = false;
+  bool hold_until_copy_ = false;
+  int inherit_attempts_ = 0;
   base::FilePath root_;
   Load load_ = Load::kInspecting;
   std::string version_;
@@ -521,7 +641,9 @@ void LinuxSiteControlsCall(Profile* app_profile, Profile* page_profile, const st
   std::optional<controls::Failure> failure;
   std::optional<base::DictValue> input = ParseArgs(args, &failure);
   if (!input) return Fail(std::move(done), failure->code, failure->message);
-  const bool page_filtered = page_profile && app_profile && page_profile->GetOriginalProfile() == app_profile;
+  Profile* page_original = page_profile ? page_profile->GetOriginalProfile() : nullptr;
+  const bool page_filtered = page_original && app_profile &&
+                             (page_original == app_profile || LinuxContentBlocker::Find(page_original));
   SiteControlsProfile(app_profile, name, requested_profile,
                       base::BindOnce(&RunSiteControlsCall, name, std::move(*input), page_filtered, std::move(done)));
 }
@@ -531,13 +653,16 @@ void StartLinuxSiteControls(ContentBlockerChanged changed) {
   g_ardia_restricted_component_extension = [](const extensions::ExtensionId& id) {
     return id == controls::kExtensionId;
   };
+  InstallLinuxNavigationHold();
   Changed() = std::move(changed);
 }
 
-void StartLinuxContentBlocker(Profile* profile) {
+void StartLinuxContentBlocker(Profile* app_profile, Profile* page_profile) {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-  if (!profile || profile->IsOffTheRecord()) return;
-  LinuxContentBlocker::For(profile);
+  if (!app_profile || app_profile->IsOffTheRecord()) return;
+  LinuxContentBlocker* leader = LinuxContentBlocker::Start(app_profile, nullptr);
+  if (!page_profile || page_profile->IsOffTheRecord() || page_profile == app_profile) return;
+  LinuxContentBlocker::Start(page_profile, leader);
 }
 
 }

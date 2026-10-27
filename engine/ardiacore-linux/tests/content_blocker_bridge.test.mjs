@@ -236,3 +236,36 @@ test("malformed requests are dropped without a reply", async () => {
   assert.equal(root.getAttribute("data-ardia-reply"), null);
   assert.equal(root.getAttribute("data-ardia-request"), null);
 });
+
+test("settings reads the selected lists, every whitelist directive and auto-update for another profile to copy", async () => {
+  const { call } = load();
+  await call("setAllowed", { host: "news.example", allowed: true });
+  await call("setEnabled", { enabled: false });
+  const { value } = await call("settings");
+  assert.deepEqual(value, {
+    lists: ["easylist", "ublock-filters", "user-filters"],
+    whitelist: [OFF, "chrome-extension-scheme", "moz-extension-scheme", "news.example"].sort(),
+    autoUpdate: false,
+  });
+});
+
+test("follow copies the default profile's lists, exceptions and auto-update, and writes nothing already equal", async () => {
+  const leader = load();
+  await leader.call("setList", { id: "fanboy-cookiemonster", enabled: true });
+  await leader.call("setAllowed", { host: "news.example", allowed: true });
+  await leader.call("setEnabled", { enabled: false });
+  const { value: settings } = await leader.call("settings");
+  const follower = load();
+  assert.deepEqual(await follower.call("follow", settings), { ticket: 1, value: null });
+  assert.deepEqual((await follower.call("settings")).value, settings);
+  assert.equal(follower.ublock.state.reloads, 1);
+  assert.equal((await follower.call("isAllowed", { host: "a.news.example" })).value, true);
+  assert.equal((await follower.call("state")).value.enabled, false);
+  const before = follower.ublock.state.messages.length;
+  assert.deepEqual((await follower.call("follow", settings)).value, null);
+  const written = follower.ublock.state.messages.slice(before).filter((m) => m !== "getLists" && m !== "getWhitelist");
+  assert.deepEqual(written, []);
+  for (const bad of [{}, { lists: "easylist", whitelist: [] }, { lists: [], whitelist: [3] }, { lists: [1], whitelist: [] }]) {
+    assert.match((await follower.call("follow", bad)).error, /no settings to copy/);
+  }
+});

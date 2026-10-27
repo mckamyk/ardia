@@ -13,6 +13,7 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "build/build_config.h"
+#include "chrome/browser/ardia/ac_sensitive_args.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -64,6 +65,20 @@ void Reply::Send(base::DictValue result) {
   void* context = std::exchange(context_, nullptr);
   reply(context, ToJSON(result).c_str());
 }
+
+#if BUILDFLAG(IS_LINUX)
+void Reply::SendSecret(base::DictValue result) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!reply_) {
+    base::Value dropped(std::move(result));
+    Cleanse(dropped);
+    return;
+  }
+  ac_engine_reply_t reply = std::exchange(reply_, nullptr);
+  void* context = std::exchange(context_, nullptr);
+  SendSecretJson(std::move(result), reply, context);
+}
+#endif
 
 void Reply::Ok() {
   Send(base::DictValue().Set("ok", true));

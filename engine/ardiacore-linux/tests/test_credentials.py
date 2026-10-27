@@ -49,6 +49,16 @@ class CredentialHelperTests(unittest.TestCase):
         for name in ['passwords.', 'autofill.', 'ac_passwords', 'ac_autofill']:
             self.assertNotIn(name, contract)
 
+    def test_status_reports_which_key_provider_encrypts_new_data(self):
+        service = (LINUX / 'ac_linux_credential_service.cc').read_text()
+        self.assertIn('encryptor.EncryptString(credentials::kProtectionProbeText)', service)
+        self.assertIn('credentials::ProtectionFromCiphertext(', service)
+        self.assertIn('probe->protection = protection;', service)
+        status = service[service.index('base::Value Status('):service.index('struct PendingCall {')]
+        self.assertIn('credentials::DescribeStorage(backend, probes.passwords.protection)', status)
+        for key in ['"protection"', '"protectionFallback"', '"storage"']:
+            self.assertIn(f'.Set({key}', status)
+
 
 if __name__ == '__main__':
     unittest.main()
