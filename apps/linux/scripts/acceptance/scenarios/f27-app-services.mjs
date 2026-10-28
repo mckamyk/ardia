@@ -37,9 +37,9 @@ export default {
   title: "Onboarding starts once on a fresh profile and app services run once per launch",
   deadline: 300000,
   manual: [
-    { name: "Finishing onboarding through its steps", steps: ["On a fresh profile, click through every onboarding step to the end.", "Restart: onboarding does not return, and Help › Show Onboarding replays it on demand."] },
-    { name: "Setup choices apply across windows", steps: ["On a fresh profile, finish onboarding choosing a non-default search engine, the top tab layout and two pinned sites.", "Open a second window: it shows the same layout and pins; Settings › Search shows the chosen engine; no duplicate pins appear after a restart."], reason: "the onboarding flow needs pointer input through its steps" },
-    { name: "Onboarding and tours from a utility window", steps: ["Open Settings and run Help › Show Onboarding and Help › Tool Tour from it.", "They play in a browser window, not inside Settings."], reason: "cross-renderer command routing is still open in the F27 handoff" },
+    { name: "Finishing onboarding through its steps", steps: ["On a fresh profile, click through every onboarding step to the end.", "Restart: onboarding does not return, and Help › Show Onboarding replays it on demand."], reason: "automated in F27D; step 7's Continue never enables (#258)" },
+    { name: "Setup choices apply across windows", steps: ["On a fresh profile, finish onboarding choosing a non-default search engine, the top tab layout and two pinned sites.", "Open a second window: it shows the same layout and pins; Settings › Search shows the chosen engine; no duplicate pins appear after a restart."], reason: "automated in F27D" },
+    { name: "Onboarding and tours from a utility window", steps: ["Open Settings and run Help › Show Onboarding and Help › Tool Tour from it.", "They play in a browser window, not inside Settings."], reason: "automated in F27D for Show Onboarding (fails, #37); Tool Tour isn't driven" },
   ],
   async run(t) {
     let fresh;

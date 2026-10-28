@@ -25,9 +25,9 @@ export default {
   title: "External drops into the sidebar and file drag out",
   deadline: 240000,
   manual: [
-    { name: "Drag a downloaded file out to another application", steps: ["Download a file, open Ctrl+J.", "Drag its row into a scratch folder in the file manager (Wayland and X11).", "The file is copied there; the press alone does not open the file; releasing before the drag starts does nothing."], reason: "outbound drags need a compositor drag session" },
-    { name: "Drop real files from a file manager", steps: ["Drag one, then three files from the file manager onto the sidebar and onto the top strip.", "Each opens as a file:// tab in that position; dragging over and leaving shows and clears the drop indicator."], reason: "the host records file paths only from an OS drag session" },
-    { name: "Internal reorder and page drops still work", steps: ["Drag a sidebar tab to a new position; it moves.", "Drag a tab onto the page area to make a split.", "Drag a link from a page onto a text field in another page; the page receives it."] },
+    { name: "Drag a downloaded file out to another application", steps: ["Download a file, open Ctrl+J.", "Drag its row into a scratch folder in the file manager (Wayland and X11).", "The file is copied there; the press alone does not open the file; releasing before the drag starts does nothing."], reason: "automated in F20D (sway) and F20X (X11) with a GTK drop target; a real file manager needs a person" },
+    { name: "Drop real files from a file manager", steps: ["Drag one, then three files from the file manager onto the sidebar and onto the top strip.", "Each opens as a file:// tab in that position; dragging over and leaving shows and clears the drop indicator."], reason: "automated in F20D and F20X with a GTK drag source; a real file manager needs a person" },
+    { name: "Internal reorder and page drops still work", steps: ["Drag a sidebar tab to a new position; it moves.", "Drag a tab onto the page area to make a split.", "Drag a link from a page onto a text field in another page; the page receives it."], reason: "automated in F20D; sidebar reorder and tab-to-page split fail there (#266)" },
   ],
   async run(t) {
     const run = nonce("f20");

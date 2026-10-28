@@ -41,8 +41,16 @@ import w77Desktop from "./d-fullscreen.mjs";
 import f07Desktop, { f07Keyring, s102Keyring } from "./d-passwords.mjs";
 import f18Desktop from "./d-power.mjs";
 import { f08Desktop, f09Desktop, f12Desktop, f13Desktop, w74Desktop } from "./d-files.mjs";
+import f07Credentials, { s104Desktop } from "./d-credentials.mjs";
+import { f12Window, i109Keyring, i111Window } from "./d-import.mjs";
+import { f11Keyring, f13Keyring } from "./d-keyring.mjs";
+import f27Desktop from "./d-onboarding.mjs";
+import s105Package from "./d-package.mjs";
+import w156Drive from "./d-trash.mjs";
+import e100Desktop from "./d-native-host.mjs";
+import { f20Desktop, f20X11 } from "./d-drag.mjs";
 
-export const SCENARIOS = [f01, f02, f03, f06, f23, f07, f08, f09, f20, f10, f11, f12, f13, f14, f22, f26, f27, f17, w78, f24, f15, f18, f16, f25, s102, s104, s105, s106, s107, s108, ...privateServices, ...privateFollowups, w92, w77, w79, w70, w114, w74, w75, w156, w76, w137, i109, i110, i111, e97, e98, e100, q221, f22Sway, f22X11, f22Hyprland, w79Sway, w79X11, w79Hyprland, q221Desktop, w77Desktop, f07Desktop, f07Keyring, s102Keyring, f18Desktop, w74Desktop, f08Desktop, f09Desktop, f12Desktop, f13Desktop];
+export const SCENARIOS = [f01, f02, f03, f06, f23, f07, f08, f09, f20, f10, f11, f12, f13, f14, f22, f26, f27, f17, w78, f24, f15, f18, f16, f25, s102, s104, s105, s106, s107, s108, ...privateServices, ...privateFollowups, w92, w77, w79, w70, w114, w74, w75, w156, w76, w137, i109, i110, i111, e97, e98, e100, q221, f22Sway, f22X11, f22Hyprland, w79Sway, w79X11, w79Hyprland, q221Desktop, w77Desktop, f07Desktop, f07Keyring, s102Keyring, f18Desktop, w74Desktop, f08Desktop, f09Desktop, f12Desktop, f13Desktop, f07Credentials, f12Window, i111Window, i109Keyring, f11Keyring, f13Keyring, f27Desktop, s105Package, s104Desktop, w156Drive, e100Desktop, f20Desktop, f20X11];
 
 export function selectScenarios(only, scenarios = SCENARIOS) {
   if (!only?.length) return scenarios;
