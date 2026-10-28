@@ -24,6 +24,7 @@
 #include "ardia/linux/ac_linux_close_hooks.h"
 #include "ardia/linux/ac_linux_credential_service.h"
 #include "ardia/linux/ac_linux_credentials.h"
+#include "ardia/linux/ac_linux_live_service.h"
 #include "ardia/linux/ac_linux_sync_service.h"
 #include "ardia/linux/ac_linux_dialog_views.h"
 #include "ardia/linux/ac_linux_document_service.h"
@@ -921,7 +922,11 @@ class ShellHostView : public views::View,
     RetireRenderer();
     return true;
   }
+  std::string LiveCaller() const {
+    return base::NumberToString(id_) + "#" + base::NumberToString(renderer_generation_);
+  }
   void RetireRenderer() {
+    LinuxLiveCallerGone(LiveCaller());
     auto alive = GetWeakPtr();
     if (dialogs_ && renderer_generation_)
       dialogs_->controller().RetireRenderer(base::NumberToString(renderer_generation_));
@@ -1736,6 +1741,7 @@ ShellHostView::~ShellHostView() {
   LinuxImportWindowClosed(window_id_);
   WindowFocus().Forget(id_);
   weak_factory_.InvalidateWeakPtrs();
+  LinuxLiveCallerGone(LiveCaller());
   handler_ = nullptr;
   renderer_document_ = content::WeakDocumentPtr();
   dialogs_.reset();
@@ -1858,6 +1864,7 @@ base::DictValue ShellHostView::Bootstrap() const {
     capabilities.Append(route);
   capabilities.Append("engine.systemState");
   AppendLinuxSyncCapabilities(capabilities);
+  AppendLinuxLiveCapabilities(capabilities);
   AppendLinuxSiteControlsCapabilities(capabilities);
   for (const char* capability : linux_import::kImportCapabilities) capabilities.Append(capability);
   capabilities.Append("favicons.fetch");
@@ -4149,6 +4156,10 @@ void ShellHostView::Invoke(
     return LinuxSyncInvoke({base::NumberToString(id_) + "#" + base::NumberToString(renderer_generation_),
                             !private_window_.empty(), is_utility()},
                            profile(), shell_, method, values, std::move(done));
+  }
+  if (LinuxLiveInvokes(method)) {
+    return LinuxLiveInvoke({LiveCaller(), !private_window_.empty()},
+                           profile(), method, values, std::move(done));
   }
   if (LinuxExtensionSurfaces::Handles(method)) {
     return ExtensionSurfaces()->Invoke(method, args, page_profile(), renderer_generation_,

@@ -67,6 +67,17 @@ test("production graph uses current Linux adapters and one canonical shared stat
     assert.ok(graph.get(id).importedIds.includes(original));
   }
 
+  for (const shared of ["state/live/sources.ts", "state/live/net.ts"]) assert.ok(!graph.has(`${browser}${shared}`), `${shared} and its renderer fetch stay out of the Linux bundle`);
+  const liveImporters = [
+    [`${browser}state/live/engine.ts`, `${linux}liveSources.ts`],
+    [`${browser}state/live/googleAuth.ts`, `${linux}liveSources.ts`],
+    [`${browser}state/live/googleAuth.ts`, `${linux}liveNet.ts`],
+    [`${browser}components/settings/panes/LiveFolders.tsx`, `${linux}liveSources.ts`],
+    [`${browser}components/settings/panes/LiveFolders.tsx`, `${linux}liveNet.ts`],
+    [`${linux}liveSources.ts`, `${linux}hostLive.ts`],
+  ];
+  for (const [importer, adapter] of liveImporters) assert.ok(graph.get(importer)?.importedIds.includes(adapter), `${importer} uses ${adapter}`);
+
   const coreSuggestFetcher = `${repo}packages/core/src/suggestFetcher.ts`;
   assert.deepEqual(graph.get(coreSuggestFetcher)?.importers, [`${linux}suggestFetcher.ts`]);
   assert.ok(graph.get(`${linux}suggestFetcher.ts`).importedIds.includes(`${linux}hostSuggestions.ts`));
