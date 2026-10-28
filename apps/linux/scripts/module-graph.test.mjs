@@ -53,6 +53,7 @@ test("production graph uses current Linux adapters and one canonical shared stat
     ["components/settings/Form.tsx", "settingsForm.tsx", ["Anchor", "Group", "Row", "SectionHeader", "SettingsPaneContext"]],
     ["state/engines/engines.ts", "hostEngines.ts", ["canSwitchEngine", "chosenEngine", "defaultEngine", "tabEngine", "siteOf"]],
     ["state/import/apply.ts", "importApply.ts", ["applyResult", "applySafari", "emptyCounts", "importBookmarks"]],
+    ["state/extensions/store.ts", "extensionsStore.ts", ["extensionProfile", "shownIn", "useExtensions", "useWindowExtensions", "windowExtensions"]],
   ];
   for (const [shared, adapter, names] of replacements) {
     const id = `${linux}${adapter}`;
