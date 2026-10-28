@@ -6,10 +6,12 @@
 
 #include "base/check.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
@@ -26,6 +28,10 @@ namespace {
 
 using linux_profiles::ProfileError;
 using Registry = linux_profiles::ProfileRegistry<Profile>;
+
+bool ProfileDirectoryWritable(const base::FilePath& path) {
+  return base::CreateDirectory(path) && base::PathIsWritable(path);
+}
 
 class ChromeProfiles : public Registry::Backend, public ProfileObserver {
  public:
@@ -44,10 +50,12 @@ class ChromeProfiles : public Registry::Backend, public ProfileObserver {
     const base::FilePath user_data = app->GetPath().DirName();
     const base::FilePath path = user_data.AppendASCII(directory);
     if (user_data != manager->user_data_dir() || path.DirName() != user_data) return done(nullptr);
-    manager->CreateProfileAsync(
-        path, base::BindOnce(
-                  [](std::function<void(Profile*)> done, Profile* profile) { done(profile); },
-                  std::move(done)));
+    if (manager->GetProfileByPath(path)) return CreateProfile(path, std::move(done), true);
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE,
+        {base::MayBlock(), base::TaskPriority::USER_VISIBLE, base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
+        base::BindOnce(&ProfileDirectoryWritable, path),
+        base::BindOnce(&ChromeProfiles::CreateProfile, path, std::move(done)));
   }
 
   Profile* ExistingOffTheRecord(Profile* original) override {
@@ -75,6 +83,15 @@ class ChromeProfiles : public Registry::Backend, public ProfileObserver {
   }
 
  private:
+  static void CreateProfile(const base::FilePath& path, std::function<void(Profile*)> done, bool writable) {
+    ProfileManager* manager = g_browser_process ? g_browser_process->profile_manager() : nullptr;
+    if (!writable || !manager) return done(nullptr);
+    manager->CreateProfileAsync(
+        path, base::BindOnce(
+                  [](std::function<void(Profile*)> done, Profile* profile) { done(profile); },
+                  std::move(done)));
+  }
+
   void OnProfileWillBeDestroyed(Profile* profile) override {
     registry_.Forget(profile);
     if (observations_.IsObservingSource(profile)) observations_.RemoveObservation(profile);

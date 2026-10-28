@@ -225,6 +225,18 @@ class ProfileServiceTests(unittest.TestCase):
         self.assertIn('PostDelayedTask', later)
         self.assertNotIn('OffTheRecord(Profile* original) override {\n    if (!Usable(original) || original->IsOffTheRecord()) return nullptr;\n    Profile* otr = original->GetPrimaryOTRProfile(true);\n    if (otr) Watch(otr);', self.source)
 
+    def test_a_profile_directory_that_cannot_be_written_fails_the_load_instead_of_hanging(self):
+        writable = method(self.source, 'bool ProfileDirectoryWritable(const base::FilePath& path) {')
+        self.assertIn('return base::CreateDirectory(path) && base::PathIsWritable(path);', writable)
+        load = method(self.source, '  void Load(const std::string& directory, std::function<void(Profile*)> done) override {')
+        self.assertNotIn('CreateProfileAsync', load)
+        self.assertIn('if (manager->GetProfileByPath(path)) return CreateProfile(path, std::move(done), true);', load)
+        self.assertIn('base::BindOnce(&ProfileDirectoryWritable, path),', load)
+        self.assertIn('base::BindOnce(&ChromeProfiles::CreateProfile, path, std::move(done))', load)
+        self.assertIn('base::MayBlock()', load)
+        create = method(self.source, '  static void CreateProfile(const base::FilePath& path, std::function<void(Profile*)> done, bool writable) {')
+        self.assertLess(create.index('if (!writable || !manager) return done(nullptr);'), create.index('manager->CreateProfileAsync('))
+
     def test_app_profile_stays_the_startup_profile(self):
         pin = method(self.source, 'void PinStartupProfile(const std::string& app_directory) {')
         for pref in ('prefs::kProfileLastUsed', 'prefs::kProfilesLastActive', 'prefs::kBrowserShowProfilePickerOnStartup'):
