@@ -97,6 +97,17 @@ export const w79 = {
   ],
   async run(t) {
     const { app, shell } = await startBrowser(t, { name: "typeahead" });
+    await t.check("text typed into the command bar right after launch stays in the field", async () => {
+      const text = "ardia typed at launch";
+      await shell.state("s.openPanel(windowId, ''); return true;");
+      await shell.waitFor("document.activeElement?.tagName === 'INPUT'", { timeout: 6000, label: "command bar focus" });
+      await shell.insertText(text);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const value = await shell.eval("document.activeElement?.value ?? null");
+      if (value !== text) throw new Error(`the command bar holds ${JSON.stringify(value)} instead of ${JSON.stringify(text)}`);
+      await shell.state("s.closePanel(windowId); return true;");
+      return { value };
+    });
     await t.check("new windows advertise held typeahead and report readiness", async () => {
       const id = await shell.state("return s.createWindow();");
       const created = await app.shell(id, { timeout: 25000 });
