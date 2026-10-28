@@ -705,6 +705,7 @@ struct ShellHostView {
     OnWidgetActivationChanged(&widget, true);
   }
   struct { void Reset() {} } presentation_observation_;
+  bool presented_ = true;
   void OnDidPresentCompositorFrame(ui::Compositor*, uint32_t, const gfx::PresentationFeedback&);
   void Event(std::string_view module, std::string_view event, base::Value payload) {
     if (module == "ArdiaShell" && event == "onWindowEvent") events.push_back(payload.GetDict().Clone());
@@ -1271,6 +1272,30 @@ static void TheRestoresFinalFocusKeepsTheBehindWindowsHandBack() {
   ui::OzonePlatform::properties.supports_global_screen_coordinates = true;
 }
 
+static void TheRestoreWaitsForTheWindowsFirstFrame() {
+  ui::OzonePlatform::properties.supports_global_screen_coordinates = false;
+  display::Screen::displays = {{{0, 0, 1920, 1080}, 10, "Out A"}, {{1920, 0, 1920, 1080}, 20, "Out B"}};
+  display::Screen::nearest = display::Screen::displays[0];
+  Profile app;
+  app.prefs.placements.Set("ArdiaLinuxWindowOutputs", base::DictValue().Set("main", "Out B"));
+  BrowserWindowInterface main_browser{1};
+  ShellHostView main(1, "main", &main_browser);
+  main.profile_source = &app;
+  main.startup_ = true;
+  main.presented_ = false;
+  bool ok = false;
+  Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"main"}, "main"), &ok);
+  assert(ok && !main.widget.fullscreen && main.widget.fullscreen_targets.empty() && Toggles(main_browser) == 0);
+  main.RendererReady();
+  assert(!main.widget.fullscreen && main.widget.fullscreen_targets.empty());
+  main.OnDidPresentCompositorFrame(nullptr, 1, {});
+  assert(main.widget.fullscreen);
+  assert((main.widget.fullscreen_targets == std::vector<int64_t>{20}));
+  main.OnDidPresentCompositorFrame(nullptr, 2, {});
+  assert(main.widget.fullscreen_targets.size() == 1);
+  ui::OzonePlatform::properties.supports_global_screen_coordinates = true;
+}
+
 static void FullScreenWhenTheSavedOutputIsGone() {
   ui::OzonePlatform::properties.supports_global_screen_coordinates = false;
   display::Screen::displays = {{{0, 0, 1920, 1080}, 10, "Out A"}};
@@ -1402,6 +1427,7 @@ int main(int argc, char** argv) {
       {"fullscreen-background", FullScreenInBackground}, {"fullscreen-focus-yields", FullScreenFocusYieldsToTheUser},
       {"fullscreen-shown-later", FullScreenWhenShownLater}, {"fullscreen-output", FullScreenOnTheSavedOutput},
       {"fullscreen-output-gone", FullScreenWhenTheSavedOutputIsGone}, {"x11-outputs", X11KeepsNoOutputs}, {"late-output", ALateOutputChangeIsSavedWhileFullscreen},
+      {"restore-after-first-frame", TheRestoreWaitsForTheWindowsFirstFrame},
       {"restore-keeps-hand-back", TheRestoresFinalFocusKeepsTheBehindWindowsHandBack}, {"output-labels", OutputLabels}};
   const auto found = scenarios.find(mode);
   if (found == scenarios.end()) return 2;
@@ -1619,6 +1645,14 @@ class WindowLifecycleHostTests(unittest.TestCase):
 
     def test_x11_keeps_no_saved_outputs(self):
         self.run_mode('x11-outputs')
+
+    def test_the_fullscreen_restore_waits_for_the_windows_first_presented_frame(self):
+        self.run_mode('restore-after-first-frame')
+
+    def test_quitting_saves_the_output_before_the_browser_is_detached(self):
+        detach = extract(HOST, 'void ShellHostView::DetachBrowser()')
+        self.assertLess(detach.index('RememberWindowOutput();'), detach.index('browser_ = nullptr;'))
+        self.assertLess(detach.index('RememberWindowOutput();'), detach.index('if (!RetireDocuments()) return;'))
 
     def test_outputs_are_saved_on_close_and_forgotten_when_the_window_departs(self):
         self.assertIn('RememberWindowOutput();', extract(HOST, 'void ShellHostView::OnWidgetClosing('))
