@@ -7,9 +7,10 @@
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/system/sys_info.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner_thread_mode.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
-#include "components/dbus/thread_linux/dbus_thread_linux.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "dbus/object_path.h"
@@ -25,6 +26,15 @@ constexpr char kUPower[] = "org.freedesktop.UPower";
 constexpr char kUPowerPath[] = "/org/freedesktop/UPower";
 constexpr char kDisplayPath[] = "/org/freedesktop/UPower/devices/DisplayDevice";
 constexpr char kDevice[] = "org.freedesktop.UPower.Device";
+
+scoped_refptr<dbus::Bus> PrivateSystemBus() {
+  dbus::Bus::Options options;
+  options.bus_type = dbus::Bus::SYSTEM;
+  options.connection_type = dbus::Bus::PRIVATE;
+  options.dbus_task_runner = base::ThreadPool::CreateSingleThreadTaskRunner(
+      {base::MayBlock(), base::TaskPriority::USER_VISIBLE}, base::SingleThreadTaskRunnerThreadMode::DEDICATED);
+  return base::MakeRefCounted<dbus::Bus>(std::move(options));
+}
 
 std::pair<uint64_t, uint64_t> ReadMemory() {
   return {base::SysInfo::AmountOfTotalPhysicalMemory().InBytes(),
@@ -117,7 +127,7 @@ void LinuxPowerMonitor::Start() {
 }
 
 void LinuxPowerMonitor::Watch() {
-  bus_ = dbus_thread_linux::GetSharedSystemBus();
+  bus_ = PrivateSystemBus();
   auto changed = base::BindRepeating(&LinuxPowerMonitor::PropertiesChanged, weak_factory_.GetWeakPtr());
   auto answered = [this] { return base::BindOnce(&LinuxPowerMonitor::PropertiesAnswered, weak_factory_.GetWeakPtr()); };
   auto watch = [&](const char* service, const char* path, const char* interface) {
