@@ -79,6 +79,7 @@ export const f15Desktop = {
     });
     const window = await ardiaWindow(desktop);
     const videoTab = await tabIdFor(shell, videoUrl);
+    const otherTab = await tabIdFor(shell, otherUrl);
     const video = await pageSession(app, videoUrl);
     await t.check("a click on the video starts playback with sound in the media session", async () => {
       await playByClick(desktop, window, shell, video, videoTab);
@@ -134,6 +135,7 @@ export const f15Desktop = {
       await playByClick(desktop, window, shell, video, videoTab);
       await delay(1500);
       await clickTab(desktop, window, shell, "Acceptance page 2");
+      await until(async () => (await shell.activeTabId()) === otherTab, { timeout: 5000, label: "Acceptance page 2 to be the active tab" });
       const pip = await waitPip(desktop).catch(async (error) => { throw new Error(`${error.message}; page log ${JSON.stringify(await evaluate(video, "pipLog", { userGesture: false }))}`); });
       await shot(t, desktop, "auto-pip");
       await clickTab(desktop, window, shell, "Desktop video");
@@ -148,6 +150,7 @@ export const f15Desktop = {
       await playByClick(desktop, window, shell, video, videoTab);
       await delay(1500);
       await clickTab(desktop, window, shell, "Acceptance page 2");
+      await until(async () => (await shell.activeTabId()) === otherTab, { timeout: 5000, label: "Acceptance page 2 to be the active tab" });
       await delay(5000);
       const opened = await pipWindows(desktop);
       if (opened.length) throw new Error(`a PiP window opened with the setting off: ${JSON.stringify(opened.map((w) => w.rect))}`);
@@ -222,7 +225,9 @@ export const privateAutoPipDesktop = {
       await playByClick(desktop, window, windowShell, session, tabId);
       await delay(1500);
       await desktop.key("ctrl+t");
-      return { tabId, session };
+      const left = await until(async () => { const active = await windowShell.activeTabId(); return active && active !== tabId ? active : false; }, { timeout: 5000, label: `${label}: Ctrl+T to leave the video tab` });
+      if (await evaluate(session, "document.visibilityState", { userGesture: false }) !== "hidden") throw new Error(`${label}: the video page is still visible after Ctrl+T`);
+      return { tabId, session, left };
     }
     const seen = new Set();
 

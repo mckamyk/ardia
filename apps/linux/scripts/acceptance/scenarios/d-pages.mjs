@@ -229,7 +229,7 @@ export const f01Desktop = {
       const toolsLeft = pane.x + size.width;
       const overTools = { x: Math.max(bar.x, toolsLeft), y: bar.y, width: bar.x + bar.width - Math.max(bar.x, toolsLeft), height: bar.height };
       await desktop.key("escape");
-      if (overTools.width < 20) return { bar, overlap: 0, note: "the find bar sits over the page, not the frontend" };
+      if (overTools.width < 20) throw new Error(`the find bar ${JSON.stringify(bar)} doesn't reach over docked DevTools (which starts at x ${toolsLeft}), so the overlay can't be checked`);
       const changed = differingFraction(before, after, overTools);
       if (changed < 0.05) throw new Error(`the find bar's part over DevTools didn't change on screen (${changed.toFixed(3)})`);
       return { bar, overlap: overTools.width, changed };
@@ -323,7 +323,9 @@ async function systemPrint(t, desktop, window, shell, app, url, tabId) {
   const { region } = await promptAfter(desktop, () => desktop.key("ctrl+alt+p"), { settle: 6000 });
   const added = (await desktop.windows()).filter((w) => !known.some((k) => k.id === w.id));
   await shot(t, desktop, "system-print");
-  if (added.length || (region && region.width > 300 && region.height > 200)) return { shown: true, windows: added.map((w) => w.title), region };
+  const screen = await desktop.capture();
+  const dialogLike = region && region.width >= 300 && region.height >= 200 && region.width <= screen.width * 0.8 && region.height <= screen.height * 0.9;
+  if (added.length || dialogLike) return { shown: true, windows: added.map((w) => w.title), region };
   return { shown: false, calibration: await stockChromiumPrints(t, desktop) };
 }
 

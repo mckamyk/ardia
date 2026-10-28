@@ -172,22 +172,32 @@ export const f16Desktop = {
       const url = `${target}-two`;
       const before = (await tabsOn(shell, url)).length;
       await focusPageByClick(desktop, window, shell, app, urlTwo, tabTwo);
+      const logged = () => evaluate(two, "(window.dragLog ?? []).slice()", { userGesture: false });
+      const dragged = async (before, label) => {
+        const now = (await logged()).slice(before.length);
+        if (!now.includes("dragstart") || !now.includes("dragend")) throw new Error(`${label}: no drag ran (page events ${JSON.stringify(now)})`);
+        return now;
+      };
       const from = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('link')");
       const drop = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('target')");
+      const beforeTarget = await logged();
       await desktop.drag({ x: from.x, y: from.y }, { x: drop.x, y: drop.y }, { steps: 20, hold: 250 });
       await until(() => evaluate(two, "drops === 1", { userGesture: false }), { timeout: 5000, label: "the page's drop target to receive the drop" });
+      const targetEvents = await dragged(beforeTarget, "drop target");
       await desktop.command(`[con_id=${window.id}] floating enable, resize set 1280 860, move position 0 0`);
       await delay(1000);
       const moved = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('link')");
+      const beforeOutside = await logged();
       await desktop.drag({ x: moved.x, y: moved.y }, { x: 1700, y: 1000 }, { steps: 24, hold: 250 });
       await delay(2500);
+      const outsideEvents = await dragged(beforeOutside, "outside the window");
       const after = (await tabsOn(shell, url)).length;
       await desktop.command(`[con_id=${window.id}] floating disable`);
       if (after !== before) throw new Error(`${after - before} tabs opened`);
-      return { drops: await evaluate(two, "drops", { userGesture: false }) };
+      return { drops: await evaluate(two, "drops", { userGesture: false }), targetEvents, outsideEvents };
     });
 
-    await t.check("dragging a link onto a second Ardia window at the same in-window point opens nothing", async () => {
+    await t.check("dragging a link onto a second Ardia window at the same in-window point: where a tab opens, by window and profile", async () => {
       const url = `${target}-two`;
       await focusPageByClick(desktop, window, shell, app, urlTwo, tabTwo);
       const known = await desktop.windows();
@@ -204,18 +214,22 @@ export const f16Desktop = {
       const first = await currentRect(desktop, window);
       const other = await currentRect(desktop, second);
       if (first.x === other.x) throw new Error(`the two windows overlap: ${JSON.stringify({ first, other })}`);
-      const before = { first: (await tabsOn(shell, url)).length, second: (await tabsOn(secondShell, url)).length };
+      const inWindow = (windowShell) => windowShell.state(`return Object.values(s.tabs).filter((t) => t.url === ${js(url)} && t.windowId === windowId).map((t) => ({ id: t.id, profileId: t.profileId, active: (s.windows[windowId]?.activeTabIds?.[t.profileId] ?? null) === t.id }));`);
+      const before = { first: await inWindow(shell), second: await inWindow(secondShell) };
       await focusPageByClick(desktop, window, shell, app, urlTwo, tabTwo);
+      const beforeLog = await evaluate(two, "(window.dragLog ?? []).slice()", { userGesture: false });
       const from = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('link')");
       const start = { x: from.rect.x + 24, y: from.y };
       const drop = { x: start.x - first.x + other.x, y: start.y - first.y + other.y };
       await desktop.drag(start, drop, { steps: 24, hold: 250 });
       await delay(4000);
       await shot(t, desktop, "drop-on-second-window");
-      const after = { first: (await tabsOn(shell, url)).length, second: (await tabsOn(secondShell, url)).length };
-      const secondTabs = await secondShell.state("return Object.values(s.tabs).filter((x) => x.windowId === windowId).map((x) => x.url);");
-      if (after.first !== before.first || after.second !== before.second) throw new Error(`a tab opened on the dragged link: before ${JSON.stringify(before)}, after ${JSON.stringify(after)}`);
-      return { windows: [first, other], start, drop, secondTabs };
+      const events = (await evaluate(two, "(window.dragLog ?? []).slice()", { userGesture: false })).slice(beforeLog.length);
+      if (!events.includes("dragstart") || !events.includes("dragend")) throw new Error(`no drag ran (page events ${JSON.stringify(events)})`);
+      const after = { first: await inWindow(shell), second: await inWindow(secondShell) };
+      const opened = Object.fromEntries(Object.entries(after).map(([name, tabs]) => [name, tabs.filter((tab) => !before[name].some((old) => old.id === tab.id))]));
+      const where = Object.entries(opened).flatMap(([name, tabs]) => tabs.map((tab) => ({ window: name === "first" ? `the source window (${shell.windowId})` : `the second window (${secondShell.windowId})`, profile: tab.profileId, active: tab.active })));
+      return { opened: where.length ? where : "none", events, start, drop, secondTabs: await secondShell.state("return Object.values(s.tabs).filter((x) => x.windowId === windowId).map((x) => x.url);") };
     });
     await t.stop(app);
   },
@@ -345,11 +359,14 @@ export const f25Desktop = {
       await wheel(-15, 10);
       const band = await scrollBand();
       const top = await desktop.capture();
+      const scrollBefore = await probe(app, long, "scrollY");
       await wheel(15, 8);
       const down = await desktop.capture();
+      const scrollAfter = await probe(app, long, "scrollY");
+      if (scrollAfter < scrollBefore + 100) throw new Error(`the page didn't scroll (${scrollBefore} → ${scrollAfter})`);
       const changed = green(down, band);
       if (green(top, band) > 0.05 || changed > 0.05) throw new Error(`the toolbar left its band (${changed.toFixed(2)} page green) with the setting off`);
-      return { changed };
+      return { changed, scrolled: [scrollBefore, scrollAfter] };
     });
     await t.stop(app);
   },
