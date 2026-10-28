@@ -8,7 +8,7 @@ import { BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, openVirtualPointer } from "./waylandPo
 
 export const MOCKS = new URL("./mocks/", import.meta.url);
 export const PORTAL_FRONTEND = "/usr/lib/xdg-desktop-portal";
-const SCRUBBED = ["WAYLAND_DISPLAY", "DISPLAY", "SWAYSOCK", "I3SOCK", "HYPRLAND_INSTANCE_SIGNATURE", "XDG_SESSION_ID", "XDG_SEAT", "XDG_VTNR", "XDG_ACTIVATION_TOKEN", "DESKTOP_STARTUP_ID", "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS", "GNOME_KEYRING_CONTROL", "SSH_AUTH_SOCK", "GTK_IM_MODULE", "QT_IM_MODULE", "XMODIFIERS", "XAUTHORITY"];
+const SCRUBBED = ["WAYLAND_DISPLAY", "DISPLAY", "SWAYSOCK", "I3SOCK", "HYPRLAND_INSTANCE_SIGNATURE", "XDG_SESSION_ID", "XDG_SEAT", "XDG_VTNR", "XDG_ACTIVATION_TOKEN", "DESKTOP_STARTUP_ID", "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS", "GNOME_KEYRING_CONTROL", "SSH_AUTH_SOCK", "GTK_IM_MODULE", "QT_IM_MODULE", "XMODIFIERS", "XAUTHORITY", "AT_SPI_BUS_ADDRESS", "PULSE_SERVER", "PIPEWIRE_REMOTE", "WAYLAND_SOCKET"];
 
 export function toolEnvironment(base = process.env) {
   const prefix = base.ARDIA_ACCEPTANCE_TOOLS;
@@ -73,6 +73,50 @@ export function missingTools(tools, needed) {
   return needed.filter((name) => !tools[name]);
 }
 
+const GROUPS = new Set();
+const EMERGENCIES = new Set();
+
+export function trackGroup(proc) {
+  const pid = proc.child.pid;
+  if (!pid) return proc;
+  GROUPS.add(proc);
+  proc.child.once("exit", () => {
+    setTimeout(() => {
+      if (!groupAlive(pid)) GROUPS.delete(proc);
+    }, 200).unref();
+  });
+  return proc;
+}
+
+export function onEmergency(stop) {
+  EMERGENCIES.add(stop);
+  return () => EMERGENCIES.delete(stop);
+}
+
+export function trackedGroups() {
+  return [...GROUPS].map((proc) => proc.child.pid);
+}
+
+export function groupAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function killDesktopNow() {
+  for (const stop of [...EMERGENCIES]) {
+    try { stop(); } catch {}
+  }
+  EMERGENCIES.clear();
+  for (const proc of [...GROUPS]) {
+    try { process.kill(-proc.child.pid, "SIGKILL"); } catch {}
+    GROUPS.delete(proc);
+  }
+}
+
 function spawnLogged(command, args, { env, logPath, stdio }) {
   const log = openSync(logPath, "a");
   const child = spawn(command, args, { env, stdio: stdio ?? ["ignore", log, log], detached: true });
@@ -80,15 +124,17 @@ function spawnLogged(command, args, { env, logPath, stdio }) {
   const state = { exited: false, code: null };
   child.once("exit", (code, signal) => { state.exited = true; state.code = code ?? signal; });
   child.once("error", (error) => { state.exited = true; state.code = error.message; });
-  return { child, state };
+  return trackGroup({ child, state });
 }
 
-async function stopGroup({ child, state }, { grace = 3000 } = {}) {
-  if (state.exited || !child.pid) return;
+export async function stopGroup(proc, { grace = 3000 } = {}) {
+  const { child, state } = proc;
+  if (!child.pid) return;
   try { process.kill(-child.pid, "SIGTERM"); } catch {}
-  for (let waited = 0; !state.exited && waited < grace; waited += 50) await delay(50);
-  if (!state.exited) try { process.kill(-child.pid, "SIGKILL"); } catch {}
-  for (let waited = 0; !state.exited && waited < 2000; waited += 50) await delay(50);
+  for (let waited = 0; (!state.exited || groupAlive(child.pid)) && waited < grace; waited += 50) await delay(50);
+  try { process.kill(-child.pid, "SIGKILL"); } catch {}
+  for (let waited = 0; (!state.exited || groupAlive(child.pid)) && waited < 2000; waited += 50) await delay(50);
+  GROUPS.delete(proc);
 }
 
 export function busConfig({ type = "session", socket, serviceDir }) {
@@ -162,6 +208,7 @@ async function startXvfb(dir, { tools, env }) {
   const child = spawn(tools.xvfb, ["-displayfd", "3", "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "-noreset", "+extension", "XTEST"], { env, stdio: ["ignore", log, log, "pipe"], detached: true });
   closeSync(log);
   const state = { exited: false, code: null };
+  trackGroup({ child, state });
   child.once("exit", (code, signal) => { state.exited = true; state.code = code ?? signal; });
   let text = "";
   child.stdio[3].on("data", (chunk) => { text += chunk; });
@@ -223,12 +270,14 @@ export async function startDesktop(dir, { tools, outputs = 1, x11 = false, compo
   }
   desktop.launchEnv = (extra = {}) => ({ ...desktop.env, ...extra });
   desktop.run = (command, args, options = {}) => runFile(command, args, { env: { ...desktop.env, ...(options.env ?? {}) }, timeout: options.timeout ?? 10000, input: options.input });
+  desktop.stopped = false;
   desktop.spawn = (command, args, { name = command.split("/").pop(), env = {}, stdio } = {}) => {
+    if (desktop.stopped) throw new Error(`the desktop session in ${dir} was stopped; refusing to start ${name}`);
     const proc = spawnLogged(command, args, { env: { ...desktop.env, ...env }, logPath: join(dir, `${name}.log`), stdio });
     stops.push(() => stopGroup(proc));
     return proc;
   };
-  desktop.onStop = (stop) => stops.push(stop);
+  desktop.onStop = (stop) => (desktop.stopped ? void Promise.resolve().then(stop).catch(() => {}) : stops.push(stop));
   if (desktop.sway) {
     desktop.keyboard = await openVirtualKeyboard(desktop);
     desktop.pointer = await openVirtualPointer({ runtime: desktop.runtime, display: desktop.display, width: 1920 * outputs, height: 1080 });
@@ -241,6 +290,7 @@ export async function startDesktop(dir, { tools, outputs = 1, x11 = false, compo
     }, { timeout: 5000, label: "the private seat's keyboard and pointer" });
   } else if (desktop.kind === "x11") Object.assign(desktop, x11Driver(desktop));
   desktop.stop = async () => {
+    desktop.stopped = true;
     for (const stop of stops.splice(0).reverse()) await stop().catch(() => {});
   };
   return desktop;
@@ -433,6 +483,9 @@ function x11Driver(desktop) {
     },
     async keyDown(key) {
       await xdotool(["keydown", key]);
+    },
+    async tap(key) {
+      await xdotool(["key", { return: "Return", enter: "Return", backspace: "BackSpace", escape: "Escape", tab: "Tab", space: "space" }[key] ?? key]);
     },
     async keyUp(key) {
       await xdotool(["keyup", key]);

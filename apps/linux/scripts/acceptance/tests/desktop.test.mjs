@@ -92,3 +92,29 @@ test("Wayland messages encode with their size and opcode and decode globals", ()
   assert.equal(rest.length, 5);
   assert.deepEqual(decodeGlobal(messages[0].body), { name: 3, iface: "wl_seat", version: 7 });
 });
+
+test("audio, accessibility and inherited Wayland socket variables never reach private processes or launches", () => {
+  const owner = { ...OWNER, AT_SPI_BUS_ADDRESS: "unix:path=/run/user/1000/at-spi/bus", PULSE_SERVER: "unix:/run/user/1000/pulse/native", PIPEWIRE_REMOTE: "pipewire-0", WAYLAND_SOCKET: "7" };
+  const env = privateEnvironment(owner);
+  for (const key of ["AT_SPI_BUS_ADDRESS", "PULSE_SERVER", "PIPEWIRE_REMOTE", "WAYLAND_SOCKET"]) assert.equal(env[key], undefined, key);
+  const launch = sessionEnvironment({ kind: "sway", env: owner });
+  for (const key of ["AT_SPI_BUS_ADDRESS", "PULSE_SERVER", "PIPEWIRE_REMOTE", "WAYLAND_SOCKET"]) assert.ok(key in launch && launch[key] === undefined, key);
+});
+
+test("the live-session guard refuses input off workspace 9 or outside its windows, and stays tripped", async () => {
+  const { createGuard, LiveGuardError, layoutBox } = await import("../lib/liveHyprland.mjs");
+  const state = { workspace: 9, focused: { title: "A - Ardia", workspace: 9 }, windows: [{ workspace: 9, layout: { x: 100, y: 100, width: 400, height: 300 } }] };
+  const guard = createGuard({ activeWorkspace: async () => state.workspace, focusedWindow: async () => state.focused, windows: async () => state.windows });
+  assert.equal((await guard.focus("type")).title, "A - Ardia");
+  assert.ok(await guard.point("click", { x: 120, y: 120 }));
+  await assert.rejects(guard.point("click", { x: 50, y: 50 }), LiveGuardError);
+  await assert.rejects(guard.focus("type"), /refusing to click at 50,50/);
+  const fresh = createGuard({ activeWorkspace: async () => state.workspace, focusedWindow: async () => state.focused, windows: async () => state.windows });
+  state.workspace = 1;
+  await assert.rejects(fresh.focus("press ctrl+n"), /workspace 1 is active/);
+  state.workspace = 9;
+  await assert.rejects(fresh.focus("press ctrl+n"), LiveGuardError);
+  const other = createGuard({ activeWorkspace: async () => 9, focusedWindow: async () => ({ title: "owner", workspace: 1 }), windows: async () => [] });
+  await assert.rejects(other.focus("type"), /isn't on workspace 9/);
+  assert.deepEqual(layoutBox([{ x: 0, y: 0, width: 3840, height: 2160 }, { x: 3840, y: 200, width: 1920, height: 1080 }]), { x: 0, y: 0, width: 5760, height: 2160 });
+});

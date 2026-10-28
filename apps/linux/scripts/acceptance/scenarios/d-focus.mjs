@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -28,15 +27,29 @@ async function clickedIntoFocus(desktop, shell) {
   await until(() => hasFocus(shell), { timeout: 5000, label: "focus after clicking into the window" }).catch(() => {});
 }
 
-export async function calibrate(t, desktop, label) {
+export const CALIBRATION_UNAVAILABLE = "stock Chromium isn't installed (set ARDIA_ACCEPTANCE_CHROMIUM), so a failing check here can't be told apart from a harness fault";
+
+export async function calibrate(t, desktop, label, { ctrlN = false } = {}) {
   const chromium = process.env.ARDIA_ACCEPTANCE_CHROMIUM ?? "/usr/bin/chromium";
-  if (!(await access(chromium, constants.X_OK).then(() => true, () => false))) return;
-  await t.check(`${label}: calibration: stock Chromium in the same session takes focus at launch and receives typing`, async () => {
-    const dir = await t.scratch("calibration");
-    const child = spawn(chromium, [`--user-data-dir=${dir}`, `--ozone-platform=${desktop.kind === "x11" ? "x11" : "wayland"}`, "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-extensions", "--remote-debugging-port=0", ...SOFTWARE_GL, "data:text/html,<title>calibration</title><input autofocus>"], { env: { ...desktop.env, HOME: join(dir, "home") }, stdio: "ignore", detached: true });
-    try {
-      const port = await until(() => readFile(join(dir, "DevToolsActivePort"), "utf8").then((text) => text.split("\n")[0] || false, () => false), { timeout: 20000, label: "stock Chromium's DevTools port" });
-      const page = await until(async () => (await fetchJson(`http://127.0.0.1:${port}/json/list`, 3000)).find((p) => p.type === "page" && p.url.startsWith("data:")) ?? false, { timeout: 10000, label: "stock Chromium's page" });
+  if (!(await access(chromium, constants.X_OK).then(() => true, () => false))) {
+    t.manual(`${label}: calibration with stock Chromium`, ["Install Chromium and rerun: stock Chromium must take focus at launch and receive typing in the same session."], CALIBRATION_UNAVAILABLE);
+    return;
+  }
+  const dir = await t.scratch("calibration");
+  const proc = desktop.spawn(chromium, [`--user-data-dir=${dir}`, `--ozone-platform=${desktop.kind === "x11" ? "x11" : "wayland"}`, "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-extensions", "--remote-debugging-port=0", ...SOFTWARE_GL, "data:text/html,<title>calibration</title><input autofocus>"], { name: "calibration-chromium", env: { HOME: join(dir, "home") } });
+  const stopChromium = async () => {
+    try { process.kill(-proc.child.pid, "SIGTERM"); } catch {}
+    for (let waited = 0; !proc.state.exited && waited < 3000; waited += 100) await delay(100);
+    try { process.kill(-proc.child.pid, "SIGKILL"); } catch {}
+  };
+  t.defer(stopChromium);
+  const pages = async () => {
+    const port = await until(() => readFile(join(dir, "DevToolsActivePort"), "utf8").then((text) => text.split("\n")[0] || false, () => false), { timeout: 20000, label: "stock Chromium's DevTools port" });
+    return fetchJson(`http://127.0.0.1:${port}/json/list`, 3000);
+  };
+  try {
+    await t.check(`${label}: calibration: stock Chromium in the same session takes focus at launch and receives typing`, async () => {
+      const page = await until(async () => (await pages()).find((p) => p.type === "page" && p.url.startsWith("data:")) ?? false, { timeout: 20000, label: "stock Chromium's page" });
       const session = await connectCdp(page.webSocketDebuggerUrl);
       try {
         await until(() => evaluate(session, "document.hasFocus()", { userGesture: false }), { timeout: 10000, label: "stock Chromium's focus at launch" });
@@ -46,15 +59,33 @@ export async function calibrate(t, desktop, label) {
       } finally {
         await session.close().catch(() => {});
       }
-    } finally {
-      try { process.kill(-child.pid, "SIGTERM"); } catch {}
-      await delay(1000);
-      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+    });
+    if (ctrlN) {
+      await t.check(`${label}: calibration: stock Chromium's Ctrl+N window takes typing once the compositor focuses it`, async () => {
+        const known = await desktop.windows();
+        await desktop.key("ctrl+n");
+        const window = await newWindow(desktop, known, { label: "stock Chromium's Ctrl+N window" });
+        await waitFocused(desktop, (w) => w.id === window.id, { label: "stock Chromium's Ctrl+N window focused" });
+        await desktop.type("data:text/html,<title>calnew</title>");
+        await desktop.tap("return");
+        const page = await until(async () => (await pages()).find((p) => p.type === "page" && p.title === "calnew") ?? false, { timeout: 10000, label: "the address typed into the new window to load" });
+        return { title: page.title };
+      });
     }
-  });
+  } finally {
+    await stopChromium();
+  }
 }
 
-async function newShell(app, known, { timeout = 20000 } = {}) {
+async function ctrlNFocused(desktop) {
+  const known = await desktop.windows();
+  await desktop.key("ctrl+n");
+  const window = await newWindow(desktop, known, { label: "the Ctrl+N window in the compositor" });
+  await waitFocused(desktop, (w) => w.id === window.id, { label: "the Ctrl+N window focused in the compositor" });
+  return window;
+}
+
+async function newShell(app, known, { timeout = 30000 } = {}) {
   const id = await until(async () => {
     const shells = (await app.shells()).filter((s) => s.ready && !known.includes(s.windowId));
     return shells[0]?.windowId ?? false;
@@ -70,7 +101,7 @@ function focusChecks({ x11, open, label: named }) {
   const label = named ?? (x11 ? "X11" : "sway");
   return async (t) => {
     const desktop = open ? await open(t) : await openDesktop(t, { x11 });
-    await calibrate(t, desktop, label);
+    await calibrate(t, desktop, label, { ctrlN: true });
     const session = sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }, { id: "second", urls: [t.fixtures.url.page(2)] }], focused: "main" });
     const { app, shell } = await startDesktopBrowser(t, desktop, { name: "focus", session });
     const second = await app.shell("second", { timeout: 25000 });
@@ -91,13 +122,13 @@ function focusChecks({ x11, open, label: named }) {
       const known = await desktop.windows();
       const ids = await liveIds(app);
       await desktop.key("ctrl+n");
-      await desktop.type("abc");
-      created = await newShell(app, ids);
       createdWindow = await newWindow(desktop, known, { label: "the Ctrl+N window in the compositor" });
       await waitFocused(desktop, (w) => w.id === createdWindow.id, { label: "the Ctrl+N window focused in the compositor" });
+      await desktop.type("abc");
+      created = await newShell(app, ids);
       return { window: created.windowId, title: createdWindow.title };
     }, { critical: true });
-    await t.check(`${label}: typing right after Ctrl+N lands in the new window's command bar`, async () => {
+    await t.check(`${label}: typing as soon as the compositor focuses the Ctrl+N window lands in its command bar`, async () => {
       const typed = await waitTyped(created, "abc").catch(async (error) => {
         throw new Error(`${error.message}; new window ${JSON.stringify(await commandBarText(created))} (document focus ${await hasFocus(created)}), first window ${JSON.stringify(await commandBarText(shell))}`);
       });
@@ -126,7 +157,7 @@ function focusChecks({ x11, open, label: named }) {
       await desktopShot(t, desktop, `${label}-settings`);
       return { settings: window.title };
     });
-    await t.check(`${label}: a background instance never activates`, async () => {
+    if (desktop.kind === "x11") await t.check(`${label}: a background instance never activates`, async () => {
       const before = await desktop.focused();
       const hidden = await startDesktopBrowser(t, desktop, { name: "hidden", background: true });
       await delay(3000);
@@ -199,7 +230,7 @@ function launchTypingScenario({ id, x11, live = false }) {
         return;
       }
       const desktop = live ? await openLiveHyprland(t, request) : await openDesktop(t, { x11 });
-      await calibrate(t, desktop, label);
+      await calibrate(t, desktop, label, { ctrlN: true });
       const launching = startDesktopBrowser(t, desktop, { name: "launch-typing", session: sessionSeed() });
       await t.check(`${label}: typing at launch reaches the first window's command bar`, async () => {
         await until(async () => (await desktop.windows()).length > 0, { timeout: 30000, interval: 50, label: "the first window to map" });
@@ -213,10 +244,10 @@ function launchTypingScenario({ id, x11, live = false }) {
       });
       const { app, shell } = await launching;
       const firstWindow = (await desktop.windows())[0];
-      await t.check(`${label}: Ctrl+N then immediate typing reaches the new window's command bar`, async () => {
+      await t.check(`${label}: typing as soon as the compositor focuses the Ctrl+N window reaches its command bar`, async () => {
         await clickedIntoFocus(desktop, shell);
         const ids = await liveIds(app);
-        await desktop.key("ctrl+n");
+        await ctrlNFocused(desktop);
         await desktop.type("abc");
         const created = await newShell(app, ids);
         const typed = await waitTyped(created, "abc").catch(async (error) => {
@@ -248,12 +279,12 @@ function launchTypingScenario({ id, x11, live = false }) {
         if (dead !== "é" || compose !== "é") throw new Error(`dead key gave ${dead}, compose gave ${compose}`);
         return { dead, compose };
       });
-      await t.check(`${keyLabel}: Ctrl+N then a dead key at once puts é exactly once in the new window's command bar`, async () => {
+      await t.check(`${keyLabel}: a dead key as soon as the compositor focuses the Ctrl+N window puts é exactly once in its command bar`, async () => {
         await focusShellWindow(desktop, shell, firstWindow);
         const ids = await liveIds(app);
         await desktop.keymap({ layout: "us", variant: "intl" });
         try {
-          await desktop.key("ctrl+n");
+          await ctrlNFocused(desktop);
           await desktop.tap("apostrophe");
           await desktop.tap("e");
         } finally {

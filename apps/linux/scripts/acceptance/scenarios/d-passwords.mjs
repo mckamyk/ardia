@@ -168,6 +168,7 @@ export const s102Keyring = {
       if (!/encrypted with a key from/.test(storage) || !/Secret Service/i.test(storage)) throw new Error(`storage row ${JSON.stringify(storage)}`);
       if (pane.includes(FLAGGED)) throw new Error("the pane flags a working keyring");
       if (!saved.ok) throw new Error(`saving with the keyring failed: ${JSON.stringify(saved)}`);
+      if (!Array.isArray(items) || !items.length) throw new Error(`the login keyring holds no item after a save with the keyring: ${JSON.stringify(items)}`);
       return { protection: status.protection, storage, keyringItems: Array.isArray(items) ? items.length : items };
     }, { timeout: 120000 });
     await t.check("a locked gnome-keyring is flagged in Settings and falls back to the built-in key", async () => {

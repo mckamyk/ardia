@@ -23,6 +23,18 @@ export default {
   issue: 221,
   title: "Warn before quitting asks once, quitting confirms active downloads, and signal quits never ask",
   deadline: 240000,
+  manual: [
+    {
+      name: "The quit prompts' wording",
+      steps: [
+        "In Settings › General turn on Warn before quitting and press Ctrl+Shift+Q.",
+        `The prompt reads "Are you sure you want to quit Ardia?", "Your windows and tabs will be restored the next time you open it.", with Quit, Cancel and a "Don't ask again" box.`,
+        "Turn the warning off, start a large download and press Ctrl+Shift+Q.",
+        "The prompt reads \"You have 1 download in progress. If you quit now, this download will be cancelled.\" with Quit and Cancel.",
+      ],
+      reason: "Q221D finds the prompts only as pixels: Views dialogs are child surfaces sway doesn't list, and this build registers nothing with AT-SPI, so the words can't be read through a real channel; presence, place, count and the answers are automated in Q221D",
+    },
+  ],
   async run(t) {
     const warned = await startBrowser(t, { name: "warned", session: twoWindows({ warnBeforeQuitting: true }) });
     await t.check("the host offers the quit routes and counts downloads in progress", async () => {

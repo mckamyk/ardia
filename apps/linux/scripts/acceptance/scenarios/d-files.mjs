@@ -105,6 +105,7 @@ export const w74Desktop = {
       await clickTextIn(desktop, window, settings, "Change…");
       const call = await until(async () => (await portal.calls()).find((c) => c.method === "OpenFile") ?? false, { timeout: 10000, label: "a FileChooser OpenFile request" });
       if (!call.options.directory) throw new Error(`the request isn't for a folder: ${JSON.stringify(call.options)}`);
+      if (call.options.current_folder !== first) throw new Error(`the dialog opens at ${JSON.stringify(call.options.current_folder ?? null)}, not the current folder ${first}`);
       const row = await until(async () => {
         const r = await folderRow(settings);
         return r?.includes("chosen") ? r : false;
@@ -479,9 +480,12 @@ export const f13Desktop = {
       await until(async () => (await portal.calls()).length > count, { timeout: 10000, label: "the second OpenFile request" });
       await delay(1500);
       if (!(await text(settings)).includes("Ardia Sync Folder")) throw new Error("Cancel cleared the folder");
+      const closing = window;
       await desktop.key("ctrl+w");
-      await until(async () => !(await app.shells()).some((s) => s.windowId === "settings"), { timeout: 10000, label: "Settings to close" }).catch(() => {});
-      ({ settings, window } = await openSettingsWindow(desktop, app, shell, { pane: "Sync" }));
+      await until(async () => !(await app.shells()).some((s) => s.windowId === "settings") && !(await desktop.windows()).some((w) => w.id === closing.id), { timeout: 10000, label: "Ctrl+W to close Settings and its window" });
+      let reused;
+      ({ settings, window, reused } = await openSettingsWindow(desktop, app, shell, { pane: "Sync" }));
+      if (reused || window.id === closing.id) throw new Error("Settings didn't reopen as a new window");
       await settings.waitFor("document.body.innerText.includes('Turn On Sync')", { timeout: 10000, label: "the Sync pane after reopening" });
       if (!(await text(settings)).includes("Choose…")) await pointAt(desktop, window, await until(() => rowControl(settings, "Show advanced settings"), { timeout: 8000, label: "the advanced toggle" }));
       await settings.waitFor("document.body.innerText.includes('Ardia Sync Folder')", { timeout: 10000, label: "the folder after reopening Settings" });

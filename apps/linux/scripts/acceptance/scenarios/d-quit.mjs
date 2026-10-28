@@ -1,7 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { desktopShot, desktopUnavailable, focusShellWindow, inside, openDesktop, pointAt, pressInPrompt, promptAfter, promptLike, startDesktopBrowser, waitFocused } from "../lib/desktopSession.mjs";
+import { PROMPT_DIFF, desktopShot, desktopUnavailable, focusShellWindow, inside, openDesktop, pointAt, pressInPrompt, promptAfter, promptLike, startDesktopBrowser, waitFocused } from "../lib/desktopSession.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { until } from "../lib/util.mjs";
+import { changedCells, regions } from "../lib/desktop.mjs";
+
+const overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 const QUIT_TITLE = "Are you sure you want to quit Ardia?";
 const twoWindows = (t, settings) => sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }, { id: "second", urls: [t.fixtures.url.page(2)] }], focused: "main", settings });
@@ -40,10 +43,12 @@ export default {
     const main = await windowTitled(desktop, "Acceptance page 1");
     const second = await windowTitled(desktop, "Acceptance page 2");
     let prompt;
+    let beforePrompt;
     await t.check("Ctrl+Shift+Q shows one quit prompt over the focused window and no per-window close prompt", async () => {
       await focusShellWindow(desktop, warned.shell, main).catch(() => {});
       const parent = await waitFocused(desktop, (w) => w.title.includes("Acceptance page"), { label: "a browser window focused" });
-      const { region } = await promptAfter(desktop, () => desktop.key("ctrl+shift+q"), { settle: 2000 });
+      const { region, before } = await promptAfter(desktop, () => desktop.key("ctrl+shift+q"), { settle: 2000 });
+      beforePrompt = before;
       await desktopShot(t, desktop, "quit-prompt");
       if (!promptLike(region)) throw new Error(`no prompt-sized change on screen after Ctrl+Shift+Q: ${JSON.stringify(region)}`);
       const all = await desktop.windows();
@@ -57,14 +62,21 @@ export default {
     await t.check("Ctrl+Shift+Q again from the other window raises no second prompt", async () => {
       const shell2 = await warned.app.shell("second", { timeout: 20000 });
       await desktop.raise(second);
-      const { region } = await promptAfter(desktop, () => desktop.key("ctrl+shift+q"), { settle: 2000 });
+      await waitFocused(desktop, (w) => w.id === second.id, { label: "the second window focused in the compositor before the shortcut" });
+      const { all } = await promptAfter(desktop, () => desktop.key("ctrl+shift+q"), { settle: 2000 });
       await desktopShot(t, desktop, "quit-prompt-again");
-      if (promptLike(region) && !inside(region, prompt)) throw new Error(`a second prompt-sized change appeared at ${JSON.stringify(region)}`);
-      return { change: region, focus: await shell2.eval("document.hasFocus()").catch(() => null) };
+      const secondRect = (await desktop.windows()).find((w) => w.id === second.id)?.rect ?? second.rect;
+      const extra = all.filter((r) => promptLike(r) && (inside(r, secondRect) || !inside(r, prompt)));
+      if (extra.length) throw new Error(`a second prompt-sized change appeared: ${JSON.stringify(extra)}`);
+      if (!(await waitFocused(desktop, (w) => w.id === second.id, { timeout: 2000, label: "the second window still focused" }).catch(() => null))) throw new Error("focus left the second window, so the shortcut may not have reached it");
+      return { changes: all, focus: await shell2.eval("document.hasFocus()").catch(() => null) };
     });
     await t.check("Escape cancels: the prompt closes and both windows and their tabs stay open", async () => {
       const { region } = await promptAfter(desktop, () => pressInPrompt(desktop, prompt, ["escape"]), { settle: 1500 });
       if (!region || !inside(region, { x: prompt.x - 20, y: prompt.y - 20, width: prompt.width + 40, height: prompt.height + 40 })) throw new Error(`the prompt did not close: change ${JSON.stringify(region)}`);
+      const now = await desktop.capture();
+      const leftover = regions(changedCells(beforePrompt, now, PROMPT_DIFF), PROMPT_DIFF).filter((r) => overlaps(r, prompt));
+      if (leftover.length) throw new Error(`the prompt's area still differs from before the prompt: ${JSON.stringify(leftover)}`);
       if (warned.app.exited) throw new Error(warned.app.exitReason());
       const windows = await browserWindows(warned.app);
       if (windows < 2) throw new Error(`${windows} browser windows after Cancel`);

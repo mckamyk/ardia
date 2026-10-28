@@ -7,7 +7,7 @@ import { until } from "./util.mjs";
 
 export const SESSION_TOOLS = { sway: ["sway", "swaymsg", "python", "xkbcli", "dbusDaemon"], x11: ["xvfb", "xdotool", "openbox", "xprop", "dbusDaemon"] };
 const SESSION_KEYS = ["WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "GTK_IM_MODULE", "QT_IM_MODULE", "XMODIFIERS"];
-const OWNER_KEYS = ["SWAYSOCK", "I3SOCK", "HYPRLAND_INSTANCE_SIGNATURE", "XDG_SESSION_ID", "XDG_SEAT", "XDG_VTNR", "XAUTHORITY", "GNOME_KEYRING_CONTROL", "SSH_AUTH_SOCK"];
+const OWNER_KEYS = ["SWAYSOCK", "I3SOCK", "HYPRLAND_INSTANCE_SIGNATURE", "XDG_SESSION_ID", "XDG_SEAT", "XDG_VTNR", "XAUTHORITY", "GNOME_KEYRING_CONTROL", "SSH_AUTH_SOCK", "AT_SPI_BUS_ADDRESS", "PULSE_SERVER", "PIPEWIRE_REMOTE", "WAYLAND_SOCKET"];
 export const SOFTWARE_GL = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
 let cachedTools = null;
 
@@ -145,10 +145,14 @@ export async function openSettingsWindow(desktop, app, shell, { pane } = {}) {
   const known = await desktop.windows();
   await desktop.key("ctrl+comma");
   const settings = await app.shell("settings", { timeout: 20000 });
-  const window = await newWindow(desktop, known, { label: "the Settings window in the compositor" }).catch(async () => (await desktop.windows()).find((w) => /Settings/.test(w.title)));
+  let reused = false;
+  const window = await newWindow(desktop, known, { label: "the Settings window in the compositor" }).catch(async () => {
+    reused = true;
+    return (await desktop.windows()).find((w) => /Settings/.test(w.title));
+  });
   if (!window) throw new Error("no Settings window in the compositor");
   if (pane) await clickTextIn(desktop, window, settings, pane);
-  return { settings, window };
+  return { settings, window, reused };
 }
 
 export const PROMPT_DIFF = { fill: 0.06, gap: 4 };

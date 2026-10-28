@@ -1,5 +1,5 @@
 import { connect } from "node:net";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { until } from "./util.mjs";
 
 export const BTN_LEFT = 0x110;
@@ -52,7 +52,7 @@ export function decodeGlobal(body) {
 }
 
 export async function openVirtualPointer({ runtime, display, width, height }) {
-  const socket = connect({ path: join(runtime, display) });
+  const socket = connect({ path: isAbsolute(display) ? display : join(runtime, display) });
   await new Promise((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
   let pending = Buffer.alloc(0);
   const globals = [];
