@@ -1312,6 +1312,7 @@ class ShellHostView : public views::View,
   std::optional<std::string> output_target_;
   bool output_forgotten_ = false;
   base::RepeatingTimer output_watch_;
+  bool presented_ = false;
   base::OneShotTimer typeahead_timer_;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
@@ -1831,7 +1832,11 @@ void ShellHostView::Initialize() {
   dialogs_ = std::make_unique<LinuxWindowDialogs>(window_id_, DialogProfile(), GetWidget(),
                                                   ardiacore::BackgroundInstance());
   close_observation_.Observe(GetWidget());
-  if (ui::Compositor* compositor = GetWidget()->GetCompositor()) presentation_observation_.Observe(compositor);
+  if (ui::Compositor* compositor = GetWidget()->GetCompositor()) {
+    presentation_observation_.Observe(compositor);
+  } else {
+    presented_ = true;
+  }
   SeedWindowActivation();
   RestoreFullScreenNow();
   ArmWindowClose();
@@ -1878,6 +1883,7 @@ void ShellHostView::DetachViewports() {
 }
 
 void ShellHostView::DetachBrowser() {
+  RememberWindowOutput();
   if (!RetireDocuments()) return;
   weak_factory_.InvalidateWeakPtrs();
   handler_ = nullptr;
@@ -2889,6 +2895,8 @@ void ShellHostView::FocusShellOnActivation() {
 void ShellHostView::OnDidPresentCompositorFrame(ui::Compositor*, uint32_t, const gfx::PresentationFeedback&) {
   WindowFocus().Presented(id_, FocusClockMs());
   presentation_observation_.Reset();
+  presented_ = true;
+  RestoreFullScreenNow();
 }
 
 void ShellHostView::OnWidgetActivationChanged(views::Widget*, bool active) {
@@ -2931,7 +2939,7 @@ void ExpireFullScreenRestore() {
 
 void ShellHostView::RestoreFullScreenNow() {
   views::Widget* widget = GetWidget();
-  if (is_utility() || window_id_.empty() || !browser_ || !widget || !widget->IsVisible() ||
+  if (is_utility() || window_id_.empty() || !browser_ || !widget || !widget->IsVisible() || !presented_ ||
       widget->IsMinimized() || !FullScreenRestorer().Wants(window_id_)) return;
   auto* manager = ExclusiveAccessManager::From(browser());
   if (!manager) return;
