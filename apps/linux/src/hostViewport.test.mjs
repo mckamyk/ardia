@@ -14,7 +14,7 @@ test("viewport observation tracks transforms, scroll, visual zoom, overlays, and
   let cardAtSample = false;
   let disconnected = false;
   const element = { isConnected: true, parentElement: null, getBoundingClientRect: () => rect, contains: () => false };
-  const document = Object.assign(documentEvents, { hidden: false, querySelectorAll: () => cards, elementFromPoint: () => blocked ? {} : cardAtSample ? cards[0] : element });
+  const document = Object.assign(documentEvents, { hidden: false, querySelectorAll: () => cards, querySelector: () => null, elementFromPoint: () => blocked ? {} : cardAtSample ? cards[0] : element });
   globalThis.window = Object.assign(windowEvents, { innerWidth: 1280, innerHeight: 800, visualViewport });
   globalThis.document = document;
   globalThis.getComputedStyle = () => ({ display: "block", visibility: "visible", opacity: "1" });
@@ -59,6 +59,59 @@ test("viewport observation tracks transforms, scroll, visual zoom, overlays, and
     const count = updates.length;
     windowEvents.dispatchEvent(new Event("scroll"));
     assert.equal(updates.length, count);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  }
+});
+
+test("an open extension popup keeps the page under it painted and live, cut out around the popup, while its outside-click layer stays transparent", () => {
+  const previous = Object.fromEntries(["window", "document", "getComputedStyle", "ResizeObserver", "requestAnimationFrame", "cancelAnimationFrame"].map((key) => [key, globalThis[key]]));
+  const box = (x, y, width, height) => ({ x, y, width, height, left: x, top: y, right: x + width, bottom: y + height });
+  const page = { isConnected: true, parentElement: null, getBoundingClientRect: () => box(190, 47, 763, 1026), contains: (node) => node === page };
+  const field = {};
+  const popupView = { isConnected: true, parentElement: null, getBoundingClientRect: () => box(705, 48, 239, 119), contains: (node) => node === popupView || node === field };
+  const popup = { getBoundingClientRect: () => box(704, 47, 241, 121), contains: (node) => node === popup || node === field || node === popupView };
+  const dismiss = { getBoundingClientRect: () => box(0, 0, 953, 1080), contains: (node) => node === dismiss };
+  const other = { getBoundingClientRect: () => box(0, 0, 953, 1080), contains: (node) => node === other };
+  let open = true;
+  let catcher = dismiss;
+  const selected = { '[data-testid="ardia-extension-popup"]': () => (open ? popup : null), '[data-testid="ardia-extension-popup-dismiss"]': () => (open ? dismiss : null) };
+  const inPopup = (x, y) => x >= 704 && x < 945 && y >= 47 && y < 168;
+  globalThis.window = Object.assign(new EventTarget(), { innerWidth: 953, innerHeight: 1080 });
+  globalThis.document = Object.assign(new EventTarget(), {
+    hidden: false,
+    querySelectorAll: () => [],
+    querySelector: (selector) => selected[selector]?.() ?? null,
+    elementFromPoint: (x, y) => (!open ? page : inPopup(x, y) ? field : catcher),
+  });
+  globalThis.getComputedStyle = () => ({ display: "block", visibility: "visible", opacity: "1" });
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  let frame;
+  globalThis.requestAnimationFrame = (callback) => { frame = callback; return 1; };
+  globalThis.cancelAnimationFrame = () => {};
+  try {
+    const updates = [];
+    const stop = watchTabViewport(page, () => true, (update) => updates.push(update));
+    assert.equal(updates.at(-1).visible, true);
+    assert.deepEqual(updates.at(-1).occlusions, [{ x: 704, y: 47, width: 241, height: 121, paintOutset: 32 }]);
+    catcher = other;
+    frame();
+    assert.equal(updates.at(-1).visible, false);
+    catcher = dismiss;
+    open = false;
+    frame();
+    assert.equal(updates.at(-1).visible, true);
+    assert.equal(updates.at(-1).occlusions, undefined);
+    stop();
+    open = true;
+    const own = [];
+    const stopOwn = watchTabViewport(popupView, () => true, (update) => own.push(update));
+    assert.equal(own.at(-1).visible, true);
+    assert.equal(own.at(-1).occlusions, undefined);
+    stopOwn();
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete globalThis[key];

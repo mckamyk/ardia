@@ -123,8 +123,9 @@ function ActionPopup({ windowId, pageProfile, url, anchor }: { windowId: string;
 
   return (
     <>
-      <Pressable style={StyleSheet.absoluteFill} onPress={closeExtensionPopup} onLayout={(e) => setWindowWidth(e.nativeEvent.layout.width)} />
+      <Pressable testID="ardia-extension-popup-dismiss" style={StyleSheet.absoluteFill} onPress={closeExtensionPopup} onLayout={(e) => setWindowWidth(e.nativeEvent.layout.width)} />
       <Animated.View
+        testID="ardia-extension-popup"
         style={{
           position: "absolute",
           left,
