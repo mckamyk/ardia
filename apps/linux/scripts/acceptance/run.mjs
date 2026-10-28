@@ -7,7 +7,9 @@ import { parseArgs, USAGE, UsageError } from "./lib/cli.mjs";
 import { findCompositor } from "./lib/compositor.mjs";
 import { startFixtures } from "./lib/fixtures.mjs";
 import { buildReport, exitCode, formatLine } from "./lib/report.mjs";
-import { runScenario } from "./lib/scenario.mjs";
+import { cleanupActiveScenarios, runScenario } from "./lib/scenario.mjs";
+import { killDesktopNow } from "./lib/desktop.mjs";
+import { withDeadline } from "./lib/util.mjs";
 import { generateTls } from "./lib/tls.mjs";
 import { SCENARIOS, selectScenarios } from "./scenarios/index.mjs";
 
@@ -64,11 +66,18 @@ async function main() {
   const stop = (signal) => {
     if (interrupted) {
       killAllAppsNow();
+      killDesktopNow();
       process.exit(130);
     }
     interrupted = true;
-    log(`${signal}: stopping test browsers`);
-    void closeAllApps({ graceful: false }).finally(() => fixtures.close().finally(() => process.exit(130)));
+    log(`${signal}: stopping test browsers and desktop sessions`);
+    void withDeadline(cleanupActiveScenarios().then(() => closeAllApps({ graceful: false })), 30000, "stopping the scenarios")
+      .catch(() => {})
+      .finally(() => {
+        killAllAppsNow();
+        killDesktopNow();
+        fixtures.close().finally(() => process.exit(130));
+      });
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
@@ -100,8 +109,15 @@ async function main() {
   return exitCode(report);
 }
 
-process.exitCode = await main().catch((error) => {
+process.on("exit", () => {
+  killAllAppsNow();
+  killDesktopNow();
+});
+
+process.exitCode = await main().catch(async (error) => {
   process.stderr.write(`${error.stack ?? error}\n`);
   killAllAppsNow();
+  await withDeadline(cleanupActiveScenarios(), 30000, "stopping the scenarios").catch(() => {});
+  killDesktopNow();
   return 1;
 });

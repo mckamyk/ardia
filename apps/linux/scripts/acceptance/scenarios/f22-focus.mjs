@@ -59,8 +59,7 @@ export default {
         await until(() => hasFocus(settings), { timeout: 10000, label: "Settings focus" });
         return true;
       });
-      t.manual(MANUAL_FOCUS[0].name, MANUAL_FOCUS[0].steps, "typing through the compositor needs a virtual keyboard; the nested check above covers activation only");
-      t.manual(MANUAL_FOCUS[1].name, MANUAL_FOCUS[1].steps.slice(0, 2), "restore-behind and links from other apps need a real desktop session");
+      t.manual("Import comes to the front", ["With a browser window focused, open File › Import.", "It opens in front and has keyboard focus."], "F22D and F22X drive typing, restore-behind, background instances and Settings through a private session; Import has no keyboard route to drive yet");
     } finally {
       if (session) await t.stop(session.app);
       await nested.stop();

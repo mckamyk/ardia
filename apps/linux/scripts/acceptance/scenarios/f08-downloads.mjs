@@ -35,8 +35,7 @@ export default {
   title: "Downloads events, controls, settings and restart behaviour",
   deadline: 360000,
   manual: [
-    { name: "Open and Show in Folder act on the selected file", steps: ["In a desktop session, download any file and open Ctrl+J.", "Click the row: the file opens in its default application.", "Choose Show in Folder: the file manager opens with that file selected (portal, FileManager1 or xdg-open).", "Choose Move to Trash: the file moves to ~/.local/share/Trash/files with a .trashinfo record."], reason: "needs a desktop session bus and a file manager" },
-    { name: "Ask where to save shows the native picker", steps: ["Settings › General › Downloads: turn on 'Ask where to save'.", "Download a file: a native save dialog opens; cancelling it cancels the download and leaves no row in a live state."], reason: "needs the native file dialog" },
+    { name: "Move to Trash from the row menu", steps: ["Right-click a finished download in Ctrl+J and choose Move to Trash.", "The file moves to ~/.local/share/Trash/files with a .trashinfo record and the row shows it as gone."], reason: "F08D drives Open and Show in Folder through a private session; Move to Trash is only in the row's native context menu" },
   ],
   async run(t) {
     const run = nonce("f08");
