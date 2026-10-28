@@ -8,7 +8,7 @@ const page = readFileSync(new URL("../content-blocker/ardia-linux-bridge.html", 
 const EXTENSION = "fajbdaomknpkicfjcpipdmcpoamdmilh";
 const OFF = "/^(?:ardia-blocking-off|)/";
 
-function fakeUblock({ ready = true, invalidated = false } = {}) {
+function fakeUblock({ ready = true, invalidated = false, stalled = false, silent = [] } = {}) {
   const state = {
     whitelist: ["chrome-extension-scheme", "moz-extension-scheme"],
     whitelistDefault: ["chrome-extension-scheme", "moz-extension-scheme"],
@@ -28,6 +28,7 @@ function fakeUblock({ ready = true, invalidated = false } = {}) {
     send(channel, message) {
       assert.equal(channel, "dashboard");
       state.messages.push(message.what);
+      if (silent.includes(message.what)) return new Promise(() => {});
       switch (message.what) {
         case "getWhitelist":
           return Promise.resolve({ whitelist: [...state.whitelist], whitelistDefault: state.whitelistDefault });
@@ -53,7 +54,7 @@ function fakeUblock({ ready = true, invalidated = false } = {}) {
       }
     },
   };
-  return { state, storage, messaging, ready, invalidated };
+  return { state, storage, messaging, ready, invalidated, stalled };
 }
 
 function load({ origin = `chrome-extension://${EXTENSION}`, ublock = fakeUblock() } = {}) {
@@ -70,12 +71,22 @@ function load({ origin = `chrome-extension://${EXTENSION}`, ublock = fakeUblock(
       for (const o of observers) if (o.filter.includes(name)) queueMicrotask(() => o.callback());
     },
   };
-  const background = ublock.ready ? { "µBlock": { isReadyPromise: Promise.resolve() } } : {};
+  const background = ublock.ready ? { "µBlock": { isReadyPromise: ublock.stalled ? new Promise(() => {}) : Promise.resolve() } } : {};
   let looks = 0;
+  const locks = [];
   const context = {
     document: { documentElement: root },
     location: { origin, href: `${origin}/ardia-linux-bridge.html` },
-    navigator: { languages: ["en-US", "de"] },
+    navigator: {
+      languages: ["en-US", "de"],
+      locks: {
+        request(name, options, hold) {
+          const held = hold();
+          locks.push({ name, options, held });
+          return held;
+        },
+      },
+    },
     MutationObserver: class {
       constructor(callback) {
         this.callback = callback;
@@ -118,6 +129,8 @@ function load({ origin = `chrome-extension://${EXTENSION}`, ublock = fakeUblock(
     vAPI: { messaging: ublock.messaging },
     setTimeout,
     clearTimeout,
+    setInterval,
+    clearInterval,
     Date,
     JSON,
     Promise,
@@ -146,7 +159,10 @@ function load({ origin = `chrome-extension://${EXTENSION}`, ublock = fakeUblock(
     }
     throw new Error(`no reply to ${op}`);
   };
-  return { root, call, ublock, attributes };
+  const invalidate = () => {
+    context.chrome.runtime.id = undefined;
+  };
+  return { root, call, ublock, attributes, invalidate, locks };
 }
 
 test("the bridge page loads uBlock's messaging client before the bridge and marks itself ready", () => {
@@ -155,6 +171,20 @@ test("the bridge page loads uBlock's messaging client before the bridge and mark
   assert.doesNotMatch(page, /<!--/);
   const { root } = load();
   assert.equal(root.getAttribute("data-ardia-bridge"), "ready");
+});
+
+test("the bridge page holds a shared Web Lock for its whole life so the browser never freezes it", async () => {
+  const { locks, call } = load();
+  assert.equal(locks.length, 1);
+  assert.equal(locks[0].name, "ardia-linux-bridge");
+  assert.deepEqual({ ...locks[0].options }, { mode: "shared" });
+  let released = false;
+  locks[0].held.then(() => {
+    released = true;
+  });
+  await call("state");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(released, false);
 });
 
 test("state reports filter lists, defaults, counts and user exceptions", async () => {
@@ -238,6 +268,25 @@ test("a bridge page whose extension context was invalidated replies with that er
   const lost = load({ ublock: fakeUblock({ ready: false, invalidated: true }) });
   const reply = await lost.call("state", {}, { deadlineMs: 1500 });
   assert.match(reply.error, /Extension context invalidated/);
+});
+
+test("a call waiting on uBlock's old background page answers as soon as uBlock reloads itself", async () => {
+  const reloading = load({ ublock: fakeUblock({ stalled: true }) });
+  setTimeout(reloading.invalidate, 100);
+  const started = Date.now();
+  const reply = await reloading.call("state", {}, { deadlineMs: 20000 });
+  assert.match(reply.error, /Extension context invalidated/);
+  assert.ok(Date.now() - started < 1500);
+});
+
+test("a dashboard message lost to uBlock's reload answers with the invalidation instead of timing out", async () => {
+  const reloading = load({ ublock: fakeUblock({ silent: ["getLists"] }) });
+  setTimeout(reloading.invalidate, 100);
+  const started = Date.now();
+  const reply = await reloading.call("state", {}, { deadlineMs: 20000 });
+  assert.match(reply.error, /Extension context invalidated/);
+  assert.ok(Date.now() - started < 1500);
+  assert.deepEqual(reloading.ublock.state.messages, ["getLists", "getWhitelist"]);
 });
 
 test("malformed requests are dropped without a reply", async () => {

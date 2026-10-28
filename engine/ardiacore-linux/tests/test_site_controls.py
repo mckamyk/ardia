@@ -60,7 +60,7 @@ class SiteControlsHelperTests(unittest.TestCase):
         result = subprocess.run(['node', '--test', str(ROOT / 'tests/content_blocker_bridge.test.mjs')],
                                 capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertRegex(result.stdout, r'pass 10\b')
+        self.assertRegex(result.stdout, r'pass 14\b')
 
 
 class SiteControlsWiringTests(unittest.TestCase):

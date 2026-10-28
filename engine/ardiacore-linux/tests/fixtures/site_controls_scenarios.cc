@@ -480,6 +480,12 @@ void Queue() {
   auto load_failed = queue.PageGone("closed: the bridge page didn't load", 1000);
   assert(load_failed && load_failed->retry);
   queue.PageReady();
+  queue.Next(1100);
+  queue.Sent();
+  auto reloaded = queue.Answer(BridgeReply{second, std::string("Extension context invalidated."), base::Value()}, 1100);
+  assert(reloaded && reloaded->retry && reloaded->reset_page && queue.size() == 1 && !queue.page_ready());
+  assert(queue.Next(1100 + BlockerQueue::kRetryMs) == BlockerQueue::Step::kOpenPage);
+  queue.PageReady();
   queue.Next(2000);
   queue.Sent();
   auto final_error = queue.Answer(BridgeReply{second, std::string("no list nope"), base::Value()}, 2100);
