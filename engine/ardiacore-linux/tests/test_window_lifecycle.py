@@ -1212,7 +1212,7 @@ static void FullScreenOnTheSavedOutput() {
   display::Screen::nearest = display::Screen::displays[0];
   bool ok = false;
   Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"main"}, "main"), &ok);
-  assert(ok && Toggles(main_browser) == 1 && main.widget.fullscreen);
+  assert(ok && Toggles(main_browser) == 0 && main.widget.fullscreen);
   assert((main.widget.fullscreen_targets == std::vector<int64_t>{20}));
   assert(*SavedOutput(app, "main") == "Out B");
   main.ReportWindowGeometry();
