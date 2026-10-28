@@ -114,7 +114,7 @@ test("known shared page scripts map to native commands and unknown scripts stay 
   assert.ok(engines.includes(`const UNSAVED_WORK = \`${UNSAVED_WORK}\`;`), "the shared unsaved-work probe changed; update hostPageScripts.ts");
   const webView = source("./shims/web/HostWebView.tsx");
   assert.ok(webView.indexOf("hostPageScript(property, args)") < webView.indexOf("current.command(property, args)"));
-  assert.ok(webView.includes("script.map ? current.command(script.command, script.args).then(script.map, () => script.map!(null))"), "a mapped page script treats a refused command as unknown");
+  assert.ok(webView.includes("script.map ? current.command(script.command, script.args).then(script.map, () => (script.failed ? script.failed() : script.map!(null)))"), "a mapped page script treats a refused command as unknown unless it has its own failure handler");
 });
 
 test("the unsaved-input adapter asks the native host and treats anything else as unknown", async () => {

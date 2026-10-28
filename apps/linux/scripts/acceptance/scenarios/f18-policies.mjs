@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { navigateTab, startBrowser } from "../lib/flows.mjs";
 import { evaluate } from "../lib/cdp.mjs";
 import { openPage } from "../lib/pages.mjs";
@@ -18,7 +19,7 @@ export default {
   manual: [
     { name: "Battery transitions", steps: ["On a laptop with UPower, set Settings › Advanced › Battery Saver to When unplugged.", "Unplug: engine.systemState reports onBattery at once and one Battery Saver toast appears, in the focused window only; plug in and it turns off."], reason: "needs a real battery and UPower on the system bus" },
     { name: "Power profile", steps: ["Switch power-profiles-daemon to power-saver.", "lowPowerMode turns on at once (no 30 s poll) and Battery Saver activates."], reason: "needs power-profiles-daemon" },
-    { name: "Memory pressure", steps: ["Fill memory until MemAvailable drops under 10% of RAM.", "memoryPressure reports warning (under 5%: critical) and idle background tabs sleep on the next sweep."], reason: "needs real memory pressure" },
+    { name: "Memory pressure", steps: ["Run a memory hog until tasks stall on reclaim (stress-ng --vm 4 --vm-bytes 95%, or a cgroup with a low memory.high).", "Within 2 s memoryPressure reports warning (critical once full stalls pass 10%), idle background tabs sleep on the next sweep, and it falls back to normal a few seconds after the hog stops."], reason: "needs real memory pressure" },
   ],
   async run(t) {
     const run = nonce("f18");
@@ -31,6 +32,8 @@ export default {
       if (!reply.ok) throw new Error(`engine.systemState failed: ${reply.code} ${reply.message}`);
       const value = reply.value;
       if (!["normal", "warning", "critical"].includes(value.memoryPressure) || !(value.physicalMemory > 0)) throw new Error(JSON.stringify(value));
+      const psi = await readFile("/proc/pressure/memory", "utf8").then((text) => text.startsWith("some "), () => false);
+      if (value.memorySignal !== (psi ? "psi" : "meminfo")) throw new Error(`memory signal ${value.memorySignal}, PSI ${psi ? "available" : "unavailable"}`);
       if (!["upower", "unavailable"].includes(value.power)) throw new Error(`power source ${value.power}`);
       if (value.power === "unavailable" && (value.onBattery !== false || value.batteryLevel !== null)) throw new Error(`unavailable power reported a battery: ${JSON.stringify(value)}`);
       return value;

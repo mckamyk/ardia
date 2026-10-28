@@ -165,12 +165,23 @@ void PictureInPicture() {
   assert(!ParseLinuxControlPress(Args("press")) && !ParseLinuxControlPress(Args(base::DictValue(), base::DictValue())));
   assert(RouteLinuxPictureInPicture(true, false, false) == LinuxPictureInPictureRoute::kAlreadyOpen);
   assert(RouteLinuxPictureInPicture(false, false, true) == LinuxPictureInPictureRoute::kNoActivation);
-  assert(RouteLinuxPictureInPicture(false, true, false) == LinuxPictureInPictureRoute::kNoVideo);
+  assert(RouteLinuxPictureInPicture(false, true, false) == LinuxPictureInPictureRoute::kElement);
+  assert(RouteLinuxPictureInPicture(false, false, false) == LinuxPictureInPictureRoute::kNoActivation);
   assert(RouteLinuxPictureInPicture(false, true, true) == LinuxPictureInPictureRoute::kMediaSession);
 }
 
 LinuxTabProtection Idle() {
   return {false, false, false, false, false, false, false};
+}
+
+void PictureInPictureChoice() {
+  using P = LinuxPictureInPicturePlayer;
+  assert(!ChooseLinuxPictureInPicturePlayer({}));
+  assert(ChooseLinuxPictureInPicturePlayer({P{false, 100}}) == 0u);
+  assert(ChooseLinuxPictureInPicturePlayer({P{false, 900}, P{true, 100}, P{true, 400}}) == 2u);
+  assert(ChooseLinuxPictureInPicturePlayer({P{true, 0}, P{false, 1000}}) == 0u);
+  assert(ChooseLinuxPictureInPicturePlayer({P{false, 300}, P{false, 300}, P{false, 200}}) == 0u);
+  assert(ChooseLinuxPictureInPicturePlayer({P{false, 0}, P{false, 0}}) == 0u);
 }
 
 void Protection() {
@@ -242,6 +253,15 @@ void Power() {
   assert(LinuxSystemState(gone).FindBool("onBattery") == false && LinuxSystemState(gone).Find("batteryLevel")->is_none());
   assert(LinuxMemoryPressure(1000, 40) == "critical" && LinuxMemoryPressure(1000, 90) == "warning" && LinuxMemoryPressure(1000, 100) == "normal");
   assert(LinuxMemoryPressure(0, 0) == "normal" && LinuxMemoryPressure(10, 20) == "normal");
+  assert(Text(LinuxSystemState(absent), "memorySignal") == "meminfo");
+  LinuxPowerSample stalled = absent;
+  stalled.available_memory = 40ull << 20;
+  stalled.memory_level = "warning";
+  stalled.memory_signal = "psi";
+  state = LinuxSystemState(stalled);
+  assert(Text(state, "memoryPressure") == "warning" && Text(state, "memorySignal") == "psi");
+  stalled.memory_level = "normal";
+  assert(Text(LinuxSystemState(stalled), "memoryPressure") == "normal");
 }
 
 void PowerTracker() {
@@ -281,6 +301,14 @@ void PowerTracker() {
   tracker.SetPower(LinuxPowerSample());
   auto gone = tracker.Take();
   assert(gone && Text(*gone, "power") == "unavailable" && gone->FindBool("onBattery") == false && Text(*gone, "memoryPressure") == "critical");
+  tracker.SetMemory(1000, 40, "normal", "psi");
+  auto relieved = tracker.Take();
+  assert(relieved && Text(*relieved, "memoryPressure") == "normal" && Text(*relieved, "memorySignal") == "psi");
+  tracker.SetPower(battery);
+  auto replugged = tracker.Take();
+  assert(replugged && Text(*replugged, "memoryPressure") == "normal" && Text(*replugged, "memorySignal") == "psi");
+  tracker.SetMemory(1000, 40, "critical", "psi");
+  assert(Text(*tracker.Take(), "memoryPressure") == "critical");
 }
 
 }
@@ -293,6 +321,7 @@ int main(int argc, char** argv) {
   else if (mode == "reporter") Reporter();
   else if (mode == "commands") Commands();
   else if (mode == "pip") PictureInPicture();
+  else if (mode == "pip-choice") PictureInPictureChoice();
   else if (mode == "protection") Protection();
   else if (mode == "power-tracker") PowerTracker();
   else if (mode == "power") Power();

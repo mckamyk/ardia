@@ -308,7 +308,10 @@ void LinuxExtensionSurfaces::Command(const base::DictValue& args, uint64_t gener
     surface->Focus();
     return std::move(done).Run(true, base::Value());
   }
-  if (*command == "evaluate" || *command == "captureViewport") return std::move(done).Run(true, base::Value());
+  if (*command == "captureViewport") return std::move(done).Run(true, base::Value());
+  if (*command == "evaluate") {
+    return Fail(std::move(done), "ERR_PAGE_EVALUATION_REFUSED", "Extension views run no page script on Linux");
+  }
   Fail(std::move(done), "ERR_UNKNOWN_COMMAND", "Extension views do not support this command");
 }
 

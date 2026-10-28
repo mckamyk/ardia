@@ -85,6 +85,22 @@ class DownloadWiringTests(unittest.TestCase):
         finish = method(files, '  void Finish() {')
         self.assertIn('FolderPickerOpen() = false;', finish)
 
+    def test_reveal_runs_the_tested_route_chain_with_a_portal_deadline(self):
+        from test_renderer_contract import method
+        files = (LINUX / 'ac_linux_files.cc').read_text()
+        self.assertNotIn('ShowItemInFolder', files)
+        self.assertIn('downloads::LinuxRevealChain chain_;', files)
+        self.assertIn('return base::ScopedFD(downloads::OpenRevealTarget(path));', files)
+        portal = method(files, '  void Portal() {')
+        self.assertIn('portal_deadline_.Start(FROM_HERE, kPortalWait,', portal)
+        timed_out = method(files, '  void PortalTimedOut() {')
+        self.assertIn('portal_.reset();', timed_out)
+        self.assertIn('Answer::kTimedOut', timed_out)
+        self.assertIn('"OpenDirectory"', method(files, '  void PortalToken(base::ScopedFD fd, std::string token) {'))
+        self.assertIn('"ShowItems"', method(files, '  void FileManager(bool available) {'))
+        run = method(files, 'std::optional<int> RunOpenFolder(std::string folder, base::LaunchOptions options) {')
+        self.assertIn('WaitForExitWithTimeout(kOpenFolderWait, &exit_code)', run)
+
     def test_contract_routes_engine_controls_and_forwards_removals(self):
         code = r'''
 #include "ardia/linux/ac_linux_contract.h"
@@ -122,7 +138,7 @@ int main() {
         self.assertLessEqual({name for name in present if name.endswith('.cc')}, listed | closing)
         for name in ['ac_linux_download_service', 'ac_linux_downloads', 'ac_linux_file_drop', 'ac_linux_files']:
             self.assertLessEqual({f'{name}.cc', f'{name}.h'}, listed)
-        for dep in ['//components/download/public/common', '//chrome/browser/download', '//extensions/browser']:
+        for dep in ['//components/download/public/common:public', '//chrome/browser/download', '//extensions/browser']:
             self.assertIn(f'"{dep}"', target)
 
 if __name__ == '__main__':

@@ -58,6 +58,7 @@ class LinuxPageChannel : public content::WebContentsObserver,
   void Detach();
   base::ListValue SnapshotEvents();
   void PushOptions();
+  void RefreshPageConfig();
   void Post(const std::string& kind, const std::string& json) override;
   void Bind(content::RenderFrameHost* frame,
             mojo::PendingAssociatedReceiver<ardia::linux_page::mojom::PageHost> receiver);

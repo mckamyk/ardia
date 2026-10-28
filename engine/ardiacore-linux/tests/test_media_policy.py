@@ -49,6 +49,9 @@ class MediaPolicyTests(unittest.TestCase):
     def test_picture_in_picture_press_and_route(self):
         self.run_case('pip')
 
+    def test_manual_picture_in_picture_takes_the_playing_then_largest_video(self):
+        self.run_case('pip-choice')
+
     def test_protection_predicate_and_discard_freeze_decisions(self):
         self.run_case('protection')
 

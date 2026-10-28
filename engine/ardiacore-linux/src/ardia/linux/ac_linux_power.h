@@ -3,15 +3,18 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "ardia/linux/ac_linux_memory_pressure.h"
 #include "ardia/linux/ac_linux_tab_policy.h"
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
 
@@ -20,6 +23,13 @@ class Bus;
 }
 
 namespace ardiacore {
+
+struct LinuxMemorySample {
+  uint64_t physical = 0;
+  uint64_t available = 0;
+  std::string level;
+  std::string signal;
+};
 
 class LinuxPowerMonitor {
  public:
@@ -36,13 +46,13 @@ class LinuxPowerMonitor {
   ~LinuxPowerMonitor();
   void Start();
   void Watch();
-  void SampleMemory();
-  void MemorySampled(std::pair<uint64_t, uint64_t> memory);
+  void WatchMemory();
+  void MemorySampled(LinuxMemorySample sample);
   void PropertiesChanged();
   void PropertiesAnswered();
   void Publish();
 
-  scoped_refptr<base::SequencedTaskRunner> runner_;
+  scoped_refptr<base::SingleThreadTaskRunner> memory_runner_;
   scoped_refptr<dbus::Bus> bus_;
   std::unique_ptr<Properties> upower_;
   std::unique_ptr<Properties> display_;
@@ -51,10 +61,8 @@ class LinuxPowerMonitor {
   size_t unanswered_ = 0;
   std::vector<base::OnceCallback<void(base::DictValue)>> waiting_;
   base::RepeatingCallbackList<void(const base::DictValue&)> listeners_;
-  base::RepeatingTimer memory_timer_;
   base::OneShotTimer answer_deadline_;
   bool started_ = false;
-  bool sampling_ = false;
   base::WeakPtrFactory<LinuxPowerMonitor> weak_factory_{this};
 };
 
