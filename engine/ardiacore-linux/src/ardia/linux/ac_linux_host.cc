@@ -2849,10 +2849,12 @@ void ShellHostView::RestoreFullScreenNow() {
   if (!manager) return;
   FullscreenController* fullscreen = manager->fullscreen_controller();
   if (FullScreenRestorer().Enter(window_id_, fullscreen->IsFullscreenForBrowser())) {
-    const auto output = SavedWindowOutput();
-    if (output) output_target_ = output->second;
-    fullscreen->ToggleBrowserFullscreenMode(false);
-    if (output) widget->SetFullscreen(true, output->first);
+    if (const auto output = SavedWindowOutput()) {
+      output_target_ = output->second;
+      widget->SetFullscreen(true, output->first);
+    } else {
+      fullscreen->ToggleBrowserFullscreenMode(false);
+    }
   }
   FinishFullScreenRestore();
 }
