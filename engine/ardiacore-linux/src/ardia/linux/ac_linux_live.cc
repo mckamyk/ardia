@@ -544,8 +544,9 @@ bool UsageLimitBody(const std::string& body) {
   const JsonValue* errors = error && error->is_object() ? error->Find("errors") : nullptr;
   if (!errors || !errors->is_array()) return false;
   for (const JsonValue& item : errors->items) {
-    const std::string* domain = item.is_object() ? Text(item, "domain") : nullptr;
-    if (domain && *domain == "usageLimits") return true;
+    const std::string* reason = item.is_object() ? Text(item, "reason") : nullptr;
+    if (reason && (*reason == "userRateLimitExceeded" || *reason == "rateLimitExceeded" || *reason == "dailyLimitExceeded"))
+      return true;
   }
   return false;
 }

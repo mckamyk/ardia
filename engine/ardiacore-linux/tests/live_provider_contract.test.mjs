@@ -304,13 +304,15 @@ test("Google Drive: an authError on an unexpired token renews once and retries",
   await rejectsWith(SOURCES.gdrive.fetch(docFolder), "signedOut");
 });
 
-test("Google Drive: usage-limit 403s and 429 read as rate limits, missing scopes as signed out", async () => {
+test("Google Drive: rate-limit 403s and 429 read as rate limits; missing scopes and a disabled API do not", async () => {
   for (const name of ["userRateLimitExceeded", "rateLimitExceeded403", "rateLimitExceeded429", "dailyLimitExceeded"]) {
     serve("www.googleapis.com /drive/v3/files", name);
     await rejectsWith(SOURCES.gdrive.fetch(docFolder), "rateLimited", undefined).catch((error) => assert.fail(`${name}: ${error.message}`));
   }
   serve("www.googleapis.com /drive/v3/files", "insufficientPermissions");
   await rejectsWith(SOURCES.gdrive.fetch(docFolder), "signedOut", /insufficient authentication scopes/);
+  serve("www.googleapis.com /drive/v3/files", "accessNotConfigured");
+  await rejectsWith(SOURCES.gdrive.fetch(docFolder), "signedOut", /Drive API has not been used in project/);
 });
 
 test("Google Drive: a revoked or expired refresh token reads as signed out", async () => {

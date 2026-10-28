@@ -52,14 +52,14 @@ The native fixed strings (viewer query, Notion body and version, Confluence CQL,
 | `ERR_LIVE_NOT_CONNECTED` | `signedOut` if Live has the account, otherwise `notConfigured` (as macOS's missing keychain item) |
 | `ERR_LIVE_SIGNED_OUT` (401, 403 without rate-limit headers, Google `invalid_grant`) | `signedOut` |
 | `ERR_LIVE_SSO` (403 with `x-github-sso`) | `sso` |
-| `ERR_LIVE_RATE_LIMITED` (429; 403 with `x-ratelimit-remaining: 0`, a `retry-after` header, GitHub's "secondary rate limit" message or a Google `usageLimits` error) | `rateLimited` |
+| `ERR_LIVE_RATE_LIMITED` (429; 403 with `x-ratelimit-remaining: 0`, a `retry-after` header, GitHub's "secondary rate limit" message or a Google `userRateLimitExceeded`, `rateLimitExceeded` or `dailyLimitExceeded` error) | `rateLimited` |
 | `ERR_LIVE_NETWORK` (no response, timeout, refused redirect) | `network` |
 | `ERR_LIVE_KEYRING_LOCKED`, `ERR_LIVE_KEYRING_UNAVAILABLE`, `ERR_LIVE_CANCELLED`, `ERR_LIVE_ARGUMENT`, `ERR_LIVE_BUSY`, `ERR_LIVE_SERVICE`, `ERR_PRIVATE_SERVICE` | `other`, with the native message |
 
 Two deliberate differences from macOS:
 
 - A revoked Google refresh token (`invalid_grant`) reads as signed out ("Sign back in to Google Drive") instead of a generic 400.
-- GitHub's secondary rate limit (403 with `retry-after`, or its "secondary rate limit" message) and Google Drive's documented usage-limit 403s (`userRateLimitExceeded`, `rateLimitExceeded`, `dailyLimitExceeded`) read as rate limited. The shared macOS mapping (`state/live/net.ts`) still reads them as signed out (#241's contract tests found it).
+- GitHub's secondary rate limit (403 with `retry-after`, or its "secondary rate limit" message) and Google Drive's documented usage-limit 403s (`userRateLimitExceeded`, `rateLimitExceeded`, `dailyLimitExceeded`) read as rate limited. Other `usageLimits` reasons, such as `accessNotConfigured` when the Drive API is off in the user's Cloud project, are not rate limits and keep Google's message. The shared macOS mapping (`state/live/net.ts`) still reads them as signed out (#244).
 
 ## Tokens
 
@@ -122,4 +122,4 @@ What it pins, per provider:
 - **Bitbucket:** Basic auth with the Atlassian account email and an API token; the paginated list (only its first page of 50 is read, as on macOS); build statuses; a merged pull request; 401, 429, and a 403 for missing scopes (signed out).
 - **Notion:** the bot user's workspace name; pages and databases, trashed ones skipped; `has_more` is not followed (30 newest, as on macOS); 401, 429, 403 `restricted_resource` (signed out) and 529.
 - **Confluence:** the account id; a page with expanded space and history, its URL from `_links.base`; `_links.next` is not followed; 401, 429 and 403.
-- **Google Drive:** the code exchange with `refresh_token_expires_in`; a renewal reply without `refresh_token` keeps the stored one; an `authError` on an unexpired token renews once and retries; usage-limit 403s and 429 are rate limits, a missing scope is signed out; `invalid_grant` on renewal is signed out.
+- **Google Drive:** the code exchange with `refresh_token_expires_in`; a renewal reply without `refresh_token` keeps the stored one; an `authError` on an unexpired token renews once and retries; rate-limit 403s and 429 are rate limits, a missing scope and a disabled API are not; `invalid_grant` on renewal is signed out.
