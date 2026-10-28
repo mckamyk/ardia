@@ -31,6 +31,7 @@ struct Pane {
     page.focused = [this] { binding->OnWebContentsFocused(nullptr); };
     DevToolsWindow::docked.clear();
     DevToolsWindow::strategies.clear();
+    DevToolsWindow::companions.clear();
     views::focus_manager.focused = nullptr;
     posted.clear();
   }
@@ -166,6 +167,66 @@ int main(int argc, char** argv) {
     assert(views::focus_manager.focused == p.tools() && p.frontend.focuses == 1);
     return 0;
   }
+  if (mode == "undock") {
+    Pane p;
+    p.Dock();
+    p.host.Show(p.binding, true);
+    assert(views::focus_manager.focused == p.tools());
+    p.host.OnDevToolsDockChanged(&p.page, &p.frontend);
+    assert(p.tools()->GetVisible() && p.tools()->web_contents() == &p.frontend);
+    DrainPosted();
+    DevToolsWindow::docked.clear();
+    p.host.OnDevToolsDockChanged(&p.page, nullptr);
+    assert(!p.tools()->GetVisible() && !p.tools()->web_contents());
+    assert(views::focus_manager.focused == p.binding->viewport() && p.page.focuses == 1);
+    DrainPosted();
+    assert(!p.tools()->web_contents() && p.binding->viewport()->bounds() == gfx::Rect(100, 50, 800, 600));
+    content::WebContents toolbox;
+    DevToolsWindow::docked[&p.page] = &toolbox;
+    p.host.OnDevToolsDockChanged(&p.page, &toolbox);
+    DrainPosted();
+    assert(p.tools()->GetVisible() && p.tools()->web_contents() == &toolbox);
+    DevToolsWindow::docked[&p.page] = &p.frontend;
+    p.host.OnDevToolsDockChanged(&p.page, &p.frontend);
+    assert(!p.tools()->GetVisible() && !p.tools()->web_contents());
+    DrainPosted();
+    assert(p.tools()->GetVisible() && p.tools()->web_contents() == &p.frontend);
+    ShellHostView other;
+    content::WebContents stranger;
+    other.OnDevToolsDockChanged(&stranger, nullptr);
+    assert(p.tools()->web_contents() == &p.frontend);
+    return 0;
+  }
+  if (mode == "undock-toolbox") {
+    Pane p;
+    p.Dock();
+    p.host.Show(p.binding, true);
+    assert(views::focus_manager.focused == p.tools() && p.frontend.focuses == 1);
+    content::WebContents toolbox;
+    DevToolsWindow::companions.insert(&toolbox);
+    DevToolsWindow::docked.clear();
+    p.host.OnDevToolsDockChanged(&p.page, nullptr);
+    assert(views::focus_manager.focused == p.binding->viewport() && p.page.focuses == 1);
+    DevToolsWindow::docked[&p.page] = &toolbox;
+    p.host.OnDevToolsDockChanged(&p.page, &toolbox);
+    DrainPosted();
+    assert(p.tools()->GetVisible() && p.tools()->web_contents() == &toolbox);
+    assert(views::focus_manager.focused == p.binding->viewport() && toolbox.focuses == 0);
+    p.host.Show(p.binding, false);
+    p.host.Show(p.binding, true);
+    assert(views::focus_manager.focused == p.binding->viewport() && toolbox.focuses == 0);
+    p.tools()->RequestFocus();
+    p.host.Show(p.binding, false);
+    views::focus_manager.focused = nullptr;
+    p.host.Show(p.binding, true);
+    assert(views::focus_manager.focused == p.tools() && toolbox.focuses == 1);
+    DevToolsWindow::docked[&p.page] = &p.frontend;
+    p.host.OnDevToolsDockChanged(&p.page, &p.frontend);
+    DrainPosted();
+    assert(views::focus_manager.focused == p.tools() && p.tools()->web_contents() == &p.frontend);
+    assert(p.frontend.focuses == 2);
+    return 0;
+  }
   if (mode == "hidden-native") {
     Pane p;
     p.Dock();
@@ -190,7 +251,8 @@ class PaneLayoutTests(unittest.TestCase):
         host = HOST.read_text()
         watch = method(host, 'class DevToolsFrontendWatch') + ';' if 'class DevToolsFrontendWatch' in host else 'struct DevToolsFrontendWatch {};'
         methods = '\n'.join(method(host, signature) for signature in [
-            'void ShellHostView::LayoutPane(', 'void TabBinding::WebContentsDestroyed(',
+            'void ShellHostView::LayoutPane(', 'void ShellHostView::OnDevToolsDockChanged(',
+            'void ShellHostView::HideDevToolsViewport(', 'void TabBinding::WebContentsDestroyed(',
             'void TabBinding::FocusFromHost(', 'void TabBinding::OnWebContentsFocused('])
         methods = methods.replace('content::RenderWidgetHost*', 'void*')
         code = FIXTURE.read_text().replace('#pragma once\n', '').replace('ARDIA_FRONTEND_WATCH', watch).replace('ARDIA_HOST_METHODS', methods)
@@ -230,6 +292,12 @@ class PaneLayoutTests(unittest.TestCase):
 
     def test_devtools_opened_before_the_first_viewport_waits_for_it_without_chrome_hosting_it(self):
         self.run_case('before-viewport')
+
+    def test_undocking_releases_the_frontend_before_chrome_moves_it_into_its_window(self):
+        self.run_case('undock')
+
+    def test_the_undocked_toolbox_shows_in_the_pane_without_taking_the_pages_focus(self):
+        self.run_case('undock-toolbox')
 
     def test_presenting_reshows_a_hidden_native_frontend(self):
         self.run_case('hidden-native')
