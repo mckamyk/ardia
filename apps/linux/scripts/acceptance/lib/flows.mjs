@@ -1,7 +1,7 @@
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { sessionPath, sessionSeed, writeChromePreferences, writeProfileSeed } from "./seed.mjs";
-import { until } from "./util.mjs";
+import { js, until } from "./util.mjs";
 
 export async function startBrowser(t, { name = "profile", scratch, seed = true, session, onboardingComplete = true, preferences, background = true, extensions, extraArgs, env, ozone, label, coreDumps, settle = true } = {}) {
   const dir = scratch ?? (await t.scratch(name));
@@ -33,9 +33,18 @@ export async function restartBrowser(t, current, options = {}) {
   return startBrowser(t, { ...options, scratch: current.scratch, label: options.label ?? "restart" });
 }
 
-export async function navigateTab(shell, tabId, url, { timeout = 25000, match = (current) => current === url } = {}) {
+export async function navigateTab(shell, tabId, url, { timeout = 25000, match = (current) => current === url, committed = false } = {}) {
   await shell.navigate(tabId, url);
   await shell.waitTabUrl(tabId, match, { timeout, label: `tab ${tabId} to commit ${url}` });
+  if (committed) await waitCommitted(shell, tabId, match, { timeout, label: url });
+}
+
+export async function waitCommitted(shell, tabId, match, { timeout = 25000, label = "" } = {}) {
+  return until(async () => {
+    const entries = await shell.eval(`(async () => (await ardiaLinux.webviews.get(${js(tabId)})?.navigationEntries()) ?? null)()`).catch(() => null);
+    const current = Array.isArray(entries) ? entries.find((entry) => entry.current) : null;
+    return current && match(current.url) ? current : false;
+  }, { timeout, label: `Chromium to commit ${label} in tab ${tabId}`, abort: () => shell.app.exitReason() });
 }
 
 export async function readSavedSession(scratch) {

@@ -103,8 +103,9 @@ export default {
       await waitDownload(state.shell, (x) => x.id === d.id && x.received > 0, "cancel candidate progress");
       await control(state.shell, "cancel", d.id);
       cancelledDownload = await waitDownload(state.shell, (x) => x.id === d.id && x.state === "cancelled", "cancelled state");
-      const leftovers = (await readdir(folder)).filter((name) => name.includes(cancelled));
-      if (leftovers.length) throw new Error(`partial files left: ${leftovers.join(", ")}`);
+      const leftovers = () => readdir(folder).then((names) => names.filter((name) => name.includes(cancelled)));
+      const left = await until(async () => ((await leftovers()).length ? false : []), { timeout: 5000, label: "the partial file to be deleted" }).catch(leftovers);
+      if (left.length) throw new Error(`partial files left: ${left.join(", ")}`);
       return { id: d.id };
     });
     await t.check("remove forgets a finished download in the engine too", async () => {

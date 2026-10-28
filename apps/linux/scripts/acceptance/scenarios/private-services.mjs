@@ -15,6 +15,8 @@ async function openWindow(state, body, label) {
 const openPrivate = (state) => openWindow(state, `return s.createWindow({ incognito: true, profileId: "default" });`, "private window");
 
 async function closeWindow(state, windowId) {
+  const closing = await state.app.shell(windowId, { timeout: 10000 });
+  await closing.state("s.updateSettings({ warnBeforeClosingWindow: false }); return true;");
   await state.shell.state(`s.closeWindow(${js(windowId)}); return true;`);
   await until(async () => !(await state.app.shells()).some((s) => s.windowId === windowId), { timeout: 15000, label: `${windowId} to close` });
 }
