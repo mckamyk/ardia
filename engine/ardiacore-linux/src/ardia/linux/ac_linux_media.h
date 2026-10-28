@@ -3,7 +3,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -75,50 +74,10 @@ struct LinuxSessionSample {
 struct LinuxPageVideo {
   bool present = false;
   bool playing = false;
-};
-
-template <typename Id>
-class LinuxPageVideos {
- public:
-  bool Started(const Id& id, bool has_video) {
-    const Player started{has_video, true};
-    const auto [player, added] = players_.try_emplace(id, started);
-    if (!added && player->second.video == has_video && player->second.playing) return false;
-    player->second = started;
-    return true;
+  void Join(bool has_video, bool video_playing) {
+    present = present || has_video;
+    playing = playing || (has_video && video_playing);
   }
-  bool Stopped(const Id& id) {
-    const auto player = players_.find(id);
-    if (player == players_.end() || !player->second.playing) return false;
-    player->second.playing = false;
-    return true;
-  }
-  bool Metadata(const Id& id, bool has_video) {
-    const auto player = players_.find(id);
-    if (player == players_.end() || player->second.video == has_video) return false;
-    player->second.video = has_video;
-    return true;
-  }
-  bool Destroyed(const Id& id) { return players_.erase(id) > 0; }
-  template <typename Keep>
-  bool Retain(Keep keep) {
-    return std::erase_if(players_, [&keep](const auto& player) { return !keep(player.first); }) > 0;
-  }
-  LinuxPageVideo Summary() const {
-    LinuxPageVideo summary;
-    for (const auto& [id, player] : players_) {
-      summary.present = summary.present || player.video;
-      summary.playing = summary.playing || (player.video && player.playing);
-    }
-    return summary;
-  }
-
- private:
-  struct Player {
-    bool video = false;
-    bool playing = false;
-  };
-  std::map<Id, Player> players_;
 };
 
 std::optional<std::string_view> LinuxMediaSessionActionName(

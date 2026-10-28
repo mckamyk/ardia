@@ -75,24 +75,11 @@ class ElementPictureInPictureTests(unittest.TestCase):
             for name in FILES[1::2]:
                 self.assertIn('#if BUILDFLAG(IS_LINUX)', (pathlib.Path(directory) / name).read_text())
 
-    def test_the_patch_lists_main_frame_videos_that_have_played(self):
-        with patched_tree() as directory:
-            observer = (pathlib.Path(directory) / FILES[0]).read_text()
-            self.assertIn('has_played_ = true;', body(observer, 'void SetIsPlaying()'))
-            played = body(observer, 'MediaWebContentsObserver::ArdiaLinuxPlayedVideoPlayers(')
-            self.assertIn('id.frame_routing_id != frame', played)
-            self.assertIn('!info->has_video()', played)
-            self.assertIn('!info->has_played()', played)
-            self.assertIn('info->is_playing()', played)
-            self.assertRegex(observer, r'ArdiaLinuxPlayedVideoPlayers\(\s*WebContents\* contents\) \{')
-        hooks = (LINUX / 'ac_linux_content_hooks.h').read_text()
-        self.assertIn('ArdiaLinuxPlayedVideoPlayers(WebContents* contents);', hooks)
-
-    def test_the_media_entry_is_seeded_only_from_videos_that_have_played(self):
-        media = (LINUX / 'ac_linux_page_media.cc').read_text()
-        created = body(media, 'LinuxPageMedia::LinuxPageMedia(')
-        self.assertIn('content::ArdiaLinuxPlayedVideoPlayers(contents)', created)
-        self.assertNotIn('ArdiaLinuxPictureInPictureCandidates', created)
+    def test_the_patch_keeps_no_played_player_list(self):
+        text = PATCH.read_text()
+        self.assertNotIn('has_played', text)
+        self.assertNotIn('ArdiaLinuxPlayedVideoPlayers', text)
+        self.assertNotIn('ArdiaLinuxPlayedVideoPlayers', (LINUX / 'ac_linux_content_hooks.h').read_text())
 
     def test_the_host_chooses_among_available_players_and_waits_for_the_window(self):
         media = (LINUX / 'ac_linux_page_media.cc').read_text()

@@ -121,6 +121,7 @@ std::optional<LinuxPageMessageKind> LinuxPageMessageKindOf(std::string_view kind
   if (kind == "scroll") return LinuxPageMessageKind::kScroll;
   if (kind == "theme") return LinuxPageMessageKind::kTheme;
   if (kind == "linkDrop") return LinuxPageMessageKind::kLinkDrop;
+  if (kind == "nowPlaying") return LinuxPageMessageKind::kNowPlaying;
   return std::nullopt;
 }
 
@@ -167,6 +168,14 @@ std::optional<LinuxPageMessage> NormalizeLinuxPageMessage(LinuxPageMessageKind k
       const std::string* url = dict ? BoundedString(*dict, "url", kLinuxPageUrlMax) : nullptr;
       if (!url || !IsLinuxPageHttpUrl(*url)) return std::nullopt;
       return Message(kind, base::Value(base::DictValue().Set("url", *url)));
+    }
+    case LinuxPageMessageKind::kNowPlaying: {
+      if (value.is_none()) return Message(kind, base::Value());
+      if (!dict) return std::nullopt;
+      const std::string* state = BoundedString(*dict, "playbackState", 8);
+      return Message(kind, base::Value(base::DictValue()
+          .Set("hasVideo", dict->FindBool("hasVideo").value_or(false))
+          .Set("playing", state && *state == "playing")));
     }
   }
   return std::nullopt;
