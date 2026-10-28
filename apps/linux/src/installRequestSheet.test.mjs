@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { create } from "zustand";
-import { followInstallRequest } from "./installRequestSheet.ts";
+import { followInstallRequest, ownsInstallRequest } from "./installRequestSheet.ts";
 
 const request = (windowId, name = "Fixture") => ({ windowId, profile: "", source: "unpacked", status: "ready", pkg: { name, path: `/tmp/${name}` } });
 
-function sheet(windowId = "settings", install = null) {
+function sheet(windowId = "settings", install = null, leftover = null) {
   const store = create(() => ({ install }));
   const closed = [];
-  const stop = followInstallRequest(store, windowId, () => closed.push(store.getState().install));
+  const stop = followInstallRequest(store, windowId, () => closed.push(store.getState().install), leftover);
   return { store, closed, stop };
 }
 
@@ -36,7 +36,7 @@ test("every Choose Folder… in a row gets its own dialog, and each answer close
   }
 });
 
-test("a request that arrived before the sheet subscribed is followed and closes the sheet when answered", () => {
+test("a request that arrived between the press and the sheet subscribing is followed and closes the sheet when answered", () => {
   const f = sheet("settings", request("settings"));
   f.store.setState({ install: null });
   assert.deepEqual(f.closed, [null]);
@@ -60,4 +60,37 @@ test("an unmounted sheet stops following", () => {
   f.stop();
   f.store.setState({ install: null });
   assert.deepEqual(f.closed, []);
+});
+
+test("a request left behind by a replaced sheet is never shown by the next Choose Folder…, and the new folder's request is", () => {
+  const old = request("settings", "previous");
+  const f = sheet("settings", old, old);
+  assert.equal(ownsInstallRequest(f.store.getState().install, "settings", old), false, "the previous folder's dialog shows before the new chooser returns");
+  f.store.setState({ install: old });
+  assert.deepEqual(f.closed, []);
+  const fresh = request("settings", "chosen");
+  f.store.setState({ install: fresh });
+  assert.equal(ownsInstallRequest(f.store.getState().install, "settings", old), true);
+  assert.deepEqual(f.closed, []);
+  f.store.setState({ install: null });
+  assert.deepEqual(f.closed, [null]);
+  f.stop();
+});
+
+test("a left-over request isn't cancelled or answered by the sheet that ignores it", () => {
+  const old = { ...request("settings", "previous"), source: "webStore", prompt: { requestId: "install4" } };
+  const f = sheet("settings", old, old);
+  f.store.setState({ install: null });
+  assert.deepEqual(f.closed, [], "the left-over request going away closes a sheet that never showed it");
+  f.store.setState({ install: old });
+  assert.equal(f.store.getState().install, old);
+  f.stop();
+});
+
+test("a request is shown only by its own window's sheet", () => {
+  const live = request("settings");
+  assert.equal(ownsInstallRequest(live, "settings", null), true);
+  assert.equal(ownsInstallRequest(live, "main", null), false);
+  assert.equal(ownsInstallRequest(null, "settings", null), false);
+  assert.equal(ownsInstallRequest({ ...live }, "settings", live), true, "an updated copy of a request is a new request");
 });

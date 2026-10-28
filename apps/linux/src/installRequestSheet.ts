@@ -1,12 +1,17 @@
+type InstallRequest = { windowId: string };
+
 type InstallRequestStore = {
-  getState(): { install: { windowId: string } | null };
-  subscribe(listener: (state: { install: { windowId: string } | null }) => void): () => void;
+  getState(): { install: InstallRequest | null };
+  subscribe(listener: (state: { install: InstallRequest | null }) => void): () => void;
 };
 
-export function followInstallRequest(store: InstallRequestStore, windowId: string, onClosed: () => void) {
-  let shown = store.getState().install?.windowId === windowId;
+export const ownsInstallRequest = (install: InstallRequest | null, windowId: string, leftover: InstallRequest | null) =>
+  !!install && install.windowId === windowId && install !== leftover;
+
+export function followInstallRequest(store: InstallRequestStore, windowId: string, onClosed: () => void, leftover: InstallRequest | null = null) {
+  let shown = ownsInstallRequest(store.getState().install, windowId, leftover);
   return store.subscribe((state) => {
-    if (state.install?.windowId === windowId) shown = true;
+    if (ownsInstallRequest(state.install, windowId, leftover)) shown = true;
     else if (shown) {
       shown = false;
       onClosed();
