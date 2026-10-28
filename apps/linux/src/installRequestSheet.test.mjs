@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { create } from "zustand";
-import { followInstallRequest, ownsInstallRequest } from "./installRequestSheet.ts";
+import { followInstallRequest, leftoverInstallRequest, ownsInstallRequest } from "./installRequestSheet.ts";
 
 const request = (windowId, name = "Fixture") => ({ windowId, profile: "", source: "unpacked", status: "ready", pkg: { name, path: `/tmp/${name}` } });
 
@@ -93,4 +93,22 @@ test("a request is shown only by its own window's sheet", () => {
   assert.equal(ownsInstallRequest(live, "main", null), false);
   assert.equal(ownsInstallRequest(null, "settings", null), false);
   assert.equal(ownsInstallRequest({ ...live }, "settings", live), true, "an updated copy of a request is a new request");
+});
+
+test("a mistyped Web Store link's own error, set before the sheet mounts, is shown and closes the sheet when dismissed", () => {
+  const error = { windowId: "settings", profile: "", source: "webStore", status: "error", error: "That isn't a link to an extension in the Chrome Web Store." };
+  const leftover = leftoverInstallRequest(error);
+  assert.equal(leftover, null);
+  assert.equal(ownsInstallRequest(error, "settings", leftover), true);
+  const f = sheet("settings", error, leftover);
+  f.store.setState({ install: null });
+  assert.deepEqual(f.closed, [null]);
+  f.stop();
+});
+
+test("only a Load Unpacked request waiting when the sheet mounts counts as left behind", () => {
+  const stale = request("settings", "previous");
+  assert.equal(leftoverInstallRequest(stale), stale);
+  assert.equal(leftoverInstallRequest({ ...stale, status: "error", error: "bad manifest" }).source, "unpacked");
+  assert.equal(leftoverInstallRequest(null), null);
 });

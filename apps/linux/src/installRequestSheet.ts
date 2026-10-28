@@ -1,9 +1,12 @@
-type InstallRequest = { windowId: string };
+type InstallRequest = { windowId: string; source?: string };
 
 type InstallRequestStore = {
   getState(): { install: InstallRequest | null };
   subscribe(listener: (state: { install: InstallRequest | null }) => void): () => void;
 };
+
+export const leftoverInstallRequest = <T extends InstallRequest>(install: T | null): T | null =>
+  install?.source === "unpacked" ? install : null;
 
 export const ownsInstallRequest = (install: InstallRequest | null, windowId: string, leftover: InstallRequest | null) =>
   !!install && install.windowId === windowId && install !== leftover;
