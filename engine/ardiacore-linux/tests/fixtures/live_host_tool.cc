@@ -214,25 +214,39 @@ class LoopStore final : public live::CredentialStore {
   }
 
   void Save(live::Credential credential, Stored done) override {
-    loop_.Post([this, credential = std::move(credential), done = std::move(done)] {
+    Write([this, credential = std::move(credential), done = std::move(done)] {
       if (locked_) return done(keys::KeyStatus::kLocked);
       done(live::SaveCredential(*store_, credential));
     });
   }
 
   void Delete(live::Source source, Stored done) override {
-    loop_.Post([this, source, done = std::move(done)] {
+    Write([this, source, done = std::move(done)] {
       if (locked_) return done(keys::KeyStatus::kLocked);
       done(live::DeleteCredential(*store_, source));
     });
   }
 
   void set_locked(bool locked) { locked_ = locked; }
+  void set_holding(bool holding) {
+    holding_ = holding;
+    if (holding) return;
+    for (auto& write : held_) loop_.Post(std::move(write));
+    held_.clear();
+  }
+  size_t held() const { return held_.size(); }
   int loads() const { return loads_; }
 
  private:
+  void Write(std::function<void()> write) {
+    if (holding_) return held_.push_back(std::move(write));
+    loop_.Post(std::move(write));
+  }
+
   Loop& loop_;
   std::unique_ptr<keys::KeyStore> store_;
+  bool holding_ = false;
+  std::vector<std::function<void()>> held_;
   bool locked_ = false;
   int loads_ = 0;
 };
@@ -269,6 +283,15 @@ int SelfTest() {
   EXPECT(!live::ReadOnlyGraphql("query A { viewer { login } } subscription B { x }"));
   EXPECT(live::ReadOnlyGraphql("query { search(query: \"mutation\") { issueCount } }"));
   EXPECT(!live::ReadOnlyGraphql("query { a(b: \"unterminated) }"));
+  EXPECT(!live::ReadOnlyGraphql("#x\rmutation{a}"));
+  EXPECT(!live::ReadOnlyGraphql("query { a(b: \"x\rmutation\") }"));
+  EXPECT(!live::ReadOnlyGraphql("#x\r\nmutation{a}"));
+  EXPECT(!live::ReadOnlyGraphql("query { a } #x\rsubscription { b }"));
+  EXPECT(!live::ReadOnlyGraphql("\xef\xbb\xbfmutation { a }"));
+  EXPECT(!live::ReadOnlyGraphql("query{a},mutation{b}"));
+  EXPECT(live::ReadOnlyGraphql("# mutation here\nquery { a }"));
+  EXPECT(live::ReadOnlyGraphql("query { a(b: \"\"\"mutation\rsubscription\"\"\") }"));
+  EXPECT(live::ReadOnlyGraphql("query { a(b: \"say \\\"mutation\\\"\") }"));
   EXPECT(!live::ReadOnlyGraphql(std::string(live::kMaxQueryBytes + 1, 'a')));
   EXPECT(live::NormalizeSite("https://Acme.Atlassian.net") == "https://acme.atlassian.net");
   EXPECT(live::NormalizeSite("https://wiki.example.com:8443") == "https://wiki.example.com:8443");
@@ -374,6 +397,14 @@ int main(int argc, char** argv) {
           transport.set_offline(args->items.at(0).flag);
           return Emit(id, live::Outcome::Value(keys::JsonValue::Bool(true)));
         }
+        if (method->text == "Tool.holdWrites") {
+          store.set_holding(args->items.at(0).flag);
+          return Emit(id, live::Outcome::Value(keys::JsonValue::Bool(true)));
+        }
+        if (method->text == "Tool.callerGone") {
+          core->CancelCaller(args->items.at(0).text);
+          return Emit(id, live::Outcome::Value(keys::JsonValue::Bool(true)));
+        }
         if (method->text == "Tool.locked") {
           store.set_locked(args->items.at(0).flag);
           return Emit(id, live::Outcome::Value(keys::JsonValue::Bool(true)));
@@ -391,6 +422,7 @@ int main(int argc, char** argv) {
           stats.Set("sent", keys::JsonValue::Number(transport.sent()));
           stats.Set("cancels", keys::JsonValue::Number(transport.cancels()));
           stats.Set("loads", keys::JsonValue::Number(store.loads()));
+          stats.Set("heldWrites", keys::JsonValue::Number(static_cast<double>(store.held())));
           return Emit(id, live::Outcome::Value(std::move(stats)));
         }
         core->Invoke(method->text, args->items, [id](live::Outcome outcome) { Emit(id, outcome); });

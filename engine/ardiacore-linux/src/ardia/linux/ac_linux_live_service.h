@@ -20,6 +20,7 @@ bool LinuxLiveInvokes(std::string_view method);
 void AppendLinuxLiveCapabilities(base::ListValue& capabilities);
 void LinuxLiveInvoke(const LinuxLiveCaller& caller, Profile* app_profile, const std::string& method,
                      const base::ListValue& values, base::OnceCallback<void(bool, base::Value)> done);
+void LinuxLiveCallerGone(const std::string& key);
 
 }
 

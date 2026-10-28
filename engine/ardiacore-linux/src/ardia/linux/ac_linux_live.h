@@ -168,6 +168,7 @@ class LiveCore {
   ~LiveCore();
 
   void Invoke(std::string_view method, const std::vector<JsonValue>& args, Reply reply);
+  void CancelCaller(std::string_view caller);
 
   size_t active() const { return active_.size(); }
   size_t queued() const { return queue_.size(); }
@@ -189,6 +190,7 @@ class LiveCore {
     State state = State::kUnknown;
     std::optional<Credential> credential;
     uint64_t generation = 0;
+    uint32_t saving = 0;
     std::vector<Access> waiters;
   };
 
@@ -214,7 +216,7 @@ class LiveCore {
   void WithAccess(Source source, uint64_t serial, Access access);
   void Renew();
   void FinishRenewal(std::optional<Outcome> failure);
-  void Store(Credential credential, std::function<void(std::optional<Outcome>)> done);
+  void Commit(uint64_t serial, Credential candidate, std::function<void(const Credential&)> committed);
 
   void Issue(uint64_t serial, Source source, std::string operation, JsonValue params, bool retried);
   void Verify(uint64_t serial, Credential candidate);

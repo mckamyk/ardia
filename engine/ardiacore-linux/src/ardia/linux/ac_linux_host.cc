@@ -922,7 +922,11 @@ class ShellHostView : public views::View,
     RetireRenderer();
     return true;
   }
+  std::string LiveCaller() const {
+    return base::NumberToString(id_) + "#" + base::NumberToString(renderer_generation_);
+  }
   void RetireRenderer() {
+    LinuxLiveCallerGone(LiveCaller());
     auto alive = GetWeakPtr();
     if (dialogs_ && renderer_generation_)
       dialogs_->controller().RetireRenderer(base::NumberToString(renderer_generation_));
@@ -1737,6 +1741,7 @@ ShellHostView::~ShellHostView() {
   LinuxImportWindowClosed(window_id_);
   WindowFocus().Forget(id_);
   weak_factory_.InvalidateWeakPtrs();
+  LinuxLiveCallerGone(LiveCaller());
   handler_ = nullptr;
   renderer_document_ = content::WeakDocumentPtr();
   dialogs_.reset();
@@ -4153,8 +4158,7 @@ void ShellHostView::Invoke(
                            profile(), shell_, method, values, std::move(done));
   }
   if (LinuxLiveInvokes(method)) {
-    return LinuxLiveInvoke({base::NumberToString(id_) + "#" + base::NumberToString(renderer_generation_),
-                            !private_window_.empty()},
+    return LinuxLiveInvoke({LiveCaller(), !private_window_.empty()},
                            profile(), method, values, std::move(done));
   }
   if (LinuxExtensionSurfaces::Handles(method)) {

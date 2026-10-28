@@ -3,7 +3,7 @@ export const LIVE_HOSTS = ["api.github.com", "github.com", "api.bitbucket.org", 
 export const LIVE_FIXTURE = {
   github: { token: "ghp_fixtureValid0001", deviceToken: "ghp_fixtureDevice002", clientId: "Iv1.fixture", login: "octo-fixture" },
   bitbucket: { user: "alice-fixture", token: "ATBBfixtureToken0003", accountId: "557058:fixture-account" },
-  notion: { token: "secret_fixtureNotion0004", workspace: "Fixture Workspace" },
+  notion: { token: "secret_fixtureNotion0004", altToken: "secret_fixtureNotionAlt9", workspace: "Fixture Workspace" },
   confluence: { site: "https://acme.atlassian.net", email: "alice@fixture.test", token: "ATATTfixtureConfluence5", accountId: "fixture-confluence-id" },
   gdrive: { clientId: "fixture.apps.googleusercontent.com", clientSecret: "GOCSPX-fixtureSecret06", code: "4/fixture-code", refreshToken: "1//fixtureRefresh07", email: "alice@fixture.test" },
 };
@@ -13,6 +13,7 @@ const SECRET_VALUES = () => [
   LIVE_FIXTURE.github.deviceToken,
   LIVE_FIXTURE.bitbucket.token,
   LIVE_FIXTURE.notion.token,
+  LIVE_FIXTURE.notion.altToken,
   LIVE_FIXTURE.confluence.token,
   LIVE_FIXTURE.gdrive.clientSecret,
   LIVE_FIXTURE.gdrive.refreshToken,
@@ -63,6 +64,8 @@ export function createLiveServices() {
     googleRefreshValid: true,
     googleIssued: 0,
     googleRenewals: 0,
+    googleRenewDelayMs: 0,
+    googleIssuedBy: {},
     googleCodes: new Set([LIVE_FIXTURE.gdrive.code]),
     delayMs: new Map(),
     offline: false,
@@ -77,9 +80,10 @@ export function createLiveServices() {
     res.end(text);
   };
   const unauthorized = (res) => json(res, 401, { message: "Bad credentials" });
-  const issueGoogle = () => {
+  const issueGoogle = (grant) => {
     const token = `ya29.fixture-${++state.googleIssued}`;
     state.googleAccess.add(token);
+    state.googleIssuedBy[token] = grant;
     return token;
   };
 
@@ -155,7 +159,8 @@ export function createLiveServices() {
   }
 
   function notion(req, res, url) {
-    if (req.headers.authorization !== `Bearer ${LIVE_FIXTURE.notion.token}`) return unauthorized(res);
+    const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+    if (token !== LIVE_FIXTURE.notion.token && token !== LIVE_FIXTURE.notion.altToken) return unauthorized(res);
     if (req.headers["notion-version"] !== "2022-06-28") return json(res, 400, { message: "missing Notion-Version" });
     if (url.pathname === "/v1/users/me") return json(res, 200, { object: "user", name: "Fixture Bot", bot: { workspace_name: LIVE_FIXTURE.notion.workspace } });
     if (url.pathname === "/v1/search" && req.method === "POST") return json(res, 200, { results: state.notionPages });
@@ -172,7 +177,7 @@ export function createLiveServices() {
     return json(res, 404, { message: "unknown fixture path" });
   }
 
-  function google(req, res, url, body) {
+  async function google(req, res, url, body) {
     if (req.headers.host === "accounts.google.com") {
       const redirect = url.searchParams.get("redirect_uri");
       const stateParam = url.searchParams.get("state");
@@ -186,12 +191,14 @@ export function createLiveServices() {
       if (form.get("grant_type") === "authorization_code") {
         if (!state.googleCodes.has(form.get("code")) || form.get("redirect_uri") !== "http://127.0.0.1:53682/ardia-oauth" || !form.get("code_verifier")) return json(res, 400, { error: "invalid_grant" });
         state.googleRefreshValid = true;
-        return json(res, 200, { access_token: issueGoogle(), refresh_token: LIVE_FIXTURE.gdrive.refreshToken, expires_in: 3600, token_type: "Bearer" });
+        return json(res, 200, { access_token: issueGoogle("authorization_code"), refresh_token: LIVE_FIXTURE.gdrive.refreshToken, expires_in: 3600, token_type: "Bearer" });
       }
       if (form.get("grant_type") === "refresh_token") {
         state.googleRenewals++;
+        if (state.googleRenewDelayMs) await new Promise((resolve) => setTimeout(resolve, state.googleRenewDelayMs));
+        if (res.destroyed) return true;
         if (!state.googleRefreshValid || form.get("refresh_token") !== LIVE_FIXTURE.gdrive.refreshToken) return json(res, 400, { error: "invalid_grant", error_description: "Token has been expired or revoked." });
-        return json(res, 200, { access_token: issueGoogle(), expires_in: 3600, token_type: "Bearer" });
+        return json(res, 200, { access_token: issueGoogle("refresh_token"), expires_in: 3600, token_type: "Bearer" });
       }
       return json(res, 400, { error: "unsupported_grant_type" });
     }
@@ -219,7 +226,7 @@ export function createLiveServices() {
       if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
       if (res.destroyed) return true;
       const route = host === "api.github.com" || host === "github.com" ? github : host === "api.bitbucket.org" ? bitbucket : host === "api.notion.com" ? notion : host === "acme.atlassian.net" ? confluence : google;
-      const handled = route(req, res, url, body);
+      const handled = await route(req, res, url, body);
       if (handled === false) json(res, 404, { message: "unknown fixture route" });
       return true;
     } finally {

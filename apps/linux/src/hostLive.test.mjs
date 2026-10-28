@@ -91,3 +91,14 @@ test("sources call only fixed provider operations and never pass a token back ou
   assert.equal(normalizeConfluenceSite("https://x.atlassian.net/"), "https://x.atlassian.net");
   assert.equal(normalizeConfluenceSite("http://x.atlassian.net"), "http://x.atlassian.net");
 });
+
+test("a bridge timeout cancels the native call so a late save cannot land", async () => {
+  const { host, calls } = fakeHost((method) => (method === "ArdiaLive.cancel" ? Promise.resolve(true) : Promise.reject(new Error("Native request timed out: ArdiaLive.connect"))));
+  const client = hostLiveClient(host);
+  await assert.rejects(client.connect("notion", { token: "secret_x" }), /timed out/);
+  assert.deepEqual(calls.map((c) => c.method), ["ArdiaLive.connect", "ArdiaLive.cancel"]);
+  assert.deepEqual(calls[1].args, [calls[0].args[2]]);
+  const native = fakeHost(() => Promise.reject(Object.assign(new Error("Signed out"), { code: "ERR_LIVE_SIGNED_OUT" })));
+  await assert.rejects(hostLiveClient(native.host).request("notion", "users"), LiveError);
+  assert.deepEqual(native.calls.map((c) => c.method), ["ArdiaLive.request"]);
+});

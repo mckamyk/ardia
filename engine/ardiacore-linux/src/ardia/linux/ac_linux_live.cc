@@ -453,7 +453,7 @@ bool ReadOnlyGraphql(std::string_view query) {
   while (at < query.size()) {
     const char c = query[at];
     if (c == '#') {
-      while (at < query.size() && query[at] != '\n') ++at;
+      while (at < query.size() && query[at] != '\n' && query[at] != '\r') ++at;
     } else if (c == '"') {
       if (query.substr(at, 3) == "\"\"\"") {
         const size_t end = query.find("\"\"\"", at + 3);
@@ -464,7 +464,7 @@ bool ReadOnlyGraphql(std::string_view query) {
       ++at;
       while (at < query.size() && query[at] != '"') {
         if (query[at] == '\\') ++at;
-        if (at < query.size() && query[at] == '\n') return false;
+        if (at < query.size() && (query[at] == '\n' || query[at] == '\r')) return false;
         ++at;
       }
       if (at >= query.size()) return false;
@@ -779,7 +779,9 @@ void LiveCore::WithCredential(Source source, Access access) {
   store_.Load(source, [this, source, generation](KeyStatus status, std::optional<Credential> credential) {
     Cached& current = cache_[source];
     std::optional<Outcome> failure;
-    if (current.generation == generation) {
+    if (current.generation != generation && current.state == Cached::State::kLoading) {
+      current.state = Cached::State::kUnknown;
+    } else if (current.generation == generation) {
       if (status == KeyStatus::kOk && credential) {
         current.state = Cached::State::kPresent;
         current.credential = std::move(credential);
@@ -837,7 +839,7 @@ void LiveCore::Renew() {
                                    {"grant_type", "refresh_token"}}));
   Send(0, std::move(request), [this, generation](HttpResponse response) {
     Cached& current = cache_[Source::kGdrive];
-    if (current.generation != generation || current.state != Cached::State::kPresent)
+    if (current.generation != generation || current.state != Cached::State::kPresent || current.saving)
       return FinishRenewal(std::nullopt);
     if (InvalidGrant(response))
       return FinishRenewal(Outcome::Error(kErrSignedOut, "Google Drive access was revoked"));
@@ -874,9 +876,35 @@ void LiveCore::FinishRenewal(std::optional<Outcome> failure) {
   }
 }
 
-void LiveCore::Store(Credential credential, std::function<void(std::optional<Outcome>)> done) {
-  store_.Save(std::move(credential), [done = std::move(done)](KeyStatus status) {
-    done(status == KeyStatus::kOk ? std::nullopt : std::optional<Outcome>(KeyringFailure(status)));
+void LiveCore::Commit(uint64_t serial, Credential candidate, std::function<void(const Credential&)> committed) {
+  const Source source = candidate.source;
+  WithCredential(source, [this, serial, source, candidate = std::move(candidate), committed = std::move(committed)](
+                             std::optional<Outcome> failure, const Credential* current) mutable {
+    if (!Alive(serial)) return;
+    if (failure && failure->code != kErrNotConnected) return Finish(serial, std::move(*failure));
+    std::optional<Credential> previous;
+    if (current) previous = *current;
+    Cached& posted = cache_[source];
+    const uint64_t generation = ++posted.generation;
+    ++posted.saving;
+    store_.Save(candidate, [this, serial, source, generation, candidate, previous = std::move(previous),
+                            committed = std::move(committed)](KeyStatus status) mutable {
+      Cached& cached = cache_[source];
+      --cached.saving;
+      const bool latest = cached.generation == generation;
+      if (status != KeyStatus::kOk) return Finish(serial, KeyringFailure(status));
+      if (!Alive(serial)) {
+        if (!latest) return;
+        if (previous) return store_.Save(std::move(*previous), [](KeyStatus) {});
+        return store_.Delete(source, [](KeyStatus) {});
+      }
+      if (latest) {
+        ++cached.generation;
+        cached.state = Cached::State::kPresent;
+        cached.credential = candidate;
+      }
+      committed(candidate);
+    });
   });
 }
 
@@ -1001,13 +1029,7 @@ void LiveCore::Verify(uint64_t serial, Credential candidate) {
                (source == Source::kConfluence && !Text(value, "accountId"))) {
       return Finish(serial, Unreadable());
     }
-    Store(candidate, [this, serial, source, candidate, value = std::move(value)](std::optional<Outcome> failure) mutable {
-      if (!Alive(serial)) return;
-      if (failure) return Finish(serial, std::move(*failure));
-      Cached& cached = cache_[source];
-      ++cached.generation;
-      cached.state = Cached::State::kPresent;
-      cached.credential = std::move(candidate);
+    Commit(serial, std::move(candidate), [this, serial, value = std::move(value)](const Credential&) mutable {
       Finish(serial, Outcome::Value(std::move(value)));
     });
   });
@@ -1083,15 +1105,9 @@ void LiveCore::ConnectGoogle(uint64_t serial, Credential candidate, std::string 
     candidate.refresh_token = *refresh;
     candidate.expires_at_ms = now_ms_() + *expires * 1000;
     if (!ValidCredential(candidate)) return Finish(serial, Unreadable());
-    Store(candidate, [this, serial, candidate](std::optional<Outcome> failure) mutable {
-      if (!Alive(serial)) return;
-      if (failure) return Finish(serial, std::move(*failure));
-      Cached& cached = cache_[Source::kGdrive];
-      ++cached.generation;
-      cached.state = Cached::State::kPresent;
-      cached.credential = candidate;
+    Commit(serial, std::move(candidate), [this, serial](const Credential& committed) {
       std::string error;
-      auto about = BuildRequest(Source::kGdrive, "about", JsonValue::Object(), &candidate, &error);
+      auto about = BuildRequest(Source::kGdrive, "about", JsonValue::Object(), &committed, &error);
       if (!about) return Finish(serial, Outcome::Error(kErrArgument, error));
       Send(serial, std::move(*about), [this, serial](HttpResponse response) {
         JsonValue value = JsonValue::Object();
@@ -1101,6 +1117,15 @@ void LiveCore::ConnectGoogle(uint64_t serial, Credential candidate, std::string 
       });
     });
   });
+}
+
+void LiveCore::CancelCaller(std::string_view caller) {
+  const std::string prefix = std::string(caller) + ":";
+  std::vector<uint64_t> owned;
+  for (const auto& [serial, call] : calls_) {
+    if (call.id.starts_with(prefix)) owned.push_back(serial);
+  }
+  for (const uint64_t serial : owned) Finish(serial, Cancelled());
 }
 
 void LiveCore::Cancel(const std::string& id, Reply reply) {

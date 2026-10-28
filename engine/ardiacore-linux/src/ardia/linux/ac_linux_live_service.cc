@@ -269,6 +269,11 @@ void AppendLinuxLiveCapabilities(base::ListValue& capabilities) {
   for (const char* method : live::kMethods) capabilities.Append(method);
 }
 
+void LinuxLiveCallerGone(const std::string& key) {
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  Live().core.CancelCaller(key);
+}
+
 void LinuxLiveInvoke(const LinuxLiveCaller& caller, Profile* app_profile, const std::string& method,
                      const base::ListValue& values, Done done) {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));

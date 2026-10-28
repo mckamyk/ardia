@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import unittest
 
+from test_session_merge import VALUES
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REPO = ROOT.parents[1]
 LINUX = ROOT / 'src/ardia/linux'
@@ -44,7 +46,42 @@ def run(test, command, env=None, timeout=120, cwd=None):
     return result.stdout
 
 
+def build_service(test, directory):
+    compiler = shutil.which('clang++') or shutil.which('c++')
+    if compiler is None:
+        test.skipTest('C++ compiler is unavailable')
+    stubs = pathlib.Path(directory) / 'stubs'
+    includes = set()
+    for name in ['ac_linux_live_service.cc', 'ac_linux_live_service.h']:
+        includes.update(re.findall(r'^#include "([^"]+)"', (LINUX / name).read_text(), re.M))
+    for name in includes:
+        if name.startswith('ardia/linux/'):
+            continue
+        (stubs / name).parent.mkdir(parents=True, exist_ok=True)
+        (stubs / name).write_text('#include "live_service_support.h"\n')
+    (stubs / 'base').mkdir(parents=True, exist_ok=True)
+    append = '  void Append(Value&& value) & { entries_.push_back(std::move(value)); }\n'
+    test.assertIn(append, VALUES)
+    (stubs / 'base/values.h').write_text(VALUES.replace(
+        append, append + '  void Append(const char* value) & { Append(Value(value)); }\n'))
+    executable = pathlib.Path(directory) / 'live_service'
+    compiled = subprocess.run([
+        compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-g', '-fsanitize=address,undefined',
+        '-fno-omit-frame-pointer', f'-I{stubs}', f'-I{ROOT / "tests/fixtures"}', '-I', str(ROOT / 'src'),
+        str(LINUX / 'ac_linux_live_service.cc'), *[str(LINUX / source) for source in HELPERS],
+        str(ROOT / 'tests/fixtures/live_service_scenarios.cc'), '-o', str(executable), '-lcrypto', '-ldl', '-lpthread',
+    ], capture_output=True, text=True, timeout=300)
+    test.assertEqual(compiled.returncode, 0, compiled.stderr)
+    return executable
+
+
 class LiveServiceTests(unittest.TestCase):
+    def test_chromium_glue_refuses_private_callers_namespaces_ids_and_drives_the_loader(self):
+        with tempfile.TemporaryDirectory(prefix='ardia-live-service-') as directory:
+            service = build_service(self, directory)
+            output = run(self, [service, pathlib.Path(directory) / 'profile'])
+        self.assertIn('live service scenarios passed', output)
+
     def test_core_against_local_fake_providers(self):
         if shutil.which('node') is None:
             self.skipTest('node is unavailable')
@@ -63,7 +100,7 @@ class LiveServiceTests(unittest.TestCase):
                                 REPO / 'apps/linux/scripts/host-test-loader.mjs', '--test', '--test-reporter=tap',
                                 ROOT / 'tests/live_services.test.mjs'],
                          env={'LIVE_HOST_TOOL': str(tool)}, timeout=300)
-            self.assertIn('# pass 14', output)
+            self.assertIn('# pass 18', output)
             self.assertIn('# fail 0', output)
             self.assertNotIn('AddressSanitizer', output)
 
@@ -99,6 +136,10 @@ class LiveServiceTests(unittest.TestCase):
             self.assertIn(f'"{name}"', gn)
         host = (LINUX / 'ac_linux_host.cc').read_text()
         self.assertIn('#include "ardia/linux/ac_linux_live_service.h"', host)
+        retire = host[host.index('  void RetireRenderer() {'):]
+        self.assertTrue(retire[:retire.index('\n  }\n')].split('\n')[1].strip().startswith('LinuxLiveCallerGone(LiveCaller());'))
+        destructor = host[host.index('ShellHostView::~ShellHostView() {'):]
+        self.assertIn('LinuxLiveCallerGone(LiveCaller());', destructor[:destructor.index('\n}\n')])
         self.assertIn('AppendLinuxLiveCapabilities(capabilities)', host)
         invoke = host[host.index('void ShellHostView::Invoke('):]
         invoke = invoke[:invoke.index('\n}\n')]

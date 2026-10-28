@@ -24,7 +24,7 @@ Operations the renderer may ask for:
 
 | Source | Operation | Request built natively |
 | --- | --- | --- |
-| github | `graphql` {query, variables} | POST `https://api.github.com/graphql`, Bearer. The query must be read-only: any `mutation` or `subscription` token outside a string is refused. |
+| github | `graphql` {query, variables} | POST `https://api.github.com/graphql`, Bearer. The query must be read-only: any `mutation` or `subscription` token outside a string or comment is refused. Comments end at `\n`, `\r` or `\r\n` as in the GraphQL spec, and a `\r` or `\n` inside a single-line string is refused. |
 | github | `deviceCode` {clientId} | POST `https://github.com/login/device/code`, scope `repo read:org`. No token. |
 | bitbucket | `pullRequests` {user} | GET `https://api.bitbucket.org/2.0/pullrequests/<user>?state=OPEN&pagelen=50`, Basic. |
 | bitbucket | `statuses`, `pullRequest` {repo, id} | GET `/2.0/repositories/<ws>/<slug>/pullrequests/<id>[/statuses?pagelen=50]`. `repo` is exactly two `[A-Za-z0-9._-{}]` segments; `id` a positive integer. |
@@ -70,6 +70,9 @@ One deliberate difference from macOS: a revoked Google refresh token (`invalid_g
 - Refresh: F04's document claims already make the first window to claim a folder its only refresher until that window unwatches. The F11 acceptance scenario checks that two windows refreshing at once fetch once.
 - Credentials and renewal live in one process-wide `LiveCore`. Concurrent Drive refreshes with an expired token share one renewal. A Drive 401 on a token that hasn't expired yet forces one renewal and one retry.
 - Connect and disconnect bump a per-source generation, so a load or renewal that finishes after a disconnect can't bring the token back. Disconnect cancels that source's in-flight requests.
+- A connect bumps the generation when it posts its keyring save and again when the save commits. A renewal that spans either point, or finishes while a connect save is pending, is discarded and never written over the new token.
+- A connect that is cancelled, or whose renderer gave up (a bridge timeout makes `hostLive` cancel it), restores the token that was stored before, or deletes the item if there was none. Keyring and UI agree that nothing changed. A newer connect or a disconnect wins over that restore.
+- When a shell renderer retires (reload, crash, close) or its window goes away, `ShellHostView` calls `LinuxLiveCallerGone`, which cancels that caller's in-flight requests and frees their slots.
 - Private windows (and an off-the-record app profile) get `ERR_PRIVATE_SERVICE`. Settings is a regular utility window and can connect.
 
 ## Tests
@@ -80,6 +83,12 @@ One deliberate difference from macOS: a revoked Google refresh token (`invalid_g
   - runs `tests/live_services.test.mjs`: the real `liveSources.ts` and `hostLive.ts` against the native core over sockets to local fake provider servers (`apps/linux/scripts/acceptance/lib/liveServices.mjs`), with `fetch` replaced by a thrower. It covers connect, refresh, restart, revocation, renewal (single-flight, expiry, server-side revocation), rate limits, SSO, offline and recovery, cancellation, queue bounds, the device flow and its cancellation, refused operations, a locked keyring, disconnect during a request, and an unavailable host;
   - compares the native fixed requests with the shared constants;
   - source checks: no logging, GN registration, routing only through `ShellHostView::Invoke`, private-window refusal, `kOmit`/`kError`/HTTPS in the loader, bootstrap deadlines, no network or storage APIs in the Linux Live modules.
+- The Chromium glue itself (`ac_linux_live_service.cc`) is compiled against stubs (`tests/fixtures/live_service_support.h`) and driven through `LinuxLiveInvoke` and `LinuxLiveCallerGone` (`live_service_scenarios.cc`). The fixture covers:
+  - refusal of private, off-the-record, shutting-down and missing profiles;
+  - renderer request-id rules and per-caller namespacing (another window's cancel or retirement doesn't touch a request);
+  - the loader's flags, headers, upload, timeout, size cap and traffic tag;
+  - UTF-8, size, rate-limit and network mapping;
+  - the 0600 token file, and disconnect deleting it.
 - `apps/linux/src/hostLive.test.mjs` (in `test:host`): error mapping, request ids, abort and late replies, unavailable hosts, reply parsing.
 - `apps/linux/scripts/module-graph.test.mjs`: the shared `sources.ts` and `net.ts` are absent from the production graph, and every Live importer uses the Linux modules.
 - Acceptance `F11` (`scenarios/f11-live-services.mjs`): needs an engine built with this change. The fixture server now answers the provider hosts over the trusted test certificate, mapped by `--host-resolver-rules`, and can go offline.
@@ -89,4 +98,5 @@ One deliberate difference from macOS: a revoked Google refresh token (`invalid_g
 - Not run in Chromium 156: the glue passes `scripts/linux/syntax-check-156.sh`, but the acceptance scenario waits for an engine build.
 - Real accounts and OAuth client IDs for all five providers (manual steps in the scenario).
 - A real desktop keyring: the item in Seahorse/KWallet, and the locked-keyring prompt.
+- The shared Google OAuth flow's weaknesses (Math.random state and verifier, plain PKCE, the code on a loopback URL that every window sees) are tracked in #233. They're shared with macOS and unchanged here.
 - Google sign-in still opens the consent page in an Ardia tab and watches for the loopback redirect, as macOS does. From the Settings utility window that tab is created in the browser window, so the redirect has to come back through session sync. The acceptance scenario drives it from a browser window.

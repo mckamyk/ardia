@@ -63,6 +63,7 @@ export function hostLiveClient(host: ArdiaHost | undefined = ardiaHost, connecte
           signal?.removeEventListener("abort", abort);
           if (settled) return;
           settled = true;
+          if (id && typeof (error as { code?: unknown })?.code !== "string") void invokeHost("ArdiaLive.cancel", { args: [id] }, host).catch(() => {});
           reject(liveError(error, connected(source)));
         },
       );
