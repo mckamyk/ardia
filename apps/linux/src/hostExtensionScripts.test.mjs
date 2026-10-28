@@ -1,0 +1,53 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { test } from "node:test";
+import { POPUP_MEASURE, PopupSizeWaiters, extensionViewEvaluate } from "./hostExtensionScripts.ts";
+import { WEB_STORE_REQUEST, hostPageScript } from "./hostPageScripts.ts";
+
+const literal = (path, name) => {
+  const source = readFileSync(new URL(path, import.meta.url), "utf8");
+  const match = source.match(new RegExp(`const ${name} = \`([\\s\\S]*?)\`;\\n`));
+  assert.ok(match, `${name} is no longer a template literal in ${path}`);
+  return match[1];
+};
+
+test("the shared Web Store bridge script maps to the native store request and never reaches the page", async () => {
+  assert.equal(WEB_STORE_REQUEST, literal("../../browser/src/state/extensions/bridge.ts", "STORE_SCRIPT"), "the shared Web Store script changed; update hostPageScripts.ts");
+  const script = hostPageScript("evaluate", [WEB_STORE_REQUEST]);
+  assert.equal(script.command, "webStoreRequest");
+  assert.deepEqual(script.args, []);
+  assert.equal(script.map("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  assert.equal(script.map(null), null);
+  assert.equal(script.map(7), null);
+  assert.equal(hostPageScript("executeJavaScript", [WEB_STORE_REQUEST]), null);
+  assert.equal(hostPageScript("evaluate", [WEB_STORE_REQUEST, 1]), null);
+});
+
+test("the popup size probe answers from the native preferred size", async () => {
+  assert.equal(POPUP_MEASURE, literal("../../browser/src/components/extensions/ExtensionOverlays.tsx", "MEASURE"), "the shared popup size probe changed; update hostExtensionScripts.ts");
+  const sizes = new PopupSizeWaiters();
+  let answered = null;
+  const first = extensionViewEvaluate(POPUP_MEASURE, sizes).then((size) => (answered = size));
+  await Promise.resolve();
+  assert.equal(answered, null, "nothing to answer before Chromium reports a size");
+  sizes.note({ width: 320, height: 240 });
+  assert.deepEqual(await first, { w: 320, h: 240 });
+  assert.deepEqual(await extensionViewEvaluate(POPUP_MEASURE, sizes), { w: 320, h: 240 });
+  sizes.note({ width: 400, height: 300 });
+  assert.deepEqual(await extensionViewEvaluate(POPUP_MEASURE, sizes), { w: 400, h: 300 });
+});
+
+test("other popup scripts and a closed popup resolve to nothing", async () => {
+  const sizes = new PopupSizeWaiters();
+  assert.equal(await extensionViewEvaluate("document.title", sizes), null);
+  const pending = extensionViewEvaluate(POPUP_MEASURE, sizes);
+  sizes.close();
+  assert.equal(await pending, null);
+});
+
+test("the extension view shim sends no evaluate to the host", () => {
+  const shim = readFileSync(new URL("./shims/web/HostExtensionWebView.tsx", import.meta.url), "utf8");
+  assert.ok(shim.includes('if (property === "evaluate") return extensionViewEvaluate(args[0], sizes.current);'));
+  assert.ok(shim.includes("sizes.current.note(size);"));
+  assert.ok(shim.includes("sizes.current.close();"));
+});

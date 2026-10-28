@@ -197,6 +197,8 @@ The JSON lists each manual item with these steps. They are kept here so they can
 **#19 F09**
 
 - **Web Store.** Choose Add to Ardia on a store extension. Ardia's dialog lists its permissions. Cancel installs nothing; Add installs it and shows it on the toolbar.
+- **Remove from the Web Store (#169).** On an installed extension's store page the buttons read Add to Ardia and Remove from Ardia. Remove from Ardia opens Ardia's own removal confirmation, not Chromium's dialog; confirming removes it and the store page switches back to Add to Ardia; cancelling keeps it and the store page's call reports it was kept. Leaving the page while the confirmation is open keeps the extension.
+- **Popup size (#169).** A fixture popup that grows after load (adds rows on a timer) resizes the popup to its new size up to 800 × 600 with no page script; a popup page's console shows no Ardia evaluation.
 - **Permission increase.** Install a packed CRX, then a newer CRX of the same key that adds a permission. Chromium disables it; turning it on asks first, and Cancel keeps it off.
 - **Load unpacked.** Settings › Extensions › Load Unpacked opens the native folder picker, and the chosen fixture folder installs after Ardia's dialog.
 - **Popup.** Pin the fixture and click it: the popup opens under the button at its own size, takes typing, and closes on Escape, on an outside click and from its own Close button.

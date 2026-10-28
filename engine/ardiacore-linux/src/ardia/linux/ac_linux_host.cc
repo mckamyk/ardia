@@ -20,6 +20,7 @@
 #include "ardia/linux/ac_linux_contract.h"
 #include "ardia/linux/ac_linux_auto_pip_service.h"
 #include "ardia/linux/ac_linux_autoplay.h"
+#include "ardia/linux/ac_linux_web_store.h"
 #include "ardia/linux/ac_linux_background_dialogs.h"
 #include "ardia/linux/ac_linux_calendar_service.h"
 #include "ardia/linux/ac_linux_close.h"
@@ -3653,6 +3654,10 @@ void ShellHostView::TabCommand(
                                                   : shell_frame->HasTransientUserActivation());
     return binding->media->Dispatch(command, values, activation, std::move(done));
   }
+  if (command == "webStoreRequest") {
+    if (!values.empty()) return std::move(done).Run(false, base::Value("webStoreRequest takes no arguments"));
+    return ardiacore::LinuxWebStoreRequest(contents, std::move(done));
+  }
   if (command == "captureViewport") {
     auto* view = contents->GetRenderWidgetHostView();
     if (!view || !view->IsSurfaceAvailableForCopy()) {
@@ -5373,6 +5378,12 @@ void StartLinuxHost() {
     return true;
   };
   ardiacore::InstallLinuxAutoplayPolicy();
+  ardiacore::InstallLinuxWebStore(base::BindRepeating([](content::WebContents* contents) {
+    for (const auto& [id, host] : Hosts()) {
+      if (host->HoldsTab(contents)) return true;
+    }
+    return false;
+  }));
   g_ardia_linux_drag_ended = [](BrowserWindowInterface* browser) {
     if (!browser) return;
     const auto found = Hosts().find(browser->GetSessionID().id());

@@ -4,6 +4,7 @@ import { toAppUrl } from "@ardia/core";
 import type { NavigationState, WebViewHandle, WebViewProps } from "@ardia-real/ardiacore";
 import { ardiaHost, reportHostError } from "../../host";
 import { HostExtensionView, type ExtensionViewEvent } from "../../hostExtensionView";
+import { PopupSizeWaiters, extensionViewEvaluate } from "../../hostExtensionScripts";
 import { watchTabViewport } from "../../hostViewport";
 import { menuShown } from "../../menus";
 
@@ -14,6 +15,7 @@ export const HostExtensionWebView = forwardRef<WebViewHandle, WebViewProps>(func
   const view = useRef<HostExtensionView | null>(null);
   const navigation = useRef<NavigationState | null>(null);
   const ready = useRef(false);
+  const sizes = useRef(new PopupSizeWaiters());
 
   const receive = (event: ExtensionViewEvent) => {
     const p = latest.current;
@@ -26,7 +28,10 @@ export const HostExtensionWebView = forwardRef<WebViewHandle, WebViewProps>(func
       p.onNavigationChange?.(navigation.current);
     } else if (event.type === "preferredSize") {
       const size = event.value as { width: number; height: number };
-      if (Number.isFinite(size?.width) && Number.isFinite(size?.height)) p.onPreferredSize?.(size);
+      if (Number.isFinite(size?.width) && Number.isFinite(size?.height)) {
+        p.onPreferredSize?.(size);
+        sizes.current.note(size);
+      }
     } else if (event.type === "windowClose") p.onWindowClose?.();
   };
 
@@ -39,6 +44,7 @@ export const HostExtensionWebView = forwardRef<WebViewHandle, WebViewProps>(func
     });
     return () => {
       current.dispose();
+      sizes.current.close();
       if (view.current === current) view.current = null;
     };
   }, []);
@@ -50,7 +56,8 @@ export const HostExtensionWebView = forwardRef<WebViewHandle, WebViewProps>(func
       return async (...args: unknown[]) => {
         const current = view.current;
         if (!current) throw new Error("Ardia extension view is not mounted");
-        if (property !== "focus" && property !== "evaluate") throw new Error(`Extension views do not support ${property}`);
+        if (property === "evaluate") return extensionViewEvaluate(args[0], sizes.current);
+        if (property !== "focus") throw new Error(`Extension views do not support ${property}`);
         return current.command(property, args);
       };
     },

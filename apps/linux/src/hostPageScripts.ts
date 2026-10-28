@@ -8,6 +8,39 @@ export const UNSAVED_WORK = `(() => {
   post("result", JSON.stringify(fields.some(changed) || !!editing));
 })()`;
 
+export const WEB_STORE_REQUEST = `
+const g = window;
+if (!g.__ardiaStore) {
+  const store = (g.__ardiaStore = { waiting: null, queued: [] });
+  const request = (id) => {
+    if (!id) return;
+    if (store.waiting) { const w = store.waiting; store.waiting = null; w(id); } else store.queued.push(id);
+  };
+  const mg = g.chrome && g.chrome.management;
+  if (mg && typeof mg.uninstall === "function") {
+    Object.defineProperty(mg, "uninstall", { configurable: true, writable: true, value: (id, options, callback) => {
+      request(id);
+      const done = typeof options === "function" ? options : callback;
+      if (typeof done === "function") { setTimeout(done); return; }
+      return Promise.resolve();
+    } });
+  }
+  const relabel = () => {
+    for (const el of document.querySelectorAll("button, button *")) {
+      if (el.childElementCount) continue;
+      const t = el.textContent;
+      if (t === "Add to Chrome") el.textContent = "Add to Ardia";
+      else if (t === "Remove from Chrome") el.textContent = "Remove from Ardia";
+    }
+  };
+  relabel();
+  new MutationObserver(relabel).observe(document.documentElement, { subtree: true, childList: true, characterData: true });
+}
+const store = g.__ardiaStore;
+if (store.queued.length) post("result", JSON.stringify(store.queued.shift()));
+else store.waiting = (id) => post("result", JSON.stringify(id));
+`;
+
 export type HostPageScript = { command: string; args: unknown[]; map?: (result: unknown) => unknown };
 
 export function hostPageScript(method: string, args: readonly unknown[]): HostPageScript | null {
@@ -15,5 +48,6 @@ export function hostPageScript(method: string, args: readonly unknown[]): HostPa
   if (method === "evaluate" && args[0] === PICTURE_IN_PICTURE_STATE) return { command: "pictureInPictureState", args: [] };
   if (method === "executeJavaScript" && args[0] === CLOSE_DOCUMENT_PICTURE_IN_PICTURE) return { command: "exitPictureInPicture", args: [] };
   if (method === "evaluate" && args[0] === UNSAVED_WORK) return { command: "editedInput", args: [], map: (edited) => edited !== false };
+  if (method === "evaluate" && args[0] === WEB_STORE_REQUEST) return { command: "webStoreRequest", args: [], map: (id) => (typeof id === "string" ? id : null) };
   return null;
 }
