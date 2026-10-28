@@ -88,7 +88,6 @@ export default {
   manual: [
     { name: "Web Store install shows Ardia's consent dialog and Cancel installs nothing", steps: ["Open chromewebstore.google.com and choose Add to Ardia on any extension.", "Ardia's own dialog lists the extension's permissions.", "Cancel: nothing is installed and the store page shows Add again.", "Add: the extension appears in Settings › Extensions and on the toolbar."], reason: "needs network access to the Chrome Web Store and its signed CRX" },
     { name: "A permission-increasing update asks before re-enabling", steps: ["Install a packed CRX from Settings › Extensions › Install from file.", "Install a newer CRX of the same key that adds a permission: Chromium disables it.", "Turning it on shows Ardia's 'needs new permissions' dialog; Cancel keeps it off, Allow turns it on."], reason: "needs two signed CRX files of the same key" },
-    { name: "Load unpacked through the folder picker", steps: ["Settings › Extensions › Load Unpacked: the native folder picker opens.", "Choose the fixture folder: Ardia's dialog shows its name and permissions; Add installs it."], reason: "needs the native folder picker in a desktop session" },
     { name: "Popup placement, focus and keyboard", steps: ["Pin the fixture and click its toolbar button: the popup opens under the button at its own size.", "Typing goes to the popup; Escape and clicking outside close it; Close in the popup closes it."], reason: "needs a visible compositor and real input" },
   ],
   async run(t) {

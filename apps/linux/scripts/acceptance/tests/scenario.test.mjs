@@ -140,8 +140,10 @@ describe("report", () => {
 
 describe("scenario catalogue", () => {
   it("covers every issue #81 names and the later feature issues, once each", () => {
-    assert.deepEqual(SCENARIOS.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 32, 33, 34, 35, 36, 37, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 88, 89, 92, 97, 98, 99, 100, 101, 102, 104, 105, 106, 107, 108, 109, 110, 111, 114, 137, 148, 149, 150, 156, 172, 173, 221]);
+    const headless = SCENARIOS.filter((s) => !s.desktop);
+    assert.deepEqual(headless.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 32, 33, 34, 35, 36, 37, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 88, 89, 92, 97, 98, 99, 100, 101, 102, 104, 105, 106, 107, 108, 109, 110, 111, 114, 137, 148, 149, 150, 156, 172, 173, 221]);
     assert.equal(new Set(SCENARIOS.map((s) => s.id)).size, SCENARIOS.length);
+    for (const s of SCENARIOS.filter((x) => x.desktop)) assert.ok(headless.some((h) => h.issue === s.issue), `${s.id} adds desktop checks to an issue the headless suite covers`);
     for (const s of SCENARIOS) {
       assert.equal(typeof s.run, "function", s.id);
       for (const m of s.manual ?? []) assert.ok(m.name && m.steps?.length, `${s.id} manual steps`);
@@ -185,11 +187,11 @@ describe("scenario catalogue", () => {
     assert.equal(QUIT_BACKGROUND_ANSWER, '[ardiacore] dialog (background run, not shown): "Are you sure you want to quit Ardia?" (Quit / Cancel): Cancel');
     for (const text of ["title: `Are you sure you want to quit ${app}?`", 'confirmTitle: "Quit"', 'cancelTitle: "Cancel"', 'appName: () => "Ardia"']) assert.ok(quit.includes(text), text);
     assert.ok(views.includes('"[ardiacore] dialog (background run, not shown): \\""'));
-    assert.deepEqual(selectScenarios(["#221"]).map((s) => s.id), ["Q221"]);
+    assert.deepEqual(selectScenarios(["#221"]).map((s) => s.id), ["Q221", "Q221D"]);
   });
 
   it("selects by finding or issue number", () => {
-    assert.deepEqual(selectScenarios(["f01", "#33", "18"]).map((s) => s.id), ["F01", "F23", "F08"]);
+    assert.deepEqual(selectScenarios(["f01", "#33", "18"]).map((s) => s.id), ["F01", "F23", "F08", "F08D"]);
     assert.equal(selectScenarios([]).length, SCENARIOS.length);
     assert.throws(() => selectScenarios(["F99"]), /Unknown scenario F99/);
   });

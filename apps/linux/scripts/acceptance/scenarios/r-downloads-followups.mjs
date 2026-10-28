@@ -22,7 +22,6 @@ export const w74 = {
   title: "The download folder picker returns a validated folder or nothing",
   deadline: 120000,
   manual: [
-    { name: "Choosing and cancelling the download folder", steps: ["Settings › General › Downloads › Change…: the desktop's folder dialog opens (portal, GTK or KDE) at the current folder.", "Pick a writable folder: the row shows it and the next download lands there.", "Open it again and Cancel: the folder stays the same.", "Pick a folder you can't write to: Ardia explains why and offers to choose another; the setting is unchanged."], reason: "needs the desktop's folder dialog" },
   ],
   async run(t) {
     const { shell } = await startBrowser(t, { name: "picker" });
@@ -51,7 +50,6 @@ export const w75 = {
   deadline: 240000,
   manual: [
     { name: "A finished download never flashes as missing", steps: ["Download a file and watch its row in the downloads popover and in Ctrl+J as it finishes.", "The row goes straight from progress to the finished file; it never shows 'Missing' first."], reason: "a frame-level check of the rendered row" },
-    { name: "Show in Folder through the desktop", steps: ["In a desktop session, Show in Folder on a finished download opens the file manager with the file selected.", "On a session with no portal, FileManager1 or folder handler, Show in Folder shows 'Couldn't Show the File' instead of doing nothing."], reason: "needs a desktop session bus and a file manager" },
   ],
   async run(t) {
     const scratch = await t.scratch("volume");
@@ -111,7 +109,6 @@ export const w156 = {
   title: "Downloads: a failed reveal is reported and volume trash survives a writable top directory",
   deadline: 240000,
   manual: [
-    { name: "Portal or FileManager1 that fails", steps: ["In a desktop session, stop the file manager behind FileManager1 (or make the portal's OpenURI backend fail) and leave xdg-open without a folder handler.", "Show in Folder shows 'Couldn't Show the File' naming the portal, the file manager and the folder app it tried, instead of doing nothing."], reason: "needs a desktop session bus with a portal or FileManager1" },
     { name: "Trash on a writable removable drive", steps: ["Mount a drive whose top folder is writable by everyone and not sticky (for example vfat with umask=000) and download a file to it.", "Move to Trash puts it in that drive's .Trash-<uid>/files with a .trashinfo record, and a .Trash-<uid> another user created there is refused instead of used."], reason: "needs a second user and a removable drive" },
   ],
   async run(t) {

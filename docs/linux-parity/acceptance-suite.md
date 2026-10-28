@@ -86,6 +86,31 @@ Local fixtures:
 
 `openssl` must be installed. Node 22 or newer is needed for the built-in WebSocket client; the suite was written on Node 26.
 
+## Desktop sessions (#240)
+
+The scenarios whose id ends in `D` (sway) or `X` (X11) drive a visible Ardia the way a person would: real keys, a real pointer, the compositor's own focus and fullscreen, the real quit prompt and Settings window. They never touch the desktop you are using. Each one starts its own session and tears it down afterwards:
+
+- **Buses.** A private session bus and a private system bus (`dbus-daemon` with a generated config that has one empty service directory, so nothing on the machine is bus-activated into it). Ardia gets `DBUS_SESSION_BUS_ADDRESS` and `DBUS_SYSTEM_BUS_ADDRESS` pointing at them, so polkit, UPower, the keyring and the portal it talks to are the scenario's.
+- **Display.** Headless sway (`WLR_BACKENDS=headless`, pixman renderer, Xwayland off) with its own `XDG_RUNTIME_DIR`; `swaymsg create_output` adds a second 1920×1080 output when a scenario asks for two. The X11 variant runs `Xvfb -displayfd` with openbox as the window manager (without one, X11 falls back to pointer-root focus and focus checks mean nothing). `WAYLAND_DISPLAY`, `DISPLAY`, `SWAYSOCK`, `HYPRLAND_INSTANCE_SIGNATURE`, `XAUTHORITY` and `SSH_AUTH_SOCK` are removed from every process the harness starts.
+- **Input.** Keys go through one long-lived `zwp_virtual_keyboard_v1` client (`lib/tools/virtual_keyboard.py`, a US keymap from `xkbcli compile-keymap`) and the pointer through a `zwlr_virtual_pointer_v1` client written in Node (`lib/waylandPointer.mjs`). wtype isn't used: each wtype run adds and removes a seat keyboard, and Ardia (like any Chromium) drops keyboard focus when its keyboard goes away. On X11, xdotool.
+- **Reading the screen.** Window titles, focus, geometry, output and fullscreen come from `swaymsg -t get_tree` (xdotool on X11). Ardia's Views dialogs (the quit prompt) are child surfaces, not toplevels: with the prompt up, sway's tree still holds only the browser window. So they are found by diffing `grim -t ppm` captures: the harness waits for a settled screen, acts, and takes the largest connected changed region. A closed prompt is confirmed by its area matching the capture from before it opened. The prompts' words can't be read: this build links the ATK bridge but registers nothing with an AT-SPI bus started in the session, even with `ACCESSIBILITY_ENABLED=1` and `--force-renderer-accessibility`. Q221's wording stays manual. Screenshots of each step go to the evidence folder.
+- **Calibration.** Every focus scenario first runs stock `/usr/bin/chromium` (or `ARDIA_ACCEPTANCE_CHROMIUM`) in the same session. Stock Chromium must get focus at launch and receive typed text. Then its Ctrl+N window, once the compositor focuses it, must take a typed address. Without Chromium the calibration is reported as manual (unavailable) rather than skipped. Ctrl+N checks type only after the compositor has focused the new window: keys sent before it maps rightly go to the old window on Wayland. The background-instance check runs on X11 only, since sway and Hyprland focus every newly mapped toplevel and a Wayland client can't refuse it.
+- **Services** (`lib/desktopServices.mjs`, `lib/mocks/`), all python-dbusmock templates on the private buses:
+  - `ardia_polkitd.py`: `org.freedesktop.PolicyKit1` answering the probe with a challenge (as `auth_self` does) and each interactive check by mode: `allow`, `deny`, `dismiss` (`polkit.dismissed`), `hang` (held until Ardia cancels it), or an unregistered action. It records every call and cancellation.
+  - dbusmock's own `upower` and `power_profiles_daemon` templates; scenarios flip `OnBattery` and `ActiveProfile` through `org.freedesktop.DBus.Properties.Set`, which emits `PropertiesChanged` as the real daemons do.
+  - `file_manager.py`: `org.freedesktop.FileManager1` recording `ShowItems`/`ShowFolders`, optionally failing.
+  - `portal_backend.py` behind the real `/usr/lib/xdg-desktop-portal` frontend, started with its own `XDG_DESKTOP_PORTAL_DIR` and `portals.conf` in the scenario's folder: FileChooser `OpenFile`/`SaveFile`/`SaveFiles` answer with a scripted path or a cancel and record their options.
+  - `lib/desktopKeyring.mjs`: `gnome-keyring-daemon --foreground --components=secrets --unlock` with the scenario's `HOME`, left unlocked, locked through `org.freedesktop.Secret.Service.Lock`, or not started (absent).
+- **Tools.** `sway`, `swaymsg`, `grim`, `xkbcli`, `Xvfb`, `xdotool`, `xprop`, `openbox`, `dbus-daemon`, `python3` with `dbusmock`, `gnome-keyring-daemon` and `/usr/lib/xdg-desktop-portal`. A scenario whose tools are missing reports its checks as manual with the missing names. `ARDIA_ACCEPTANCE_TOOLS=<prefix>` puts `<prefix>/usr/bin` and `<prefix>/usr/lib` (and its Python `site-packages`, `etc/xdg` and `usr/share` for openbox) in front, for tools unpacked from packages without installing them.
+- **Live session.** Only F22H and W79H use the logged-in desktop, and only when `ARDIA_ACCEPTANCE_LIVE_HYPRLAND` is set to the Hyprland instance signature.
+  - **Isolation.** They move to workspace 9 and refuse if it has windows. Ardia and the calibration Chromium get private buses and a private `XDG_RUNTIME_DIR`, reaching the compositor through one symlink to its socket (`<private runtime>/wayland-live`; Chromium joins `XDG_RUNTIME_DIR` with `WAYLAND_DISPLAY` itself, so an absolute `WAYLAND_DISPLAY` fails). They never see the owner's pipewire, pulse, keyring, gnupg, at-spi or Hyprland IPC sockets.
+  - **Guard.** Every input event is checked first: each key and each typed character, each pointer motion, press and release, and each keymap switch. Workspace 9 must be active, and a workspace-9 window must be focused (keys) or under the pointer (pointer events, in layout coordinates). The first refusal aborts the scenario and refuses all later input.
+  - **Restore.** The previous workspace comes back afterwards, also from Ctrl+C or a crash.
+  - On Hyprland 0.56 dispatchers are Lua (`hl.dsp.focus({ workspace = 9 })`). CI has no such session.
+- **Lifecycle.** Every process group the harness starts is tracked. Stopping a group sends SIGTERM, then SIGKILL to the whole group, even after its leader exited.
+  - **Ctrl+C or SIGTERM.** The runner stops every running scenario: its browsers and its deferred stops (buses, compositor, mocks, portal, keyring, calibration Chromium, live workspace). A second Ctrl+C, a fatal error or process exit SIGKILLs whatever is left.
+  - **Deadline.** A scenario past its deadline is cleaned up, and from then on its context and desktop refuse to launch browsers, run checks, spawn processes or start mocks. A browser that finishes starting afterwards is closed.
+
 ## What each scenario automates
 
 | Finding | Issue | Automated checks | Manual |
@@ -123,6 +148,20 @@ Local fixtures:
 | S107 | #107 | From uBlock Origin's background page, `tabs.executeScript` into a `chrome://version` tab is refused; the `chrome://ardia/` shell has no execution context from the component | — |
 | S108 | #108 | An isolated profile's window blocks the fixture ad; a site exception set from the default window lets it through there while other sites stay blocked; a call from the isolated window removes the exception from the default profile's settings and blocking returns | The site panel in an isolated window |
 
+| F22D, F22X | #32 | Private sway, and Xvfb with openbox. Stock Chromium calibrates focus and typing at launch and on its Ctrl+N window. A restored two-window session focuses the saved window. Ctrl+N opens a window the compositor focuses, and keys typed once it is focused land in it. Ctrl+, opens Settings in front with keyboard focus and focuses it again. On X11 only, an `ARDIA_BACKGROUND=1` instance in the same session never takes focus | A link from another app |
+| W79D, W79X | #79 | Private sway and Xvfb, with the same calibration. Text typed while the first window maps reaches its command bar. Text typed once the compositor focuses the Ctrl+N window reaches its command bar. On sway, a dead key and a compose sequence type é in a clicked command bar, and a dead key once the Ctrl+N window is focused | An input method (#154) |
+| Q221D | #221 | Private sway: Ctrl+Shift+Q shows one quit prompt over the focused window (screen diff); none appears from the other window once the compositor has focused it; Escape cancels, its area matches the pre-prompt capture again, and the setting is kept; Don't ask again + Quit quits and the windows restore with the toggle off; with a download running one prompt, Cancel keeps the download, Quit quits with no second dialog, SIGTERM quits without asking | The prompts' wording (Q221) |
+| W77D | #77 | Two-output sway: a window moved to HEADLESS-2 and made fullscreen with the window manager is stamped, quits with Ctrl+Shift+Q, and after relaunch is fullscreen, on HEADLESS-2 and focused | — |
+| F07D | #17 | Mocked polkit authority on a private system bus: status reports reauth; Settings › Passwords › Unlock (clicked) with deny, dismiss and a two-minute hang stays locked and the hang is cancelled at the authority; allow lists the saved password and opening it asks nothing more | Five-minute expiry, Export, Edit and card numbers |
+| F07K | #17 | gnome-libsecret with gnome-keyring locked and with no Secret Service: Settings › Passwords names the keyring problem and shows no plain empty vault | — |
+| S102D | #102 | gnome-keyring unlocked: protection `keyring` and the storage row names the Secret Service; locked: the fallback is flagged in Settings | — |
+| F18D | #28 | dbusmock UPower and power-profiles-daemon on a private system bus: AC state; unplug reports onBattery within 2 s and one Battery Saver toast in the focused window only; plugging in turns it off; power-saver sets lowPowerMode within 2 s; UPower leaving the bus reports `unavailable` | — |
+| W74D | #74 | Private portal: Settings › General › Downloads › Change… sends a FileChooser folder request; the picked folder shows in the row and the next download lands there; Cancel keeps it; an unwritable folder brings up "Couldn't Use That Folder" over Settings and the setting is unchanged | — |
+| F08D | #18 | Private portal and FileManager1: the Ask where to save toggle, clicked in Settings, makes a download ask `SaveFile` and land at the answer; Cancel leaves no row or file; the popover's Show in Folder sends `ShowItems` with the file URI; clicking the finished row runs `xdg-open` on the file; with FileManager1 failing and the folder app exiting 4, Show in Folder says "Couldn't Show the File" | Move to Trash (native context menu) |
+| F09D | #19 | Private portal, extensions on: Settings › Show advanced settings › Extensions › Choose Folder… sends a folder request; Cancel in Ardia's Add dialog installs nothing; choosing the folder again shows the dialog again; in a fresh session Add Extension installs it from that folder | — |
+| F12D | #22 | Private portal and mocked polkit: Settings › Passwords › Import CSV… with Cancel imports nothing, three new rows and a duplicate say "Imported 3 passwords" and Unlock lists them, the same file again says "Imported 0 passwords"; Settings › General › Import… opens the Import window, Bookmarks HTML File… with Cancel stays on the chooser, a Chrome-shaped bookmarks.html says "Imported 3 bookmarks", and its 3 links and Work folder reach the browser window without a relaunch and are there after one | — |
+| F13D | #23 | Private portal: Settings › Sync (advanced) › Choose… sends a folder request and the pane shows the chosen folder; Cancel keeps it; it is still chosen after reopening Settings | Opening the sync folder from Other Options |
+| F22H, W79H | #32, #79 | Live session only (`ARDIA_ACCEPTANCE_LIVE_HYPRLAND=<instance signature>`): F22D's and W79D's checks on the logged-in Hyprland, on workspace 9 (refused if it has windows), with private session and system buses. Keys and clicks are refused unless workspace 9 is active and one of its windows has focus; the previous workspace comes back afterwards | — |
 S106, S107 and S108 need `ARDIA_ACCEPTANCE_CONTENT_BLOCKER` (or a package built with `--content-blocker`). S105's installer check needs the suite to run against an extracted package, where `install.sh` sits beside `bin/` and `lib/`.
 | F02-88 | #88 | A private window's `sites.setSetting` and `sites.setZoom` show in its own `sites.settings`/`sites.zoomLevels` and never in the regular profile's (nor in `sites.origins`); `history.query` and `profiles.clearBrowsingData` from it are `ERR_PROFILE_PRIVATE`; a regular window naming the private session gets `ERR_PROFILE_WINDOW`; a new private session after the last window closed has none of it | — (a call during OTR shutdown is covered by the fixtures) |
 | F02-72 | #72 | A private download asks where to save, as Chrome's incognito does (the background instance answers from `file-chooser.txt`, see #194), reaches only the private renderer, flagged `offTheRecord`, and its `downloads.list`; regular renderers never receive it and cannot remove or pause it; a slow private download pauses, resumes and cancels from its window; after the window closes and after a restart nothing lists it | The private window's Downloads popover |
@@ -149,6 +188,117 @@ S106, S107 and S108 need `ARDIA_ACCEPTANCE_CONTENT_BLOCKER` (or a package built 
 | E97 | #97 | The follow-up fixture (`fixtures/extension-followups`, loaded by `--load-extension`) declares `chrome_settings_overrides.search_provider`; `search.engines` lists it with `isOmniboxExtension: false` and keyword `ardiasearch`; Ardia maps it into `settings.extensionSearchEngines`; uninstalling removes it from both | The provider row in Settings › Search |
 | E98 | #98 | Chromium assigns the fixture's `_execute_action` (`Alt+Shift+Y`) and named (`Alt+Shift+U`) shortcuts on Linux (`chrome.commands.getAll()`) | Pressing the shortcuts: popup under Ardia's toolbar button, `onCommand`, no shadowing of an Ardia shortcut, side panel through the action |
 | E100 | #100 | A generated echo host (Node, `stdio`) answers `chrome.runtime.sendNativeMessage` from `~/.config/chromium/NativeMessagingHosts` (Ardia's new lookup) and from `~/.config/google-chrome/NativeMessagingHosts` (Helium's); Ardia's own `<data dir>/NativeMessagingHosts` wins over both; a host that doesn't list the extension is forbidden and an unknown host isn't found | A real password manager's desktop app connecting |
+
+## Manual checks and where each one stands (#240)
+
+The 104 manual items of the round-2 run (`ca167b67`), in its order. **Automated** names the scenario and its result on the `ee23b331` package; a failing result is a product failure, listed in the scenario's checks with screenshots. **Partly** means the scenario covers part of the steps and the rest stays in the original scenario's manual list. **Manual** gives the reason it can't be automated here. **Live session** marks checks only the logged-in Hyprland can answer; they were run by hand on an empty workspace and CI can't repeat them.
+
+| # | Finding | Check | Outcome |
+| --- | --- | --- | --- |
+| 1 | F01 #11 | System print dialog prints the correct pane | Manual: needs physical input or a desktop session. |
+| 2 | F01 #11 | Save Page writes the focused pane | Manual: Chromium's Save Page always asks for a path through a native file dialog. |
+| 3 | F01 #11 | Docked DevTools layout and focus | Manual: needs physical input or a desktop session. |
+| 4 | F01 #11 | DevTools and Find shortcuts from page focus | Manual: Ardia's shortcuts are handled at the window's Aura root, which CDP key events sent to a page never reach. |
+| 5 | F02 #12 | Extensions stay per profile | Manual: needs an extension install flow. |
+| 6 | F02 #12 | Settings panes reach the isolated profile's services | Manual: needs physical input or a desktop session. |
+| 7 | F03 #13 | Certificate details match the served certificate | Manual: needs a visual check of the certificate viewer. |
+| 8 | F06 #16 | Site panel and Privacy settings drive the same state | Manual: needs the visible panel and Settings layouts on a desktop. |
+| 9 | F06 #16 | Native permission prompts | Manual: needs physical devices and the prompt UI. |
+| 10 | F23 #33 | Pinch zoom agrees with the indicator | Manual: needs touchpad input. |
+| 11 | F07 #17 | System authentication gates reveal, edit, export and card numbers | Partly: F07D drives Settings › Passwords › Unlock against the mocked polkit authority (prompt with user interaction, list after allow, no second prompt inside the grant): pass. The five-minute expiry, Export CSV and card numbers stay manual. |
+| 12 | F07 #17 | Denied, dismissed and timed-out prompts never reveal | Partly: F07D answers Unlock with deny, dismiss and a two-minute hang (Ardia cancels the request at the authority): pass. Edit, Export and card numbers stay manual. |
+| 13 | F07 #17 | A locked keyring is reported as unavailable | Automated: F07K (gnome-keyring locked through Secret Service, and absent): pass. The pane says "Passwords aren't encrypted with your keyring" with "Your keyring didn't answer…", the #102 fallback, not the older "Passwords are unavailable" wording in F07's steps. |
+| 14 | F07 #17 | Private windows refuse credential management | Manual: driving a private window's own renderer through Settings needs the visible UI. |
+| 15 | F08 #18 | Open and Show in Folder act on the selected file | Partly: F08D: pass. Clicking a finished row in the Downloads popover runs the desktop's handler (xdg-open with the file), and Show in Folder asks FileManager1 to `ShowItems` the file URI. Move to Trash stays manual: it is only in the row's native context menu. |
+| 16 | F08 #18 | Ask where to save shows the native picker | Automated: F08D: pass. Ask where to save, turned on by clicking its Settings toggle, makes the next download ask the portal's `SaveFile` and save where it answers. Cancelling leaves no live row and no file. |
+| 17 | F09 #19 | Web Store install shows Ardia's consent dialog and Cancel installs nothing | Manual: needs network access to the Chrome Web Store and its signed CRX. |
+| 18 | F09 #19 | A permission-increasing update asks before re-enabling | Manual: this build has no UI route that installs a local CRX. Settings › Extensions offers the Web Store, a store link and Choose Folder… only, so a locally signed CRX pair has nowhere to go. |
+| 19 | F09 #19 | Load unpacked through the folder picker | Automated: F09D (Settings › Show advanced settings › Extensions › Choose Folder…, portal folder dialog): **fail, intermittent**. The portal always answers with the fixture folder, but Ardia's Add dialog appears on only about half the attempts (six runs; which attempt misses depends on how fast the folder comes back). When it appears, Cancel installs nothing and Add Extension installs the folder. |
+| 20 | F09 #19 | Popup placement, focus and keyboard | Manual: needs a visible compositor and real input. |
+| 21 | F20 #30 | Drag a downloaded file out to another application | Manual: outbound drags need a compositor drag session. |
+| 22 | F20 #30 | Drop real files from a file manager | Manual: the host records file paths only from an OS drag session. |
+| 23 | F20 #30 | Internal reorder and page drops still work | Manual: needs physical input or a desktop session. |
+| 24 | F11 #21 | Real provider accounts | Manual: needs real provider credentials and OAuth client IDs. |
+| 25 | F11 #21 | Tokens live in the desktop keyring | Manual: needs a real desktop keyring session. |
+| 26 | F12 #22 | Import window click-through | Manual: the import utility window needs a desktop session to click through. |
+| 27 | F12 #22 | Native file chooser | Automated: F12D: **fail**. Bookmarks HTML File… in the Import window asks the portal, and Cancel keeps the chooser step and imports nothing (pass). A Chrome-shaped bookmarks.html says "Imported 3 bookmarks", and the Import window's own store has the Work folder and 3 links, but the open browser window gets none of them until Ardia is relaunched (after a relaunch they are all there). |
+| 28 | F12 #22 | Passwords CSV import from Settings | Automated: F12D: pass. Cancel imports nothing; a CSV with three new logins and a duplicate row says "Imported 3 passwords" and Unlock (mocked polkit) lists them; the same file again says "Imported 0 passwords". |
+| 29 | F12 #22 | Chromium's SQLite build reads real profiles | Manual: fixtures use the system SQLite; only a real build exercises Chromium's. |
+| 30 | F12 #22 | Keyring-protected Chrome passwords | Manual: needs the user's real keyring session; the generated keyring path is automated in I109. |
+| 31 | F13 #23 | The sync key lives in the desktop keyring | Manual: needs a real desktop keyring session. |
+| 32 | F13 #23 | No or locked keyring fails safely | Manual: needs a real desktop keyring session. |
+| 33 | F13 #23 | The recovery phrase needs system authentication | Manual: needs a polkit agent and a person at its prompt. |
+| 34 | F13 #23 | Choosing a folder from Settings | Automated: F13D: pass. Settings › Sync (advanced) › Choose… sends a portal folder request; the pane shows the chosen folder; Cancel keeps it. Ctrl+W really closes Settings, it reopens as a new window, and the folder is still chosen. Opening the folder from Other Options stays manual (native menu). |
+| 35 | F13 #23 | Linux and macOS share one folder | Manual: needs a Mac and a real folder-sync service. |
+| 36 | F14 #24 | A real GNOME Online Accounts calendar | Manual: needs a desktop session with Evolution Data Server and a signed-in online account. |
+| 37 | F14 #24 | Expired online account | Manual: needs a real provider account. |
+| 38 | F22 #32 | Ctrl+N then immediate typing lands in the new window | Automated: F22D (sway) and F22X (Xvfb + openbox): **fail** (#246). Typing starts only after the compositor has focused the Ctrl+N window. The text still never reaches its command bar: the window has compositor focus but no keyboard focus. In the same session, stock Chromium's Ctrl+N window takes a typed address once focused. **Live session:** F22H on Hyprland is inconclusive. Hyprland keeps keyboard focus on the owner's workspace-1 terminal: new windows on workspace 9 don't take it, and neither does `hl.dsp.focus` by address. Stock Chromium fails the calibration there, and the guard refused the first key, so no input reached any window. Rerun it once focus follows new windows again. |
+| 39 | F22 #32 | Background and restore-behind windows never activate | Partly: F22D/F22X automate restore-behind: **fail** (#247), the last-mapped window takes focus, not the saved focused one. An ARDIA_BACKGROUND=1 instance is checked on X11 only (F22X): **fail** (#248), its window maps and takes focus. On sway and Hyprland every newly mapped toplevel gets focus and a Wayland client can't refuse it, so that check isn't run there. A link from another app stays manual: it needs a second application handing Ardia an activation token. |
+| 40 | F22 #32 | Settings and Import come to the front | Partly: F22D/F22X automate Settings in front with keyboard focus, and reopening it: **fail** (#246). The compositor focuses it, but there's no document focus until a click. Import stays manual: it has no shortcut, only a menu row. |
+| 41 | F26 #36 | Default browser registration and autostart survive restart | Manual: the Linux backends are not implemented; the rows are hidden until they are. |
+| 42 | F26 #36 | Streaming sites keep Chromium's identity | Manual: needs Widevine and a real network. |
+| 43 | F26 #36 | Custom header dragging moves the window | Manual: needs pointer input through the compositor. |
+| 44 | F26 #36 | Page scroll bar style applies to real pages | Manual: the scroll bar backend is not implemented; the row is hidden. |
+| 45 | F27 #37 | Finishing onboarding through its steps | Manual: needs physical input or a desktop session. |
+| 46 | F27 #37 | Setup choices apply across windows | Manual: the onboarding flow needs pointer input through its steps. |
+| 47 | F27 #37 | Onboarding and tours from a utility window | Manual: cross-renderer command routing is still open in the F27 handoff. |
+| 48 | F17 #27 | Video fullscreen from the player's own control | Manual: needs a real media player and a desktop session. |
+| 49 | F17 #27 | Hover status follows the pointer | Manual: needs a physical pointer. |
+| 50 | F17 #27 | Split and transfer keep producers on the right pane | Manual: needs desktop window management. |
+| 51 | W78 #78 | Compositor fullscreen keeps page fullscreen separate | Manual: needs the desktop compositor. |
+| 52 | F24 #34 | Icons in essentials and the top strip | Manual: visual check of pinned layouts. |
+| 53 | F15 #25 | Manual PiP of a real video | Manual: headless Chromium has no compositor surface for a PiP window. |
+| 54 | F15 #25 | Manual PiP of a video outside the media session | Manual: headless Chromium has no compositor surface for a PiP window. |
+| 55 | F15 #25 | Automatic PiP still separate | Manual: needs a compositor. |
+| 56 | F15 #25 | Hear mute | Manual: needs an audio device. |
+| 57 | F15 #25 | Portal capture indicators | Manual: needs a desktop portal session. |
+| 58 | F18 #28 | Battery transitions | Automated: F18D (dbusmock UPower on a private system bus): pass. onBattery within 2 s, one Battery Saver toast in the focused window only, off again on AC, and power `unavailable` once UPower leaves the bus. |
+| 59 | F18 #28 | Power profile | Automated: F18D (dbusmock power-profiles-daemon): pass. power-saver turns lowPowerMode on within 2 s and Battery Saver activates. |
+| 60 | F18 #28 | Memory pressure | Manual: Ardia reads the root cgroup's memory PSI. A `systemd-run --user --scope -p MemoryHigh=` hog only stalls its own scope, and stalling the root cgroup would stall the owner's desktop. |
+| 61 | F16 #26 | Physical modifier clicks | Manual: CDP clicks cover the browser path; the physical keyboard and pointer need a desktop session. |
+| 62 | F16 #26 | Selection popover and Escape | Manual: the popover position and look need a visual check. |
+| 63 | F16 #26 | Drag a link out of a page | Manual: headless Ozone has no system drag-and-drop loop. |
+| 64 | F25 #35 | Toolbar hides and returns on screen | Manual: the slide animation and layout need a visual check. |
+| 65 | F25 #35 | Tint looks right | Manual: the rendered colors need a visual check. |
+| 66 | S102 #102 | A working keyring is reported as the keyring | Automated: S102D (gnome-keyring-daemon unlocked on a private session bus): pass. Protection is `keyring`, the storage row names the Secret Service, nothing is flagged, and the login keyring holds an item after a save. |
+| 67 | S102 #102 | A keyring that stops answering is flagged | Automated: S102D (gnome-keyring locked): pass. protectionFallback and the Settings flag. |
+| 68 | S104 #104 | Wording reads naturally on the desktop | Manual: layout needs a visible desktop. |
+| 69 | S105 #105 | The installed package registers the action | Manual: needs a root install and a polkit agent. |
+| 70 | S108 #108 | The site panel acts the same in an isolated window | Manual: needs the visible panel. |
+| 71 | F02-72 #72 | The private window's Downloads popover | Manual: needs a visible window to read the popover. |
+| 72 | F02-71 #71 | Open link in incognito window | Manual: needs Chrome's native context menu, which a background instance only logs. |
+| 73 | F02-89 #89 | Window menu entry | Manual: Linux has no Window menu yet; tracked as a follow-up. |
+| 74 | F02-101 #101 | Print and Save Page in isolated and private windows | Manual: needs the native print preview and file dialog. |
+| 75 | F02-99 #99 | Toolbar, popup and side panel in a private window | Manual: needs a visible window and real input. |
+| 76 | F02-148 #148 | Window menu from the window controls | Manual: needs a visible compositor to see the menu and the focus change. |
+| 77 | F02-149 #149 | Spanning extension button and popup in a private window | Manual: needs a visible window and real input. |
+| 78 | F02-150 #150 | Open Link in Incognito Window from an extension popup | Manual: needs Chrome's native context menu, which a background instance only logs. |
+| 79 | F02-150 #150 | Open Link in Incognito Window from DevTools | Manual: needs Chrome's native context menu. |
+| 80 | F02-173 #173 | Automatic PiP stays off in a private window | Manual: needs a compositor and media playback. |
+| 81 | W77 #77 | Fullscreen restores on the right display | Automated: W77D (sway with two headless outputs): **fail**. Fullscreen and focus come back, but the window returns on HEADLESS-1, not HEADLESS-2 where it was saved: on Wayland Ardia saves no output for a fullscreen window. |
+| 82 | W79 #79 | Ctrl+N then immediate typing | Automated: W79D/W79X: **fail** (#246). Typing starts once the compositor has focused the Ctrl+N window, and it still never reaches its command bar. Stock Chromium's Ctrl+N calibration passes. **Live session:** W79H is inconclusive for the same reason (calibration fails, the guard refused all input). |
+| 83 | W79 #79 | Ctrl+N then composed input (#154) | Partly: W79D: a dead key (us intl) and a compose sequence (compose:ralt) each type é in a clicked command bar: pass. A dead key typed once the compositor focuses the Ctrl+N window: **fail** (#246), the é lands in the old window. An input method (Japanese) stays manual: no fcitx5 or ibus engine (mozc, anthy) is installed here, and fcitx5 has no keyboard engine. |
+| 84 | W79 #79 | Typing at launch | Automated: W79D/W79X: **fail** (#246). Text typed while the first window appears never reaches its command bar: the window has compositor focus but no keyboard focus until it is clicked. Stock Chromium passes. **Live session:** W79H is inconclusive for the same reason (calibration fails, the guard refused all input). |
+| 85 | W70 #70 | Swiping toward an isolated profile | Manual: needs trackpad gestures. |
+| 86 | W74 #74 | Choosing and cancelling the download folder | Automated: W74D: pass. Change… asks the portal for a folder, starting at the current folder (`current_folder`). The picked folder is shown and the next download lands there. Cancel keeps the folder. An unwritable folder brings up Ardia's "Couldn't Use That Folder" prompt over Settings (screen diff) and leaves the setting unchanged. |
+| 87 | W75 #75 | A finished download never flashes as missing | Manual: a frame-level check of the rendered row. |
+| 88 | W75 #75 | Show in Folder through the desktop | Automated: F08D: pass, through FileManager1 (`ShowItems` with the file URI). The portal's OpenURI `OpenDirectory` path isn't driven, because the stub backend offers no AppChooser, so the frontend exports no OpenURI. |
+| 89 | W156 #156 | Portal or FileManager1 that fails | Automated: F08D: pass. With FileManager1 failing and the folder app exiting 4, Show in Folder from the popover shows "Couldn't Show the File". |
+| 90 | W156 #156 | Trash on a writable removable drive | Manual: needs a second user and a removable drive. |
+| 91 | W76 #76 | DevTools on a fresh tab | Manual: the frame-by-frame placement needs a person. |
+| 92 | W137 #137 | Closing the Web Store tab dismisses its prompt | Manual: needs network access to the Chrome Web Store. |
+| 93 | W137 #137 | A prompt with no tab stays until answered | Manual: the same as #18. No UI route installs a local CRX, so a prompt without a Web Store tab can't be raised here. |
+| 94 | I109 #109 | GNOME Keyring and KWallet | Manual: needs the desktop keyring daemons and their prompts. |
+| 95 | I110 #110 | A real Firefox profile | Manual: fixtures come from the system NSS; a real Firefox profile proves its own NSS version. |
+| 96 | I111 #111 | Import window click-through with tabs, cookies and autofill | Manual: needs a desktop session and a real profile. |
+| 97 | E97 #97 | The provider appears in Settings › Search | Manual: Settings needs a desktop session to click through. |
+| 98 | E98 #98 | _execute_action opens the popup under Ardia's toolbar button | Manual: needs real keyboard input through the native window. |
+| 99 | E98 #98 | Named commands fire chrome.commands.onCommand | Manual: needs real keyboard input through the native window. |
+| 100 | E98 #98 | Extension shortcuts never shadow Ardia's | Manual: needs real keyboard input and the Settings window. |
+| 101 | E98 #98 | Side panel through the action shortcut | Manual: needs real keyboard input. |
+| 102 | E100 #100 | A password manager's desktop app connects | Manual: needs a third-party desktop app and its signed extension. |
+| 103 | Q221 #221 | The visible quit prompt | Partly: Q221D: pass. One prompt over the focused window (screen diff, since Views dialogs aren't compositor windows). Ctrl+Shift+Q again, once the compositor has focused the other window, adds no prompt-sized change anywhere. Escape closes it, and the prompt's area matches the capture from before it opened. Don't ask again + Quit quits, both windows restore and the toggle is off. The prompt's words stay manual in Q221: they can't be read through a real channel (no compositor window, nothing registered with AT-SPI). |
+| 104 | Q221 #221 | Active downloads ask before quitting | Partly: Q221D: pass. With a download running there is one prompt; Cancel keeps Ardia and the download; Quit quits with no second dialog; SIGTERM quits without asking and restores both windows. The prompt's wording stays manual in Q221 (see #103). |
 
 ## Manual steps
 
