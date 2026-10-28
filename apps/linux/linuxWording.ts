@@ -93,6 +93,10 @@ export const LINUX_WORDING: readonly Wording[] = [
       ],
     ],
   },
+  {
+    file: "state/extensions/actions.ts",
+    replacements: [[`"The extension's folder stays on your Mac."`, `"The extension's folder stays on this computer."`]],
+  },
 ];
 
 const marker = "/apps/browser/src/";
