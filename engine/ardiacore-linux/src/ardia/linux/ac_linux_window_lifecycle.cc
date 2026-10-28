@@ -65,6 +65,17 @@ void FocusLedger::Forget(int window) {
   if (active_ == window) active_ = 0;
 }
 
+std::optional<int64_t> OutputLabelled(const std::vector<Output>& outputs, const std::string& label) {
+  if (label.empty()) return std::nullopt;
+  std::optional<int64_t> found;
+  for (const Output& output : outputs) {
+    if (output.label != label) continue;
+    if (found) return std::nullopt;
+    found = output.id;
+  }
+  return found;
+}
+
 std::array<int, 4> SharedFrame(const Rect& bounds, const Rect& primary) {
   return {bounds.x - primary.x,
           primary.y + primary.height - (bounds.y + bounds.height),

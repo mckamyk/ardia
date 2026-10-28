@@ -341,17 +341,26 @@ struct BaseWindow {
   void Maximize() { maximized = true; }
   NativeWindow* GetNativeWindow() { return &native; }
 };
+using NativeWindow = NativeWindow;
 }
 
 namespace display {
 struct Display {
   gfx::Rect rect;
+  int64_t id_ = 0;
+  std::string label_;
   gfx::Rect bounds() const { return rect; }
+  int64_t id() const { return id_; }
+  const std::string& label() const { return label_; }
 };
 struct Screen {
   static inline gfx::Rect primary{0, 0, 1920, 1080};
+  static inline std::vector<Display> displays;
+  static inline Display nearest;
   static Screen* Get() { static Screen screen; return &screen; }
-  Display GetPrimaryDisplay() const { return {primary}; }
+  Display GetPrimaryDisplay() const { Display display; display.rect = primary; return display; }
+  const std::vector<Display>& GetAllDisplays() const { return displays; }
+  Display GetDisplayNearestWindow(ui::NativeWindow*) const { return nearest; }
 };
 }
 
@@ -364,6 +373,13 @@ struct Widget {
   bool IsMinimized() const { return minimized; }
   bool IsActive() const { return active; }
   gfx::Rect GetWindowBoundsInScreen() const { return bounds; }
+  std::vector<int64_t> fullscreen_targets;
+  std::function<void()> show_state_changed;
+  void SetFullscreen(bool on, int64_t target) {
+    fullscreen_targets.push_back(target);
+    fullscreen = on;
+    if (show_state_changed) show_state_changed();
+  }
 };
 struct WebView {
   bool visible = true;
@@ -382,9 +398,13 @@ struct WebContents {
 };
 }
 
+struct PrefService {
+  base::DictValue placements;
+};
+struct ScopedDictPrefUpdate {};
 struct Profile {
-  int prefs = 0;
-  int* GetPrefs() { return &prefs; }
+  PrefService prefs;
+  PrefService* GetPrefs() { return &prefs; }
   base::WeakPtr<Profile> GetWeakPtr() { return base::WeakPtr<Profile>(this); }
 };
 struct SessionID {
@@ -422,7 +442,14 @@ BrowserWindowInterface* CreateBrowserWindow(BrowserWindowCreateParams params) {
   return created_browsers.back().get();
 }
 namespace chrome {
-inline const base::DictValue* GetWindowPlacementDictionaryReadOnly(const std::string&, int*) { return nullptr; }
+inline const base::DictValue* GetWindowPlacementDictionaryReadOnly(const std::string& name, PrefService* prefs) {
+  return prefs->placements.FindDict(name);
+}
+inline base::DictValue& GetWindowPlacementDictionaryReadWrite(const std::string& name, PrefService* prefs,
+                                                             std::unique_ptr<ScopedDictPrefUpdate>&) {
+  if (!prefs->placements.FindDict(name)) prefs->placements.Set(name, base::DictValue());
+  return const_cast<base::DictValue&>(*prefs->placements.FindDict(name));
+}
 }
 inline bool ValidUtilityPlacement(const base::DictValue*) { return false; }
 std::string String(const base::DictValue& dict, std::string_view key) {
@@ -457,10 +484,17 @@ struct FullscreenController {
   bool tab = false, caused_by_tab = false;
   bool browser_fullscreen = false;
   int toggles = 0;
+  views::Widget* widget = nullptr;
   bool IsWindowFullscreenForTabOrPending() const { return tab; }
   bool IsFullscreenCausedByTab() const { return caused_by_tab; }
   bool IsFullscreenForBrowser() const { return browser_fullscreen; }
-  void ToggleBrowserFullscreenMode(bool) { ++toggles; browser_fullscreen = !browser_fullscreen; }
+  void ToggleBrowserFullscreenMode(bool) {
+    ++toggles;
+    browser_fullscreen = !browser_fullscreen;
+    if (!widget) return;
+    widget->fullscreen = browser_fullscreen;
+    if (widget->show_state_changed) widget->show_state_changed();
+  }
 };
 struct ExclusiveAccessManager {
   FullscreenController controller;
@@ -472,7 +506,11 @@ struct ExclusiveAccessManager {
 };
 struct ShellHostView {
   ShellHostView(int id, std::string window_id, BrowserWindowInterface* browser, std::string kind = "")
-      : id_(id), window_id_(std::move(window_id)), kind_(std::move(kind)), browser_(browser) { Hosts()[id_] = this; }
+      : id_(id), window_id_(std::move(window_id)), kind_(std::move(kind)), browser_(browser) {
+    Hosts()[id_] = this;
+    widget.show_state_changed = [this] { OnWidgetShowStateChanged(&widget); };
+    ExclusiveAccessManager::From(browser_)->controller.widget = &widget;
+  }
   ~ShellHostView() { Hosts().erase(id_); }
   int id_;
   std::string window_id_;
@@ -492,7 +530,15 @@ struct ShellHostView {
   const std::string& window_id() const { return window_id_; }
   bool is_utility() const { return !kind_.empty(); }
   BrowserWindowInterface* browser() const { return browser_; }
-  Profile* profile() { return &profile_; }
+  Profile* profile_source = &profile_;
+  Profile* profile() const { return profile_source; }
+  bool private_window() const { return false; }
+  PrefService* WindowOutputPrefs() const;
+  void RememberWindowOutput();
+  void ForgetWindowOutput();
+  std::optional<std::pair<int64_t, std::string>> SavedWindowOutput() const;
+  std::optional<std::string> output_target_;
+  bool output_forgotten_ = false;
   std::string page_profile_;
   int opener_host_ = 0;
   uint64_t opener_generation_ = 0;
@@ -831,6 +877,98 @@ static void FullScreenRestored() {
   assert(ok && Toggles(other_browser) == 0);
 }
 
+static const std::string* SavedOutput(Profile& profile, const char* id) {
+  const base::DictValue* outputs = profile.prefs.placements.FindDict("ArdiaLinuxWindowOutputs");
+  return outputs ? outputs->FindString(id) : nullptr;
+}
+
+static void FullScreenOnTheSavedOutput() {
+  ui::OzonePlatform::properties.supports_global_screen_coordinates = false;
+  display::Screen::displays = {{{0, 0, 1920, 1080}, 10, "Out A"}, {{1920, 0, 1920, 1080}, 20, "Out B"}};
+  Profile app;
+  {
+    BrowserWindowInterface main_browser{1};
+    ShellHostView main(1, "main", &main_browser);
+    main.profile_source = &app;
+    BrowserWindowInterface settings_browser{2};
+    ShellHostView settings(2, "settings", &settings_browser, "settings");
+    settings.profile_source = &app;
+    display::Screen::nearest = display::Screen::displays[1];
+    main.ReportWindowGeometry();
+    assert(!SavedOutput(app, "main"));
+    main.widget.fullscreen = true;
+    main.OnWidgetShowStateChanged(&main.widget);
+    assert(SavedOutput(app, "main") && *SavedOutput(app, "main") == "Out B");
+    settings.widget.fullscreen = true;
+    settings.RememberWindowOutput();
+    assert(!SavedOutput(app, "settings"));
+    BrowserWindowInterface other_browser{3};
+    ShellHostView other(3, "w-other", &other_browser);
+    other.profile_source = &app;
+    other.widget.fullscreen = true;
+    other.RememberWindowOutput();
+    assert(SavedOutput(app, "w-other"));
+    other.ForgetWindowOutput();
+    assert(!SavedOutput(app, "w-other"));
+    other.RememberWindowOutput();
+    assert(!SavedOutput(app, "w-other"));
+  }
+  BrowserWindowInterface main_browser{1};
+  ShellHostView main(1, "main", &main_browser);
+  main.profile_source = &app;
+  main.startup_ = true;
+  display::Screen::nearest = display::Screen::displays[0];
+  bool ok = false;
+  Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"main"}, "main"), &ok);
+  assert(ok && Toggles(main_browser) == 1 && main.widget.fullscreen);
+  assert((main.widget.fullscreen_targets == std::vector<int64_t>{20}));
+  assert(*SavedOutput(app, "main") == "Out B");
+  main.ReportWindowGeometry();
+  assert(*SavedOutput(app, "main") == "Out B");
+  display::Screen::nearest = display::Screen::displays[1];
+  main.ReportWindowGeometry();
+  assert(*SavedOutput(app, "main") == "Out B");
+  display::Screen::nearest = display::Screen::displays[0];
+  main.ReportWindowGeometry();
+  assert(*SavedOutput(app, "main") == "Out A");
+}
+
+static void FullScreenWhenTheSavedOutputIsGone() {
+  ui::OzonePlatform::properties.supports_global_screen_coordinates = false;
+  display::Screen::displays = {{{0, 0, 1920, 1080}, 10, "Out A"}};
+  Profile app;
+  app.prefs.placements.Set("ArdiaLinuxWindowOutputs", base::DictValue().Set("main", "Out B"));
+  BrowserWindowInterface main_browser{1};
+  ShellHostView main(1, "main", &main_browser);
+  main.profile_source = &app;
+  main.startup_ = true;
+  Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"main"}, "main"));
+  assert(Toggles(main_browser) == 1 && main.widget.fullscreen_targets.empty());
+}
+
+static void OutputLabels() {
+  using linux_window::Output;
+  using linux_window::OutputLabelled;
+  const std::vector<Output> outputs{{10, "Make A (HEADLESS-1)"}, {20, "Make B (HEADLESS-2)"}, {30, "Twin"}, {40, "Twin"}};
+  assert(OutputLabelled(outputs, "Make B (HEADLESS-2)") == std::optional<int64_t>(20));
+  assert(!OutputLabelled(outputs, "Gone"));
+  assert(!OutputLabelled(outputs, "Twin"));
+  assert(!OutputLabelled(outputs, ""));
+  assert(!OutputLabelled({{50, ""}}, ""));
+}
+
+static void X11KeepsNoOutputs() {
+  display::Screen::displays = {{{0, 0, 1920, 1080}, 10, "Out A"}};
+  display::Screen::nearest = display::Screen::displays[0];
+  Profile app;
+  BrowserWindowInterface main_browser{1};
+  ShellHostView main(1, "main", &main_browser);
+  main.profile_source = &app;
+  main.widget.fullscreen = true;
+  main.OnWidgetShowStateChanged(&main.widget);
+  assert(!SavedOutput(app, "main"));
+}
+
 static void FullScreenGivenUp() {
   BrowserWindowInterface main_browser{1};
   ShellHostView main(1, "main", &main_browser);
@@ -922,7 +1060,8 @@ int main(int argc, char** argv) {
       {"wayland", Wayland}, {"background", Background}, {"frames", Frames},
       {"fullscreen-restore", FullScreenRestored}, {"fullscreen-given-up", FullScreenGivenUp},
       {"fullscreen-background", FullScreenInBackground}, {"fullscreen-focus-yields", FullScreenFocusYieldsToTheUser},
-      {"fullscreen-shown-later", FullScreenWhenShownLater}};
+      {"fullscreen-shown-later", FullScreenWhenShownLater}, {"fullscreen-output", FullScreenOnTheSavedOutput},
+      {"fullscreen-output-gone", FullScreenWhenTheSavedOutputIsGone}, {"x11-outputs", X11KeepsNoOutputs}, {"output-labels", OutputLabels}};
   const auto found = scenarios.find(mode);
   if (found == scenarios.end()) return 2;
   found->second();
@@ -1001,6 +1140,10 @@ def host_harness():
         'void ShellHostView::SeedWindowActivation(',
         'void ShellHostView::RendererReady(',
         'void ShellHostView::RestoreFullScreenNow(',
+        'PrefService* ShellHostView::WindowOutputPrefs(',
+        'void ShellHostView::RememberWindowOutput(',
+        'void ShellHostView::ForgetWindowOutput(',
+        'std::optional<std::pair<int64_t, std::string>> ShellHostView::SavedWindowOutput(',
         'void TabBinding::FocusFromHost(',
         'void TabBinding::OnWebContentsFocused('])
     status = (LINUX / 'ac_linux_page_status.h').read_text()
@@ -1083,6 +1226,22 @@ class WindowLifecycleHostTests(unittest.TestCase):
 
     def test_a_window_shown_after_it_is_ready_still_restores_fullscreen(self):
         self.run_mode('fullscreen-shown-later')
+
+    def test_wayland_fullscreen_windows_return_to_their_saved_output(self):
+        self.run_mode('fullscreen-output')
+
+    def test_a_missing_saved_output_falls_back_to_the_compositors_choice(self):
+        self.run_mode('fullscreen-output-gone')
+
+    def test_a_saved_output_matches_exactly_one_display_label(self):
+        self.run_mode('output-labels')
+
+    def test_x11_keeps_no_saved_outputs(self):
+        self.run_mode('x11-outputs')
+
+    def test_outputs_are_saved_on_close_and_forgotten_when_the_window_departs(self):
+        self.assertIn('RememberWindowOutput();', extract(HOST, 'void ShellHostView::OnWidgetClosing('))
+        self.assertIn('ForgetWindowOutput();', extract(HOST, 'void ShellHostView::CommitWindowDeparture('))
 
     def test_fullscreen_restore_never_activates_a_background_instance(self):
         self.run_mode('fullscreen-background')
