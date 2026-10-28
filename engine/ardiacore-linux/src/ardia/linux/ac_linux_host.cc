@@ -5609,7 +5609,8 @@ void StartLinuxHost() {
   extensions.broadcast = base::BindRepeating([](Profile* profile, std::string_view name, base::DictValue data) {
     for (const auto& [id, host] : Hosts()) {
       Profile* page = host->page_profile();
-      if (page && !page->ShutdownStarted() && page->GetOriginalProfile() == profile) {
+      if (!page || page->ShutdownStarted()) continue;
+      if (page->GetOriginalProfile() == profile || (host->is_utility() && !profile->IsOffTheRecord())) {
         host->ExtensionEvent(name, data.Clone());
       }
     }

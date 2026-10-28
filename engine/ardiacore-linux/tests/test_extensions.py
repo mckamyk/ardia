@@ -163,7 +163,7 @@ class ExtensionServiceTests(unittest.TestCase):
 
 
 class ExtensionBroadcastTests(unittest.TestCase):
-    def test_extension_changes_reach_only_windows_of_that_profile(self):
+    def test_extension_changes_reach_windows_of_that_profile_and_settings_windows(self):
         host = (LINUX / 'ac_linux_host.cc').read_text()
         start = host.index('  extensions.broadcast = base::BindRepeating(')
         lambda_text = host[start:host.index('\n  });\n', start) + len('\n  });\n')]
@@ -173,8 +173,10 @@ class ExtensionBroadcastTests(unittest.TestCase):
 #include <cstdio>
 struct FakeHost {
   Profile* page = nullptr;
+  bool utility = false;
   std::vector<std::string> seen;
   Profile* page_profile() const { return page; }
+  bool is_utility() const { return utility; }
   bool ExtensionEvent(std::string_view name, base::DictValue data) {
     seen.push_back(std::string(name) + ":" + *data.FindString("id"));
     return true;
@@ -193,13 +195,15 @@ int main() {
   regular_private.original = &regular;
   isolated_private.off_the_record = true;
   isolated_private.original = &isolated;
-  FakeHost a, b, c, d, e, closed;
+  FakeHost a, b, c, d, e, closed, settings;
+  settings.page = &regular;
+  settings.utility = true;
   a.page = &regular;
   b.page = &isolated;
   c.page = &regular;
   d.page = &regular_private;
   e.page = &isolated_private;
-  Hosts() = {{1, &a}, {2, &b}, {3, &c}, {4, &d}, {5, &e}, {6, &closed}};
+  Hosts() = {{1, &a}, {2, &b}, {3, &c}, {4, &d}, {5, &e}, {6, &closed}, {7, &settings}};
   struct { base::RepeatingCallback<void(Profile*, std::string_view, base::DictValue)> broadcast; } extensions;
 ARDIA_LAMBDA
   extensions.broadcast.Run(&isolated, "extensions.changed", base::DictValue().Set("id", "x"));
@@ -209,6 +213,10 @@ ARDIA_LAMBDA
   assert(a.seen.size() == 1 && c.seen.size() == 1 && b.seen.size() == 1 && d.seen.size() == 1 && e.seen.size() == 1);
   extensions.broadcast.Run(&regular_private, "extensions.changed", base::DictValue().Set("id", "z"));
   assert(a.seen.size() == 1 && d.seen.size() == 1 && closed.seen.empty());
+  assert(settings.seen.size() == 2 && settings.seen[0] == "extensions.changed:x" && settings.seen[1] == "extensions.changed:y");
+  regular.shutdown_started = true;
+  extensions.broadcast.Run(&isolated, "extensions.changed", base::DictValue().Set("id", "w"));
+  assert(settings.seen.size() == 2 && b.seen.size() == 2);
   std::printf("broadcast scenarios passed\n");
 }
 '''
