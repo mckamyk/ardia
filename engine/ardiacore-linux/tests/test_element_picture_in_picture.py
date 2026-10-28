@@ -15,6 +15,7 @@ FILES = [
     'content/browser/media/media_web_contents_observer.h',
     'content/browser/media/session/media_session_controllers_manager.cc',
     'content/browser/media/session/media_session_controllers_manager.h',
+    'content/browser/media/session/media_session_controller.h',
 ]
 
 
@@ -57,7 +58,7 @@ class ElementPictureInPictureTests(unittest.TestCase):
         self.assertNotIn('EnterPictureInPictureForUser', mojom)
         self.assertNotIn('PictureInPictureDocument', mojom)
 
-    def test_the_patch_requests_pip_for_one_available_player_of_the_primary_main_frame(self):
+    def test_the_patch_requests_pip_for_one_available_player_of_the_primary_page(self):
         series = (ROOT.parents[0] / 'patches/series').read_text()
         self.assertIn('chromium chromium-linux-media-player-pip.patch linux', series)
         text = PATCH.read_text()
@@ -67,13 +68,29 @@ class ElementPictureInPictureTests(unittest.TestCase):
             observer = (pathlib.Path(directory) / FILES[0]).read_text()
             candidates = body(observer, 'MediaWebContentsObserver::ArdiaLinuxPictureInPictureCandidates(')
             self.assertIn('has_video()', candidates)
-            self.assertIn('ArdiaLinuxPictureInPictureAvailable(id)', candidates)
-            self.assertIn('id.frame_routing_id != frame', candidates)
+            self.assertRegex(candidates, r'ArdiaLinuxPictureInPictureAvailable\(\s*id\)')
+            self.assertIn('ArdiaLinuxInPrimaryPage(id)', candidates)
+            self.assertNotIn('frame_routing_id', candidates)
+            primary = body(observer, 'bool MediaWebContentsObserver::ArdiaLinuxInPrimaryPage(')
+            self.assertIn('RenderFrameHost::FromID(id.frame_routing_id)', primary)
+            self.assertIn('frame->GetPage().IsPrimary()', primary)
+            self.assertIn('WebContents::FromRenderFrameHost(frame) == web_contents_impl()', primary)
             request = body(observer, 'bool MediaWebContentsObserver::ArdiaLinuxRequestPictureInPicture(')
             self.assertIn('media_player_remotes_.find(id)', request)
+            self.assertIn('ArdiaLinuxInPrimaryPage(id)', request)
             self.assertIn('RequestEnterPictureInPicture(std::nullopt)', request)
+            self.assertNotIn('GetPrimaryMainFrame', body(observer, 'bool ArdiaLinuxRequestPictureInPicture(WebContents* contents,'))
             for name in FILES[1::2]:
                 self.assertIn('#if BUILDFLAG(IS_LINUX)', (pathlib.Path(directory) / name).read_text())
+
+    def test_pip_availability_is_read_without_the_session_player_id_check(self):
+        with patched_tree() as directory:
+            manager = (pathlib.Path(directory) / FILES[2]).read_text()
+            available = body(manager, 'bool MediaSessionControllersManager::ArdiaLinuxPictureInPictureAvailable(')
+            self.assertIn('ArdiaLinuxPictureInPictureAvailable()', available)
+            self.assertNotIn('id.player_id', available)
+            controller = (pathlib.Path(directory) / FILES[4]).read_text()
+            self.assertIn('bool ArdiaLinuxPictureInPictureAvailable() const {\n    return is_picture_in_picture_available_;', controller)
 
     def test_the_patch_keeps_no_played_player_list(self):
         text = PATCH.read_text()
