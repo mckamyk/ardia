@@ -239,6 +239,13 @@ test("utility windows skip the tab warning but keep the drain and save barrier",
   assert.deepEqual(steps(log), ["begin", "quiesce", "drain", "acknowledge"]);
 });
 
+test("an app quit closes every window without the tab warning but keeps the drain and save barrier", async () => {
+  const { log, asks, coordinator } = harness();
+  await coordinator.accept(main, { quitting: true });
+  assert.equal(asks.length, 0);
+  assert.deepEqual(steps(log), ["begin", "quiesce", "drain", "acknowledge"]);
+});
+
 test("dialog suspension waits after allow and before quiescence and resumes once only on confirmed cancellation", async () => {
   const settled = deferred();
   const resumed = [];
