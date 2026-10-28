@@ -158,6 +158,13 @@ void Routes() {
          IsDownloadControl("downloads.resume") && IsDownloadControl("downloads.keep"));
   assert(!IsDownloadControl("downloads.list") && !IsDownloadControl("downloads.settings") && !IsDownloadControl("downloads.remove"));
   assert(DownloadControlService("downloads.cancel") == "ac_downloads_cancel");
+  assert(DeliversRemoval(false, false, "/data/Default", "/data/Default"));
+  assert(DeliversRemoval(false, true, "/data/Default", "/data/Default"));
+  assert(DeliversRemoval(false, false, "/data/Isolated", "/data/Default"));
+  assert(DeliversRemoval(true, true, "/data/Default", "/data/Default"));
+  assert(!DeliversRemoval(true, false, "/data/Default", "/data/Default"));
+  assert(!DeliversRemoval(true, true, "/data/Isolated", "/data/Default"));
+  assert(!DeliversRemoval(true, true, "", ""));
   assert(DownloadControlService("downloads.pause") == "ac_downloads_pause");
   assert(DownloadControlService("downloads.resume") == "ac_downloads_resume");
   assert(DownloadControlService("downloads.keep") == "ac_downloads_keep");

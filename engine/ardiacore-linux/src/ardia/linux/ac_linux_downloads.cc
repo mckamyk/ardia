@@ -190,6 +190,12 @@ DownloadRoute RouteDownloads(ardiacore::linux_profiles::ProfileKind requested, b
   return {ProfileError::kNone, false};
 }
 
+bool DeliversRemoval(bool private_removal, bool page_private, std::string_view page_original_path,
+                     std::string_view removal_path) {
+  if (!private_removal) return true;
+  return page_private && !removal_path.empty() && page_original_path == removal_path;
+}
+
 std::string_view DownloadControlService(std::string_view name) {
   if (name == "downloads.cancel") return "ac_downloads_cancel";
   if (name == "downloads.pause") return "ac_downloads_pause";

@@ -959,6 +959,7 @@ class ShellHostView : public views::View,
   void QueueTransaction(std::optional<int> command);
   void EngineEvent(std::string_view topic, const base::DictValue& payload);
   bool ReceivesPrivateDownload(const base::DictValue& download);
+  bool ReceivesRemoval(bool private_removal, const std::string& profile_path);
   void Invoke(std::string method, const base::DictValue& args,
               base::OnceCallback<void(bool, base::Value)> done);
   void ReportPictureInPicture(content::WebContents* contents, base::DictValue state);
@@ -3244,12 +3245,22 @@ bool ShellHostView::ReceivesPrivateDownload(const base::DictValue& download) {
   return page && page->IsOffTheRecord() && !page->ShutdownStarted() && id && LinuxDownloadOwned(page, *id);
 }
 
+bool ShellHostView::ReceivesRemoval(bool private_removal, const std::string& profile_path) {
+  Profile* page = page_profile();
+  return linux_downloads::DeliversRemoval(private_removal, page && page->IsOffTheRecord(),
+                                          page ? page->GetOriginalProfile()->GetPath().value() : std::string(),
+                                          profile_path);
+}
+
 void ShellHostView::EngineEvent(std::string_view topic,
                                 const base::DictValue& payload) {
   if (!profile()) return;
   base::DictValue translated = payload.Clone();
+  const bool private_removal = topic == "downloads.removed" && translated.FindBool("offTheRecord").value_or(false);
+  if (private_removal) translated.Remove("offTheRecord");
   if (translated.FindBool("offTheRecord").value_or(false)) return;
   if (!translated.FindString("profile")) return;
+  if (!ReceivesRemoval(private_removal, String(translated, "profile"))) return;
   const auto engine_profile = ardiacore::LinuxProfileNameForPath(String(translated, "profile"));
   if (!engine_profile) return;
   translated.Set("profile", *engine_profile);
