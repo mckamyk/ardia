@@ -61,6 +61,9 @@ class PageMessageTests(unittest.TestCase):
     def test_link_drops_need_a_real_drag_that_ended_over_the_page(self):
         self.run_case('link-drops')
 
+    def test_a_drag_is_over_its_page_until_the_exit_settles(self):
+        self.run_case('drag-over')
+
     def test_input_activity_is_announced_at_most_twice_a_second(self):
         self.run_case('activity')
 

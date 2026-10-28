@@ -38,3 +38,37 @@ On 0f5d71dc (with #285), F16D's "drop target or outside the window" check opened
 ## Needs the next build to confirm
 
 F16D's own-page drop still opening one tab, the outside-window drop opening nothing, and the second-window drop opening exactly one tab in the second window (target profile, first window unchanged).
+
+## Regression on cand-980e7f14: the own-page drop never reaches a drop target
+
+F16D on the cand-980e7f14 package (with #301) failed "dragging a link onto its own page with no drop target opens one foreground tab". It had passed on 0f5d71dc. A run of the packaged `chrome` with gdb attached after startup (symbols from the matching unstripped build, same build ID) traced `DesktopDragDropClientOzone`'s `StartDragAndDrop`, `OnDragLeave`, `OnDragDrop` and `OnDragFinished`, `LinuxDropWatch::OnDragCompleted`, `NoteLinuxDragEnded` and `AcceptLinkDrop`. Launching under gdb kept DevTools from starting, so the wrapper starts `chrome`, waits for `DevToolsActivePort`, then execs `gdb -p` as its parent (Yama ptrace scope 1).
+
+| Drag | Sequence (ms after drag start) |
+| --- | --- |
+| own page, no drop target | page leave 849.3, source finished (cancelled) 851.5, drag ended 855.1, `linkDrop` checked; no `OnDragDrop`, no `OnDragCompleted` |
+| page drop target | `OnDragDrop` 856.4, finished (copy) 858.4 |
+| outside the window | page leave 272.9, source finished (cancelled) 980.2 |
+| second Ardia window | page leave 90.2, the other window's `OnDragDrop` 980.5, finished (copy) 982.7 |
+
+Blink refuses a drop on the page that started the drag (`drag_controller.cc:571-573`), so the platform offer accepts no action. On release sway sends the target `leave` and the source `cancelled`, not `drop`. X11's XDND does the same (`XdndLeave` instead of `XdndDrop`). The page only sends `linkDrop` when `dropEffect` is `none`, which means a refused or cancelled drop. So `OnDragCompleted`, which fires only for a delivered drop, never fires in the case `linkDrop` exists for.
+
+At the protocol level, a release over the page and a drop outside the window differ only in when the page saw the drag leave. At release, the leave comes in the same Wayland dispatch as `cancelled` (2 ms apart under gdb). When the pointer leaves first, the leave comes long before the release (707 ms here). Sway sends no pointer `enter` after a drop without motion (the next page input came 6 s later, from the harness), and `linkDrop` arrives before any later pointer input anyway.
+
+## Fix
+
+- `LinuxPageDropTrack` (`ac_linux_page_channel.cc`) wraps the `aura::client::DragDropDelegate` that `WebContentsViewAura` installs on the page view's window (`web_contents_view_aura.cc:1078`). It is installed when the page gets a left press and forwards all four calls.
+  - Entered and updated mark the drag over the page.
+  - Exited posts a task that settles the exit.
+  - It restores WCVA's delegate and deletes itself when the window is destroyed or the WebContents is destroyed. The latter is notified before the frame tree and view are torn down, so it never outlives WCVA.
+- `LinuxDragOver` (`ac_linux_link_gesture.h`) is the pure state: an exit counts only once its task has run, and a stale exit does not undo a later entry.
+- The drag ends inside the nested drag loop's dispatch, before queued tasks run, so a leave that came with the release is still unsettled when `NoteLinuxDragEnded` runs. `NoteLinuxDragEnded` calls `Gate().NoteDrop(over ? source : 0)` before `NoteDragEnded`. A pointer that left earlier has settled, and its drop opens nothing.
+- `LinuxDropWatch` and `NoteLinuxDrop` are removed. Cross-window drops stay with the target page's Blink handling, as on macOS.
+
+| Command | Result |
+| --- | --- |
+| `python3 -m unittest test_page_messages` | 10 passed. `drag-over` replays the own-page sequence (enter, exit, end before settle), the outside sequence (exit settled before the end) and a re-entry; it fails to compile on `linux` |
+| `python3 -m unittest test_page_channel_contract` | 5 passed |
+| `bash scripts/linux/syntax-check-156.sh ac_linux_page_channel ac_linux_link_gesture ac_linux_host.cc` | 3 of 3 pass |
+| `test_private_links`, `test_page_world`, `test_page_commands`, `test_linux_features` | OK |
+
+Needs the next build: all four F16D drop checks.

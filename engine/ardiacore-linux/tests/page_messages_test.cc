@@ -289,6 +289,43 @@ void LinkDrops() {
   Expect(gate.AcceptLinkDrop(5, true, 30.1) == "no drag from this page ended", "destroyed surface forgets its drop");
 }
 
+void DragOver() {
+  LinuxDragOver own_page;
+  Expect(!own_page.Over(), "no drag yet");
+  own_page.Entered();
+  own_page.Entered();
+  const uint64_t release = own_page.Exited();
+  Expect(own_page.Over(), "a refused drop on its own page: the leave and the drag end come in one batch, before the exit settles");
+  own_page.Settle(release);
+  Expect(!own_page.Over(), "once the exit settles the pointer has left");
+
+  LinuxDragOver outside;
+  outside.Entered();
+  outside.Settle(outside.Exited());
+  Expect(!outside.Over(), "a drag that left the page before it ended was not over it");
+
+  LinuxDragOver returned;
+  returned.Entered();
+  const uint64_t left = returned.Exited();
+  returned.Entered();
+  returned.Settle(left);
+  Expect(returned.Over(), "a stale exit doesn't undo coming back");
+
+  LinuxDragOver never;
+  never.Settle(never.Exited());
+  Expect(!never.Over(), "an exit without an entry is never over");
+
+  LinuxDragOver performed;
+  performed.Entered();
+  performed.Reset();
+  Expect(!performed.Over(), "a new press forgets an earlier drag whose drop was performed without an exit");
+  const uint64_t stale = performed.Exited();
+  performed.Reset();
+  performed.Entered();
+  performed.Settle(stale);
+  Expect(performed.Over(), "an exit from before the press doesn't undo the new drag");
+}
+
 void Activity() {
   LinuxInputActivity activity;
   Expect(activity.Note(10.0), "first input is announced");
@@ -352,6 +389,7 @@ int main(int argc, char** argv) {
   else if (name == "gestures") Gestures();
   else if (name == "evaluation") Evaluation();
   else if (name == "link-drops") LinkDrops();
+  else if (name == "drag-over") DragOver();
   else if (name == "activity") Activity();
   else return 2;
   return 0;
