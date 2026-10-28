@@ -13,6 +13,7 @@ This covers saved passwords and full card numbers in the Linux port (#17, source
 
   The Linux notice above Passwords and Autofill warns about the fallback, and its "Storage on this computer" row names the key. A fallback store stays available, so saved data never looks like an empty vault.
 - **Unavailable store.** If the password store reports `kKeychainError`/`kInactionable`, or the encryptor has no key, every password call fails with `ERR_PASSWORDS_UNAVAILABLE`. The card calls fail with `ERR_AUTOFILL_UNAVAILABLE`. None of them returns an empty list, so a locked keyring never looks like an empty vault.
+- **A store that is still loading (#195).** A newly loaded profile's password store reports `kInactionable` until its database has opened, which waits for the OSCrypt key. A password call, or the password status, polls `GetError()` every 50 ms while it reads `kInactionable`, for at most 10 s (`AwaitsStore`), and only then judges the store. The wait reads only the store's error state, never a login. A store that is still `kInactionable` after 10 s fails as before, so a database that couldn't open now takes 10 s to report. Calls that need only addresses or cards don't wait.
 
 ## Authentication
 

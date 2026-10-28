@@ -175,6 +175,14 @@ I couldn't build or run Chromium 156 here, so none of this has run as a browser.
   - a private window's own renderer (private names and isolated-profile separation are automated).
 - **First real build.** Confirm that the new GN deps resolve and that `SelectFileDialog` uses the portal or GTK under Ardia's host. Confirm too that polkit accepts the `system-bus-name` subject from the shared system bus.
 
+## Acceptance fix: the first call for a profile that is still loading (#195)
+
+The first `ArdiaPasswords.save` or `passwords.list` for an isolated profile that had just loaded failed with `ERR_PASSWORDS_UNAVAILABLE` ("The password store couldn't be opened"); 2 s later it worked. F07 hit this on its first isolated save.
+
+- **Cause.** `WithProbes` read `PasswordStore::GetError()` right after `ProfilePasswordStoreFactory` created the store. `PasswordStoreBuiltInBackend::GetError()` reports `kInactionable` until `OnInitComplete`, which runs only after OSCrypt hands over its key and the login database opens, so a store that was still loading looked broken. F12's `writePasswords` never read `GetError()`; Chromium queues its `AddLogins` until init finishes.
+- **Fix.** `AwaitPasswordStore` re-reads `GetError()` every `kStoreReadyPollMs` (50 ms) while `AwaitsStore` says to wait, at most `kStoreReadyTimeoutMs` (10 s), then hands the settled error to `Assess`. It holds a reference to the store and never uses the `Profile*` after the synchronous part of `WithProbes`. A store shut down during the wait reports `kInactionable` and ends as `storeFailed`. Only plans that need the password store (and the password status) wait.
+- **Tests.** `credentials_scenarios.cc` covers `AwaitsStore` and a store that loads after 40 polls; `test_credentials.py` checks the service polls instead of judging the first reading.
+
 ## Follow-ups opened
 
 - #102: report a silent OSCrypt fallback from the keyring to the v10 key.
