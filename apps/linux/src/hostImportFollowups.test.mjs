@@ -109,7 +109,7 @@ test("Firefox passes its primary password to the native unlock and only then cou
   await api.listBrowsers();
   const unlocking = api.unlockBrowser("firefox", { primaryPassword: "primary pw" });
   await settle();
-  assert.deepEqual(calls.at(-1).args.slice(1), ["firefox", "primary pw"]);
+  assert.deepEqual(calls.at(-1).args.slice(1), ["firefox", "primary pw", [], []]);
   emit({ jobId: calls.at(-1).args[0], type: "unlocked" });
   await unlocking;
   assert.equal(api.isBrowserUnlocked("firefox"), true);
@@ -181,4 +181,37 @@ test("an unlock expires with the native key's ten-minute lifetime", async () => 
   advance(1000);
   assert.equal(api.isBrowserUnlocked("chrome"), false);
   assert.equal(api.isBrowserUnlocked("brave"), true);
+});
+
+test("an import result keeps only well-formed PNG favicons for http and https pages", async () => {
+  const { api, calls, emit } = fixture();
+  const running = api.importData("firefox", "a.default", ["bookmarks"]);
+  await settle();
+  const png = "iVBORw0KGgoAAAANSUhEUg==";
+  emit({ jobId: calls[0].args[0], type: "done", result: { favicons: [
+    { page: "https://a.example/", icon: "https://a.example/favicon.ico", png },
+    { page: "javascript:alert(1)", icon: "https://b.example/i.png", png },
+    { page: "https://c.example/", icon: "https://c.example/i.png", png: "R0lGODlh" },
+    { page: "https://d.example/", icon: 4, png },
+    { page: "https://e.example/", icon: "https://e.example/i.png", png: "iVBORw0KGgo!!" },
+    "nope",
+  ] } });
+  const result = await running;
+  assert.deepEqual(result.favicons, [{ page: "https://a.example/", icon: "https://a.example/favicon.ico", png }]);
+});
+
+test("a Firefox unlock whose card key the keyring refused leaves the browser locked, so the next import asks again", async () => {
+  const { api, calls, emit } = fixture({ "ArdiaImport.listBrowsers": SOURCES });
+  await api.listBrowsers();
+  const unlocking = api.unlockBrowser("firefox", { primaryPassword: "primary pw", profiles: ["a.default", 4], kinds: ["passwords", "autofill"] });
+  await settle();
+  assert.deepEqual(calls.at(-1).args.slice(1), ["firefox", "primary pw", ["a.default"], ["passwords", "autofill"]]);
+  emit({ jobId: calls.at(-1).args[0], type: "unlocked", cardsLocked: true });
+  await unlocking;
+  assert.equal(api.isBrowserUnlocked("firefox"), false);
+  const again = api.unlockBrowser("firefox", { primaryPassword: "primary pw", profiles: ["a.default"], kinds: ["autofill"] });
+  await settle();
+  emit({ jobId: calls.at(-1).args[0], type: "unlocked", cardsLocked: false });
+  await again;
+  assert.equal(api.isBrowserUnlocked("firefox"), true);
 });

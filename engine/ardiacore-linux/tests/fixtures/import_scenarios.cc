@@ -562,6 +562,20 @@ int main(int argc, char** argv) {
     std::cout << base::ToJson(ListBrowsers(environment, keyring.get())) << "\n";
     return 0;
   }
+  if (command == "firefox-unlock" && argc > 9) {
+    std::unique_ptr<Keyring> keyring = argc > 10 && std::string(argv[10]) == "keyring" ? SystemKeyring() : nullptr;
+    const auto list = [](const char* text) { return std::string(text) == "-" ? std::vector<std::string>() : Split(text); };
+    FirefoxUnlock unlock = UnlockFirefox(environment, argv[6], SecretBytes(std::string(argv[7]) == "-" ? "" : argv[7]),
+                                         list(argv[8]), list(argv[9]), keyring.get(), 5000);
+    base::DictValue out;
+    out.Set("code", unlock.code);
+    out.Set("message", unlock.message);
+    out.Set("primary", unlock.primary_password ? unlock.primary_password->value() : std::string());
+    out.Set("cardKey", unlock.card_key ? Hex(unlock.card_key->value()) : std::string());
+    out.Set("cardsLocked", unlock.cards_locked);
+    std::cout << base::ToJson(out) << "\n";
+    return 0;
+  }
   if (command == "extensions") {
     std::cout << base::ToJson(ListExtensions(environment, argv[6], argv[7])) << "\n";
     return 0;
@@ -574,6 +588,7 @@ int main(int argc, char** argv) {
     if (argc > 12 && std::string(argv[12]) != "-") options.chromium_key = SecretBytes(Unhex(argv[12]));
     if (argc > 13 && std::string(argv[13]) != "-") options.firefox_primary_password = SecretBytes(argv[13]);
     options.now_ms = argc > 14 ? std::atof(argv[14]) : 1700000000000.0;
+    if (argc > 15 && std::string(argv[15]) != "-") options.firefox_card_key = SecretBytes(Unhex(argv[15]));
     ImportOutcome outcome = ReadBrowserProfile(environment, argv[6], argv[7], Split(argv[8]), options, recorder);
     base::DictValue out;
     out.Set("cancelled", outcome.cancelled);

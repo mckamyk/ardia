@@ -45,6 +45,7 @@ class Value {
   int GetInt() const { return std::get<int>(value_); }
   double GetDouble() const { return is_int() ? std::get<int>(value_) : std::get<double>(value_); }
   const std::string& GetString() const { return std::get<std::string>(value_); }
+  std::string& GetString() { return std::get<std::string>(value_); }
   DictValue& GetDict() { return *std::get<std::unique_ptr<DictValue>>(value_); }
   const DictValue& GetDict() const { return *std::get<std::unique_ptr<DictValue>>(value_); }
   ListValue& GetList() { return *std::get<std::unique_ptr<ListValue>>(value_); }
@@ -103,6 +104,10 @@ class DictValue {
   }
   const std::string* FindString(std::string_view key) const {
     const Value* v = Find(key);
+    return v && v->is_string() ? &v->GetString() : nullptr;
+  }
+  std::string* FindString(std::string_view key) {
+    Value* v = Find(key);
     return v && v->is_string() ? &v->GetString() : nullptr;
   }
   const DictValue* FindDict(std::string_view key) const {

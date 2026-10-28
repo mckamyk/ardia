@@ -13,6 +13,7 @@ namespace ardia::linux_import {
 
 inline constexpr std::string_view kSecretSchemaV2 = "chrome_libsecret_os_crypt_password_v2";
 inline constexpr std::string_view kSecretSchemaV1 = "chrome_libsecret_os_crypt_password";
+inline constexpr std::string_view kFirefoxSecretSchema = "mozilla.firefox";
 inline constexpr std::string_view kKWalletAppId = "Ardia";
 inline constexpr int kKeyringProbeTimeoutMs = 3000;
 inline constexpr int kKeyringPromptTimeoutMs = 120000;
@@ -21,9 +22,12 @@ struct SafeStorageItem {
   std::string application;
   std::string kwallet_folder;
   std::string kwallet_key;
+  std::string secret_schema;
+  std::string secret_label;
 };
 
 std::optional<SafeStorageItem> SafeStorageFor(std::string_view browser_id);
+std::optional<SafeStorageItem> FirefoxStorageFor(std::string_view browser_id);
 
 enum class KeyringStatus { kOk, kMissing, kLocked, kDenied, kUnavailable };
 std::string_view KeyringErrorCode(KeyringStatus status);

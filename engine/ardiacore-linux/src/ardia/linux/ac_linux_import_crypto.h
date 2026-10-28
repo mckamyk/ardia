@@ -93,7 +93,25 @@ enum class FirefoxKey { kOk, kLocked, kUnsupported, kMalformed, kMissing };
 FirefoxKey FirefoxMasterKeys(std::string_view global_salt, std::string_view password_check,
                              const std::vector<FirefoxKeyRow>& rows, std::string_view primary_password, FirefoxKeys* keys);
 
+inline constexpr std::string_view kFirefoxLoginsKeyLabel = "as-logins-key";
+inline constexpr std::string_view kFirefoxAutofillKeyLabel = "as-autofill-key";
+inline constexpr size_t kGcmIvBytes = 12;
+inline constexpr size_t kGcmTagBytes = 16;
+
+FirefoxKey FirefoxPasswordState(std::string_view global_salt, std::string_view password_check,
+                                std::string_view primary_password);
+FirefoxKey FirefoxNamedKey(std::string_view global_salt, std::string_view password_check,
+                           const std::vector<FirefoxKeyRow>& rows, std::string_view primary_password,
+                           std::string_view label, SecretBytes* key);
+
 bool Base64Decode(std::string_view text, std::string* out);
+bool Base64UrlDecode(std::string_view text, std::string* out);
+std::string Base64Encode(std::string_view data);
+bool DecryptAesGcm(std::string_view key, std::string_view iv, std::string_view cipher, std::string_view tag,
+                   std::string_view aad, std::string* plain);
+bool DecryptFirefoxJwe(std::string_view compact, const SecretBytes& key, std::string* plain);
+bool DecryptFirefoxOsKeyStore(std::string_view base64, const SecretBytes& key, std::string* plain);
+std::optional<SecretBytes> FirefoxOsKeyStoreKey(std::string_view secret);
 bool DecryptFirefoxField(std::string_view base64, const FirefoxKeys& keys, std::string* plain);
 
 bool DecompressMozLz4(std::string_view data, std::string* out);
