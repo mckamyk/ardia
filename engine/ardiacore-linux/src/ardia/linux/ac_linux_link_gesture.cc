@@ -49,8 +49,8 @@ std::string LinuxLinkGestureGate::AcceptLinkDrop(uintptr_t surface, bool visible
 }
 
 void LinuxLinkGestureGate::NoteRelease(uintptr_t surface, int flags, double now,
-                                       std::optional<LinuxLinkPoint> point) {
-  if (!surface) return;
+                                       std::optional<LinuxLinkPoint> point, bool ends_drag) {
+  if (!surface || ends_drag) return;
   up_surface_ = surface;
   up_flags_ = flags & (kLinuxLinkAlt | kLinuxLinkShift | kLinuxLinkControl | kLinuxLinkMeta);
   up_at_ = now;
