@@ -14,7 +14,8 @@ test("viewport observation tracks transforms, scroll, visual zoom, overlays, and
   let cardAtSample = false;
   let disconnected = false;
   const element = { isConnected: true, parentElement: null, getBoundingClientRect: () => rect, contains: () => false };
-  const document = Object.assign(documentEvents, { hidden: false, querySelectorAll: () => cards, querySelector: () => null, elementFromPoint: () => blocked ? {} : cardAtSample ? cards[0] : element });
+  const selectors = [];
+  const document = Object.assign(documentEvents, { hidden: false, querySelectorAll: (selector) => { selectors.push(selector); return cards; }, querySelector: () => null, elementFromPoint: () => blocked ? {} : cardAtSample ? cards[0] : element });
   globalThis.window = Object.assign(windowEvents, { innerWidth: 1280, innerHeight: 800, visualViewport });
   globalThis.document = document;
   globalThis.getComputedStyle = () => ({ display: "block", visibility: "visible", opacity: "1" });
@@ -25,6 +26,7 @@ test("viewport observation tracks transforms, scroll, visual zoom, overlays, and
   try {
     const stop = watchTabViewport(element, () => true, (update) => updates.push(update));
     assert.equal(updates.at(-1).visible, true);
+    assert.deepEqual(selectors.at(-1).split(",").map((part) => part.trim()), ['[data-testid="ardia-sidebar-hover"] > div > div', '[data-testid="ardia-page-overlay"] > div > div']);
     rect = { ...rect, x: 250, left: 250, right: 1050 };
     windowEvents.dispatchEvent(new Event("scroll"));
     assert.equal(updates.at(-1).rect.x, 250);
@@ -112,6 +114,42 @@ test("an open extension popup keeps the page under it painted and live, cut out 
     assert.equal(own.at(-1).visible, true);
     assert.equal(own.at(-1).occlusions, undefined);
     stopOwn();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  }
+});
+
+test("a selection popover over the page and an open extension popup are both cut out of the page", () => {
+  const previous = Object.fromEntries(["window", "document", "getComputedStyle", "ResizeObserver", "requestAnimationFrame", "cancelAnimationFrame"].map((key) => [key, globalThis[key]]));
+  const box = (x, y, width, height) => ({ x, y, width, height, left: x, top: y, right: x + width, bottom: y + height });
+  const page = { isConnected: true, parentElement: null, getBoundingClientRect: () => box(190, 47, 763, 1026), contains: (node) => node === page };
+  const bar = { getBoundingClientRect: () => box(500, 300, 87, 32), contains: (node) => node === bar };
+  const popup = { getBoundingClientRect: () => box(704, 47, 241, 121), contains: (node) => node === popup };
+  const dismiss = { getBoundingClientRect: () => box(0, 0, 953, 1080), contains: (node) => node === dismiss };
+  const selected = { '[data-testid="ardia-extension-popup"]': popup, '[data-testid="ardia-extension-popup-dismiss"]': dismiss };
+  globalThis.window = Object.assign(new EventTarget(), { innerWidth: 953, innerHeight: 1080 });
+  globalThis.document = Object.assign(new EventTarget(), {
+    hidden: false,
+    querySelectorAll: (selector) => (selector.includes('"ardia-page-overlay"') ? [bar] : []),
+    querySelector: (selector) => selected[selector] ?? null,
+    elementFromPoint: () => dismiss,
+  });
+  globalThis.getComputedStyle = () => ({ display: "block", visibility: "visible", opacity: "1" });
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  globalThis.requestAnimationFrame = () => 1;
+  globalThis.cancelAnimationFrame = () => {};
+  try {
+    const updates = [];
+    const stop = watchTabViewport(page, () => true, (update) => updates.push(update));
+    assert.equal(updates.at(-1).visible, true);
+    assert.deepEqual(updates.at(-1).occlusions, [
+      { x: 500, y: 300, width: 87, height: 32, paintOutset: 32 },
+      { x: 704, y: 47, width: 241, height: 121, paintOutset: 32 },
+    ]);
+    stop();
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete globalThis[key];

@@ -17,6 +17,7 @@ const replacements = new Map([
   [here("../browser/src/components/settings/Form.tsx"), here("./src/settingsForm.tsx")],
   [here("../browser/src/state/engines/engines.ts"), here("./src/hostEngines.ts")],
   [here("../browser/src/components/sidebar/HoverCard.tsx"), here("./src/SidebarHoverCard.tsx")],
+  [here("../browser/src/components/site/SelectionPopover.tsx"), here("./src/SelectionPopover.tsx")],
   [here("../browser/src/components/onboarding/HomeStep.tsx"), here("./src/LinuxHomeStep.tsx")],
   [here("../browser/src/state/settings/settingsWindows.ts"), here("./src/settingsWindows.ts")],
   [here("../browser/src/components/profiles/ProfileIndicator.tsx"), here("./src/ProfileIndicator.tsx")],
