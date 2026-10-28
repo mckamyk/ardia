@@ -33,7 +33,7 @@ int TypeaheadModifierFlag(ui::KeyboardCode key);
 class TypeaheadInput : public ui::EventRewriter, public ui::InputMethodObserver, public ui::TextInputClient {
  public:
   using Owns = base::RepeatingCallback<bool(aura::Window* target)>;
-  using Live = base::RepeatingCallback<bool(const ui::KeyEvent& event)>;
+  using Live = base::RepeatingCallback<ShortcutKind(const ui::KeyEvent& event)>;
 
   TypeaheadInput(aura::WindowTreeHost* host, ui::InputMethod* input, Owns owns);
   TypeaheadInput(const TypeaheadInput&) = delete;

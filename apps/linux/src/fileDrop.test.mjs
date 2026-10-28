@@ -97,5 +97,5 @@ test("the Linux shell replaces the placeholder drop and drag views with DOM adap
   const area = readFileSync(new URL("./shims/web/FileDropArea.tsx", import.meta.url), "utf8");
   assert.match(area, /FILE_DROP/);
   const main = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
-  assert.match(main, /startNativeSync\(\);\n\s+announceCommandsReady\(ardiaHost\);\n\s+startHostDownloads\(ardiaHost, useBrowser\);/);
+  assert.match(main, /startNativeSync\(\);\n\s+startHostDownloads\(ardiaHost, useBrowser\);/);
 });

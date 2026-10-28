@@ -75,18 +75,20 @@ These are verified only by unit tests and `scripts/linux/syntax-check-156.sh`. T
 
 A new window holds every key from attach until its UI calls `typeaheadReady`, which can take seconds under swiftshader. The typeahead rewriter swallows those keys before `OnKeyEvent` (#331; F02-150D lost Ctrl+Shift+I this way). #323 settled how shortcuts behave during the hold.
 
-- **Live once commands are ready.** Right after `startNativeSync` installs its command listener, the UI calls `ArdiaShell.commandsReady` (`announceCommandsReady` in `typeahead.ts`). `shortcuts_` is filled earlier, by `startLinuxShortcuts`, before any listener exists, so it can't be the signal. The host then gives `TypeaheadInput` a live predicate (`ShellHostView::LiveShortcut`): a key press matching `shortcuts_` that isn't a `notInText` binding. `RewriteEvent` sends three kinds of key through live (`LiveKeys` in `ac_linux_typeahead.h`), and only text stays held:
-  - live presses;
-  - the releases of those keys;
-  - every modifier release, so the tab switcher sees its Ctrl go up.
-
-  `OnKeyEvent` then runs the shortcut at once with the live modal check, extension commands and switcher handling. When the hold ends, the held text replays into whichever field the shortcut focused.
+- **Live once commands are ready.** The UI calls `ArdiaShell.commandsReady` from the `FirstWindowCommitted` effect (`announceCommandsReady` in `typeahead.ts`), just before `announceTypeaheadReady`.
+  - **Why then.** The window's tree, its webviews and every service `start()` launches already exist at that point, so a live shortcut acts on the right tab. Sending it right after `startNativeSync` would let shortcuts through before the first render, where they did nothing.
+  - **Why not `shortcuts_`.** `startLinuxShortcuts` fills it before any command listener exists, so it can't be the signal.
+- **Which keys pass.** The host records the calling renderer's generation and gives `TypeaheadInput` a predicate, `ShellHostView::LiveShortcutKind`. It answers only while that generation is current, so a shell reload or crash during the hold goes back to holding until the new document announces again. A matching non-`notInText` press counts as a shortcut, or as focusing when its command moves focus to the shell (`CommandFocusesShell`, the same list `AcceleratorPressed` uses). `RewriteEvent` (deciding through `LiveKeys` in `ac_linux_typeahead.h`) then:
+  - passes the press;
+  - passes its release;
+  - passes every modifier release live and also records it in the hold. A tab-switcher press held before commands were ready then sees its Ctrl release at replay and is skipped, instead of reopening a switcher with Ctrl already up. The field also gets the keyup matching its held Ctrl press.
+- **Held text before a focusing shortcut is dropped.** Typing "ab", then Ctrl+L, then "cd" gives "cd" in the command bar, as Ctrl+L's select-all followed by typing does live. With Ctrl+T or Ctrl+F the earlier text would have gone to the old field. This matches rule (d): drop rather than misdirect. A non-focusing shortcut such as Ctrl+Shift+I keeps the held text. `OnKeyEvent` runs live shortcuts at once with the modal check, extension commands and switcher handling. When the hold ends, the remaining text replays into the field the shortcut focused.
 - **Before commands are ready**, held shortcuts replay when the window is ready (`ReplayTypeahead`):
   - Each held press goes through `AcceleratorPressed` and then `ExtensionShortcutPressed`, as live keys do, and releases never do.
   - It goes through the same gates as `OnKeyEvent`, including the modal check (`OwnsKeyboardTarget` on the focused window).
-  - A tab-switcher press whose modifier release is also held is skipped, since the switcher would otherwise stay open.
-  - Text after the first shortcut that runs is dropped rather than sent to a field the shortcut may be replacing.
+  - A tab-switcher press whose modifier release is also held is skipped.
+  - Text after the first shortcut that runs is dropped.
   - The 10 s discard still drops everything.
 - **The UI's wait respects the host's deadline.** The bootstrap carries `typeaheadMs`, the time left on the host's hold when the page was served. The UI's field and idle waits end 250 ms before it, measured from navigation start, which is conservative.
 
-The output watch (#249) follows the widget's own fullscreen state. A video in fullscreen inside a fullscreen window keeps the watch and its pending output target, and saves nothing until the video exits.
+#323 item 3 (the output watch stopping when a video goes fullscreen inside a fullscreen window) can't happen on 156. `FullscreenController::EnterFullscreenModeInternal` records the prior state as browser fullscreen whenever the window is already fullscreen (`IsFullscreenForBrowser()` only needs the window fullscreen and the prior state not normal). So `IsFullscreenCausedByTab()` stays false and `WindowFullScreen()` stays true. The watch is unchanged.

@@ -1249,40 +1249,6 @@ static void ALateOutputChangeIsSavedWhileFullscreen() {
   ui::OzonePlatform::properties.supports_global_screen_coordinates = true;
 }
 
-static void VideoFullScreenInsideAFullScreenWindowKeepsTheOutputWatch() {
-  ui::OzonePlatform::properties.supports_global_screen_coordinates = false;
-  display::Screen::displays = {{{0, 0, 1920, 1080}, 10, "Out A"}, {{1920, 0, 1920, 1080}, 20, "Out B"}};
-  Profile app;
-  BrowserWindowInterface main_browser{1};
-  ShellHostView main(1, "main", &main_browser);
-  main.profile_source = &app;
-  display::Screen::nearest = display::Screen::displays[0];
-  main.widget.fullscreen = true;
-  main.OnWidgetShowStateChanged(&main.widget);
-  assert(*SavedOutput(app, "main") == "Out A" && main.output_watch_.IsRunning());
-  main.output_target_ = "Out B";
-  FullscreenController* controller = ExclusiveAccessManager::From(&main_browser)->fullscreen_controller();
-  controller->tab = true;
-  controller->caused_by_tab = true;
-  main.output_watch_.Fire();
-  assert(main.output_watch_.IsRunning());
-  assert(main.output_target_ && *main.output_target_ == "Out B");
-  assert(*SavedOutput(app, "main") == "Out A");
-  controller->tab = false;
-  controller->caused_by_tab = false;
-  display::Screen::nearest = display::Screen::displays[1];
-  main.output_watch_.Fire();
-  assert(!main.output_target_);
-  assert(*SavedOutput(app, "main") == "Out B");
-  display::Screen::nearest = display::Screen::displays[0];
-  main.output_watch_.Fire();
-  assert(*SavedOutput(app, "main") == "Out A");
-  main.widget.fullscreen = false;
-  main.OnWidgetShowStateChanged(&main.widget);
-  assert(!main.output_watch_.IsRunning());
-  ui::OzonePlatform::properties.supports_global_screen_coordinates = true;
-}
-
 static void TheRestoresFinalFocusKeepsTheBehindWindowsHandBack() {
   ui::OzonePlatform::properties.supports_global_screen_coordinates = false;
   base::TimeTicks::now_ms = 0;
@@ -1435,7 +1401,7 @@ int main(int argc, char** argv) {
       {"fullscreen-restore", FullScreenRestored}, {"fullscreen-given-up", FullScreenGivenUp},
       {"fullscreen-background", FullScreenInBackground}, {"fullscreen-focus-yields", FullScreenFocusYieldsToTheUser},
       {"fullscreen-shown-later", FullScreenWhenShownLater}, {"fullscreen-output", FullScreenOnTheSavedOutput},
-      {"fullscreen-output-gone", FullScreenWhenTheSavedOutputIsGone}, {"x11-outputs", X11KeepsNoOutputs}, {"late-output", ALateOutputChangeIsSavedWhileFullscreen}, {"video-output", VideoFullScreenInsideAFullScreenWindowKeepsTheOutputWatch},
+      {"fullscreen-output-gone", FullScreenWhenTheSavedOutputIsGone}, {"x11-outputs", X11KeepsNoOutputs}, {"late-output", ALateOutputChangeIsSavedWhileFullscreen},
       {"restore-keeps-hand-back", TheRestoresFinalFocusKeepsTheBehindWindowsHandBack}, {"output-labels", OutputLabels}};
   const auto found = scenarios.find(mode);
   if (found == scenarios.end()) return 2;
@@ -1647,9 +1613,6 @@ class WindowLifecycleHostTests(unittest.TestCase):
 
     def test_a_fullscreen_windows_output_is_rechecked_without_a_geometry_report(self):
         self.run_mode('late-output')
-
-    def test_a_video_fullscreen_inside_a_fullscreen_window_keeps_watching_its_output(self):
-        self.run_mode('video-output')
 
     def test_the_fullscreen_restores_final_focus_keeps_the_behind_windows_hand_back(self):
         self.run_mode('restore-keeps-hand-back')

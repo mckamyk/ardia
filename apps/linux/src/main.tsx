@@ -58,7 +58,10 @@ setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLa
 function FirstWindowCommitted({ typeahead }: { typeahead: boolean }) {
   useEffect(() => {
     firstWindowCommitted();
-    if (typeahead && ardiaHost) announceTypeaheadReady(ardiaHost, { expectsField: () => windowExpectsField(useBrowser.getState(), ardiaHost!.bootstrap.windowId, useOnboarding.getState().windowId) });
+    if (typeahead && ardiaHost) {
+      announceCommandsReady(ardiaHost);
+      announceTypeaheadReady(ardiaHost, { expectsField: () => windowExpectsField(useBrowser.getState(), ardiaHost!.bootstrap.windowId, useOnboarding.getState().windowId) });
+    }
   }, [typeahead]);
   return null;
 }
@@ -101,7 +104,6 @@ async function start() {
     await persistence.flush();
     startTabPages();
     startNativeSync();
-    announceCommandsReady(ardiaHost);
     startHostDownloads(ardiaHost, useBrowser);
     startLinuxTabPolicies({
       target: window, provide: provideNativeModuleProvider, startLifecycle: startTabLifecycle, startTrim: startMemoryTrim,

@@ -1161,7 +1161,8 @@ class ShellHostView : public views::View,
   void ReplayTypeahead(bool field);
   bool RunHeldShortcut(const ui::KeyEvent& event);
   bool SwitcherReleasedInHold(const std::vector<ui::KeyEvent>& held, size_t index) const;
-  bool LiveShortcut(const ui::KeyEvent& event) const;
+  linux_window::ShortcutKind LiveShortcutKind(const ui::KeyEvent& event) const;
+  static bool CommandFocusesShell(const std::string& command);
   aura::Window* KeyboardFocusTarget() const;
   static ui::Accelerator KeyAccelerator(const ui::KeyEvent& event);
   void DiscardTypeahead();
@@ -1248,6 +1249,7 @@ class ShellHostView : public views::View,
   raw_ptr<LinuxShellWebView> shell_ = nullptr;
   raw_ptr<HostMessageHandler> handler_ = nullptr;
   uint64_t renderer_generation_ = 0;
+  std::optional<uint64_t> live_generation_;
   std::unique_ptr<LinuxWindowDialogs> dialogs_;
   std::unique_ptr<LinuxExtensionSurfaces> extension_surfaces_;
   std::unique_ptr<LinuxExtensionKeybindings> extension_keybindings_;
@@ -2087,10 +2089,23 @@ bool ShellHostView::SwitcherReleasedInHold(const std::vector<ui::KeyEvent>& held
   return false;
 }
 
-bool ShellHostView::LiveShortcut(const ui::KeyEvent& event) const {
-  if (!CanHandleAccelerators() || shortcut_recording_) return false;
+linux_window::ShortcutKind ShellHostView::LiveShortcutKind(const ui::KeyEvent& event) const {
+  if (live_generation_ != renderer_generation_ || !CanHandleAccelerators() || shortcut_recording_)
+    return linux_window::ShortcutKind::kNone;
   const auto found = shortcuts_.find(KeyAccelerator(event));
-  return found != shortcuts_.end() && !found->second.FindBool("notInText").value_or(false);
+  if (found == shortcuts_.end() || found->second.FindBool("notInText").value_or(false))
+    return linux_window::ShortcutKind::kNone;
+  if (found->second.FindBool("suppressed").value_or(false)) return linux_window::ShortcutKind::kShortcut;
+  return CommandFocusesShell(String(found->second, "command")) ? linux_window::ShortcutKind::kFocusing
+                                                              : linux_window::ShortcutKind::kShortcut;
+}
+
+bool ShellHostView::CommandFocusesShell(const std::string& command) {
+  return command == "focusCommandBar" || command == "newTab" ||
+         command == "newTabInGroup" || command == "findInPage" ||
+         command == "findAndReplace" || command == "searchTabs" ||
+         command == "tabSwitcher" || command == "openProfileMenu" ||
+         command == "closeTab";
 }
 
 aura::Window* ShellHostView::KeyboardFocusTarget() const {
@@ -2979,8 +2994,7 @@ PrefService* ShellHostView::WindowOutputPrefs() const {
 void ShellHostView::RememberWindowOutput() {
   PrefService* prefs = WindowOutputPrefs();
   if (!prefs || !browser_ || output_forgotten_) return output_watch_.Stop();
-  const views::Widget* widget = GetWidget();
-  if (!widget || !widget->IsFullscreen()) {
+  if (!WindowFullScreen()) {
     output_watch_.Stop();
     output_target_.reset();
     return;
@@ -2989,7 +3003,6 @@ void ShellHostView::RememberWindowOutput() {
     output_watch_.Start(FROM_HERE, base::Seconds(1),
                         base::BindRepeating(&ShellHostView::RememberWindowOutput, base::Unretained(this)));
   }
-  if (!WindowFullScreen()) return;
   const std::string label =
       display::Screen::Get()->GetDisplayNearestWindow(browser_->GetWindow()->GetNativeWindow()).label();
   if (output_target_) {
@@ -3105,13 +3118,7 @@ bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
     RequestUtilityClose();
     return true;
   }
-  if (command == "focusCommandBar" || command == "newTab" ||
-      command == "newTabInGroup" || command == "findInPage" ||
-      command == "findAndReplace" || command == "searchTabs" ||
-      command == "tabSwitcher" || command == "openProfileMenu" ||
-      command == "closeTab") {
-    FocusShell();
-  }
+  if (CommandFocusesShell(command)) FocusShell();
   const base::Value* arg = binding.Find("arg");
   Event("ArdiaShell", "onCommand", base::Value(base::DictValue()
       .Set("command", command).Set("arg", arg ? arg->Clone() : base::Value())
@@ -4887,7 +4894,8 @@ void ShellHostView::Invoke(
   if (method == "ArdiaShell.commandsReady") {
     if (is_utility()) return std::move(done).Run(false, base::Value("Typeahead is for browser windows"));
     if (!values.empty()) return std::move(done).Run(false, base::Value("commandsReady takes no arguments"));
-    if (typeahead_) typeahead_->SetLive(base::BindRepeating(&ShellHostView::LiveShortcut, base::Unretained(this)));
+    live_generation_ = renderer_generation_;
+    if (typeahead_) typeahead_->SetLive(base::BindRepeating(&ShellHostView::LiveShortcutKind, base::Unretained(this)));
     return std::move(done).Run(true, base::Value());
   }
   if (method == "ArdiaShell.typeaheadReady") {

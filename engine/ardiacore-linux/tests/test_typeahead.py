@@ -58,7 +58,24 @@ static void TheBufferIsBounded() {
   assert(held.front() == 0 && held.back() == static_cast<int>(Typeahead<int>::kMaxEvents - 1));
 }
 
+static void DroppingKeepsCapturingAndRecoversFromOverflow() {
+  Typeahead<int> typeahead;
+  typeahead.DropHeld();
+  assert(!typeahead.capturing());
+  typeahead.Start();
+  assert(typeahead.Hold(1) && typeahead.Hold(2));
+  typeahead.DropHeld();
+  assert(typeahead.capturing() && typeahead.Hold(3));
+  for (size_t i = 0; i <= Typeahead<int>::kMaxEvents; ++i) assert(typeahead.Hold(4));
+  typeahead.DropHeld();
+  assert(typeahead.Hold(5));
+  assert((typeahead.Release() == std::vector<int>{5}));
+  typeahead.DropHeld();
+  assert(!typeahead.capturing() && !typeahead.Hold(6));
+}
+
 int main() {
+  DroppingKeepsCapturingAndRecoversFromOverflow();
   NothingIsHeldBeforeStartOrAfterRelease();
   CapturingStartsOnlyOnce();
   TheBufferIsBounded();
@@ -114,8 +131,10 @@ class TypeaheadInputTests(unittest.TestCase):
 
 REPLAY_FAKES = r'''#include <compare>
 #include <cstdio>
+#include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -233,6 +252,11 @@ struct OneShotTimer {
 };
 struct DictValue {
   std::map<std::string, std::string> strings;
+  std::optional<bool> FindBool(std::string_view key) const {
+    const auto found = strings.find(std::string(key));
+    if (found == strings.end()) return std::nullopt;
+    return found->second == "1";
+  }
 };
 }
 
@@ -247,6 +271,7 @@ struct Typeahead {
 };
 namespace linux_window {
 using TypeaheadInput = Typeahead;
+enum class ShortcutKind { kNone, kShortcut, kFocusing };
 ARDIA_MODIFIER_FLAG
 }
 struct Widget {
@@ -266,6 +291,10 @@ struct ShellHostView {
   void ReplayTypeahead(bool field);
   bool RunHeldShortcut(const ui::KeyEvent& event);
   bool SwitcherReleasedInHold(const std::vector<ui::KeyEvent>& held, size_t index) const;
+  linux_window::ShortcutKind LiveShortcutKind(const ui::KeyEvent& event) const;
+  static bool CommandFocusesShell(const std::string& command);
+  uint64_t renderer_generation_ = 1;
+  std::optional<uint64_t> live_generation_;
   struct FocusManager {
     bool suspended = false;
     bool shortcut_handling_suspended() const { return suspended; }
@@ -281,7 +310,9 @@ struct ShellHostView {
       {{static_cast<ui::KeyboardCode>('I'), ui::EF_CONTROL_DOWN}, {{{"command", "devTools"}}}},
       {{static_cast<ui::KeyboardCode>('L'), ui::EF_CONTROL_DOWN}, {{{"command", "focusCommandBar"}}}},
       {{static_cast<ui::KeyboardCode>('E'), ui::EF_CONTROL_DOWN}, {{{"command", "returnToPinnedUrl"}, {"declines", "1"}}}},
-      {{static_cast<ui::KeyboardCode>('\t'), ui::EF_CONTROL_DOWN}, {{{"command", "tabSwitcher"}}}}};
+      {{static_cast<ui::KeyboardCode>('\t'), ui::EF_CONTROL_DOWN}, {{{"command", "tabSwitcher"}}}},
+      {{static_cast<ui::KeyboardCode>('P'), ui::EF_CONTROL_DOWN}, {{{"command", "returnToPinnedUrl"}, {"notInText", "1"}}}},
+      {{static_cast<ui::KeyboardCode>('S'), ui::EF_CONTROL_DOWN}, {{{"command", "focusCommandBar"}, {"suppressed", "1"}}}}};
   std::set<char> extension_keys{'K'};
   std::string order;
   static ui::Accelerator KeyAccelerator(const ui::KeyEvent& event) { return {event.key_code(), event.flags()}; }
@@ -386,6 +417,31 @@ int main() {
 }
 '''
 
+LIVE_KIND_SCENARIO = r'''
+int main() {
+  using linux_window::ShortcutKind;
+  const auto press = [](char key) { return ui::KeyEvent(ui::EventType::kKeyPressed, key, ui::EF_CONTROL_DOWN); };
+  ShellHostView host;
+  if (host.LiveShortcutKind(press('I')) != ShortcutKind::kNone) return 30;
+  host.live_generation_ = host.renderer_generation_;
+  if (host.LiveShortcutKind(press('I')) != ShortcutKind::kShortcut) return 31;
+  if (host.LiveShortcutKind(press('L')) != ShortcutKind::kFocusing) return 32;
+  if (host.LiveShortcutKind(press('\t')) != ShortcutKind::kFocusing) return 33;
+  if (host.LiveShortcutKind(press('P')) != ShortcutKind::kNone) return 34;
+  if (host.LiveShortcutKind(press('S')) != ShortcutKind::kShortcut) return 35;
+  if (host.LiveShortcutKind(press('Z')) != ShortcutKind::kNone) return 36;
+  if (host.LiveShortcutKind(ui::KeyEvent(ui::EventType::kKeyPressed, 'I')) != ShortcutKind::kNone) return 37;
+  host.shortcut_recording_ = true;
+  if (host.LiveShortcutKind(press('I')) != ShortcutKind::kNone) return 38;
+  host.shortcut_recording_ = false;
+  ++host.renderer_generation_;
+  if (host.LiveShortcutKind(press('I')) != ShortcutKind::kNone) return 39;
+  host.live_generation_ = host.renderer_generation_;
+  if (host.LiveShortcutKind(press('I')) != ShortcutKind::kShortcut) return 40;
+  std::puts("live kind scenarios passed");
+}
+'''
+
 REPLAY_SCENARIO = r'''
 int main() {
   ShellHostView host;
@@ -414,6 +470,8 @@ class TypeaheadReplayTests(unittest.TestCase):
         replay = extract(HOST, 'void ShellHostView::ReplayTypeahead(bool field)')
         shortcut = extract(HOST, 'bool ShellHostView::RunHeldShortcut(const ui::KeyEvent& event)')
         switcher = extract(HOST, 'bool ShellHostView::SwitcherReleasedInHold(const std::vector<ui::KeyEvent>& held, size_t index) const')
+        switcher += '\n' + extract(HOST, 'linux_window::ShortcutKind ShellHostView::LiveShortcutKind(const ui::KeyEvent& event) const')
+        switcher += '\n' + extract(HOST, 'bool ShellHostView::CommandFocusesShell(const std::string& command)')
         modifier = extract(INPUT, 'int TypeaheadModifierFlag(ui::KeyboardCode key)')
         fakes = REPLAY_FAKES.replace('ARDIA_MODIFIER_FLAG', modifier)
         with tempfile.TemporaryDirectory(prefix='ardia-typeahead-replay-') as scratch:
@@ -433,6 +491,9 @@ class TypeaheadReplayTests(unittest.TestCase):
 
     def test_shortcuts_pressed_while_keys_are_held_run_when_the_window_is_ready(self):
         self.run_replay(HELD_SHORTCUT_SCENARIO, 'held shortcut scenarios passed')
+
+    def test_only_the_renderer_that_announced_commands_gets_live_shortcuts(self):
+        self.run_replay(LIVE_KIND_SCENARIO, 'live kind scenarios passed')
 
 
 class TypeaheadHostTests(unittest.TestCase):
@@ -506,16 +567,16 @@ class TypeaheadHostTests(unittest.TestCase):
     def test_commands_ready_lets_shortcuts_through_live_and_only_text_stays_held(self):
         branch = extract(HOST, '  if (method == "ArdiaShell.commandsReady")')
         self.assertIn('is_utility()', branch)
-        self.assertIn('typeahead_->SetLive(base::BindRepeating(&ShellHostView::LiveShortcut, base::Unretained(this)))', branch)
+        self.assertLess(branch.index('live_generation_ = renderer_generation_;'), branch.index('typeahead_->SetLive('))
+        self.assertIn('typeahead_->SetLive(base::BindRepeating(&ShellHostView::LiveShortcutKind, base::Unretained(this)))', branch)
         self.assertIn('.Append("ArdiaShell.commandsReady")', HOST)
-        live = extract(HOST, 'bool ShellHostView::LiveShortcut(const ui::KeyEvent& event) const')
-        self.assertIn('shortcuts_.find(KeyAccelerator(event))', live)
-        self.assertIn('FindBool("notInText")', live)
-        self.assertIn('shortcut_recording_', live)
+        self.assertIn('if (CommandFocusesShell(command)) FocusShell();', extract(HOST, 'bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator)'))
         rewrite = extract(INPUT, 'ui::EventDispatchDetails TypeaheadInput::RewriteEvent(')
         self.assertLess(rewrite.index('owns_.Run('), rewrite.index('live_keys_.Pass('))
         self.assertLess(rewrite.index('live_keys_.Pass('), rewrite.index('held_.Hold('))
-        self.assertIn('pressed && live_.Run(key)', rewrite)
+        self.assertIn('pressed ? live_.Run(key) : ShortcutKind::kNone', rewrite)
+        self.assertLess(rewrite.index('case LiveKey::kPassAndHold:'), rewrite.index('held_.Hold(ui::KeyEvent(key));\n        return SendEvent('))
+        self.assertIn('if (shortcut == ShortcutKind::kFocusing) held_.DropHeld();', rewrite)
 
     def test_held_shortcuts_respect_the_live_modal_check(self):
         shortcut = extract(HOST, 'bool ShellHostView::RunHeldShortcut(const ui::KeyEvent& event)')

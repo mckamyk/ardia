@@ -97,10 +97,19 @@ ui::EventDispatchDetails TypeaheadInput::RewriteEvent(const ui::Event& event, co
   }
   if (!owns_.Run(FocusedTarget())) return SendEvent(continuation, &event);
   const ui::KeyEvent& key = *event.AsKeyEvent();
-  const bool pressed = key.type() == ui::EventType::kKeyPressed;
-  if (live_ && live_keys_.Pass(pressed, key.code(), pressed && live_.Run(key),
-                               TypeaheadModifierFlag(key.key_code()) != ui::EF_NONE)) {
-    return SendEvent(continuation, &event);
+  if (live_) {
+    const bool pressed = key.type() == ui::EventType::kKeyPressed;
+    const ShortcutKind shortcut = pressed ? live_.Run(key) : ShortcutKind::kNone;
+    switch (live_keys_.Pass(pressed, key.code(), shortcut, TypeaheadModifierFlag(key.key_code()) != ui::EF_NONE)) {
+      case LiveKey::kPass:
+        if (shortcut == ShortcutKind::kFocusing) held_.DropHeld();
+        return SendEvent(continuation, &event);
+      case LiveKey::kPassAndHold:
+        std::ignore = held_.Hold(ui::KeyEvent(key));
+        return SendEvent(continuation, &event);
+      case LiveKey::kHold:
+        break;
+    }
   }
   if (held_.Hold(ui::KeyEvent(key))) return DiscardEvent(continuation);
   return SendEvent(continuation, &event);
