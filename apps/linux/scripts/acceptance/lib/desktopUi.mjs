@@ -217,3 +217,13 @@ export async function clickDialogButton(desktop, window, shell, title, label) {
   const frame = await currentRect(desktop, window);
   await desktop.click(frame.x + r.x, frame.y + r.y);
 }
+
+export async function openDownloadsPopover(desktop, window, shell) {
+  const labels = await shell.labels();
+  const label = labels.find((l) => /^Downloads/.test(l));
+  if (!label) throw new Error(`no Downloads button in ${shell.windowId}: ${JSON.stringify(labels)}`);
+  const button = await labelRect(shell, label);
+  const frame = await currentRect(desktop, window);
+  await desktop.click(frame.x + button.x, frame.y + button.y);
+  return label;
+}

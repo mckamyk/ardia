@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { evaluate } from "../lib/cdp.mjs";
 import { startPortal } from "../lib/desktopServices.mjs";
 import { currentRect, desktopShot, desktopUnavailable, hasFocus, openDesktop, promptAfter, startDesktopBrowser, waitFocused } from "../lib/desktopSession.mjs";
-import { chooseMenuItem, clickNeutral, pageMenuIndex, everyWindowIsArdia, labelRect, openedWindow, pagePoint, rightClickMenu, shellLines } from "../lib/desktopUi.mjs";
+import { chooseMenuItem, clickNeutral, openDownloadsPopover, pageMenuIndex, everyWindowIsArdia, labelRect, openedWindow, pagePoint, rightClickMenu, shellLines } from "../lib/desktopUi.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
 
@@ -206,12 +206,7 @@ export const windowMenuDesktop = {
 
 async function downloadsPopoverLines(desktop, window, shell) {
   await focusInto(desktop, window, shell);
-  const labels = await shell.labels();
-  const label = labels.find((l) => /^Downloads/.test(l));
-  if (!label) throw new Error(`no Downloads button in ${shell.windowId}: ${JSON.stringify(labels)}`);
-  const button = await labelRect(shell, label);
-  const frame = await currentRect(desktop, window);
-  await desktop.click(frame.x + button.x, frame.y + button.y);
+  const label = await openDownloadsPopover(desktop, window, shell);
   await delay(1500);
   const lines = await shellLines(shell);
   await desktop.key("escape");
