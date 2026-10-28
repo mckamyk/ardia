@@ -136,3 +136,13 @@ test("interactive credential requests get longer deadlines than ordinary request
   void f.host.call("passwords.reveal", "", "{}");
   assert.deepEqual([...f.delays.values()], [30000, 180000, 900000, 180000, 180000, 30000, 30000]);
 });
+
+test("calendar requests that may open Evolution Data Server backends get room to finish", () => {
+  const f = fixture();
+  void f.host.invoke("ArdiaCalendar.status", { args: [] });
+  void f.host.invoke("ArdiaCalendar.requestAccess", { args: [] });
+  void f.host.invoke("ArdiaCalendar.sources", { args: [] });
+  void f.host.invoke("ArdiaCalendar.objects", { args: [["work"], 0, 1] });
+  void f.host.invoke("ArdiaCalendar.timezones", { args: ["work", []] });
+  assert.deepEqual([...f.delays.values()], [30000, 120000, 60000, 120000, 30000]);
+});

@@ -1,4 +1,5 @@
 import { hostLaunchConfig } from "./hostLaunchConfig.ts";
+import { calendarModuleMethod } from "./hostCalendar.ts";
 import type { ArdiaHost } from "./host";
 import { callHost, hostModuleMethod, hostSupports } from "./host.ts";
 import { linuxMediaCall } from "./hostCast.ts";
@@ -19,7 +20,6 @@ const synchronousDefaults: Record<string, Record<string, unknown>> = {
 };
 
 const synchronousMethods: Record<string, Record<string, unknown>> = {
-  ArdiaCalendar: { authorizationStatus: "denied" },
   ArdiaGlassEffect: { isLiquidGlass: false },
 };
 
@@ -35,6 +35,8 @@ export function resolveHostModule(host: ArdiaHost, name: string, method: string)
   if (credential !== undefined) return credential;
   const syncMethod = syncModuleMethod(host, name, method);
   if (syncMethod !== undefined) return syncMethod;
+  const calendar = calendarModuleMethod(host, name, method);
+  if (calendar !== undefined) return calendar;
   if (name === "ArdiaDocuments" && method === "call") {
     return (verb: string, profile: string, args: string) => {
       if (!["watch", "commit", "flush", "unwatch"].includes(verb)) return Promise.reject(Object.assign(new Error("Unknown document operation"), { code: "ERR_UNKNOWN_CALL" }));

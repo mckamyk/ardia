@@ -5,6 +5,7 @@ import { useBrowser } from "../../browser/src/state/browser/store";
 import { goToSettingsPane, openImport, openSettings, type SettingsPlace } from "../../browser/src/state/settings/settingsWindows";
 import { PANES } from "../../browser/src/components/settings/settingsIndex";
 import { focusSettingsSearch } from "../../browser/src/state/settings/searchState";
+import { startCalendar } from "../../browser/src/state/live/calendar";
 import { menuShown } from "./menus";
 import { startUtilityNavigation } from "./utilityNavigation";
 import { setPreferredImportSource } from "./settingsWindows";
@@ -32,6 +33,7 @@ export function startUtility(host: ArdiaHost) {
     event.preventDefault();
     void closeWindow(id).catch(reportHostError);
   });
+  if (id === "settings") startCalendar();
   const store = useBrowser;
   store.getState().setAppDark(Appearance.getColorScheme() === "dark");
   void setAppearance(store.getState().settings.appearance);

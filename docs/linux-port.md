@@ -89,6 +89,15 @@ Site permissions, per-site data and browsing-data clearing go through `ac_linux_
 
 The content blocker is the same uBlock Origin component macOS loads. Each regular profile loads it from `lib/ardia/extensions/ublock` (or `--ardia-content-blocker-dir`) once its extension system is ready. The restricted-component hook stops it from scripting `chrome://` pages, including the shell. Calls run in a hidden extension page, `ardia-linux-bridge.html`, which exposes seven fixed operations. Chromium refuses main-world script on extension pages, so the browser passes requests through a DOM attribute from an isolated world and polls for the reply. Isolated-profile windows load their own copy, which copies the app profile's lists, exceptions and auto-update on first load and after every change. Until a fresh app profile's or an isolated profile's copy is ready, a Linux-only navigation throttle (`chromium-linux-navigation-hold-hook.patch`) holds that profile's page navigations, for at most 10 s. Contract, tests and open items are in `docs/linux-parity/i-site-controls-handoff.md` and `docs/linux-parity/S-handoff.md`.
 
+## Calendar
+
+Linux reads calendars from Evolution Data Server: GNOME Online Accounts, GNOME Calendar and Evolution.
+- **Service.** One app-wide service (`ac_linux_calendar_service.cc`) runs a GLib-pumped thread. Its EDS client (`ac_linux_calendar_eds.cc`) loads GIO at runtime and uses a private session-bus connection.
+- **Adapter.** `apps/linux/src/hostCalendar.ts` expands iCalendar recurrences and time zones into the shared calendar state.
+- **Unavailable.** Without EDS or a session bus, the calendar is `restricted`, and Settings › Calendar says how to set it up.
+
+The contract and tests are in `docs/linux-parity/f14-calendar-handoff.md`.
+
 ## Extensions: search providers, shortcuts and native messaging
 
 - **Search providers.** Chromium allows `chrome_settings_overrides` only on Windows and macOS. `chromium-linux-settings-overrides.patch` adds `linux` to that manifest feature, so an extension's `search_provider` reaches `search.engines` and Ardia's extension search engines, as on macOS. A provider with `is_default` can become the default, also as on macOS. The patch keeps the key's `homepage` and `startup_pages` off on Linux, because Chromium's startup path would honour them there.

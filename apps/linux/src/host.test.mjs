@@ -41,7 +41,7 @@ test("unknown required methods reject while optional methods need an advertised 
   host.bootstrap.capabilities = ["ArdiaShell.dragPreviewBegin"];
   await assert.rejects(resolveHostModule(host, "ArdiaShell", "dragPreviewBegin")(true), /Unsupported/);
   assert.equal(resolveHostModule(host, "ArdiaTranslate", "available"), false);
-  assert.equal(resolveHostModule(host, "ArdiaCalendar", "authorizationStatus")(), "denied");
+  assert.equal(resolveHostModule(host, "ArdiaCalendar", "authorizationStatus")(), "restricted");
   await assert.rejects(invokeHost("missing", {}, undefined), /host unavailable/);
 });
 
