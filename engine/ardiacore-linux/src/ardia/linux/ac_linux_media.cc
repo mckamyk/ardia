@@ -69,8 +69,15 @@ std::optional<std::string_view> LinuxMediaSessionActionName(Action action) {
 }
 
 std::optional<LinuxNowPlaying> LinuxNowPlayingFromSession(const LinuxSessionSample& sample) {
-  if (!sample.active) return std::nullopt;
+  if (!sample.active && !sample.page_video_playing) return std::nullopt;
   LinuxNowPlaying state;
+  state.timestamp = std::isfinite(sample.now_ms) ? sample.now_ms : 0;
+  if (!sample.active) {
+    state.title = BoundedText(sample.page_title);
+    state.playback_state = "playing";
+    state.has_video = true;
+    return state;
+  }
   state.title = BoundedText(sample.title);
   state.artist = BoundedText(sample.artist);
   state.album = BoundedText(sample.album);
@@ -82,8 +89,7 @@ std::optional<LinuxNowPlaying> LinuxNowPlayingFromSession(const LinuxSessionSamp
     state.position = std::min(state.position, *sample.duration);
   }
   state.playback_rate = std::isfinite(sample.playback_rate) ? sample.playback_rate : 1;
-  state.timestamp = std::isfinite(sample.now_ms) ? sample.now_ms : 0;
-  state.has_video = sample.has_video;
+  state.has_video = sample.has_video || sample.page_video_playing;
   for (const Action action : sample.actions) {
     if (state.actions.size() >= kActionLimit) break;
     const auto name = LinuxMediaSessionActionName(action);

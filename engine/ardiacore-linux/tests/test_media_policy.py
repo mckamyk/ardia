@@ -37,6 +37,9 @@ class MediaPolicyTests(unittest.TestCase):
     def test_media_session_maps_to_now_playing(self):
         self.run_case('mapping')
 
+    def test_a_playing_video_outside_the_session_reports_a_video_without_controls(self):
+        self.run_case('page-video')
+
     def test_event_payloads_match_the_shared_page_types(self):
         self.run_case('events')
 

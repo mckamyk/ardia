@@ -10,7 +10,7 @@ import { startLinuxTabPolicies, watchInputIdle } from "./hostPolicies.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { pageOf, patchPage } from "../../browser/src/state/tabs/pageState.ts";
 import { updateLive } from "../../browser/src/state/tabs/actions.ts";
-import { setNowPlaying, setPictureInPictureState, useMedia } from "../../browser/src/state/media/media.ts";
+import { playerTabFor, setNowPlaying, setPictureInPictureState, useMedia } from "../../browser/src/state/media/media.ts";
 import { noteDiscarded, noteReady, useLifecycle } from "../../browser/src/state/tabs/tabLifecycle.ts";
 
 const source = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -65,6 +65,18 @@ test("snapshot media state reaches the shared audio badge, player, capture and p
   assert.equal(useMedia.getState().sessions[h.tab], undefined);
   assert.equal(useMedia.getState().pipOpen[h.tab], undefined);
   assert.equal(keepAliveReason(useBrowser.getState(), h.tab), "capturing");
+});
+
+test("a playing video outside the media session offers the video controls but no player", () => {
+  const h = setup();
+  assert.ok(h.receiver.install({ lease, snapshot: { watermark: 1, events: [] } }));
+  const video = { title: "Clips", artist: "", album: "", artwork: null, playbackState: "playing", position: 0, duration: null, playbackRate: 1, timestamp: 1700000000000, hasVideo: true, actions: [], controllable: false };
+  h.send(message(2, "nowPlaying", { state: video }));
+  const media = useMedia.getState();
+  assert.equal(media.sessions[h.tab]?.hasVideo, true, "Site Controls and the hover card gate Picture in Picture on hasVideo");
+  assert.equal(playerTabFor(media, [h.tab]), undefined, "a muted video gets no player tile");
+  h.send(message(3, "nowPlaying", { state: null }));
+  assert.equal(useMedia.getState().sessions[h.tab], undefined);
 });
 
 test("a restore snapshot replaces media access and a document snapshot replays it", () => {
