@@ -314,6 +314,16 @@ void DragOver() {
   LinuxDragOver never;
   never.Settle(never.Exited());
   Expect(!never.Over(), "an exit without an entry is never over");
+
+  LinuxDragOver performed;
+  performed.Entered();
+  performed.Reset();
+  Expect(!performed.Over(), "a new press forgets an earlier drag whose drop was performed without an exit");
+  const uint64_t stale = performed.Exited();
+  performed.Reset();
+  performed.Entered();
+  performed.Settle(stale);
+  Expect(performed.Over(), "an exit from before the press doesn't undo the new drag");
 }
 
 void Activity() {

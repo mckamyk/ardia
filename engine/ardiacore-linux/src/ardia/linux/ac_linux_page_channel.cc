@@ -59,6 +59,7 @@ class LinuxPageDropTrack : public aura::client::DragDropDelegate, public aura::W
   LinuxPageDropTrack& operator=(const LinuxPageDropTrack&) = delete;
   aura::Window* window() const { return window_; }
   bool Over() const { return over_.Over(); }
+  void ResetOver() { over_.Reset(); }
   void Remove() {
     if (aura::client::GetDragDropDelegate(window_) == this) aura::client::SetDragDropDelegate(window_, inner_);
     delete this;
@@ -428,7 +429,8 @@ void LinuxPageChannel::OnInputEvent(const content::RenderWidgetHost& widget, con
 void LinuxPageChannel::TrackDrops() {
   content::RenderWidgetHostView* view = GetWebContents().GetRenderWidgetHostView();
   aura::Window* window = view ? view->GetNativeView() : nullptr;
-  if (!window || (drop_track_ && drop_track_->window() == window)) return;
+  if (!window) return;
+  if (drop_track_ && drop_track_->window() == window) return drop_track_->ResetOver();
   drop_track_ = LinuxPageDropTrack::Install(window);
 }
 

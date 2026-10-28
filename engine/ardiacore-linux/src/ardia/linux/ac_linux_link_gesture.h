@@ -56,6 +56,10 @@ class LinuxDragOver {
     ++sequence_;
   }
   uint64_t Exited() { return ++sequence_; }
+  void Reset() {
+    over_ = false;
+    ++sequence_;
+  }
   void Settle(uint64_t exit) {
     if (exit == sequence_) over_ = false;
   }
