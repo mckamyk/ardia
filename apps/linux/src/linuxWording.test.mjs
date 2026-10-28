@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { LINUX_WORDING, linuxWording, rewordForLinux } from "../linuxWording.ts";
 import { rewordCredentials } from "../credentialWording.ts";
 import { unavailablePanes } from "./hostCapabilities.ts";
+import { linuxShortcutText } from "../shortcutText.ts";
+import { DEFAULT_BROWSER_ELSEWHERE, readOnboardingSystem } from "./onboardingSystem.ts";
 
 const shared = (path) => fileURLToPath(new URL(`../../browser/src/${path}`, import.meta.url));
 const MACOS = /\bMacs?\b|macOS|iCloud|Keychain|keychain/;
@@ -18,6 +20,8 @@ const SURFACES = [
   "components/import/steps/SafariStep.tsx",
   "components/import/importActions.ts",
   "components/import/diaActions.ts",
+  "components/onboarding/previews/MockWindow.tsx",
+  "components/onboarding/previews/scenes/LookScenes.tsx",
 ];
 const strings = (code) => [...code.matchAll(/"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)].map((match) => match[0]);
 const linuxCopy = (path) => {
@@ -96,4 +100,53 @@ test("a production build fails when a listed file was loaded but never reworded"
   const failed = linuxWording();
   failed.configResolved({ command: "build" });
   assert.doesNotThrow(() => failed.buildEnd.call({ ...context, getModuleIds: () => [shared("components/import/ImportWindow.tsx")].values() }, new Error("earlier failure")));
+});
+
+const componentFiles = (dir) => readdirSync(new URL(`../../browser/src/${dir}`, import.meta.url), { recursive: true })
+  .filter((file) => /\.tsx?$/.test(file) && !file.endsWith(".test.ts"))
+  .map((file) => `${dir}/${file}`);
+const linuxComponentCopy = (path) => {
+  const source = readFileSync(shared(path), "utf8");
+  const shortcuts = path.startsWith("components/") && !path.endsWith("/settings/searchMatch.ts") ? linuxShortcutText(source) : source;
+  const reworded = rewordForLinux(shared(path), shortcuts) ?? shortcuts;
+  return rewordCredentials(shared(path), reworded) ?? reworded;
+};
+
+test("click modifiers read Shift-click, Alt-click and Alt+Shift-click on Linux, and key combinations still read Ctrl+Z", () => {
+  const tabs = linuxComponentCopy("components/settings/panes/Tabs.tsx");
+  for (const title of [`title: "Shift-click"`, `title: "Alt-click"`, `title: "Alt+Shift-click"`, `"Alt-click (Peek moves to Shift-click)"`, `"Alt-click (split view moves to Alt+Shift-click)"`, `"Alt-click opens a split now: choosing it here moves split view back to Alt+Shift-click."`]) {
+    assert.ok(tabs.includes(title), title);
+  }
+  const rows = linuxComponentCopy("components/settings/rows/generalRows.ts");
+  assert.match(rows, /Ctrl\+Alt-click splits too, and so does Alt\+Shift-click when Alt-click is chosen/);
+  assert.match(rows, /title: "Ctrl-clicking links creates tab groups"/);
+  assert.match(linuxComponentCopy("components/onboarding/LayoutSteps.tsx"), /title: "Shift-click"/);
+  assert.match(linuxComponentCopy("components/tabstrip/NewTabButton.tsx"), /New Tab \(Ctrl\+T\) — Alt-click to open in Split View/);
+  assert.equal(linuxShortcutText(`"⇧⌘S" "⌘Z" "⌥⌘I" "⌃⇧Tab"`), `"Shift+Ctrl+S" "Ctrl+Z" "Alt+Ctrl+I" "Super+Shift+Tab"`);
+  const stray = componentFiles("components").filter((path) => (linuxComponentCopy(path).match(/\+-[a-z]/g) ?? []).length > (readFileSync(shared(path), "utf8").match(/\+-[a-z]/g) ?? []).length);
+  assert.deepEqual(stray, []);
+  const config = readFileSync(fileURLToPath(new URL("../vite.config.ts", import.meta.url)), "utf8");
+  assert.match(config, /return \{ code: linuxShortcutText\(code\), map: null \}/);
+});
+
+test("onboarding names no Mac, macOS or Dock on Linux, and its default-browser question is Linux's own", () => {
+  const config = readFileSync(fileURLToPath(new URL("../vite.config.ts", import.meta.url)), "utf8");
+  assert.match(config, /\[here\("\.\.\/browser\/src\/components\/onboarding\/HomeStep\.tsx"\), here\("\.\/src\/LinuxHomeStep\.tsx"\)\]/);
+  const words = /\bMacs?\b|macOS|\bDock\b|iCloud|Keychain/;
+  const leftover = componentFiles("components/onboarding")
+    .filter((path) => path !== "components/onboarding/HomeStep.tsx")
+    .flatMap((path) => strings(linuxComponentCopy(path)).filter((text) => words.test(text)).map((text) => `${path}: ${text}`));
+  assert.deepEqual(leftover, []);
+  const linuxStep = readFileSync(new URL("./LinuxHomeStep.tsx", import.meta.url), "utf8");
+  assert.deepEqual(strings(linuxStep).filter((text) => words.test(text)), []);
+  assert.doesNotMatch(linuxStep, /isInDock|addToDock/);
+  assert.doesNotMatch(DEFAULT_BROWSER_ELSEWHERE, words);
+});
+
+test("the default-browser step settles on Linux whether or not the desktop integrations exist", async () => {
+  const never = () => new Promise(() => {});
+  assert.deepEqual(await readOnboardingSystem({ defaultBrowser: false, launchAtLogin: false }, { isDefaultBrowser: never, launchAtLoginStatus: never }), { isDefault: false, loginEnabled: false });
+  const refused = () => Promise.reject(Object.assign(new Error("unavailable"), { code: "ERR_UNAVAILABLE" }));
+  assert.deepEqual(await readOnboardingSystem({ defaultBrowser: true, launchAtLogin: true }, { isDefaultBrowser: refused, launchAtLoginStatus: refused }), { isDefault: false, loginEnabled: false });
+  assert.deepEqual(await readOnboardingSystem({ defaultBrowser: true, launchAtLogin: true }, { isDefaultBrowser: async () => true, launchAtLoginStatus: async () => "enabled" }), { isDefault: true, loginEnabled: true });
 });
