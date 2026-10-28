@@ -9,6 +9,7 @@ import { unavailablePanes } from "./hostCapabilities.ts";
 const shared = (path) => fileURLToPath(new URL(`../../browser/src/${path}`, import.meta.url));
 const MACOS = /\bMacs?\b|macOS|iCloud|Keychain|keychain/;
 const SURFACES = [
+  "state/extensions/actions.ts",
   "components/onboarding/SourceStep.tsx",
   "components/onboarding/LayoutSteps.tsx",
   "components/settings/panes/Appearance.tsx",
@@ -68,6 +69,12 @@ test("the Linux Vite config runs the Linux wording transform", () => {
   const config = readFileSync(fileURLToPath(new URL("../vite.config.ts", import.meta.url)), "utf8");
   assert.match(config, /import \{ linuxWording \} from "\.\/linuxWording";/);
   assert.match(config, /plugins: \[[^\]]*linuxWording\(\)/);
+});
+
+test("removing an unpacked extension says its folder stays on this computer", () => {
+  const actions = linuxCopy("state/extensions/actions.ts");
+  assert.match(actions, /"The extension's folder stays on this computer\."/);
+  assert.doesNotMatch(actions, /stays on your Mac/);
 });
 
 test("a production build fails when a listed file was loaded but never reworded", () => {
