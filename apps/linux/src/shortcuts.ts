@@ -73,6 +73,10 @@ export function keyboardCombo(event: Pick<KeyboardEvent, "code" | "key" | "ctrlK
   return { key, modifiers, keyCode: codeOf(key), flags: modifiers.reduce((flags, mod) => flags | modifierFlags[mod], 0) };
 }
 
+export function recordableShortcut(event: Pick<KeyboardEvent, "code" | "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">) {
+  return !!keyboardCombo(event).key && (event.ctrlKey || event.metaKey || event.altKey || /^F\d+$/.test(event.code));
+}
+
 export function linuxNativeBindings(bindings: Binding[], profiles: readonly string[] = []) {
   const bound = new Set(bindings.map((binding) => `${binding.keyCode}:${binding.modifiers}`));
   return [...bindings, ...linuxBindings({}, profiles).filter((binding) => !bound.has(`${binding.keyCode}:${binding.modifiers}`)).map((binding) => ({ ...binding, suppressed: true }))];
