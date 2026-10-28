@@ -242,7 +242,7 @@ class SecretService {
                                    labelled ? std::string() : std::string(kSecretSchemaV1), std::string()};
     for (size_t pass = 0; pass < std::size(schemas); ++pass) {
       const std::string& schema = schemas[pass];
-      if (labelled && pass == 1) continue;
+      if (labelled && pass > 0) continue;
       const std::string& key = labelled ? item.secret_label : item.application;
       const char* attribute = labelled ? "string" : "application";
       GVariant* arguments =

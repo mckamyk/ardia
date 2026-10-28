@@ -18,18 +18,18 @@ async function unlock(flow: ImportFlow) {
   if (asksPrimaryPassword(source, sourceProfiles) && !primaryPassword.get()) return;
   flow.setError(null);
   flow.setUnlocking(true);
-  const failure = await unlockSource(api, source, sourceProfiles, primaryPassword);
+  const failure = await unlockSource(api, source, sourceProfiles, flow.kinds, primaryPassword);
   flow.setUnlocking(false);
   if (failure) return flow.setError(failure);
   void flow.run(flow.kinds);
 }
 
 export function UnlockBody({ flow }: { flow: ImportFlow }) {
-  const { source, sourceProfiles, error } = flow;
+  const { source, sourceProfiles, kinds, error } = flow;
   const typed = useTypedSecret();
   useEffect(() => () => primaryPassword.clear(), []);
   if (!source) return null;
-  const copy = unlockCopy(source, sourceProfiles);
+  const copy = unlockCopy(source, sourceProfiles, kinds);
   return (
     <>
       <Title title={copy.title} subtitle={copy.subtitle} />
@@ -55,7 +55,7 @@ export function UnlockFooter({ flow }: { flow: ImportFlow }) {
   const { source, bySpaces, kinds, unlocking, sourceProfiles } = flow;
   const typed = useTypedSecret();
   if (!source) return null;
-  const copy = unlockCopy(source, sourceProfiles);
+  const copy = unlockCopy(source, sourceProfiles, kinds);
   return (
     <>
       <Button title="Back" onPress={() => flow.setStep(source.profiles.length > 1 || bySpaces ? "profiles" : "choose")} />

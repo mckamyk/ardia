@@ -49,6 +49,8 @@ function writtenPasswords(reply: unknown): WrittenPasswords {
   return { added: count(value.added), existing: count(value.existing), conflicts: count(value.conflicts), invalid: count(value.invalid) };
 }
 
+export type UnlockOptions = { primaryPassword?: string; profiles?: readonly string[]; kinds?: readonly string[] };
+
 export type HostImport = Pick<
   Api,
   | "listBrowsers"
@@ -264,14 +266,17 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
       return sources;
     },
     importData,
-    async unlockBrowser(browserId, options = {}) {
+    async unlockBrowser(browserId, options: UnlockOptions = {}) {
       const family = families.get(browserId);
       if (family === "chromium" && !keychains.has(browserId)) return;
       if (family !== "chromium" && family !== "firefox") throw failure("unsupported", "This browser can't be unlocked on Linux");
       const primaryPassword = family === "firefox" && typeof options.primaryPassword === "string" ? options.primaryPassword : null;
-      await finishByEvent("unlockBrowser", [browserId, primaryPassword], "unlock", "unlocked", () => undefined, UNLOCK_DEADLINE_MS,
-        "The system keyring didn't answer");
-      unlocked.set(browserId, now());
+      const strings = (list: unknown) => (Array.isArray(list) ? list.filter((item): item is string => typeof item === "string") : []);
+      const args = family === "firefox" ? [browserId, primaryPassword, strings(options.profiles), strings(options.kinds)] : [browserId, primaryPassword];
+      const cardsLocked = await finishByEvent("unlockBrowser", args, "unlock", "unlocked", (event) => event.cardsLocked === true,
+        UNLOCK_DEADLINE_MS, "The system keyring didn't answer");
+      if (cardsLocked) unlocked.delete(browserId);
+      else unlocked.set(browserId, now());
     },
     isBrowserUnlocked: (browserId) => stillUnlocked(browserId) || (families.get(browserId) === "chromium" && !keychains.has(browserId)),
     forgetUnlockedKeys() {

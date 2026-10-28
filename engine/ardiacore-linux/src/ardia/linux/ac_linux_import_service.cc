@@ -160,9 +160,23 @@ KeyRead ReadSafeStorageKey(li::SafeStorageItem item) {
   return read;
 }
 
-li::FirefoxUnlock ReadFirefoxSecrets(li::Environment environment, std::string browser, li::SecretBytes primary_password) {
+li::FirefoxUnlock ReadFirefoxSecrets(li::Environment environment, std::string browser, li::SecretBytes primary_password,
+                                     std::vector<std::string> profiles, std::vector<std::string> kinds) {
   std::unique_ptr<li::Keyring> keyring = li::SystemKeyring();
-  return li::UnlockFirefox(environment, browser, std::move(primary_password), keyring.get(), li::kKeyringPromptTimeoutMs);
+  return li::UnlockFirefox(environment, browser, std::move(primary_password), profiles, kinds, keyring.get(),
+                           li::kKeyringPromptTimeoutMs);
+}
+
+std::vector<std::string> UnlockScope(const base::ListValue& values, size_t index, bool profiles) {
+  std::vector<std::string> out;
+  if (values.size() <= index || !values[index].is_list()) return out;
+  for (const base::Value& item : values[index].GetList()) {
+    if (!item.is_string()) continue;
+    const std::string& text = item.GetString();
+    if (profiles ? li::ValidProfileId(text) : (text == "autofill" || text == "passwords" || text == "cookies")) out.push_back(text);
+    if (out.size() >= 64) break;
+  }
+  return out;
 }
 
 base::ListValue ListBrowsersWithKeyring(li::Environment environment) {
@@ -619,7 +633,8 @@ class ImportService {
       base::ThreadPool::PostTaskAndReplyWithResult(
           FROM_HERE, kKeyring,
           base::BindOnce(&ReadFirefoxSecrets, CurrentEnvironment(), browser_id,
-                         li::SecretBytes(given ? values[2].GetString() : std::string())),
+                         li::SecretBytes(given ? values[2].GetString() : std::string()), UnlockScope(values, 3, true),
+                         UnlockScope(values, 4, false)),
           base::BindOnce(&ImportService::FirefoxUnlocked, weak_factory_.GetWeakPtr(), requester.owner, request,
                          browser_id, SecretGeneration(requester.owner), requester.emit));
       return;
@@ -672,6 +687,7 @@ class ImportService {
       if (unlock.primary_password) unlocked_.Set(owner, browser, std::move(*unlock.primary_password), NowMs());
       if (unlock.card_key) unlocked_.Set(owner, browser + kCardKeySuffix, std::move(*unlock.card_key), NowMs());
       event.Set("type", "unlocked");
+      event.Set("cardsLocked", unlock.cards_locked);
     }
     emit.Run(base::Value(std::move(event)));
   }

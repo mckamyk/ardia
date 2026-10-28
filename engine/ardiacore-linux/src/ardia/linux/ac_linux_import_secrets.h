@@ -77,6 +77,7 @@ struct AutofillRead {
   int locked_cards = 0;
   int keyring_cards = 0;
   int portal = 0;
+  std::vector<std::string> notes;
 };
 
 struct FirefoxLoginsRead {

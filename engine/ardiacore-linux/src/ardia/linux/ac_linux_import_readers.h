@@ -108,9 +108,11 @@ struct FirefoxUnlock {
   std::string message;
   std::optional<SecretBytes> primary_password;
   std::optional<SecretBytes> card_key;
+  bool cards_locked = false;
 };
 
 FirefoxUnlock UnlockFirefox(const Environment& environment, std::string_view browser_id, SecretBytes primary_password,
+                            const std::vector<std::string>& profile_ids, const std::vector<std::string>& kinds,
                             Keyring* keyring, int prompt_timeout_ms);
 
 }

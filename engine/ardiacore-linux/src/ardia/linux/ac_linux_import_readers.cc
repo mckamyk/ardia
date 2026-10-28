@@ -1110,6 +1110,7 @@ ImportOutcome ReadBrowserProfile(const Environment& environment, std::string_vie
         if (autofill.undecryptable > 0) {
           warn(name, "undecryptable", Plural(autofill.undecryptable, "card") + " couldn't be decrypted");
         }
+        for (std::string& note : autofill.notes) warn(name, "unreadable", std::move(note));
         if (autofill.addresses.empty() && autofill.cards.empty() && autofill.locked_cards + autofill.keyring_cards > 0) {
           failure = Failure{"locked", "None of " + std::string(browser->name) + "'s saved cards could be decrypted"};
         }
@@ -1208,6 +1209,7 @@ base::ListValue ListExtensions(const Environment& environment, std::string_view 
 }
 
 FirefoxUnlock UnlockFirefox(const Environment& environment, std::string_view browser_id, SecretBytes primary_password,
+                            const std::vector<std::string>& profile_ids, const std::vector<std::string>& kinds,
                             Keyring* keyring, int prompt_timeout_ms) {
   FirefoxUnlock unlock;
   const BrowserDefinition* browser = FindBrowser(browser_id);
@@ -1223,8 +1225,11 @@ FirefoxUnlock UnlockFirefox(const Environment& environment, std::string_view bro
   bool locked = false;
   bool opened = false;
   bool cards = false;
+  const bool autofill = std::find(kinds.begin(), kinds.end(), "autofill") != kinds.end();
   for (const base::DictValue& profile : profiles) {
-    cards |= profile.FindBool("cardsNeedKeyring") == true;
+    const std::string* id = profile.FindString("id");
+    if (!profile_ids.empty() && (!id || std::find(profile_ids.begin(), profile_ids.end(), *id) == profile_ids.end())) continue;
+    cards |= autofill && profile.FindBool("cardsNeedKeyring") == true;
     if (profile.FindBool("needsPrimaryPassword") != true) continue;
     locked = true;
     const std::string* path = profile.FindString("path");
@@ -1247,7 +1252,10 @@ FirefoxUnlock UnlockFirefox(const Environment& environment, std::string_view bro
     if (unlock.card_key) return unlock;
     lookup.status = KeyringStatus::kUnavailable;
   }
-  if (opened) return unlock;
+  if (opened) {
+    unlock.cards_locked = true;
+    return unlock;
+  }
   unlock.code = std::string(KeyringErrorCode(lookup.status));
   unlock.message = lookup.status == KeyringStatus::kMissing
                        ? "The system keyring has no " + item->secret_label + " key"

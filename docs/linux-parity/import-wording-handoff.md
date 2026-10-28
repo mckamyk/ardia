@@ -58,13 +58,26 @@ There is no supported path, so the importer keeps counting and reporting it:
 - Sync copy is #147.
 - Like `credentialWording.ts`, a replacement whose source string disappears throws during the transform. A production build that loads any settings, import or onboarding module but never reworded a listed file fails in `buildEnd`. Every replacement must match exactly once in its shared file (`linuxWording.test.mjs`).
 
+## Review round 1
+
+- **The Firefox unlock is scoped to the selection.** `unlockBrowser` now carries the selected profile ids and kinds (`[requestId, browserId, primaryPassword, profileIds, kinds]` for Firefox; the native side keeps valid ids and `passwords`/`cookies`/`autofill` only).
+  - The typed password is checked only against selected profiles that need one, so a password that opens only an unselected profile is `denied`.
+  - The `Firefox Encrypted Storage` key is read only when `autofill` is chosen and a selected profile has `cardsNeedKeyring`; otherwise the keyring isn't touched at all.
+  - The unlock copy mentions the keyring item under the same rule. An empty profile list means all profiles, as in the copy.
+- **A refused card key doesn't count as unlocked.** If the primary password opened but the keyring refused the card key, the `unlocked` event carries `cardsLocked: true` and `hostImport.ts` leaves the browser locked, so the next import goes back to the unlock step.
+- **`logins.json` with no entries** beside `logins.db` no longer derives the SDR key, so it no longer warns "key4.db holds no key".
+- **Duplicates.** `logins.json`/`logins.db` duplicates (realm + username) keep the most recent one (`max(timeLastUsed, timeCreated)`), and `kMaxCredentials` applies after de-duplication; each reader caps only its own rows.
+- **Wiping.** The decrypted `p` field of each `logins.db` row is wiped in its parsed `DictValue` after the copy.
+- **Bounds and fallbacks.** JSON expiry numbers outside 0–9999 (and non-finite ones) read as 0 instead of an out-of-range cast. An unreadable `autofill.db` is an `unreadable` warning and `autofill-profiles.json` still imports.
+- **Keyring search scope.** The card-key search always names `xdg:schema: mozilla.firefox`. Deb and Snap Firefox share that label and schema, so on a system with both the first match wins, as it does for Firefox itself.
+
 ## Tests
 
 | Command | Result |
 | --- | --- |
-| `python3 -m unittest test_import_firefox_stores` | 12 pass; covers `logins.db` (plain, primary password, merged with `logins.json`, missing key), `autofill.db` with and without the primary password, `autofill-profiles.json` with and without the card key, the Firefox unlock (wrong password, right password, keyring accept, dismiss, missing item, partial success) over a private D-Bus with the fake keyring, discovery flags, Chromium and Firefox favicons, portal guidance and source rules. Keys are real NSS token keys (`fixtures/nss_app_keys.py` uses `PK11_ImportSymKeyWithFlags` and `PK11_SetSymKeyNickname`, as application-services does); JWE and OSKeyStore ciphertexts come from libcrypto through ctypes. |
-| `python3 -m unittest test_import test_import_followups test_import_firefox_stores` | 51 pass under ASan/UBSan, with the two portal message expectations updated |
-| `pnpm --filter @ardia/linux test:host` | 465 pass after rebasing on `15264fd2`; includes `importUnlock.test.mjs`, `linuxWording.test.mjs` and the favicon filter test in `hostImportFollowups.test.mjs` |
+| `python3 -m unittest test_import_firefox_stores` | 20 pass (8 added in review round 1); covers `logins.db` (plain, primary password, merged with `logins.json`, missing key), `autofill.db` with and without the primary password, `autofill-profiles.json` with and without the card key, the Firefox unlock (wrong password, right password, keyring accept, dismiss, missing item, partial success) over a private D-Bus with the fake keyring, discovery flags, Chromium and Firefox favicons, portal guidance and source rules. Keys are real NSS token keys (`fixtures/nss_app_keys.py` uses `PK11_ImportSymKeyWithFlags` and `PK11_SetSymKeyNickname`, as application-services does); JWE and OSKeyStore ciphertexts come from libcrypto through ctypes. |
+| `python3 -m unittest test_import test_import_followups test_import_firefox_stores` | 59 pass under ASan/UBSan, with the two portal message expectations updated |
+| `pnpm --filter @ardia/linux test:host` | 481 pass after rebasing on `ea8ce3c6`; includes `importUnlock.test.mjs`, `linuxWording.test.mjs` and the favicon filter test in `hostImportFollowups.test.mjs` |
 | `pnpm --filter @ardia/linux typecheck`, `build`, `test:graph` | pass (graph: 3) |
 | `pnpm --filter @ardia/linux acceptance:self-test` | 79 pass |
 | `scripts/linux/syntax-check-156.sh ac_linux_import_` | 8 of 8 files pass |

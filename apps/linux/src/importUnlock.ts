@@ -11,17 +11,17 @@ const chosen = (source: BrowserSource, selected: readonly string[]) =>
 export const asksPrimaryPassword = (source: BrowserSource, selected: readonly string[]) =>
   source.family === "firefox" && chosen(source, selected).some((profile) => profile.needsPrimaryPassword === true);
 
-const readsCardKey = (source: BrowserSource, selected: readonly string[]) =>
-  source.family === "firefox" && chosen(source, selected).some((profile) => profile.cardsNeedKeyring === true);
+const readsCardKey = (source: BrowserSource, selected: readonly string[], kinds: Iterable<ImportKind>) =>
+  source.family === "firefox" && [...kinds].includes("autofill") && chosen(source, selected).some((profile) => profile.cardsNeedKeyring === true);
 
 export type UnlockCopy = { title: string; subtitle: string; lead: string; detail: string; field: boolean; waiting: string };
 
-export function unlockCopy(source: BrowserSource, selected: readonly string[]): UnlockCopy {
+export function unlockCopy(source: BrowserSource, selected: readonly string[], kinds: Iterable<ImportKind>): UnlockCopy {
   const title = "Unlock your data for import";
   const subtitle = `${APP_NAME} can securely import logins, cookies and cards from your previous browser, so you stay signed in and don't have to enter your passwords again.`;
   if (source.family === "firefox") {
     const field = asksPrimaryPassword(source, selected);
-    const cards = readsCardKey(source, selected);
+    const cards = readsCardKey(source, selected, kinds);
     const keyring = `${source.name} keeps saved card numbers under “${FIREFOX_CARD_KEY}” in your system keyring, which may ask whether ${APP_NAME} can read it.`;
     return {
       title,
@@ -116,13 +116,22 @@ export function createSecretSlot() {
   };
 }
 
-export type UnlockApi = { unlockBrowser(browserId: string, options?: { primaryPassword?: string }): Promise<void> };
+export type UnlockApi = {
+  unlockBrowser(browserId: string, options?: { primaryPassword?: string; profiles?: readonly string[]; kinds?: readonly string[] }): Promise<void>;
+};
 
-export async function unlockSource(api: UnlockApi, source: BrowserSource, selected: readonly string[], slot: ReturnType<typeof createSecretSlot>) {
+export async function unlockSource(
+  api: UnlockApi,
+  source: BrowserSource,
+  selected: readonly string[],
+  kinds: Iterable<ImportKind>,
+  slot: ReturnType<typeof createSecretSlot>,
+) {
   const primaryPassword = asksPrimaryPassword(source, selected) ? slot.take() : "";
   slot.clear();
   try {
-    await api.unlockBrowser(source.id, primaryPassword ? { primaryPassword } : {});
+    const scope = { profiles: [...selected], kinds: [...kinds] };
+    await api.unlockBrowser(source.id, primaryPassword ? { primaryPassword, ...scope } : scope);
     return null;
   } catch (error) {
     return unlockFailure(source, (error as { code?: string } | null)?.code);

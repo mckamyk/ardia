@@ -44,9 +44,9 @@ function host() {
 }
 
 test("the Linux unlock step names the system keyring, never the Mac or its keychain", () => {
-  const one = unlockCopy(CHROME, ["Default"]);
-  const many = unlockCopy(CHROME, ["Default", "Profile 1"]);
-  for (const copy of [one, many, unlockCopy(FIREFOX, ["locked.default"]), unlockCopy(FIREFOX, ["cards.default"])]) {
+  const one = unlockCopy(CHROME, ["Default"], ["passwords"]);
+  const many = unlockCopy(CHROME, ["Default", "Profile 1"], ["passwords"]);
+  for (const copy of [one, many, unlockCopy(FIREFOX, ["locked.default"], ["passwords"]), unlockCopy(FIREFOX, ["cards.default"], ["autofill"])]) {
     for (const text of [copy.title, copy.subtitle, copy.lead, copy.detail, copy.waiting]) assert.doesNotMatch(text, MACOS);
   }
   assert.match(one.detail, /Secret Service or KWallet/);
@@ -68,10 +68,12 @@ test("a Firefox primary password is asked for only when a selected profile has o
   assert.equal(asksPrimaryPassword(FIREFOX, ["plain.default"]), false);
   assert.equal(asksPrimaryPassword(FIREFOX, ["plain.default", "cards.default"]), false);
   assert.equal(asksPrimaryPassword(CHROME, ["Default"]), false);
-  assert.equal(unlockCopy(FIREFOX, ["locked.default"]).field, true);
-  assert.match(unlockCopy(FIREFOX, ["locked.default"]).lead, /primary password/);
-  assert.match(unlockCopy(FIREFOX, ["cards.default"]).detail, /“Firefox Encrypted Storage”/);
-  assert.equal(unlockCopy(FIREFOX, ["cards.default"]).field, false);
+  assert.equal(unlockCopy(FIREFOX, ["locked.default"], ["passwords"]).field, true);
+  assert.match(unlockCopy(FIREFOX, ["locked.default"], ["passwords"]).lead, /primary password/);
+  assert.match(unlockCopy(FIREFOX, ["cards.default"], ["autofill"]).detail, /“Firefox Encrypted Storage”/);
+  assert.doesNotMatch(unlockCopy(FIREFOX, ["cards.default"], ["passwords", "cookies"]).detail, /Firefox Encrypted Storage/);
+  assert.doesNotMatch(unlockCopy(FIREFOX, ["locked.default"], ["autofill"]).detail, /Firefox Encrypted Storage/);
+  assert.equal(unlockCopy(FIREFOX, ["cards.default"], ["passwords"]).field, false);
 });
 
 test("the typed primary password reaches the native unlock once, through the typed invoke, and is not kept", async () => {
@@ -81,26 +83,26 @@ test("the typed primary password reaches the native unlock once, through the typ
   let notified = 0;
   slot.subscribe(() => ++notified);
   slot.set("primary pw");
-  assert.equal(await unlockSource(api, FIREFOX, ["locked.default"], slot), null);
+  assert.equal(await unlockSource(api, FIREFOX, ["locked.default"], ["passwords", "autofill"], slot), null);
   const unlock = calls.find((call) => call.method === "ArdiaImport.unlockBrowser");
-  assert.deepEqual(unlock.args.slice(1), ["firefox", "primary pw"]);
+  assert.deepEqual(unlock.args.slice(1), ["firefox", "primary pw", ["locked.default"], ["passwords", "autofill"]]);
   assert.equal(slot.get(), "");
   assert.ok(notified >= 2);
   assert.equal(api.isBrowserUnlocked("firefox"), true);
 
   replies.push({ type: "failed", code: "denied", message: "wrong" });
   slot.set("wrong guess");
-  assert.match(await unlockSource(api, FIREFOX, ["locked.default"], slot), /isn't Firefox's primary password/);
+  assert.match(await unlockSource(api, FIREFOX, ["locked.default"], ["passwords"], slot), /isn't Firefox's primary password/);
   assert.equal(slot.get(), "");
-  assert.deepEqual(calls.filter((call) => call.method === "ArdiaImport.unlockBrowser").at(-1).args.slice(1), ["firefox", "wrong guess"]);
+  assert.deepEqual(calls.filter((call) => call.method === "ArdiaImport.unlockBrowser").at(-1).args.slice(1), ["firefox", "wrong guess", ["locked.default"], ["passwords"]]);
 
   slot.set("typed but not needed");
-  assert.equal(await unlockSource(api, FIREFOX, ["cards.default"], slot), null);
-  assert.deepEqual(calls.filter((call) => call.method === "ArdiaImport.unlockBrowser").at(-1).args.slice(1), ["firefox", null]);
+  assert.equal(await unlockSource(api, FIREFOX, ["cards.default"], ["autofill"], slot), null);
+  assert.deepEqual(calls.filter((call) => call.method === "ArdiaImport.unlockBrowser").at(-1).args.slice(1), ["firefox", null, ["cards.default"], ["autofill"]]);
   assert.equal(slot.get(), "");
 
   replies.push({ type: "failed", code: "locked", message: "locked" });
-  assert.match(await unlockSource(api, CHROME, ["Default"], slot), /system keyring is locked/);
+  assert.match(await unlockSource(api, CHROME, ["Default"], ["passwords"], slot), /system keyring is locked/);
   assert.deepEqual(calls.filter((call) => call.method === "ArdiaImport.unlockBrowser").at(-1).args.slice(1), ["chrome", null]);
 });
 

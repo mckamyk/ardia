@@ -908,9 +908,6 @@ std::optional<Failure> ReadFirefoxLoginsJson(const std::string& directory, const
                                              ImportObserver& observer, std::string_view primary_password,
                                              FirefoxLoginsRead* out, bool* cancelled) {
   const std::string logins = Join(directory, "logins.json");
-  FirefoxKeys key;
-  const FirefoxKey opened = FirefoxMasterKeys(database.global_salt, database.check, database.rows, primary_password, &key);
-  if (opened != FirefoxKey::kOk) return FirefoxKeyFailure(opened, "these passwords");
   std::string text;
   const FileRead read = ReadFileLimited(logins, kMaxLoginsJsonBytes, &text);
   if (read != FileRead::kOk) return Failure{read == FileRead::kTooLarge ? "tooLarge" : "unreadable", "Couldn't read logins.json"};
@@ -918,6 +915,11 @@ std::optional<Failure> ReadFirefoxLoginsJson(const std::string& directory, const
   Wipe(text);
   const base::ListValue* list = top ? top->FindList("logins") : nullptr;
   if (!list) return Failure{"unreadable", "logins.json is malformed"};
+  if (list->empty()) return std::nullopt;
+  FirefoxKeys key;
+  const FirefoxKey opened = FirefoxMasterKeys(database.global_salt, database.check, database.rows, primary_password, &key);
+  if (opened != FirefoxKey::kOk) return FirefoxKeyFailure(opened, "these passwords");
+  size_t added = 0;
   int seen = 0;
   for (const base::Value& entry : *list) {
     if (++seen % kCancelRows == 0 && observer.Cancelled()) {
@@ -945,7 +947,7 @@ std::optional<Failure> ReadFirefoxLoginsJson(const std::string& directory, const
     if (std::optional<double> value = row.FindDouble("timeCreated")) credential.created = *value;
     if (std::optional<double> value = row.FindDouble("timeLastUsed")) credential.last_used = *value;
     if (std::optional<int> value = row.FindInt("timesUsed")) credential.times_used = std::max(0, *value);
-    if (out->credentials.size() >= kMaxCredentials) break;
+    if (added++ >= kMaxCredentials) break;
     out->credentials.push_back(std::move(credential));
   }
   return std::nullopt;
@@ -975,6 +977,7 @@ std::optional<Failure> ReadFirefoxLoginsDatabase(const std::string& directory, c
   }
   Statement rows(db->get(), sql);
   if (!rows.ok()) return Failure{"unsupported", "logins.db has an unexpected layout"};
+  size_t added = 0;
   int seen = 0;
   while (rows.Step()) {
     if (++seen % kCancelRows == 0 && observer.Cancelled()) {
@@ -992,7 +995,7 @@ std::optional<Failure> ReadFirefoxLoginsDatabase(const std::string& directory, c
         opened_fields ? base::JSONReader::ReadDict(plain, base::JSON_PARSE_RFC) : std::nullopt;
     Wipe(plain);
     const std::string* user = fields ? fields->FindString("u") : nullptr;
-    const std::string* pass = fields ? fields->FindString("p") : nullptr;
+    std::string* pass = fields ? fields->FindString("p") : nullptr;
     if (!user || !pass) {
       ++out->undecryptable;
       continue;
@@ -1000,6 +1003,7 @@ std::optional<Failure> ReadFirefoxLoginsDatabase(const std::string& directory, c
     Credential credential;
     credential.username = *user;
     credential.password = *pass;
+    Wipe(*pass);
     if (credential.password.empty()) continue;
     const std::string form = rows.Text(2);
     credential.url = !form.empty() ? form : origin;
@@ -1008,7 +1012,7 @@ std::optional<Failure> ReadFirefoxLoginsDatabase(const std::string& directory, c
     credential.created = static_cast<double>(std::max<int64_t>(0, rows.Int(4)));
     credential.last_used = static_cast<double>(std::max<int64_t>(0, rows.Int(5)));
     credential.times_used = static_cast<int>(std::clamp<int64_t>(rows.Int(6), 0, 1 << 30));
-    if (out->credentials.size() >= kMaxCredentials) break;
+    if (added++ >= kMaxCredentials) break;
     out->credentials.push_back(std::move(credential));
   }
   if (rows.failed()) return Failure{"unreadable", "Couldn't read logins.db"};
@@ -1022,7 +1026,9 @@ std::string JsonText(const base::DictValue& record, std::string_view key) {
 
 int JsonInt(const base::DictValue& record, std::string_view key) {
   if (std::optional<int> value = record.FindInt(key)) return *value;
-  if (std::optional<double> value = record.FindDouble(key)) return static_cast<int>(*value);
+  if (std::optional<double> value = record.FindDouble(key)) {
+    return std::isfinite(*value) && *value >= 0 && *value <= 9999 ? static_cast<int>(*value) : 0;
+  }
   const std::string* text = record.FindString(key);
   if (!text || text->empty() || text->size() > 4) return 0;
   int out = 0;
@@ -1130,7 +1136,11 @@ std::optional<Failure> ReadFirefoxLogins(const std::string& directory, ScratchDi
   if ((!json || json_failure) && (!database || database_failure)) return json_failure ? json_failure : database_failure;
   if (json_failure) out->notes.push_back("logins.json couldn't be read: " + json_failure->message);
   if (database_failure) out->notes.push_back("logins.db couldn't be read: " + database_failure->message);
+  std::stable_sort(out->credentials.begin(), out->credentials.end(), [](const Credential& a, const Credential& b) {
+    return std::max(a.last_used, a.created) > std::max(b.last_used, b.created);
+  });
   RemoveDuplicateCredentials(out->credentials, false);
+  while (out->credentials.size() > kMaxCredentials) out->credentials.pop_back();
   return std::nullopt;
 }
 
@@ -1152,8 +1162,9 @@ std::optional<Failure> ReadFirefoxAutofill(const std::string& directory, Scratch
   if (database) {
     FileRead status = FileRead::kOk;
     std::unique_ptr<Database> db = Database::Snapshot(Join(directory, "autofill.db"), scratch, observer, &status);
-    if (!db) return SnapshotFailure(status, "autofill.db");
-    if (db->HasTable("addresses_data")) {
+    if (!db && !json) return SnapshotFailure(status, "autofill.db");
+    if (!db) out->notes.push_back("autofill.db couldn't be read: " + SnapshotFailure(status, "autofill.db").message);
+    if (db && db->HasTable("addresses_data")) {
       Statement rows(db->get(),
                      "SELECT name, organization, street_address, address_level2, address_level1, postal_code, country, "
                      "tel, email FROM addresses_data ORDER BY time_created");
@@ -1171,7 +1182,7 @@ std::optional<Failure> ReadFirefoxAutofill(const std::string& directory, Scratch
         KeepAddress(out, std::move(address));
       }
     }
-    if (db->HasTable("credit_cards_data")) {
+    if (db && db->HasTable("credit_cards_data")) {
       Statement rows(db->get(),
                      "SELECT cc_name, cc_number_enc, cc_exp_month, cc_exp_year FROM credit_cards_data "
                      "WHERE cc_number_enc != '' ORDER BY time_created");

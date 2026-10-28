@@ -256,35 +256,127 @@ class FirefoxAutofillTests(FirefoxStoreFixture):
         self.assertTrue(flags['profiles'][0]['cardsNeedKeyring'])
         self.assertFalse(flags['needsKeychain'])
 
-    def test_unlocking_firefox_checks_the_primary_password_and_reads_the_card_key_with_consent(self):
+    def unlock_profiles(self):
         locked = self.firefox_profile('locked.default', 'primary pw', {'as-autofill-key': AUTOFILL_KEY})
         self.autofill_db(locked, [], [('Ada', jwe(AUTOFILL_KEY, '4111111111111111'), 1, 2030)])
         cards = self.firefox_profile('cards.default')
         (cards / 'autofill-profiles.json').write_text(json.dumps({'creditCards': [
             {'guid': 'c', 'cc-name': 'G', 'cc-number-encrypted': os_key_store(CARD_KEY, '4242424242424242'), 'cc-exp-month': 1, 'cc-exp-year': 2030}]}))
-        wrong = self.json('firefox-unlock', *self.env_args(), 'firefox', 'not it')
+        return {'attributes': {'string': 'Firefox Encrypted Storage', 'xdg:schema': 'mozilla.firefox'},
+                'secret': base64.b64encode(CARD_KEY).decode()}
+
+    def unlock(self, password, profiles, kinds, keyring=None):
+        args = ['firefox-unlock', *self.env_args(), 'firefox', password, ','.join(profiles) or '-', ','.join(kinds) or '-']
+        if keyring is None:
+            return self.json(*args), []
+        return run_keyring(self, keyring, self.binary, *args, 'keyring')
+
+    def test_unlocking_firefox_checks_the_primary_password_and_reads_the_card_key_with_consent(self):
+        item = self.unlock_profiles()
+        both = ['locked.default', 'cards.default']
+        wrong, _ = self.unlock('not it', both, ['passwords', 'autofill'])
         self.assertEqual((wrong['code'], wrong['primary']), ('denied', ''))
         self.assertEqual(wrong['message'], "That isn't Firefox's primary password")
-        right = self.json('firefox-unlock', *self.env_args(), 'firefox', 'primary pw')
+        right, _ = self.unlock('primary pw', both, ['passwords', 'autofill'])
         self.assertEqual((right['code'], right['primary'], right['cardKey']), ('', 'primary pw', ''))
-        item = {'attributes': {'string': 'Firefox Encrypted Storage', 'xdg:schema': 'mozilla.firefox'},
-                'secret': base64.b64encode(CARD_KEY).decode()}
-        reply, calls = run_keyring(self, {'locked': True, 'prompt': 'accept', 'items': [item]}, self.binary, 'firefox-unlock',
-                                   *self.env_args(), 'firefox', 'primary pw', 'keyring')
-        self.assertEqual((reply['code'], reply['primary'], reply['cardKey']), ('', 'primary pw', CARD_KEY.hex()))
+        reply, calls = self.unlock('primary pw', both, ['passwords', 'autofill'], {'locked': True, 'prompt': 'accept', 'items': [item]})
+        self.assertEqual((reply['code'], reply['primary'], reply['cardKey'], reply['cardsLocked']), ('', 'primary pw', CARD_KEY.hex(), False))
         self.assertIn('Prompt', calls)
-        reply, _ = run_keyring(self, {'locked': True, 'prompt': 'dismiss', 'items': [item]}, self.binary, 'firefox-unlock',
-                               *self.env_args(), 'firefox', '-', 'keyring')
+        reply, _ = self.unlock('-', ['cards.default'], ['autofill'], {'locked': True, 'prompt': 'dismiss', 'items': [item]})
         self.assertEqual((reply['code'], reply['cardKey']), ('denied', ''))
-        reply, _ = run_keyring(self, {'locked': True, 'prompt': 'dismiss', 'items': [item]}, self.binary, 'firefox-unlock',
-                               *self.env_args(), 'firefox', 'primary pw', 'keyring')
-        self.assertEqual((reply['code'], reply['primary'], reply['cardKey']), ('', 'primary pw', ''))
-        reply, _ = run_keyring(self, {'items': []}, self.binary, 'firefox-unlock', *self.env_args(), 'firefox', '-', 'keyring')
+        reply, _ = self.unlock('primary pw', both, ['passwords', 'autofill'], {'locked': True, 'prompt': 'dismiss', 'items': [item]})
+        self.assertEqual((reply['code'], reply['primary'], reply['cardKey'], reply['cardsLocked']), ('', 'primary pw', '', True))
+        reply, _ = self.unlock('-', ['cards.default'], ['autofill'], {'items': []})
         self.assertEqual((reply['code'], reply['message']), ('notFound', 'The system keyring has no Firefox Encrypted Storage key'))
         sources, calls = run_keyring(self, {'locked': True, 'items': [item]}, self.binary, 'discover-keyring', *self.env_args())
         self.assertEqual((sources[0]['needsKeychain'], sources[0].get('keychainService')), (True, 'Firefox Encrypted Storage'))
         self.assertNotIn('GetSecrets', calls)
         self.assertNotIn('Unlock', calls)
+
+    def test_the_unlock_reads_the_card_key_only_for_selected_profiles_that_import_autofill(self):
+        item = self.unlock_profiles()
+        keyring = {'locked': True, 'prompt': 'accept', 'items': [item]}
+        for profiles, kinds in [(['locked.default'], ['passwords', 'autofill']), (['locked.default', 'cards.default'], ['passwords']),
+                                (['cards.default'], ['cookies'])]:
+            reply, calls = self.unlock('primary pw' if 'locked.default' in profiles else '-', profiles, kinds, keyring)
+            self.assertEqual((reply['code'], reply['cardKey']), ('', ''), (profiles, kinds))
+            self.assertEqual(calls, [], (profiles, kinds))
+        reply, calls = self.unlock('-', ['cards.default'], ['autofill'], keyring)
+        self.assertEqual((reply['code'], reply['cardKey']), ('', CARD_KEY.hex()))
+        self.assertIn('GetSecrets', calls)
+
+    def test_the_primary_password_is_checked_only_against_selected_profiles(self):
+        self.unlock_profiles()
+        other = self.firefox_profile('other.default', 'other pw', {'as-logins-key': LOGINS_KEY})
+        self.logins_db(other, [('g', 'https://db.example', None, '', self.sec('o', 'other db pass'), 1, 0, 1, 0, 0)])
+        reply, _ = self.unlock('primary pw', ['other.default'], ['passwords'])
+        self.assertEqual((reply['code'], reply['primary']), ('denied', ''))
+        reply, _ = self.unlock('other pw', ['other.default'], ['passwords'])
+        self.assertEqual((reply['code'], reply['primary']), ('', 'other pw'))
+        reply, _ = self.unlock('primary pw', ['cards.default'], ['passwords'])
+        self.assertEqual((reply['code'], reply['primary']), ('', ''))
+
+    def test_the_card_key_search_always_names_the_firefox_schema(self):
+        item = self.unlock_profiles()
+        unschemed = {'attributes': {'string': 'Firefox Encrypted Storage'}, 'secret': item['secret']}
+        reply, calls = self.unlock('-', ['cards.default'], ['autofill'], {'items': [unschemed]})
+        self.assertEqual((reply['code'], reply['cardKey']), ('notFound', ''))
+        self.assertNotIn('GetSecrets', calls)
+
+
+class ReviewRoundOneTests(FirefoxStoreFixture):
+    def test_an_empty_logins_json_beside_logins_db_needs_no_key_and_warns_nothing(self):
+        profile = self.firefox_profile('rust.default', app_keys={'as-logins-key': LOGINS_KEY})
+        (profile / 'logins.json').write_text(json.dumps({'nextId': 1, 'logins': [], 'version': 3}))
+        self.logins_db(profile, [('g', 'https://db.example', None, '', self.sec('dana', 'db pass'), 1, 0, 1, 0, 0)])
+        out = self.read_firefox('rust.default', ['passwords'])
+        self.assertEqual([c['password'] for c in out['credentials']], ['db pass'])
+        self.assertEqual(out['result']['warnings'], [])
+
+    def test_the_newer_of_two_duplicate_logins_wins(self):
+        profile = self.firefox_profile('both.default', app_keys={'as-logins-key': LOGINS_KEY}, logins=[
+            {'hostname': 'https://shared.example', 'username': 'sam', 'password': 'old pass'}])
+        self.logins_db(profile, [('a', 'https://shared.example', None, '', self.sec('sam', 'new pass'), 1600000000000, 1800000000000, 1, 1, 0)])
+        out = self.read_firefox('both.default', ['passwords'])
+        self.assertEqual([(c['username'], c['password']) for c in out['credentials']], [('sam', 'new pass')])
+        profile = self.firefox_profile('older.default', app_keys={'as-logins-key': LOGINS_KEY}, logins=[
+            {'hostname': 'https://shared.example', 'username': 'sam', 'password': 'json pass'}])
+        self.logins_db(profile, [('a', 'https://shared.example', None, '', self.sec('sam', 'stale db pass'), 1, 2, 1, 1, 0)])
+        out = self.read_firefox('older.default', ['passwords'])
+        self.assertEqual([c['password'] for c in out['credentials']], ['json pass'])
+
+    def test_huge_expiry_numbers_are_ignored_without_undefined_behaviour(self):
+        profile = self.firefox_profile('json.default')
+        (profile / 'autofill-profiles.json').write_text(
+            '{"creditCards": [{"guid": "c", "cc-name": "Big", "cc-number-encrypted": "%s", "cc-exp-month": 1e300, "cc-exp-year": -1e300}]}'
+            % os_key_store(CARD_KEY, '4242424242424242'))
+        result = subprocess.run([str(self.binary), 'read', *[str(a) for a in self.env_args()], 'firefox', 'json.default', 'autofill',
+                                 '0', '0', '0', '-', '-', '1700000000000', CARD_KEY.hex()], capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('runtime error', result.stderr)
+        cards = json.loads(result.stdout)['cards']
+        self.assertEqual([(c['number'], c['expMonth'], c['expYear']) for c in cards], [('4242424242424242', 0, 0)])
+
+    def test_an_unreadable_autofill_db_keeps_the_json_store(self):
+        profile = self.firefox_profile('json.default')
+        (profile / 'autofill-profiles.json').write_text(json.dumps({'addresses': [
+            {'guid': 'a', 'name': 'Grace Hopper', 'street-address': '1 Cobol Way', 'country': 'us'}]}))
+        (profile / 'autofill.db').write_bytes(b'')
+        (profile / 'autofill.db').chmod(0)
+        try:
+            out = self.read_firefox('json.default', ['autofill'])
+        finally:
+            (profile / 'autofill.db').chmod(0o600)
+        self.assertEqual([a['name'] for a in out['addresses']], ['Grace Hopper'])
+        self.assertEqual(out['result']['failed'], [])
+        self.assertEqual([(w['code'], 'autofill.db' in w['message']) for w in out['result']['warnings']], [('unreadable', True)])
+
+    def test_decrypted_logins_db_fields_are_wiped(self):
+        secrets = (LINUX / 'ac_linux_import_secrets.cc').read_text()
+        read = secrets[secrets.index('std::optional<Failure> ReadFirefoxLoginsDatabase('):]
+        read = read[:read.index('\n}\n')]
+        self.assertIn('Wipe(*pass);', read)
+        self.assertIn('std::string* pass = fields ? fields->FindString("p") : nullptr;', read)
 
 
 class FaviconTests(FirefoxStoreFixture):

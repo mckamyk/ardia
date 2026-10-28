@@ -562,15 +562,17 @@ int main(int argc, char** argv) {
     std::cout << base::ToJson(ListBrowsers(environment, keyring.get())) << "\n";
     return 0;
   }
-  if (command == "firefox-unlock" && argc > 7) {
-    std::unique_ptr<Keyring> keyring = argc > 8 && std::string(argv[8]) == "keyring" ? SystemKeyring() : nullptr;
+  if (command == "firefox-unlock" && argc > 9) {
+    std::unique_ptr<Keyring> keyring = argc > 10 && std::string(argv[10]) == "keyring" ? SystemKeyring() : nullptr;
+    const auto list = [](const char* text) { return std::string(text) == "-" ? std::vector<std::string>() : Split(text); };
     FirefoxUnlock unlock = UnlockFirefox(environment, argv[6], SecretBytes(std::string(argv[7]) == "-" ? "" : argv[7]),
-                                         keyring.get(), 5000);
+                                         list(argv[8]), list(argv[9]), keyring.get(), 5000);
     base::DictValue out;
     out.Set("code", unlock.code);
     out.Set("message", unlock.message);
     out.Set("primary", unlock.primary_password ? unlock.primary_password->value() : std::string());
     out.Set("cardKey", unlock.card_key ? Hex(unlock.card_key->value()) : std::string());
+    out.Set("cardsLocked", unlock.cards_locked);
     std::cout << base::ToJson(out) << "\n";
     return 0;
   }
