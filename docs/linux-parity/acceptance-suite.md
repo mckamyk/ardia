@@ -209,9 +209,12 @@ The JSON lists each manual item with these steps. They are kept here so they can
 
 - **Keyring.** Run Ardia normally in a GNOME Keyring or KWallet session. Turn On Sync stores an "Ardia Sync Key" item (account = the device id) and nothing under the profile folder; a restart resumes without the phrase.
 - **No or locked keyring.** With no Secret Service, or a locked keyring and a dismissed unlock prompt, Turn On Sync says the keyring isn't running or is locked and writes nothing to the folder. With sync on, a locked keyring at launch shows "not syncing" with the keyring message, and entering the phrase resumes.
-- **Recovery phrase.** With the F07 polkit policy and an agent: Show Words, Show Code and Copy Words prompt once, then work for 60 s; Stop Syncing ends that early. Save Recovery Kit › Save as Text shows the save dialog, then prompts, and leaves a 0600 file with the 24 words. Denied or dismissed prompts show, copy and write nothing.
-- **Folder.** Choose… opens the picker over Settings, and the browser window's sync uses the chosen folder. Show Sync Folder opens it in the file manager.
-- **Linux and macOS.** Through Syncthing, Dropbox or a NAS share with a Mac on the current release, each side joins with the other's phrase, and bookmarks, history, settings and pinned tabs go both ways. A file still arriving shows "waiting for N files" and applies once whole. Passwords stay on each device until #145.
+- **Recovery phrase.** With the F07 polkit policy and an agent: Show Words, Show Code and Copy Words prompt once, then work for 60 s; Stop Syncing ends that early. The Recovery Kit sheet offers Close and Save as Text… only (no preview, PDF, Copy or Share); Save as Text… shows the save dialog, then prompts, and leaves a 0600 file with the 24 words. Denied or dismissed prompts show, copy and write nothing.
+- **Folder.** Choose… opens the picker over Settings, and the browser window's sync uses the chosen folder. Advanced › Open Sync Folder opens it in the file manager.
+- **Wording (#147).** The Sync pane, its sheets and the Sync search result say computers or devices, never Mac, iCloud, Finder, iPhone or Keychain.
+- **Passwords (#145).** With sync on and Passwords ticked, a login saved on one Linux profile appears in the other device's Passwords pane after a sync, and a changed password replaces it. No polkit prompt appears for syncing. With the keyring locked, or `--enable-features=SkipUndecryptablePasswords`, passwords are skipped and nothing is removed on either side. The browser log, the sync folder and `sync-state.nns` never contain the password.
+- **Large state (#146).** A profile whose sealed `sync-state.nns` grows past 8 MiB (a long history) keeps saving it: no "couldn't save the sync state" in the log, the file grows past 8 MiB, the journal parts are pruned after the save, and a restart loads it.
+- **Linux and macOS.** Through Syncthing, Dropbox or a NAS share with a Mac on the current release, each side joins with the other's phrase, and bookmarks, history, settings, pinned tabs and passwords go both ways. A file still arriving shows "waiting for N files" and applies once whole.
 
 **#30 F20**
 
