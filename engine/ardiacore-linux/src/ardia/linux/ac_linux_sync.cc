@@ -15,6 +15,7 @@ namespace ardia::linux_sync {
 namespace {
 
 constexpr char kLockedMessage[] = "Sync isn't set up on this device.";
+constexpr int64_t kHeldKeyRetrySeconds = 30;
 constexpr char kUnreadableMessage[] =
     "This device's sync state couldn't be read safely, so sync is paused to keep it.";
 
@@ -24,6 +25,10 @@ Outcome Argument(std::string_view what) {
 
 const JsonValue* ArgAt(const std::vector<JsonValue>& args, size_t index) {
   return index < args.size() ? &args[index] : nullptr;
+}
+
+bool KeyringClosed(KeyStatus status) {
+  return status == KeyStatus::kLocked || status == KeyStatus::kUnavailable;
 }
 
 const std::string* StringArg(const std::vector<JsonValue>& args, size_t index, size_t limit) {
@@ -222,7 +227,16 @@ void SyncCore::SetEntropy(std::optional<Bytes> entropy) {
   }
 }
 
+void SyncCore::SaveHeldKey(int64_t now_seconds) {
+  if (unsaved_account_.empty() || !keys_ || now_seconds < next_held_key_save_) return;
+  next_held_key_save_ = now_seconds + kHeldKeyRetrySeconds;
+  if (store_->Probe() != KeyStatus::kOk) return;
+  last_key_status_ = store_->Save(unsaved_account_, entropy_);
+  if (last_key_status_ == KeyStatus::kOk) unsaved_account_.clear();
+}
+
 Outcome SyncCore::Dispatch(std::string_view method, const std::vector<JsonValue>& args, int64_t now_seconds) {
+  SaveHeldKey(now_seconds);
   if (method == "ArdiaSync.folderInfo") return FolderInfo(args);
   if (method == "ArdiaSync.deviceName") return Outcome::Value(JsonValue::String(options_.device_name));
   if (method == "ArdiaSync.status") return Status();
@@ -274,6 +288,8 @@ Outcome SyncCore::CreatePhrase(const std::vector<JsonValue>& args) {
     return Outcome::Value(JsonValue::Bool(false));
   }
   SetEntropy(std::move(entropy));
+  unreadable_account_.clear();
+  unsaved_account_.clear();
   return Outcome::Value(JsonValue::Bool(true));
 }
 
@@ -282,6 +298,7 @@ Outcome SyncCore::EnterPhrase(const std::vector<JsonValue>& args) {
   const std::string* text = StringArg(args, 1, kMaxPhraseBytes);
   const std::string* folder = FolderArg(args, 2);
   if (!account || !text || !folder) return Argument("A device id, phrase and folder are required");
+  if (text->empty()) return ResumeFromKeyring(*account, *folder);
   Bytes entropy;
   const PhraseProblem problem = EntropyFromPhrase(*text, &entropy);
   switch (problem.kind) {
@@ -306,11 +323,38 @@ Outcome SyncCore::EnterPhrase(const std::vector<JsonValue>& args) {
     return Outcome::Value(JsonValue::Object({{"error", JsonValue::String(HasSyncData(*folder) ? "mismatch" : "noData")}}));
   }
   last_key_status_ = store_->Save(*account, entropy);
-  if (last_key_status_ != KeyStatus::kOk) {
+  const bool hold = last_key_status_ != KeyStatus::kOk && KeyringClosed(last_key_status_) && *account == unreadable_account_;
+  if (last_key_status_ != KeyStatus::kOk && !hold) {
     Wipe(entropy);
     return Outcome::Value(JsonValue::Object({{"error", JsonValue::String("keychain")}}));
   }
   SetEntropy(std::move(entropy));
+  unreadable_account_.clear();
+  unsaved_account_ = hold ? *account : std::string();
+  next_held_key_save_ = 0;
+  return Outcome::Value(JsonValue::Object({{"ok", JsonValue::Bool(true)}}));
+}
+
+Outcome SyncCore::ResumeFromKeyring(const std::string& account, const std::string& folder) {
+  auto refuse = [] { return Outcome::Value(JsonValue::Object({{"error", JsonValue::String("keychain")}})); };
+  if (account != unreadable_account_) return refuse();
+  Bytes entropy;
+  last_key_status_ = store_->Load(account, &entropy);
+  if (last_key_status_ != KeyStatus::kOk || entropy.size() != kEntropyBytes) {
+    Wipe(entropy);
+    return refuse();
+  }
+  bool matches = false;
+  {
+    const SyncKeys keys(entropy);
+    matches = Vault(folder, keys).ChainExists();
+  }
+  if (!matches) {
+    Wipe(entropy);
+    return Outcome::Value(JsonValue::Object({{"error", JsonValue::String(HasSyncData(folder) ? "mismatch" : "noData")}}));
+  }
+  SetEntropy(std::move(entropy));
+  unreadable_account_.clear();
   return Outcome::Value(JsonValue::Object({{"ok", JsonValue::Bool(true)}}));
 }
 
@@ -321,15 +365,19 @@ Outcome SyncCore::Unlock(const std::vector<JsonValue>& args) {
   last_key_status_ = store_->Load(*account, &entropy);
   if (last_key_status_ != KeyStatus::kOk || entropy.size() != kEntropyBytes) {
     Wipe(entropy);
+    if (KeyringClosed(last_key_status_)) unreadable_account_ = *account;
     return Outcome::Value(JsonValue::Bool(false));
   }
   SetEntropy(std::move(entropy));
+  unreadable_account_.clear();
   return Outcome::Value(JsonValue::Bool(true));
 }
 
 Outcome SyncCore::Forget(const std::vector<JsonValue>& args) {
   if (const std::string* account = AccountArg(args, 0)) store_->Delete(*account);
   SetEntropy(std::nullopt);
+  unreadable_account_.clear();
+  unsaved_account_.clear();
   return Outcome::Value(JsonValue::Null());
 }
 

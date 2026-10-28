@@ -105,6 +105,35 @@ export function keyringMessage(status: SyncKeyStoreStatus | null, saving: boolea
   return null;
 }
 
+export const KEYRING_RETRY_MS = 3000;
+const KEYRING_CLOSED: ReadonlySet<string> = new Set(["locked", "unavailable"]);
+
+export type KeyringResumerIo = {
+  locked(): boolean;
+  status(): Promise<SyncKeyStoreStatus>;
+  seen(status: SyncKeyStoreStatus): void;
+  resume(): Promise<unknown>;
+};
+
+export function keyringResumer(io: KeyringResumerIo): () => Promise<boolean> {
+  let busy = false;
+  return async () => {
+    if (busy || !io.locked()) return false;
+    busy = true;
+    try {
+      const status = await io.status();
+      io.seen(status);
+      if (status.keyStore !== "secretService" || status.keyStoreStatus !== "ok" || !KEYRING_CLOSED.has(status.lastKeyStatus)) return false;
+      await io.resume();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      busy = false;
+    }
+  };
+}
+
 export function presentSyncState<S extends { status: string; error: string | null }>(state: S, status: SyncKeyStoreStatus | null): S {
   if (state.status !== "locked") return state;
   const message = keyringMessage(status, false);

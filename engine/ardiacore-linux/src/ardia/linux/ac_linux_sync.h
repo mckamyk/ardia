@@ -176,6 +176,7 @@ class SyncCore {
   Outcome CreatePhrase(const std::vector<JsonValue>& args);
   Outcome EnterPhrase(const std::vector<JsonValue>& args);
   Outcome Unlock(const std::vector<JsonValue>& args);
+  Outcome ResumeFromKeyring(const std::string& account, const std::string& folder);
   Outcome Forget(const std::vector<JsonValue>& args);
   Outcome ChainStatus(const std::vector<JsonValue>& args);
   Outcome CreateChain(const std::vector<JsonValue>& args);
@@ -189,6 +190,7 @@ class SyncCore {
   Outcome Status();
 
   void SetEntropy(std::optional<Bytes> entropy);
+  void SaveHeldKey(int64_t now_seconds);
 
   std::unique_ptr<KeyStore> store_;
   CoreOptions options_;
@@ -197,6 +199,9 @@ class SyncCore {
   bool unreadable_ = false;
   uint64_t generation_ = 0;
   KeyStatus last_key_status_ = KeyStatus::kNotFound;
+  std::string unreadable_account_;
+  std::string unsaved_account_;
+  int64_t next_held_key_save_ = 0;
 };
 
 inline constexpr char kPasswordManagerHintFormat[] = "x-kde-passwordManagerHint";

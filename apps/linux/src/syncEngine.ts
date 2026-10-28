@@ -12,7 +12,9 @@ import {
   enterPhraseBegins,
   heldLoginsStatus,
   whileResettingHeldLogins,
+  KEYRING_RETRY_MS,
   keyringMessage,
+  keyringResumer,
   loadSyncDeviceName,
   presentSyncState,
   refreshSyncDocuments,
@@ -55,6 +57,25 @@ function adoptHeldLogins() {
 }
 
 let watchingProfiles = false;
+let keyringWatch: ReturnType<typeof setInterval> | null = null;
+
+function resumeWhenKeyringOpens(host: ArdiaHost) {
+  if (keyringWatch) return;
+  const tick = keyringResumer({
+    locked: () => {
+      const state = engine.useSync.getState();
+      return !!authority?.isAuthority() && state.enabled && state.status === "locked";
+    },
+    status: () => syncKeyStoreStatus(host),
+    seen: (status) => {
+      const shown = keyringMessage(keyStore, false);
+      keyStore = status;
+      if (keyringMessage(status, false) !== shown) engine.useSync.setState({});
+    },
+    resume: () => engine.enterRecoveryPhrase(engine.useSync.getState().folder ?? "", ""),
+  });
+  keyringWatch = setInterval(() => void tick(), KEYRING_RETRY_MS);
+}
 
 function dropDeletedProfiles() {
   if (watchingProfiles) return;
@@ -132,6 +153,7 @@ async function becomeAuthority(host: ArdiaHost) {
   adoptHeldLogins();
   dropDeletedProfiles();
   engine.startSync();
+  resumeWhenKeyringOpens(host);
   return { store: engine.useSync, remote: remoteFor(host) };
 }
 

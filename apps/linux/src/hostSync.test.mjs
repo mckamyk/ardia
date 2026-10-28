@@ -11,6 +11,7 @@ import {
   createHeldLogins,
   base32,
   keyringMessage,
+  keyringResumer,
   loadSyncDeviceName,
   newSyncDeviceId,
   presentSyncState,
@@ -378,6 +379,53 @@ test("keyring problems read as keyring problems, not as a Keychain on a Mac", ()
   assert.match(presentSyncState(locked, secret("unavailable")).error, /Start a Secret Service keyring/);
   assert.equal(presentSyncState(locked, secret("ok")), locked);
   assert.equal(presentSyncState({ status: "updated", error: null }, secret("unavailable")).error, null);
+});
+
+test("a keyring locked at launch is named in the Sync pane, and opening it resumes sync from the stored key without the phrase", async () => {
+  const secret = (keyStoreStatus, lastKeyStatus) => ({ keyStore: "secretService", keyStoreStatus, lastKeyStatus, unlocked: false, unreadable: false, passwords: false });
+  const locked = { status: "locked", error: "Enter your recovery phrase to keep syncing on this device." };
+  assert.equal(presentSyncState(locked, secret("locked", "locked")).error, "Your keyring is locked. Unlock it, or enter your recovery phrase to keep syncing.");
+  const replies = [secret("locked", "locked"), secret("locked", "locked"), secret("ok", "locked"), secret("ok", "notFound")];
+  const seen = [];
+  let resumed = 0;
+  let uiLocked = true;
+  const tickOnce = keyringResumer({
+    locked: () => uiLocked,
+    status: async () => replies.shift(),
+    seen: (status) => seen.push(`${status.keyStoreStatus}/${status.lastKeyStatus}`),
+    resume: async () => void resumed++,
+  });
+  assert.equal(await tickOnce(), false);
+  assert.equal(await tickOnce(), false);
+  assert.equal(resumed, 0);
+  assert.equal(await tickOnce(), true);
+  assert.equal(resumed, 1);
+  assert.equal(await tickOnce(), false);
+  assert.equal(resumed, 1);
+  assert.deepEqual(seen, ["locked/locked", "locked/locked", "ok/locked", "ok/notFound"]);
+  uiLocked = false;
+  assert.equal(await tickOnce(), false);
+  assert.equal(seen.length, 4);
+
+  let release;
+  const slow = keyringResumer({ locked: () => true, status: () => new Promise((resolve) => (release = resolve)), seen: () => {}, resume: async () => void resumed++ });
+  const first = slow();
+  assert.equal(await slow(), false);
+  release(secret("ok", "locked"));
+  assert.equal(await first, true);
+  const file = keyringResumer({ locked: () => true, status: async () => ({ ...secret("ok", "locked"), keyStore: "file" }), seen: () => {}, resume: async () => void resumed++ });
+  assert.equal(await file(), false);
+  const failing = keyringResumer({ locked: () => true, status: async () => { throw new Error("gone"); }, seen: () => {}, resume: async () => void resumed++ });
+  assert.equal(await failing(), false);
+  assert.equal(resumed, 2);
+
+  const engine = readFileSync(new URL("./syncEngine.ts", import.meta.url), "utf8");
+  const become = engine.slice(engine.indexOf("async function becomeAuthority"), engine.indexOf("export function startLinuxSync"));
+  assert.ok(become.indexOf("engine.startSync();") < become.indexOf("resumeWhenKeyringOpens(host);"));
+  const watch = engine.slice(engine.indexOf("function resumeWhenKeyringOpens"), engine.indexOf("function dropDeletedProfiles"));
+  assert.match(watch, /authority\?\.isAuthority\(\) && state\.enabled && state\.status === "locked"/);
+  assert.match(watch, /resume: \(\) => engine\.enterRecoveryPhrase\(engine\.useSync\.getState\(\)\.folder \?\? "", ""\)/);
+  assert.match(watch, /setInterval\(\(\) => void tick\(\), KEYRING_RETRY_MS\)/);
 });
 
 test("one renderer runs sync, the others mirror it and forward their actions, and it fails over when that window closes", async () => {
