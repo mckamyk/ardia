@@ -28,6 +28,7 @@ export { MouseArea } from "./web/MouseArea";
 export { FileDropArea } from "./web/FileDropArea";
 export { showMenu } from "../menus";
 export { setTrafficLightsCenter } from "./web/windowChrome";
+export { fetchBangList } from "../shellMethods";
 
 const SYSTEM_INFO: SystemInfo = {
   appName: "Ardia",
@@ -50,7 +51,6 @@ const documents = new Map<string, string>();
 const hostDocuments = ardiaHost ? createHostDocuments(ardiaHost) : undefined;
 export const readDocument = (name: string) => hostDocuments ? hostDocuments.read(name) : documents.get(name) ?? null;
 export const writeDocument = (name: string, contents: string) => hostDocuments ? void hostDocuments.write(name, contents).catch(reportHostError) : void documents.set(name, contents);
-export const fetchBangList = async (_etag: string | null): Promise<{ status: number; etag: string | null; contentType: string | null; body: string | null; bytes: number }> => { throw Object.assign(new Error("Bang list fetching is unavailable on Linux"), { code: "ERR_UNAVAILABLE" }); };
 export const saveDocument = async (name: string, contents: string) => hostDocuments ? hostDocuments.write(name, contents) : void documents.set(name, contents);
 export const removeDocument = (name: string) => hostDocuments ? void hostDocuments.remove(name).catch(reportHostError) : void documents.delete(name);
 export const refreshDocument = async (name: string) => hostDocuments ? hostDocuments.refresh(name) : documents.has(name);

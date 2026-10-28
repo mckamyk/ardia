@@ -23,6 +23,8 @@ function linuxSystemMethod(host: ArdiaHost, method: string): ((...args: unknown[
       return capabilities.launchAtLogin ? undefined : () => Promise.reject(unavailableError("Opening at login"));
     case "setThinScrollBars":
       return capabilities.thinScrollBars ? undefined : () => Promise.resolve();
+    case "hapticTick":
+      return hostSupports("ArdiaSystem.hapticTick", host) ? undefined : () => Promise.resolve();
   }
   return undefined;
 }

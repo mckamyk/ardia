@@ -34,10 +34,10 @@ test("engine transport preserves JSON and translates the empty default profile t
   assert.deepEqual(requests.at(-1), ["call", ["history.query", "work", null]]);
 });
 
-test("unknown required methods reject while optional methods need an advertised capability", async () => {
+test("unknown methods reject, and a shell method the host advertises replaces the Linux fallback", async () => {
   const { host } = fixture(async (method) => { throw new Error(`Unsupported: ${method}`); });
   await assert.rejects(resolveHostModule(host, "ArdiaTabs", "futureMethod")(7), /Unsupported: ArdiaTabs.futureMethod/);
-  assert.equal(resolveHostModule(host, "ArdiaShell", "dragPreviewBegin"), undefined);
+  assert.equal(await resolveHostModule(host, "ArdiaShell", "dragPreviewBegin")(true), undefined);
   host.bootstrap.capabilities = ["ArdiaShell.dragPreviewBegin"];
   await assert.rejects(resolveHostModule(host, "ArdiaShell", "dragPreviewBegin")(true), /Unsupported/);
   assert.equal(resolveHostModule(host, "ArdiaTranslate", "available"), false);

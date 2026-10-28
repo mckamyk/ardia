@@ -1,4 +1,4 @@
-import { emitNativeEvent, provideNativeModule } from "../../expo-modules-core";
+import { emitNativeEvent } from "../../expo-modules-core";
 import { currentPointer, watchPointer, type PointerSample } from "./pointer";
 
 const REACH = 24;
@@ -72,5 +72,3 @@ export function watchLeftEdge(id: string, on: boolean, hold: number) {
   holdPagePointer();
   if (watched.size) check();
 }
-
-provideNativeModule("ArdiaShell", { watchLeftEdge: async (id: string, on: boolean, hold: number) => watchLeftEdge(id, on, hold) });
