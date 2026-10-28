@@ -96,6 +96,7 @@ chromium chromium-linux-autoplay-policy.patch linux
 chromium chromium-linux-web-store-uninstall.patch linux
 chromium chromium-linux-media-player-pip.patch linux
 chromium chromium-linux-branding.patch linux
+chromium chromium-linux-wayland-cursor-fallback.patch linux
 
 layer engine/chromium
 layer engine/ardiacore mac
