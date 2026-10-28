@@ -166,7 +166,7 @@ class SecretServiceKeyStore final : public KeyStore {
 
   std::string_view kind() const override { return "secretService"; }
 
-  KeyStatus Load(std::string_view account, Bytes* secret) override {
+  [[clang::no_sanitize("cfi-icall")]] KeyStatus Load(std::string_view account, Bytes* secret) override {
     if (!Loaded()) return KeyStatus::kUnavailable;
     if (!ValidAccount(account)) return KeyStatus::kNotFound;
     const std::string name(account);
@@ -184,7 +184,7 @@ class SecretServiceKeyStore final : public KeyStore {
     return KeyStatus::kOk;
   }
 
-  KeyStatus Save(std::string_view account, const Bytes& secret) override {
+  [[clang::no_sanitize("cfi-icall")]] KeyStatus Save(std::string_view account, const Bytes& secret) override {
     if (!Loaded() || !ValidAccount(account)) return KeyStatus::kUnavailable;
     const std::string name(account);
     std::string hex = HexEncode(secret);
@@ -196,7 +196,7 @@ class SecretServiceKeyStore final : public KeyStore {
     return stored ? KeyStatus::kOk : KeyStatus::kUnavailable;
   }
 
-  KeyStatus Delete(std::string_view account) override {
+  [[clang::no_sanitize("cfi-icall")]] KeyStatus Delete(std::string_view account) override {
     if (!Loaded()) return KeyStatus::kUnavailable;
     if (!ValidAccount(account)) return KeyStatus::kNotFound;
     const std::string name(account);
@@ -206,7 +206,7 @@ class SecretServiceKeyStore final : public KeyStore {
     return cleared ? KeyStatus::kOk : KeyStatus::kNotFound;
   }
 
-  KeyStatus Probe() override {
+  [[clang::no_sanitize("cfi-icall")]] KeyStatus Probe() override {
     if (!Loaded()) return KeyStatus::kUnavailable;
     GError* error = nullptr;
     void* service = service_(0, nullptr, &error);
@@ -224,7 +224,7 @@ class SecretServiceKeyStore final : public KeyStore {
     return handle_ && store_ && lookup_ && clear_ && free_ && service_ && unref_ && error_free_ && quark_name_;
   }
 
-  KeyStatus Classify(GError* error) {
+  [[clang::no_sanitize("cfi-icall")]] KeyStatus Classify(GError* error) {
     const char* domain = quark_name_(error->domain);
     const KeyStatus status = ClassifySecretError(domain ? domain : "", error->code);
     error_free_(error);
