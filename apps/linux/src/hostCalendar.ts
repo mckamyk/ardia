@@ -78,7 +78,7 @@ export function calendarsFromSources(sources: EdsSource[]): KnownCalendar[] {
   for (const source of sources) {
     if (!source.calendar || !source.data.Calendar || !enabled(source)) continue;
     const parent = byUid.get(source.data["Data Source"]?.Parent ?? "");
-    if (parent && !enabled(parent)) continue;
+    if (parent && (!enabled(parent) || parent.data.Collection?.CalendarEnabled?.toLowerCase() === "false")) continue;
     const backend = source.data.Calendar.BackendName?.toLowerCase() ?? "";
     const emails = [
       source.data["WebDAV Backend"]?.EmailAddress, source.data.Authentication?.User, source.data["Ews Backend"]?.Email,

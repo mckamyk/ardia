@@ -66,7 +66,8 @@ void ShortcutBookScenarios() {
 }
 
 void NativeMessagingScenarios(const std::string& scratch) {
-  for (const char* good : {"com.example.host", "a", "a_b.c9", "dev.ardia.acceptance.echo"}) {
+  for (const char* good : {"com.example.host", "a", "a_b.c9", "dev.ardia.acceptance.echo", "com.1password.1password",
+                           "com.8bit.bitwarden", "org.keepassxc.keepassxc_browser"}) {
     Expect(messaging::ValidHostName(good), good);
   }
   for (const char* bad : {"", ".a", "a.", "a..b", "A.b", "a/b", "../x", "a-b", "a b", "a.json\n"}) {

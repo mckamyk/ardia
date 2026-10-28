@@ -129,3 +129,7 @@ Safari and Apple automation are not applicable on Linux.
 
 - Writes and imports finish by event. The adapter gives up after 120 s without an event; each 500-password chunk emits progress.
 - Pool tasks are `SKIP_ON_SHUTDOWN`. On app termination every job's cancel flag is set, so a running read stops at its next check (every 128 rows, and between files).
+
+## Real profile schemas under Chromium's SQLite (#241)
+
+`tests/test_import_real_schemas.py` builds the readers against Chromium 156's SQLite amalgamation (from `~/ardia-linux-build-156`, or `ARDIA_CHROMIUM_SRC`) with the flags in `third_party/sqlite/*.gni`, except ICU and the recover extension, which don't change SQL. It skips without that tree. `tests/fixtures/real-profiles` holds the CREATE statements of profiles that Chromium 155, Firefox 159 and Firefox 153.6 ESR wrote in scratch directories, and the `recovery.jsonlz4` each Firefox wrote for two local tabs. To refresh them, run each browser headless with a scratch profile (`chromium --headless=new --user-data-dir=…`, `firefox --headless --profile …`) and dump `sqlite_master` plus `meta` (Chromium) or `PRAGMA user_version` (Firefox).

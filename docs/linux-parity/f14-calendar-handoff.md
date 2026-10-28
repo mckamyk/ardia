@@ -152,3 +152,7 @@ Calendar fields:
   - a real account connecting;
   - an expired account re-authenticating.
 - **RANGE=THISANDFUTURE overrides** are treated as single-instance overrides.
+
+## GNOME Online Accounts sources (#241)
+
+`calendarsFromSources` also hides a calendar whose parent collection has `[Collection] CalendarEnabled=false` (the Calendar switch in Online Accounts). EDS normally passes that down to the child's `Enabled`, but the list no longer depends on it. `hostCalendar.test.mjs` pins Google and Nextcloud sources shaped as GOA writes them. The D-Bus review and the expired-account behaviour are in `acceptance-suite.md` › Not automatable.
