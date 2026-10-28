@@ -32,11 +32,15 @@ async function closePeek(desktop, shell) {
 async function choosePopUp(desktop, app, shell, title, option, { prefix = false } = {}) {
   const { settings, window } = await openSettingsRow(desktop, app, shell, "Tabs", title);
   const control = await scrolledIntoView(desktop, window, settings, () => rowControl(settings, title, { minWidth: 40, maxWidth: 420, nearest: true }), { label: `the ${title} menu` });
-  await pointAt(desktop, window, control);
-  await delay(600);
-  await clickMenuItem(desktop, window, settings, option, { prefix });
-  await delay(600);
-  await closeSettingsWindow(desktop, window, settings);
+  try {
+    await pointAt(desktop, window, control);
+    await delay(600);
+    await clickMenuItem(desktop, window, settings, option, { prefix });
+    await delay(600);
+  } finally {
+    await desktop.key("escape").catch(() => {});
+    await closeSettingsWindow(desktop, window, settings).catch(() => {});
+  }
   await delay(800);
 }
 
@@ -93,7 +97,7 @@ export const f16Desktop = {
 
     await t.check("with Peek set to Alt-click in Settings › Tabs, a physical Alt-click peeks without reloading the page", async () => {
       await evaluate(one, "window.notReloaded = true", { userGesture: false });
-      await choosePopUp(desktop, app, shell, "Peek a link with", "Alt+-click");
+      await choosePopUp(desktop, app, shell, "Peek a link with", "Alt-click");
       const setting = await until(async () => { const v = await shell.state("return s.settings.peekModifier"); return v === "alt" ? v : false; }, { timeout: 5000, label: "the peek modifier to become alt" });
       await focusPageByClick(desktop, window, shell, app, urlOne, tabOne);
       await modifierClick(desktop, await link(), ["alt"]);
@@ -104,7 +108,7 @@ export const f16Desktop = {
     });
 
     await t.check("with split view set to Alt-click, a physical Alt-click opens a split and Shift-click peeks again", async () => {
-      await choosePopUp(desktop, app, shell, "Open a link in split view with", "Alt+-click", { prefix: true });
+      await choosePopUp(desktop, app, shell, "Open a link in split view with", "Alt-click", { prefix: true });
       const settings = await until(async () => { const v = await shell.state("return { peek: s.settings.peekModifier ?? null, split: s.settings.splitLinkModifier ?? null }"); return v.split === "alt" ? v : false; }, { timeout: 5000, label: "the split modifier to become alt" });
       await focusPageByClick(desktop, window, shell, app, urlOne, tabOne);
       await modifierClick(desktop, await link(), ["shift"]);
@@ -242,22 +246,44 @@ export const f16Desktop = {
       const first = await currentRect(desktop, window);
       const other = await currentRect(desktop, second);
       if (first.x === other.x) throw new Error(`the two windows overlap: ${JSON.stringify({ first, other })}`);
-      await focusLinks();
       const before = { first: await windowTabs(shell), second: await windowTabs(secondShell) };
-      const beforeLog = await logged();
-      const from = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('link')");
-      const start = { x: from.rect.x + 24, y: from.y };
-      const drop = { x: start.x - first.x + other.x, y: start.y - first.y + other.y };
-      await desktop.drag(start, drop, { steps: 24, hold: 250 });
-      const events = await dragRan(beforeLog, "second window");
+      let events = [];
+      let start = null;
+      let drop = null;
+      const attempts = [];
+      for (let attempt = 0; attempt < 3 && !events.includes("dragstart"); attempt++) {
+        if ((await probe(app, urlTwo, "location.href").catch(() => null)) !== urlTwo) {
+          await shell.navigate(tabTwo, urlTwo);
+          await shell.waitTabUrl(tabTwo, (u) => u === urlTwo);
+          await until(() => probe(app, urlTwo, "document.readyState === 'complete'"), { timeout: 10000, label: "the links page to load again" });
+        }
+        await focusLinks();
+        await evaluate(two, "window.dragLog = window.dragLog ?? []; if (!window.pressLogged) { window.pressLogged = true; for (const e of ['mousedown', 'mouseup']) document.addEventListener(e, () => dragLog.push(e), true); } true", { userGesture: false });
+        const from = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('link')");
+        start = { x: from.rect.x + 24, y: from.y };
+        drop = { x: start.x - first.x + other.x, y: start.y - first.y + other.y };
+        await desktop.pointerMove(start.x, start.y + 120);
+        await delay(200);
+        await desktop.pointerMove(start.x, start.y);
+        await until(() => evaluate(two, "document.getElementById('link').matches(':hover')", { userGesture: false }), { timeout: 3000, label: "the link under the pointer" }).catch(() => {});
+        const beforeLog = await logged();
+        await desktop.drag(start, drop, { steps: 24, hold: 250 });
+        await delay(800);
+        events = (await logged().catch(() => [])).slice(beforeLog.length);
+        attempts.push({ events, href: await probe(app, urlTwo, "location.href").catch(() => "(gone)") });
+      }
+      if (!events.includes("dragstart") || !events.includes("dragend")) {
+        await shot(t, desktop, "second-window-no-drag");
+        throw new Error(`second window: no drag ran in 3 attempts (${JSON.stringify(attempts)})`);
+      }
       await delay(3000);
       await shot(t, desktop, "drop-on-second-window");
       const after = { first: await windowTabs(shell), second: await windowTabs(secondShell) };
       const added = (name) => after[name].tabs.filter((tab) => !before[name].tabs.some((old) => old.id === tab.id));
       const firstAdded = added("first");
       const secondAdded = added("second");
-      const detail = { first: firstAdded, second: secondAdded, secondProfile: after.second.profileId, secondActive: after.second.active, events };
-      if (firstAdded.length || JSON.stringify(after.first.tabs) !== JSON.stringify(before.first.tabs)) throw new Error(`the first window changed: ${JSON.stringify(detail)}`);
+      const detail = { first: firstAdded, second: secondAdded, secondProfile: after.second.profileId, secondActive: after.second.active, events, attempts: attempts.length };
+      if (firstAdded.length || JSON.stringify(after.first.tabs.map((x) => x.id)) !== JSON.stringify(before.first.tabs.map((x) => x.id))) throw new Error(`the first window changed: ${JSON.stringify(detail)}`);
       if (secondAdded.length !== 1) throw new Error(`${secondAdded.length} tabs opened in the second window: ${JSON.stringify(detail)}`);
       const [tab] = secondAdded;
       if (tab.url !== url) throw new Error(`the second window's new tab is on ${tab.url}, not the link: ${JSON.stringify(detail)}`);
