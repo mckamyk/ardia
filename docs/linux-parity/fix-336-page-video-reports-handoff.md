@@ -32,6 +32,8 @@ The shared page script, the shared browser and macOS are unchanged.
 - A frame whose page script picks a heard `<audio>` over a muted `<video>` reports no video, as on macOS. #270's extra case (an audible audio element beside a muted video in the same frame) no longer shows the control.
 - A video already paused when it is removed sends no `pause`, so the script doesn't re-report and the entry stays until the page navigates. macOS has the same gap; fixing it means changing the shared page script.
 - The script runs only in http(s) and file documents, as on macOS.
+- A video inside a shadow root is invisible to the script: `querySelectorAll` doesn't reach it and media events aren't composed, so its document listeners never hear them. A muted shadow-root video outside the media session gets no control, as on macOS; the removed browser tracker did see it. An audible one still joins the Media Session and gets the control from there.
+- An iframe's video now gets the control, but pressing it opens nothing until #291's patch change (`fix3-media-291`) lets the element route reach iframe players. Land the two together.
 
 ## Tests
 
