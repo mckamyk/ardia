@@ -49,6 +49,23 @@ class LinuxInputActivity {
   double last_ = -1;
 };
 
+class LinuxDragOver {
+ public:
+  void Entered() {
+    over_ = true;
+    ++sequence_;
+  }
+  uint64_t Exited() { return ++sequence_; }
+  void Settle(uint64_t exit) {
+    if (exit == sequence_) over_ = false;
+  }
+  bool Over() const { return over_; }
+
+ private:
+  bool over_ = false;
+  uint64_t sequence_ = 0;
+};
+
 class LinuxLinkGestureGate {
  public:
   static constexpr double kGestureLifetime = 10;
