@@ -4,6 +4,15 @@ type Wording = { file: string; replacements: [string, string][] };
 
 export const LINUX_WORDING: readonly Wording[] = [
   {
+    file: "state/live/engine.ts",
+    replacements: [
+      [
+        "    case \"signedOut\":\n      return `Sign back in to ${name}`;\n",
+        "    case \"signedOut\":\n      return `Sign back in to ${name}`;\n    case \"keyringLocked\":\n      return `Unlock your keyring to refresh ${name}`;\n    case \"keyringUnavailable\":\n      return `Start your keyring to refresh ${name}`;\n",
+      ],
+    ],
+  },
+  {
     file: "components/onboarding/SourceStep.tsx",
     replacements: [[`<SectionLabel title="Found on this Mac" />`, `<SectionLabel title="Found on this computer" />`]],
   },

@@ -12,7 +12,10 @@ import {
   enterPhraseBegins,
   heldLoginsStatus,
   whileResettingHeldLogins,
+  KEYRING_RETRY_MS,
   keyringMessage,
+  keyringResumer,
+  watchLockedSync,
   loadSyncDeviceName,
   presentSyncState,
   refreshSyncDocuments,
@@ -55,6 +58,30 @@ function adoptHeldLogins() {
 }
 
 let watchingProfiles = false;
+let keyringWatch: (() => void) | null = null;
+
+function stopKeyringWatch() {
+  keyringWatch?.();
+  keyringWatch = null;
+}
+
+function resumeWhenKeyringOpens(host: ArdiaHost) {
+  stopKeyringWatch();
+  const tick = keyringResumer({
+    locked: () => {
+      const state = engine.useSync.getState();
+      return !!authority?.isAuthority() && state.enabled && state.status === "locked";
+    },
+    status: () => syncKeyStoreStatus(host),
+    seen: (status) => {
+      const shown = keyringMessage(keyStore, false);
+      keyStore = status;
+      if (keyringMessage(status, false) !== shown) engine.useSync.setState({});
+    },
+    resume: () => engine.enterRecoveryPhrase(engine.useSync.getState().folder ?? "", ""),
+  });
+  keyringWatch = watchLockedSync(engine.useSync, tick, KEYRING_RETRY_MS);
+}
 
 function dropDeletedProfiles() {
   if (watchingProfiles) return;
@@ -132,6 +159,7 @@ async function becomeAuthority(host: ArdiaHost) {
   adoptHeldLogins();
   dropDeletedProfiles();
   engine.startSync();
+  resumeWhenKeyringOpens(host);
   return { store: engine.useSync, remote: remoteFor(host) };
 }
 
@@ -153,14 +181,21 @@ export function startLinuxSync(options: { host?: ArdiaHost; candidate: boolean; 
       return claim;
     },
     onRole: (role) => {
-      if (role !== "authority") dropHeldLogins();
+      if (role !== "authority") {
+        dropHeldLogins();
+        stopKeyringWatch();
+      }
     },
     release: () => releaseSyncAuthority(host),
     become: () => becomeAuthority(host),
     present: (state) => presentSyncState(state, keyStore),
   });
   authority = started;
-  if (typeof addEventListener === "function") addEventListener("pagehide", () => started.stop(), { once: true });
+  if (typeof addEventListener === "function")
+    addEventListener("pagehide", () => {
+      stopKeyringWatch();
+      started.stop();
+    }, { once: true });
   return started;
 }
 

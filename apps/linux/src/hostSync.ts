@@ -105,6 +105,70 @@ export function keyringMessage(status: SyncKeyStoreStatus | null, saving: boolea
   return null;
 }
 
+export const KEYRING_RETRY_MS = 3000;
+const KEYRING_CLOSED: ReadonlySet<string> = new Set(["locked", "unavailable"]);
+
+export type KeyringResumerIo = {
+  locked(): boolean;
+  status(): Promise<SyncKeyStoreStatus>;
+  seen(status: SyncKeyStoreStatus): void;
+  resume(): Promise<unknown>;
+};
+
+export function keyringResumer(io: KeyringResumerIo): () => Promise<boolean> {
+  let busy = false;
+  let triedHeldKey = false;
+  return async () => {
+    if (busy || !io.locked()) return false;
+    busy = true;
+    try {
+      const status = await io.status();
+      io.seen(status);
+      if (status.keyStore !== "secretService") return false;
+      if (!status.unlocked) triedHeldKey = false;
+      const opened = status.keyStoreStatus === "ok" && KEYRING_CLOSED.has(status.lastKeyStatus);
+      const held = status.unlocked && !triedHeldKey;
+      if (!opened && !held) return false;
+      if (status.unlocked) triedHeldKey = true;
+      await io.resume();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      busy = false;
+    }
+  };
+}
+
+type LockedSyncStore = {
+  getState(): { enabled: boolean; status: string };
+  subscribe(listener: (state: { enabled: boolean; status: string }) => void): () => void;
+};
+type IntervalClock = { set(run: () => void, ms: number): unknown; clear(handle: unknown): void };
+const intervals: IntervalClock = {
+  set: (run, ms) => setInterval(run, ms),
+  clear: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
+};
+
+export function watchLockedSync(store: LockedSyncStore, tick: () => void, ms: number, clock: IntervalClock = intervals): () => void {
+  let timer: unknown = null;
+  const follow = (state: { enabled: boolean; status: string }) => {
+    const locked = state.enabled && state.status === "locked";
+    if (locked && timer === null) timer = clock.set(tick, ms);
+    if (!locked && timer !== null) {
+      clock.clear(timer);
+      timer = null;
+    }
+  };
+  const unsubscribe = store.subscribe(follow);
+  follow(store.getState());
+  return () => {
+    unsubscribe();
+    if (timer !== null) clock.clear(timer);
+    timer = null;
+  };
+}
+
 export function presentSyncState<S extends { status: string; error: string | null }>(state: S, status: SyncKeyStoreStatus | null): S {
   if (state.status !== "locked") return state;
   const message = keyringMessage(status, false);

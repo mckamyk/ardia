@@ -46,9 +46,14 @@ using ServiceFn = void* (*)(int, void*, GError**);
 using UnrefFn = void (*)(void*);
 using ErrorFreeFn = void (*)(GError*);
 using QuarkNameFn = const char* (*)(GQuark);
+using SearchFn = void* (*)(const SecretSchema*, int, void*, GError**, ...);
+using ListFreeFullFn = void (*)(void*, void (*)(void*));
+using CollectionForAliasFn = void* (*)(void*, const char*, int, void*, GError**);
+using CollectionLockedFn = int (*)(void*);
 
 constexpr int kSecretErrorIsLocked = 2;
 constexpr int kIoErrorCancelled = 19;
+constexpr int kSecretSearchAll = 1 << 1;
 constexpr char kDefaultCollection[] = "default";
 
 SecretSchema MakeSecretSchema(const KeySchema& key_schema) {
@@ -137,6 +142,7 @@ class FileKeyStore final : public KeyStore {
   }
 
   KeyStatus Probe() override { return KeyStatus::kOk; }
+  bool WritesWithoutPrompt() override { return true; }
 
  private:
   std::string PathOf(std::string_view account) const {
@@ -161,6 +167,10 @@ class SecretServiceKeyStore final : public KeyStore {
     unref_ = reinterpret_cast<UnrefFn>(dlsym(handle_, "g_object_unref"));
     error_free_ = reinterpret_cast<ErrorFreeFn>(dlsym(handle_, "g_error_free"));
     quark_name_ = reinterpret_cast<QuarkNameFn>(dlsym(handle_, "g_quark_to_string"));
+    search_ = reinterpret_cast<SearchFn>(dlsym(handle_, "secret_password_search_sync"));
+    list_free_full_ = reinterpret_cast<ListFreeFullFn>(dlsym(handle_, "g_list_free_full"));
+    collection_for_alias_ = reinterpret_cast<CollectionForAliasFn>(dlsym(handle_, "secret_collection_for_alias_sync"));
+    collection_locked_ = reinterpret_cast<CollectionLockedFn>(dlsym(handle_, "secret_collection_get_locked"));
   }
 
   std::string_view kind() const override { return "secretService"; }
@@ -172,7 +182,7 @@ class SecretServiceKeyStore final : public KeyStore {
     GError* error = nullptr;
     char* found = lookup_(&schema_, nullptr, &error, "account", name.c_str(), nullptr);
     if (error) return Classify(error);
-    if (!found) return KeyStatus::kNotFound;
+    if (!found) return LockedItem(name);
     std::string hex(found);
     free_(found);
     Bytes decoded;
@@ -215,13 +225,59 @@ class SecretServiceKeyStore final : public KeyStore {
       return Classify(error);
     }
     if (!service) return KeyStatus::kUnavailable;
+    bool open = false;
+    const KeyStatus status = DefaultCollection(service, &open);
     unref_(service);
-    return KeyStatus::kOk;
+    return status;
+  }
+
+  [[clang::no_sanitize("cfi-icall")]] bool WritesWithoutPrompt() override {
+    if (!Loaded()) return false;
+    GError* error = nullptr;
+    void* service = service_(0, nullptr, &error);
+    if (error) {
+      if (service) unref_(service);
+      error_free_(error);
+      return false;
+    }
+    if (!service) return false;
+    bool open = false;
+    const KeyStatus status = DefaultCollection(service, &open);
+    unref_(service);
+    return status == KeyStatus::kOk && open;
   }
 
  private:
   bool Loaded() const {
     return handle_ && store_ && lookup_ && clear_ && free_ && service_ && unref_ && error_free_ && quark_name_;
+  }
+
+  [[clang::no_sanitize("cfi-icall")]] KeyStatus LockedItem(const std::string& account) {
+    if (!search_ || !list_free_full_) return KeyStatus::kNotFound;
+    GError* error = nullptr;
+    void* items = search_(&schema_, kSecretSearchAll, nullptr, &error, "account", account.c_str(), nullptr);
+    if (error) {
+      if (items) list_free_full_(items, unref_);
+      return Classify(error);
+    }
+    if (!items) return KeyStatus::kNotFound;
+    list_free_full_(items, unref_);
+    return KeyStatus::kLocked;
+  }
+
+  [[clang::no_sanitize("cfi-icall")]] KeyStatus DefaultCollection(void* service, bool* open) {
+    if (!collection_for_alias_ || !collection_locked_) return KeyStatus::kOk;
+    GError* error = nullptr;
+    void* collection = collection_for_alias_(service, kDefaultCollection, 0, nullptr, &error);
+    if (error) {
+      if (collection) unref_(collection);
+      return Classify(error);
+    }
+    if (!collection) return KeyStatus::kOk;
+    const bool locked = collection_locked_(collection);
+    unref_(collection);
+    *open = !locked;
+    return locked ? KeyStatus::kLocked : KeyStatus::kOk;
   }
 
   [[clang::no_sanitize("cfi-icall")]] KeyStatus Classify(GError* error) {
@@ -242,6 +298,10 @@ class SecretServiceKeyStore final : public KeyStore {
   UnrefFn unref_ = nullptr;
   ErrorFreeFn error_free_ = nullptr;
   QuarkNameFn quark_name_ = nullptr;
+  SearchFn search_ = nullptr;
+  ListFreeFullFn list_free_full_ = nullptr;
+  CollectionForAliasFn collection_for_alias_ = nullptr;
+  CollectionLockedFn collection_locked_ = nullptr;
 };
 
 }
