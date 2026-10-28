@@ -50,6 +50,8 @@ struct LinuxPowerSample {
   std::optional<std::string> power_profile;
   uint64_t physical_memory = 0;
   uint64_t available_memory = 0;
+  std::string memory_level;
+  std::string memory_signal;
 };
 
 inline constexpr uint32_t kLinuxUPowerBattery = 2;
@@ -61,7 +63,7 @@ class LinuxPowerTracker {
  public:
   void SetPower(const LinuxPowerSample& power);
   void PowerAnswered() { power_ready_ = true; }
-  void SetMemory(uint64_t physical, uint64_t available);
+  void SetMemory(uint64_t physical, uint64_t available, std::string level = {}, std::string signal = {});
   bool Ready() const { return power_ready_ && memory_ready_; }
   std::optional<base::DictValue> Take();
   const std::optional<base::DictValue>& state() const { return state_; }
