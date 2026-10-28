@@ -10,6 +10,8 @@ Ardia windows are Chrome `BrowserView`s with the Ardia shell laid over the clien
 
 `ShellHostView::HideCaptionButtons()` calls `BrowserFrameView::SetCaptionButtonsOpacity(0.0f)` on the window's frame (through the public `BrowserWidget::GetFrameView()`). In `OpaqueBrowserFrameView` that sets each button's layer opacity to 0 and `SetCanProcessEventsWithinSubtree(false)`, and `HitTestCaptionButton` requires that flag, so the buttons neither paint nor take hits: the corner hit-tests like the rest of Ardia's top strip and the press reaches the shell. It runs from `LayoutOverlay()` (initialize and every BrowserView bounds change: resize, maximize, fullscreen) and from `OnWidgetThemeChanged`, which `NonClientView::UpdateFrame` triggers when the frame is recreated (`kThemeChangeOptimization` is off by default in 156, so observers are always notified). In 156 only Helium's zen mode changes the opacity afterwards; it follows a Helium layout pref that Ardia leaves at its default (off), and no accelerator toggles it. Ardia draws its own window controls, so nothing is lost.
 
+**Known gap: accessibility.** The buttons stay visible Views, so they remain in the accessibility tree: a screen reader lists Chrome's Minimize, Maximize and Close next to Ardia's own controls, and the accessibility API could still press them. Tracked in #327 (likely `GetViewAccessibility().SetIsIgnored(true)` beside the opacity); not fixed here.
+
 `--hide-window-buttons` (an ungoogled flag read by `OpaqueBrowserFrameViewLayout::LayoutWindowControls`) would also hide them, but it is process-wide: Chrome's own windows that Ardia does not host (undocked DevTools, `TYPE_POPUP` windows) would lose their close button.
 
 ## Tests

@@ -134,6 +134,41 @@ test("a popup asked for focus before it is shown takes focus right after its fir
   view.dispose();
 });
 
+test("a deferred popup focus is dropped when focus moved elsewhere in the window, or once it is stale", async () => {
+  const f = nativeSurfaces();
+  let active = "sidebar";
+  let documentFocused = true;
+  let now = 0;
+  const witness = { current: () => [active, documentFocused], now: () => now };
+  const view = new HostExtensionView(f.host, { kind: "popup", url: POPUP }, () => {}, witness);
+  const rect = { x: 900, y: 48, width: 241, height: 121 };
+  const focuses = () => f.requests.filter((r) => r.method === "extensionView.command" && r.args.command === "focus").length;
+  const show = (x) => view.viewport({ rect: { ...rect, x }, visible: true });
+  const hide = (x) => view.viewport({ rect: { ...rect, x }, visible: false });
+  await hide(1);
+  await view.command("focus");
+  active = "address field";
+  await show(2);
+  assert.equal(focuses(), 0);
+  await hide(3);
+  await view.command("focus");
+  documentFocused = false;
+  await show(4);
+  assert.equal(focuses(), 0);
+  documentFocused = true;
+  await hide(5);
+  await view.command("focus");
+  now += 1501;
+  await show(6);
+  assert.equal(focuses(), 0);
+  await hide(7);
+  await view.command("focus");
+  now += 1500;
+  await show(8);
+  assert.equal(focuses(), 1);
+  view.dispose();
+});
+
 test("a stale native surface rejects later calls and a failed viewport is retried with the same geometry", async () => {
   const f = nativeSurfaces();
   const view = new HostExtensionView(f.host, { kind: "popup", url: POPUP }, () => {});
