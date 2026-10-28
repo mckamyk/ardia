@@ -53,8 +53,7 @@ export default {
       return { doc, claims };
     }, { critical: true });
     await t.check("an unfinished onboarding resumes after restart without replaying the intro", async () => {
-      await fresh.shell.clickText("Skip", { timeout: 8000 });
-      await until(async () => (await fresh.shell.text()).includes("Where are you coming from?"), { timeout: 10000, label: "the step after the intro" });
+      await until(async () => (await fresh.shell.text()).includes("Where are you coming from?"), { timeout: 25000, label: "the intro to hand over to the first step" });
       fresh = await restartBrowser(t, fresh);
       await until(() => showsOnboarding(fresh.shell), { timeout: 15000, label: "resumed onboarding" });
       if ((await fresh.shell.text()).includes(INTRO_MARK)) throw new Error("a resumed onboarding replayed the intro");

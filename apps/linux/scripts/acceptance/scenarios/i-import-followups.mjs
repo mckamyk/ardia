@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir } from "node:fs/promises";
+import { access, copyFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -38,8 +38,7 @@ function rows(file, scratch, sql) {
 async function prepare(t, name, options = {}) {
   const scratch = await t.scratch(name);
   const home = join(scratch, "home");
-  const tmp = join(scratch, "import-tmp");
-  await mkdir(tmp, { recursive: true });
+  const tmp = await t.tempDir("import");
   await writeProfileSeed(scratch, { session: sessionSeed() });
   const fixtures = await writeFollowupFixtures(home, options);
   return { scratch, home, tmp, fixtures };
@@ -122,7 +121,8 @@ export const i111 = {
 
     await t.check("sources are unchanged and no scratch copy is left behind", async () => {
       const after = await digestTree(home);
-      if (JSON.stringify(after) !== JSON.stringify(before)) throw new Error("a source file changed");
+      const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((path) => before[path] !== after[path]);
+      if (changed.length) throw new Error(`source files changed: ${changed.join(", ")}`);
       const left = await leftoverImportCopies(tmp);
       if (left.length) throw new Error(`left ${left.join(", ")}`);
       return true;
@@ -194,7 +194,7 @@ export const i109 = {
       return;
     }
     const { scratch, home, tmp, fixtures } = await prepare(t, "keyring", { keyring: true });
-    const keyring = await startFakeKeyring(scratch, {
+    const keyring = await startFakeKeyring(await t.tempDir("bus"), {
       locked: true,
       prompts: ["dismiss", "accept"],
       items: [{ attributes: { application: "chrome", "xdg:schema": "chrome_libsecret_os_crypt_password_v2" }, secret: "acceptance-safe-storage-secret" }],
@@ -202,10 +202,12 @@ export const i109 = {
     try {
       const { shell } = await startBrowser(t, { name: "keyring", scratch, env: { TMPDIR: tmp, DBUS_SESSION_BUS_ADDRESS: keyring.address } });
       await t.check("discovery marks Chrome as needing its Safe Storage key without unlocking anything", async () => {
-        const list = (await shell.invoke("ArdiaImport.listBrowsers", { args: [] })).value ?? [];
+        const started = Date.now();
+        const list = (await shell.invoke("ArdiaImport.listBrowsers", { args: [] }, { timeout: 45000 })).value ?? [];
+        const elapsedMs = Date.now() - started;
         const chrome = list.find((b) => b.id === "chrome");
-        if (chrome?.needsKeychain !== true || chrome.keychainService !== "Chrome Safe Storage") throw new Error(JSON.stringify(chrome));
-        return { needsKeychain: chrome.needsKeychain };
+        if (chrome?.needsKeychain !== true || chrome.keychainService !== "Chrome Safe Storage") throw new Error(JSON.stringify({ chrome, elapsedMs }));
+        return { needsKeychain: chrome.needsKeychain, elapsedMs };
       }, { critical: true });
       await t.check("without consent, v11 passwords stay locked and nothing is imported", async () => {
         const reply = await importJob(shell, "chrome", "Default", ["passwords"]);

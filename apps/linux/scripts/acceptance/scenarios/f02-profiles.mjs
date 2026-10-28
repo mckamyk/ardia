@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { evaluate } from "../lib/cdp.mjs";
 import { privateLeaks } from "../lib/assertions.mjs";
@@ -10,7 +10,7 @@ const COOKIE = "ardia_acceptance";
 export async function profilePage(app, shell, url) {
   const tabId = await shell.newTab(url);
   await shell.waitTabUrl(tabId, (current) => current === url, { label: `${shell.windowId} to load ${url}` });
-  const target = await app.pageTarget((t) => t.type === "page" && t.url === url, { label: `page ${url}` });
+  const target = await app.pageLoaded(url);
   const session = await app.connect(target);
   const info = (await app.browserTargets()).find((t) => t.targetId === target.id);
   return { tabId, target, session, browserContextId: info?.browserContextId ?? null };
@@ -90,7 +90,7 @@ export default {
       if (marks.cookie !== `default-${run}` || marks.storage !== `default-${run}`) throw new Error(`shared profile reads ${JSON.stringify(marks)}`);
       if (page.browserContextId !== defaultPage.browserContextId) throw new Error("shared profile runs in another browser context");
       await opened.shell.eval("1");
-      await state.shell.state(`s.closeWindow(${js(opened.windowId)}); return true;`);
+      await opened.shell.state("s.closeWindow(windowId); return true;").catch(() => {});
       return { profileId, marks };
     });
 
@@ -115,23 +115,27 @@ export default {
       return { windows: Object.keys(saved?.windows ?? {}) };
     });
     await t.check("private data is gone after the last private window closes", async () => {
-      await state.shell.state(`s.closeWindow(${js(privateWindow.windowId)}); return true;`);
+      await privateWindow.shell.state("s.closeWindow(windowId); return true;");
       await until(async () => !(await state.shell.windowIds()).includes(privateWindow.windowId), { timeout: 15000, label: "private native window to close" });
       await until(async () => !(await state.app.browserTargets()).some((t) => t.browserContextId === privateWindow.page.browserContextId), { timeout: 15000, label: "private browser context to empty" });
       const opened = await openProfileWindow(state.app, state.shell, `return s.createWindow({ incognito: true, profileId: "default" });`, "second private window");
       const page = await profilePage(state.app, opened.shell, t.fixtures.url.isolation("isolation.ardia.test") + `?p=private-again-${run}`);
       const marks = await readMarks(page.session);
-      await state.shell.state(`s.closeWindow(${js(opened.windowId)}); return true;`);
+      await opened.shell.state("s.closeWindow(windowId); return true;").catch(() => {});
       if (marks.cookie || marks.storage) throw new Error(`private data survived ${JSON.stringify(marks)}`);
       return marks;
     });
     await t.check("failed profile creation leaves no phantom window", async () => {
-      const profileId = await state.shell.state(`return s.createProfile({ name: ${js(`Blocked ${run}`)} });`);
-      await writeFile(join(state.scratch, `Profile ${profileId}`), "not a directory");
-      const windowId = await state.shell.state(`return s.createWindow({ profileId: ${js(profileId)} });`);
-      await until(async () => !(await state.shell.state(`return !!s.windows[${js(windowId)}];`)), { timeout: 20000, label: "the failed window to leave the store" });
-      if ((await state.shell.windowIds()).includes(windowId)) throw new Error("a native window exists for the failed profile");
-      return { profileId, windowId };
+      await chmod(state.scratch, 0o555);
+      try {
+        const profileId = await state.shell.state(`return s.createProfile({ name: ${js(`Blocked ${run}`)} });`);
+        const windowId = await state.shell.state(`return s.createWindow({ profileId: ${js(profileId)} });`);
+        await until(async () => !(await state.shell.state(`return !!s.windows[${js(windowId)}];`)), { timeout: 20000, label: "the failed window to leave the store" });
+        if ((await state.shell.windowIds()).includes(windowId)) throw new Error("a native window exists for the failed profile");
+        return { profileId, windowId };
+      } finally {
+        await chmod(state.scratch, 0o755);
+      }
     });
 
     await t.check("after restart no private window returns and profiles keep their data", async () => {

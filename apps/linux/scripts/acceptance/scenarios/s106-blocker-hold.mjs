@@ -1,7 +1,7 @@
 import { startBrowser } from "../lib/flows.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { nonce, until } from "../lib/util.mjs";
-import { BLOCKER_DIR, blockerReady, extraArgs, pageEval } from "./f06-site-controls.mjs";
+import { blockerAvailable, blockerReady, extraArgs, pageEval } from "./f06-site-controls.mjs";
 
 export default {
   id: "S106",
@@ -10,7 +10,7 @@ export default {
   deadline: 240000,
   manual: [],
   async run(t) {
-    if (!BLOCKER_DIR) {
+    if (!blockerAvailable(t)) {
       await t.check("the content blocker is packaged", () => {
         throw new Error("set ARDIA_ACCEPTANCE_CONTENT_BLOCKER to the uBlock Origin build from scripts/linux/fetch-ubo.sh, or run against a package built with --content-blocker");
       });

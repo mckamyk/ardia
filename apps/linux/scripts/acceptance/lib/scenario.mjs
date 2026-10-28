@@ -1,4 +1,5 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchArdia } from "./ardia.mjs";
 import { summarizeScenario } from "./report.mjs";
@@ -27,7 +28,12 @@ export function createContext({ scenario, options, fixtures, resultsDir, scratch
       scratches.push(dir);
       return dir;
     },
-    async launch({ scratch, label = "ardia", background = true, extensions = false, extraArgs = [], env = {}, ozone, startTimeout } = {}) {
+    async tempDir(name = "tmp") {
+      const dir = await mkdtemp(join(tmpdir(), `ardia-${scenario.id}-${name}-`));
+      scratches.push(dir);
+      return dir;
+    },
+    async launch({ scratch, label = "ardia", background = true, extensions = false, extraArgs = [], env = {}, ozone, startTimeout, coreDumps } = {}) {
       if (!scratch) throw new Error("launch needs a scratch directory");
       const app = await launch({
         executable: options.executable,
@@ -39,6 +45,7 @@ export function createContext({ scenario, options, fixtures, resultsDir, scratch
         env,
         label,
         startTimeout,
+        coreDumps,
         extraArgs: [...(fixtures?.chromiumArgs ?? []), ...extraArgs],
       });
       apps.add(app);

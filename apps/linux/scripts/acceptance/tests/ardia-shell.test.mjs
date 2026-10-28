@@ -143,6 +143,20 @@ describe("Ardia launch plumbing and shell driver against a mock host", () => {
     }
   });
 
+  it("turns core dumps off through a shell wrapper only when asked", async () => {
+    const seen = [];
+    const recording = (executable, args, options) => {
+      seen.push([executable, args]);
+      return fakeSpawn(false)(executable, args, options);
+    };
+    await assert.rejects(launchArdia({ executable: "/opt/ardia/bin/ardia", scratch, spawnImpl: recording, coreDumps: false, startTimeout: 10000 }), /exited/);
+    await assert.rejects(launchArdia({ executable: "/opt/ardia/bin/ardia", scratch, spawnImpl: recording, startTimeout: 10000 }), /exited/);
+    assert.equal(seen[0][0], "/bin/sh");
+    assert.deepEqual(seen[0][1].slice(0, 3), ["-c", 'ulimit -c 0; exec "$0" "$@"', "/opt/ardia/bin/ardia"]);
+    assert.ok(seen[0][1].includes(`--user-data-dir=${scratch}`));
+    assert.equal(seen[1][0], "/opt/ardia/bin/ardia");
+  });
+
   it("fails fast when the browser exits before DevTools starts", async () => {
     await assert.rejects(launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(false), startTimeout: 10000 }), /exited/);
   });

@@ -1,16 +1,31 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { sessionPath, sessionSeed, writeChromePreferences, writeProfileSeed } from "./seed.mjs";
 import { until } from "./util.mjs";
 
-export async function startBrowser(t, { name = "profile", scratch, seed = true, session, onboardingComplete = true, preferences, background = true, extensions, extraArgs, env, ozone, label } = {}) {
+export async function startBrowser(t, { name = "profile", scratch, seed = true, session, onboardingComplete = true, preferences, background = true, extensions, extraArgs, env, ozone, label, coreDumps, settle = true } = {}) {
   const dir = scratch ?? (await t.scratch(name));
   if (!scratch) {
     await writeProfileSeed(dir, { session: seed ? (session ?? sessionSeed()) : undefined, onboardingComplete });
     if (preferences) await writeChromePreferences(dir, preferences);
   }
-  const app = await t.launch({ scratch: dir, background, extensions, extraArgs, env, ozone, label: label ?? name });
+  const fresh = await access(join(dir, "Default", "Preferences")).then(() => false, () => true);
+  const app = await t.launch({ scratch: dir, background, extensions, extraArgs, env, ozone, coreDumps, label: label ?? name });
   const shell = await app.mainShell();
-  return { app, shell, scratch: dir };
+  const hold = fresh && settle ? await settleNavigationHold(app, shell) : null;
+  return { app, shell, scratch: dir, hold };
+}
+
+export async function settleNavigationHold(app, shell, { timeout = 25000 } = {}) {
+  let answer = null;
+  let pending = null;
+  return until(async () => {
+    if (/held navigations go ahead/.test(await app.logText())) return "timed out";
+    if (answer?.ok && answer.value?.stats?.ready) return "ready";
+    if (answer && !answer.ok && /not installed|didn't load/.test(answer.message)) return "no blocker";
+    pending ??= shell.call("contentBlocker.state").then((reply) => { answer = reply; }, () => {}).finally(() => { pending = null; });
+    return false;
+  }, { timeout, interval: 250, label: "the content blocker's navigation hold to end", abort: () => app.exitReason() }).catch(() => "unsettled");
 }
 
 export async function restartBrowser(t, current, options = {}) {

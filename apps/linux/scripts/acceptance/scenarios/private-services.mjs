@@ -239,6 +239,7 @@ export const privatePageCommands = {
       const url = t.fixtures.url.find(count, `${label}-${run}`);
       const tabId = await shell.newTab(url);
       await shell.waitTabUrl(tabId, (u) => u === url);
+      await shell.app.pageLoaded(url);
       await shell.state(`s.activate(${js(tabId)}); s.setFind(${js(tabId)}, { open: true, query: ${js(FIND_WORD)}, focusRequest: Date.now() }); return true;`);
       return until(async () => {
         const f = await shell.state(`return s.find[${js(tabId)}] ?? null;`);
@@ -261,6 +262,7 @@ export const privatePageCommands = {
       const url = t.fixtures.url.find(2, `devtools-${run}`);
       const tabId = await priv.shell.newTab(url);
       await priv.shell.waitTabUrl(tabId, (u) => u === url);
+      await priv.shell.app.pageLoaded(url);
       await priv.shell.command("devTools");
       const frontend = await until(async () => (await native.app.targets()).find((target) => target.url?.startsWith("devtools://")) ?? false, { timeout: 15000, label: "a DevTools frontend" });
       await t.stop(native.app);
@@ -279,7 +281,7 @@ export const autoPipProfiles = {
     const state = await startBrowser(t, { name: "auto-pip-profiles" });
     let isolatedDirectory;
     await t.check("turning it off reaches the default profile and an isolated profile loaded later", async () => {
-      await ok(state.shell, "webView.setAutoPictureInPicture", { enabled: false });
+      await state.shell.state("s.updateSettings({ autoPictureInPicture: false }); return true;");
       const profileId = await state.shell.state(`return s.createProfile({ name: ${js(`Pip ${run}`)} });`);
       const isolated = await openWindow(state, `return s.createWindow({ profileId: ${js(profileId)} });`, "isolated window");
       isolatedDirectory = `Profile ${isolated.shell.pageProfile}`;
@@ -288,7 +290,7 @@ export const autoPipProfiles = {
       return { isolatedDirectory };
     }, { critical: true });
     await t.check("turning it on reaches every loaded profile", async () => {
-      await ok(state.shell, "webView.setAutoPictureInPicture", { enabled: true });
+      await state.shell.state("s.updateSettings({ autoPictureInPicture: true }); return true;");
       await until(async () => autoPip(await readPreferences(state.scratch, isolatedDirectory)) === 1, { timeout: 30000, label: "the isolated profile's auto-PiP default to be ALLOW" });
       await until(async () => autoPip(await readPreferences(state.scratch, "Default")) === 1, { timeout: 30000, label: "the default profile's auto-PiP default to be ALLOW" });
       return true;
