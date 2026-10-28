@@ -369,6 +369,16 @@ struct OneShotTimer {
   void Start(int, int, int) { running = true; }
   void Stop() { running = false; }
 };
+template <typename F, typename T> std::function<void()> BindRepeating(F method, T* object) {
+  return [method, object] { (object->*method)(); };
+}
+struct RepeatingTimer {
+  std::function<void()> task;
+  bool IsRunning() const { return static_cast<bool>(task); }
+  void Start(int, int, std::function<void()> callback) { task = std::move(callback); }
+  void Stop() { task = nullptr; }
+  void Fire() { if (task) task(); }
+};
 struct SingleThreadTaskRunner {
   static SingleThreadTaskRunner* GetCurrentDefault() { static SingleThreadTaskRunner runner; return &runner; }
   void PostTask(int, int) {}
@@ -659,6 +669,7 @@ struct ShellHostView {
   std::optional<std::pair<int64_t, std::string>> SavedWindowOutput() const;
   std::optional<std::string> output_target_;
   bool output_forgotten_ = false;
+  base::RepeatingTimer output_watch_;
   std::string page_profile_;
   int opener_host_ = 0;
   uint64_t opener_generation_ = 0;
@@ -1214,6 +1225,52 @@ static void FullScreenOnTheSavedOutput() {
   assert(*SavedOutput(app, "main") == "Out A");
 }
 
+static void ALateOutputChangeIsSavedWhileFullscreen() {
+  ui::OzonePlatform::properties.supports_global_screen_coordinates = false;
+  display::Screen::displays = {{{0, 0, 1920, 1080}, 10, "Out A"}, {{1920, 0, 1920, 1080}, 20, "Out B"}};
+  Profile app;
+  BrowserWindowInterface main_browser{1};
+  ShellHostView main(1, "main", &main_browser);
+  main.profile_source = &app;
+  display::Screen::nearest = display::Screen::displays[0];
+  main.ReportWindowGeometry();
+  assert(!main.output_watch_.IsRunning());
+  main.widget.fullscreen = true;
+  main.OnWidgetShowStateChanged(&main.widget);
+  assert(*SavedOutput(app, "main") == "Out A");
+  assert(main.output_watch_.IsRunning());
+  display::Screen::nearest = display::Screen::displays[1];
+  main.output_watch_.Fire();
+  assert(*SavedOutput(app, "main") == "Out B");
+  main.widget.fullscreen = false;
+  main.OnWidgetShowStateChanged(&main.widget);
+  assert(!main.output_watch_.IsRunning());
+  assert(*SavedOutput(app, "main") == "Out B");
+  ui::OzonePlatform::properties.supports_global_screen_coordinates = true;
+}
+
+static void TheRestoresFinalFocusKeepsTheBehindWindowsHandBack() {
+  ui::OzonePlatform::properties.supports_global_screen_coordinates = false;
+  base::TimeTicks::now_ms = 0;
+  BrowserWindowInterface main_browser{1};
+  ShellHostView main(1, "main", &main_browser);
+  main.startup_ = true;
+  main.OnWidgetActivationChanged(&main.widget, true);
+  Call(main, "ArdiaShell.openWindow", Args("w-back", base::DictValue().Set("focus", false).Set("behind", "main")));
+  BrowserWindowInterface* back_browser = created_browsers.back().get();
+  ShellHostView back(back_browser->GetSessionID().id(), "w-back", back_browser);
+  bool ok = false;
+  Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"main"}, "main"), &ok);
+  assert(ok && main.widget.fullscreen);
+  assert(Count(main_browser.window.calls, "Activate") == 1);
+  base::TimeTicks::now_ms = 100;
+  back.OnDidPresentCompositorFrame(nullptr, 1, {});
+  main.OnWidgetActivationChanged(&main.widget, false);
+  back.OnWidgetActivationChanged(&back.widget, true);
+  assert(Count(main_browser.window.calls, "Activate") == 2);
+  ui::OzonePlatform::properties.supports_global_screen_coordinates = true;
+}
+
 static void FullScreenWhenTheSavedOutputIsGone() {
   ui::OzonePlatform::properties.supports_global_screen_coordinates = false;
   display::Screen::displays = {{{0, 0, 1920, 1080}, 10, "Out A"}};
@@ -1344,7 +1401,8 @@ int main(int argc, char** argv) {
       {"fullscreen-restore", FullScreenRestored}, {"fullscreen-given-up", FullScreenGivenUp},
       {"fullscreen-background", FullScreenInBackground}, {"fullscreen-focus-yields", FullScreenFocusYieldsToTheUser},
       {"fullscreen-shown-later", FullScreenWhenShownLater}, {"fullscreen-output", FullScreenOnTheSavedOutput},
-      {"fullscreen-output-gone", FullScreenWhenTheSavedOutputIsGone}, {"x11-outputs", X11KeepsNoOutputs}, {"output-labels", OutputLabels}};
+      {"fullscreen-output-gone", FullScreenWhenTheSavedOutputIsGone}, {"x11-outputs", X11KeepsNoOutputs}, {"late-output", ALateOutputChangeIsSavedWhileFullscreen},
+      {"restore-keeps-hand-back", TheRestoresFinalFocusKeepsTheBehindWindowsHandBack}, {"output-labels", OutputLabels}};
   const auto found = scenarios.find(mode);
   if (found == scenarios.end()) return 2;
   found->second();
@@ -1552,6 +1610,12 @@ class WindowLifecycleHostTests(unittest.TestCase):
 
     def test_a_saved_output_matches_exactly_one_display_label(self):
         self.run_mode('output-labels')
+
+    def test_a_fullscreen_windows_output_is_rechecked_without_a_geometry_report(self):
+        self.run_mode('late-output')
+
+    def test_the_fullscreen_restores_final_focus_keeps_the_behind_windows_hand_back(self):
+        self.run_mode('restore-keeps-hand-back')
 
     def test_x11_keeps_no_saved_outputs(self):
         self.run_mode('x11-outputs')

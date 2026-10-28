@@ -1296,6 +1296,7 @@ class ShellHostView : public views::View,
   std::unique_ptr<linux_window::TypeaheadInput> typeahead_;
   std::optional<std::string> output_target_;
   bool output_forgotten_ = false;
+  base::RepeatingTimer output_watch_;
   base::OneShotTimer typeahead_timer_;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
@@ -2024,6 +2025,7 @@ void ShellHostView::ReplayTypeahead(bool field) {
   const auto weak = GetWeakPtr();
   for (ui::KeyEvent& event : held) {
     if (!ShellHoldsTextField()) return;
+    ui::Event::DispatcherApi(&event).set_target(GetWidget()->GetNativeWindow());
     std::ignore = GetWidget()->GetInputMethod()->DispatchKeyEvent(&event);
     if (!weak) return;
   }
@@ -2822,7 +2824,7 @@ void FinishFullScreenRestore() {
   if (!focus || WindowFocus().active() == 0 || WindowFocus().epoch() != FullScreenRestoreEpoch()) return;
   for (const auto& [id, host] : Hosts()) {
     if (!host->is_utility() && host->window_id() == *focus) {
-      ActivateNativeWindow(host->browser(), WindowFocus().Focus(host->id()));
+      ActivateNativeWindow(host->browser(), WindowFocus().HandBack(host->id()));
       return;
     }
   }
@@ -2901,10 +2903,15 @@ PrefService* ShellHostView::WindowOutputPrefs() const {
 
 void ShellHostView::RememberWindowOutput() {
   PrefService* prefs = WindowOutputPrefs();
-  if (!prefs || !browser_ || output_forgotten_) return;
+  if (!prefs || !browser_ || output_forgotten_) return output_watch_.Stop();
   if (!WindowFullScreen()) {
+    output_watch_.Stop();
     output_target_.reset();
     return;
+  }
+  if (!output_watch_.IsRunning()) {
+    output_watch_.Start(FROM_HERE, base::Seconds(1),
+                        base::BindRepeating(&ShellHostView::RememberWindowOutput, base::Unretained(this)));
   }
   const std::string label =
       display::Screen::Get()->GetDisplayNearestWindow(browser_->GetWindow()->GetNativeWindow()).label();
