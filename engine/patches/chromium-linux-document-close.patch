@@ -243,7 +243,14 @@ diff --git a/chrome/browser/lifetime/browser_close_manager.cc b/chrome/browser/l
    }
 
    current_browser_ = nullptr;
-@@ -147,9 +296,16 @@
+@@ -141,15 +290,22 @@
+   CloseBrowsers();
+ #else
+   int download_count = DownloadCoreService::BlockingShutdownCountAllProfiles();
+-  if (download_count == 0) {
++  if (download_count == 0 || ardia::LinuxQuitAsksAboutDownloads()) {
+     CloseBrowsers();
+     return;
    }
 
    ConfirmCloseWithPendingDownloads(

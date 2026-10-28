@@ -46,7 +46,7 @@ export async function startLinuxShortcuts(host: ArdiaHost) {
   const update = () => {
     const state = useBrowser.getState();
     bindings = linuxBindings(state.settings.shortcuts, state.profileOrder);
-    if (host.bootstrap.utility) bindings = bindings.filter((b) => ["closeTab", "openSettings", "findInPage"].includes(b.command));
+    if (host.bootstrap.utility) bindings = bindings.filter((b) => ["closeTab", "openSettings", "findInPage", "quit"].includes(b.command));
     const encoded = JSON.stringify(linuxNativeBindings(bindings, state.profileOrder));
     if (encoded === previous) return pending;
     previous = encoded;

@@ -652,6 +652,25 @@ void SynchronousReentry() {
   assert(reentrant_ready == 2 && ardia::CanCancelLinuxClose(browser.get()));
 }
 
+
+void ArdiaAskedAboutDownloads() {
+  Install();
+  auto browser = Window();
+  Native native(*browser);
+  pending_downloads = 2;
+  assert(!ardia::LinuxQuitAsksAboutDownloads());
+  ardia::SetLinuxQuitAsksAboutDownloads(true);
+  assert(ardia::LinuxQuitAsksAboutDownloads());
+  auto owner = base::WrapRefCounted(new BrowserCloseManager());
+  owner->StartClosingBrowsers();
+  native.Release(ardia::LinuxCloseStage::kPrepare);
+  DrainCloseTasks();
+  assert(!download_answer && download_answers.empty());
+  assert(!owner->linux_cancelled_ && trying_to_quit && shutdown_sessions == 1);
+  ardia::SetLinuxQuitAsksAboutDownloads(false);
+  assert(!ardia::LinuxQuitAsksAboutDownloads());
+  pending_downloads = 0;
+}
 }
 
 int main(int argc, char** argv) {
@@ -662,6 +681,7 @@ int main(int argc, char** argv) {
   else if (mode == "timeout") Timeout();
   else if (mode == "quit") Quit();
   else if (mode == "downloads") Downloads();
+  else if (mode == "ardia-asked-downloads") ArdiaAskedAboutDownloads();
   else if (mode == "boundaries") Boundaries();
   else if (mode == "destroyed") Destroyed();
   else if (mode == "force") Force();

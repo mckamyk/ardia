@@ -261,7 +261,7 @@ test("utility windows run only the app commands that need no browser window", ()
   const { first } = twoWindows();
   const listeners = [];
   startAppCommands("settings", capabilities, (listener) => (listeners.push(listener), { remove() {} }), UTILITY_APP_COMMANDS);
-  assert.deepEqual([...UTILITY_APP_COMMANDS].sort(), ["copyDiagnostics", "recordPerformanceIssue", "taskManager"]);
+  assert.deepEqual([...UTILITY_APP_COMMANDS].sort(), ["copyDiagnostics", "quit", "recordPerformanceIssue", "taskManager"]);
   useToasts.setState({ toasts: {} });
   listeners[0]({ command: "showOnboarding", windowId: "settings" });
   assert.equal(useOnboarding.getState().windowId, null);
@@ -311,4 +311,12 @@ test("the fresh-profile marker is removed once an onboarding record exists on di
   docs.set(FRESH_PROFILE_DOCUMENT, JSON.stringify({ version: 1, createdAt: 1 }));
   await launch(first, { savedSession: true, readStored: stored({ [FRESH_PROFILE_DOCUMENT]: "{}" }) });
   assert.equal(docs.has(FRESH_PROFILE_DOCUMENT), true);
+});
+
+test("the quit command is handled here and says so when this build cannot quit", async () => {
+  const { first } = twoWindows();
+  useToasts.setState({ toasts: {} });
+  assert.equal(runAppCommand(first, "quit", capabilities), true);
+  for (let i = 0; i < 20 && !toast(first); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(toast(first)?.title, "Not available on Linux yet");
 });

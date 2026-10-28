@@ -81,3 +81,19 @@ test("utility windows consume browser shortcuts they cannot perform", () => {
 test("Ctrl+J dispatches the advertised Downloads command", () => {
   assert.equal(commandAt(linuxBindings(), 74, 4)?.command, "downloads");
 });
+
+test("Ctrl+Shift+Q quits Ardia and Settings lists it as a remappable Ardia shortcut", () => {
+  const combo = keyboardCombo(event("KeyQ", { ctrlKey: true, shiftKey: true }));
+  const binding = commandAt(linuxBindings(), combo.keyCode, combo.flags);
+  assert.equal(binding?.command, "quit");
+  assert.equal(binding?.arg, null);
+  assert(!commandAt(linuxBindings(), 81, 4));
+  const item = linuxMenuShortcuts().find((entry) => entry.id === "std:quit:");
+  assert.equal(item.title, "Quit Ardia");
+  assert.deepEqual(item.path, ["Ardia"]);
+  assert.equal(item.defaultKey, "q");
+  assert.deepEqual([...item.defaultModifiers].sort(), ["command", "shift"]);
+  assert.equal(commandAt(linuxBindings({ "std:quit:": ["q", "command", "option"] }), 81, 12)?.command, "quit");
+  assert(!commandAt(linuxBindings({ "std:quit:": ["q", "command", "option"] }), 81, 6));
+  assert.equal(linuxMenuShortcuts().filter((entry) => entry.id.startsWith("std:")).length, 1);
+});
