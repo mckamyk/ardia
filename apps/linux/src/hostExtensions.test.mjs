@@ -112,6 +112,28 @@ test("viewports are serialized after creation and identical ones are not resent"
   view.dispose();
 });
 
+test("a popup asked for focus before it is shown takes focus right after its first visible viewport, once", async () => {
+  const f = nativeSurfaces();
+  const view = new HostExtensionView(f.host, { kind: "popup", url: POPUP }, () => {});
+  const rect = { x: 900, y: 48, width: 241, height: 121 };
+  const sent = () => f.requests.filter((r) => r.method !== "extensionView.create").map((r) => (r.method === "extensionView.command" ? r.args.command : `viewport ${r.args.visible}`));
+  await view.command("focus");
+  await view.viewport({ rect, visible: false });
+  await view.command("focus");
+  assert.deepEqual(sent(), ["viewport false"]);
+  await view.viewport({ rect, visible: true });
+  assert.deepEqual(sent(), ["viewport false", "viewport true", "focus"]);
+  await view.viewport({ rect: { ...rect, x: 901 }, visible: true });
+  assert.deepEqual(sent(), ["viewport false", "viewport true", "focus", "viewport true"]);
+  await view.command("focus");
+  assert.deepEqual(sent(), ["viewport false", "viewport true", "focus", "viewport true", "focus"]);
+  await view.viewport({ rect, visible: false });
+  await view.command("focus");
+  await view.viewport({ rect, visible: true });
+  assert.deepEqual(sent().slice(5), ["viewport false", "viewport true", "focus"]);
+  view.dispose();
+});
+
 test("a stale native surface rejects later calls and a failed viewport is retried with the same geometry", async () => {
   const f = nativeSurfaces();
   const view = new HostExtensionView(f.host, { kind: "popup", url: POPUP }, () => {});
@@ -167,4 +189,23 @@ test("toolbar activation runs the extension action as a command on the owning ta
   assert.equal(await tab.command("executeExtensionAction", [ID]), "popup");
   assert.deepEqual(requests.at(-1).args, { id: 4, claim: tab.claim, command: "executeExtensionAction", args: [ID] });
   tab.dispose();
+});
+
+test("a page in the popup's window taking focus closes the extension popup and still reaches the page's own handler", async () => {
+  const { closingPopupOnPageFocus } = await import("./popupDismissal.ts");
+  const windows = { "main-tab-0": "main", "spare-tab-0": "spare" };
+  let popup = { windowId: "main", extensionId: ID };
+  const closed = [];
+  const focused = [];
+  const props = (tabId) => closingPopupOnPageFocus({ tabId, onPageFocus: () => focused.push(tabId) }, () => popup, (id) => windows[id], () => { closed.push(popup.windowId); popup = null; });
+  props("spare-tab-0").onPageFocus();
+  assert.deepEqual(closed, []);
+  props("main-tab-0").onPageFocus();
+  assert.deepEqual(closed, ["main"]);
+  props("main-tab-0").onPageFocus();
+  assert.deepEqual(closed, ["main"]);
+  assert.deepEqual(focused, ["spare-tab-0", "main-tab-0", "main-tab-0"]);
+  popup = { windowId: "main", extensionId: ID };
+  closingPopupOnPageFocus({}, () => popup, (id) => windows[id], () => closed.push("untracked")).onPageFocus();
+  assert.deepEqual(closed, ["main"]);
 });

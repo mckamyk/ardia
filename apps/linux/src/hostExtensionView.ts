@@ -17,6 +17,8 @@ export class HostExtensionView {
   disposed = false;
   private queue: Promise<unknown> = Promise.resolve();
   private lastViewport = "";
+  private shown = false;
+  private focusWanted = false;
   private unsubscribe: () => void;
 
   constructor(host: ArdiaHost, options: ExtensionViewOptions, onEvent: (event: ExtensionViewEvent) => void) {
@@ -65,6 +67,10 @@ export class HostExtensionView {
     await this.ready;
     return this.enqueue(async () => {
       if (this.disposed || this.id === undefined) throw new Error("Ardia extension view released");
+      if (command === "focus" && !this.shown) {
+        this.focusWanted = true;
+        return undefined as T;
+      }
       return invokeHost<T>("extensionView.command", { id: this.id, command, args }, this.host);
     });
   }
@@ -80,6 +86,10 @@ export class HostExtensionView {
         if (this.lastViewport === json) this.lastViewport = "";
         throw error;
       });
+      this.shown = shown.visible;
+      if (!this.shown || !this.focusWanted) return;
+      this.focusWanted = false;
+      await invokeHost<void>("extensionView.command", { id: this.id, command: "focus", args: [] }, this.host);
     });
   }
 
