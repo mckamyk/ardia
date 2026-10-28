@@ -227,6 +227,24 @@ int main(int argc, char** argv) {
     assert(host.close_.phase() == LinuxClose::Phase::kHandedOff && *host.chrome_close_token_ == token);
     assert(host.native.discard_requests == 0 && Named(host, "shell.closeCancelled") == 0);
   }
+  if (mode == "quit-flag") {
+    auto quitting = [](const ShellHostView& host) {
+      for (const auto& event : host.events) {
+        const auto& envelope = std::get<2>(event).GetDict();
+        if (*envelope.FindString("name") != "shell.closeRequested") continue;
+        const auto* value = envelope.Find("quitting");
+        return value ? std::optional<bool>(value->GetBool()) : std::nullopt;
+      }
+      return std::optional<bool>();
+    };
+    browser_shutdown::trying_to_quit = false;
+    ShellHostView window; Watch(window); hosts[1] = &window;
+    assert(!window.RequestWindowClose().empty() && quitting(window) == false);
+    browser_shutdown::trying_to_quit = true;
+    ShellHostView quit; quit.window_id_ = "window-2"; Watch(quit); hosts[2] = &quit;
+    assert(!quit.RequestWindowClose().empty() && quitting(quit) == true);
+    browser_shutdown::trying_to_quit = false;
+  }
   if (mode == "ends-session") {
     ShellHostView host; Watch(host);
     ShellHostView other; other.window_id_ = "window-2";
@@ -453,6 +471,9 @@ class CloseDeliberationTests(unittest.TestCase):
 
     def test_drain_reports_whether_closing_ends_the_session(self):
         self.run_mode('drain', 'ends-session')
+
+    def test_close_request_tells_the_renderer_when_the_app_is_quitting(self):
+        self.run_mode('drain', 'quit-flag')
 
     def test_renderer_replacement_mid_drain_resumes_each_attempt_suspension(self):
         self.run_mode('drain', 'replacement-suspension')
