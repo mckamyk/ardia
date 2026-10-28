@@ -3375,7 +3375,7 @@ void ShellHostView::LayoutPane(TabBinding* binding) {
   const size_t tools_index = GetIndexOf(tools).value();
   if (strategy.hide_inspected_contents() ? tools_index < page_index : tools_index > page_index)
     ReorderChildView(tools, page_index);
-  if (fresh || restore_focus) {
+  if ((fresh && DevToolsWindow::AsDevToolsWindow(devtools)) || restore_focus) {
     tools->RequestFocus();
     devtools->Focus();
   }

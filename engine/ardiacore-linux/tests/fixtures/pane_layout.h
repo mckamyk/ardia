@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -161,6 +162,11 @@ struct DevToolsWindow {
     if (strategy) *strategy = strategies[inspected];
     return found->second;
   }
+  static DevToolsWindow* AsDevToolsWindow(content::WebContents* contents) {
+    static DevToolsWindow window;
+    return contents && !companions.contains(contents) ? &window : nullptr;
+  }
+  static inline std::set<content::WebContents*> companions;
   static inline std::map<content::WebContents*, content::WebContents*> docked;
   static inline std::map<content::WebContents*, DevToolsContentsResizingStrategy> strategies;
 };

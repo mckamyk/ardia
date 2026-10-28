@@ -31,6 +31,7 @@ struct Pane {
     page.focused = [this] { binding->OnWebContentsFocused(nullptr); };
     DevToolsWindow::docked.clear();
     DevToolsWindow::strategies.clear();
+    DevToolsWindow::companions.clear();
     views::focus_manager.focused = nullptr;
     posted.clear();
   }
@@ -196,6 +197,36 @@ int main(int argc, char** argv) {
     assert(p.tools()->web_contents() == &p.frontend);
     return 0;
   }
+  if (mode == "undock-toolbox") {
+    Pane p;
+    p.Dock();
+    p.host.Show(p.binding, true);
+    assert(views::focus_manager.focused == p.tools() && p.frontend.focuses == 1);
+    content::WebContents toolbox;
+    DevToolsWindow::companions.insert(&toolbox);
+    DevToolsWindow::docked.clear();
+    p.host.OnDevToolsDockChanged(&p.page, nullptr);
+    assert(views::focus_manager.focused == p.binding->viewport() && p.page.focuses == 1);
+    DevToolsWindow::docked[&p.page] = &toolbox;
+    p.host.OnDevToolsDockChanged(&p.page, &toolbox);
+    DrainPosted();
+    assert(p.tools()->GetVisible() && p.tools()->web_contents() == &toolbox);
+    assert(views::focus_manager.focused == p.binding->viewport() && toolbox.focuses == 0);
+    p.host.Show(p.binding, false);
+    p.host.Show(p.binding, true);
+    assert(views::focus_manager.focused == p.binding->viewport() && toolbox.focuses == 0);
+    p.tools()->RequestFocus();
+    p.host.Show(p.binding, false);
+    views::focus_manager.focused = nullptr;
+    p.host.Show(p.binding, true);
+    assert(views::focus_manager.focused == p.tools() && toolbox.focuses == 1);
+    DevToolsWindow::docked[&p.page] = &p.frontend;
+    p.host.OnDevToolsDockChanged(&p.page, &p.frontend);
+    DrainPosted();
+    assert(views::focus_manager.focused == p.tools() && p.tools()->web_contents() == &p.frontend);
+    assert(p.frontend.focuses == 2);
+    return 0;
+  }
   if (mode == "hidden-native") {
     Pane p;
     p.Dock();
@@ -264,6 +295,9 @@ class PaneLayoutTests(unittest.TestCase):
 
     def test_undocking_releases_the_frontend_before_chrome_moves_it_into_its_window(self):
         self.run_case('undock')
+
+    def test_the_undocked_toolbox_shows_in_the_pane_without_taking_the_pages_focus(self):
+        self.run_case('undock-toolbox')
 
     def test_presenting_reshows_a_hidden_native_frontend(self):
         self.run_case('hidden-native')
