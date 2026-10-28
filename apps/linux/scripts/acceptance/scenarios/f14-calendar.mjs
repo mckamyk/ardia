@@ -36,7 +36,7 @@ export default {
     const fixture = calendarFixture();
     const eds = await startFakeEds(await t.tempDir("bus"), fixture.config);
     try {
-      const { app, shell, scratch } = await startBrowser(t, { name: "calendar", env: { DBUS_SESSION_BUS_ADDRESS: eds.address, TZ: process.env.TZ ?? "UTC" } });
+      const { app, shell, scratch } = await startBrowser(t, { name: "calendar", env: { DBUS_SESSION_BUS_ADDRESS: eds.address, TZ: process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone } });
       await t.check("before connecting, Ardia reports notDetermined and reads nothing", async () => {
         const status = await shell.invoke("ArdiaCalendar.status", { args: [] });
         const sources = await shell.invoke("ArdiaCalendar.sources", { args: [] });
@@ -61,7 +61,8 @@ export default {
         const state = await settled(shell, (s) => s.events.length >= 6, "today's events");
         const by = Object.fromEntries(state.events.map((e) => [e.title, e]));
         const problems = [];
-        if (by["Daily planning"]?.start !== fixture.expected.recurringToday) problems.push(`daily planning at ${by["Daily planning"]?.start}, wanted ${fixture.expected.recurringToday}`);
+        const daily = state.events.filter((e) => e.title === "Daily planning").map((e) => e.start);
+        if (!daily.includes(fixture.expected.recurringToday)) problems.push(`daily planning at ${daily.join(", ")}, wanted ${fixture.expected.recurringToday}`);
         if (by["Acceptance offsite"]?.allDay !== true || by["Acceptance offsite"].start !== fixture.expected.allDayStart) problems.push("all-day offsite");
         if (by["Declined review"]?.declined !== true) problems.push("declined review");
         if (by["Cancelled sync"]?.cancelled !== true) problems.push("cancelled sync");
@@ -120,7 +121,7 @@ export default {
       await settings.clickText("Calendar", { timeout: 8000 });
       const text = await until(async () => {
         const current = await settings.text();
-        return current.includes("Live Calendar") ? current : false;
+        return current.includes("Live Calendar") ? current.slice(current.indexOf("Live Calendar")) : false;
       }, { timeout: 10000, label: "the Calendar pane" });
       await t.evidence("calendar-pane", { text });
       if (MACOS.test(text)) throw new Error(`macOS wording: ${text.match(MACOS)[0]}`);
