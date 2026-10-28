@@ -69,6 +69,22 @@ test("documents read their native bootstrap and persist writes and removals in o
   assert.deepEqual(requests.map(([method]) => method), ["ArdiaShell.writeDocument", "ArdiaShell.removeDocument"]);
 });
 
+test("an isolated profile's new window seeds itself in that profile before the session that opened it is saved", () => {
+  const { host } = fixture();
+  host.bootstrap = { windowId: "w-isolated", profileId: "default", pageProfile: "p-isolated", startup: false };
+  const saved = {
+    profiles: { default: { id: "default", name: "Personal" }, "p-isolated": { id: "p-isolated", name: "Work" } },
+    profileOrder: ["default", "p-isolated"],
+    windows: { w_linux: { id: "w_linux", profileId: "default", incognito: false, tabIds: [], activeTabIds: {} } },
+    windowOrder: ["w_linux"], tabs: {},
+  };
+  const session = initialHostSession(host, saved, 100);
+  const w = session.windows["w-isolated"];
+  assert.equal(w.profileId, "p-isolated");
+  assert.deepEqual(w.tabIds.map((id) => session.tabs[id].profileId), ["p-isolated"]);
+  assert.deepEqual(Object.keys(w.activeTabIds), ["p-isolated"]);
+});
+
 test("new host sessions use native IDs and contain no demo URLs", () => {
   const { host } = fixture();
   const session = initialHostSession(host, null, 100);
