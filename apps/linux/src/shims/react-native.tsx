@@ -1,6 +1,7 @@
-import { forwardRef, useCallback, useRef, type ComponentProps, type ForwardedRef, type KeyboardEvent } from "react";
+import { forwardRef, useCallback, useLayoutEffect, useRef, type ComponentProps, type ForwardedRef, type KeyboardEvent } from "react";
 import { unstable_batchedUpdates as batchedUpdates } from "react-dom";
 import { Animated as WebAnimated, TextInput as WebTextInput, UIManager } from "react-native-web";
+import { reportMountLayout } from "./web/mountLayout";
 
 export * from "react-native-web";
 export { MacPressable as Pressable, MacView as View } from "./web/motion/macView";
@@ -65,7 +66,12 @@ export const TextInput = forwardRef<unknown, MacTextInputProps>(function MacText
   };
   const native = useRef({ changeText: props.onChangeText, selectionChange: props.onSelectionChange });
   native.current = { changeText: props.onChangeText, selectionChange: props.onSelectionChange };
+  const field = useRef<HTMLInputElement | null>(null);
+  const layoutHandler = useRef(props.onLayout);
+  layoutHandler.current = props.onLayout;
+  useLayoutEffect(() => reportMountLayout(field.current, layoutHandler.current as never, window), []);
   const attach = useCallback((node: HTMLInputElement | null) => {
+    field.current = node;
     if (node)
       Object.assign(node, {
         setSelection: (start: number, end: number) => node.setSelectionRange(start, end),
