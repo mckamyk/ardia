@@ -126,7 +126,11 @@ export const privateExtensionToolbar = {
       if (!target) throw new Error("no service worker for the fixture");
       const sw = await state.app.connect(target);
       await evaluate(sw, `chrome.tabs.query({ url: ${js(page)} }).then(([tab]) => chrome.action.setBadgeText({ tabId: tab.id, text: "9" })).then(() => true)`);
-      const badge = await until(async () => { const s = await actionIn(priv.shell, tabId); return s?.badgeText === "9" ? s : false; }, { timeout: 8000, label: "the badge in the private window" });
+      const badge = await until(async () => { const s = await actionIn(priv.shell, tabId); return s?.badgeText === "9" ? s : false; }, { timeout: 8000, label: "the badge in the private window" }).catch(async (error) => {
+        const engine = await evaluate(sw, `chrome.tabs.query({ url: ${js(page)} }).then(([tab]) => tab ? chrome.action.getBadgeText({ tabId: tab.id }).then((badge) => ({ tab: tab.id, incognito: tab.incognito, badge })) : null)`).catch((e) => String(e?.message ?? e));
+        const renderer = await priv.shell.eval(`({ visibility: document.visibilityState, action: ardiaLinux.extensions.getState().actions[${js(tabId)}]?.[${js(ext.id)}] ?? null })`).catch((e) => String(e?.message ?? e));
+        throw new Error(`${error.message}; engine ${JSON.stringify(engine)}; renderer ${JSON.stringify(renderer)}`);
+      });
       const regular = await actionIn(state.shell, regularTab);
       if (regular?.badgeText === "9") throw new Error("the private badge reached the regular window");
       return { badge: badge.badgeText, regular: regular?.badgeText ?? null };
