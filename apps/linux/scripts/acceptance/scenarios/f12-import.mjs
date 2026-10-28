@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { startBrowser } from "../lib/flows.mjs";
 import { digestTree, leftoverImportCopies, savedLogins, writeImportFixtures } from "../lib/importFixtures.mjs";
@@ -73,8 +72,7 @@ export default {
     const run = nonce("f12");
     const scratch = await t.scratch("import");
     const home = join(scratch, "home");
-    const tmp = join(scratch, "import-tmp");
-    await mkdir(tmp, { recursive: true });
+    const tmp = await t.tempDir("import");
     await writeProfileSeed(scratch, { session: sessionSeed() });
     const fixtures = await writeImportFixtures(home);
     const sources = await digestTree(home);

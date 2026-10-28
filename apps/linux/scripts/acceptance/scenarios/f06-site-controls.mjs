@@ -1,9 +1,22 @@
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { evaluate } from "../lib/cdp.mjs";
 import { navigateTab, restartBrowser, startBrowser } from "../lib/flows.mjs";
 import { nonce, until } from "../lib/util.mjs";
 
 export const BLOCKER_DIR = process.env.ARDIA_ACCEPTANCE_CONTENT_BLOCKER;
 export const extraArgs = BLOCKER_DIR ? [`--ardia-content-blocker-dir=${BLOCKER_DIR}`] : [];
+
+export function blockerAvailable(t) {
+  if (BLOCKER_DIR) return true;
+  const executable = t.options?.executable;
+  if (!executable) return false;
+  try {
+    return existsSync(join(dirname(realpathSync(executable)), "..", "lib", "ardia", "extensions", "ublock", "manifest.json"));
+  } catch {
+    return false;
+  }
+}
 
 export async function call(shell, name, args = {}, profile = "") {
   const reply = await shell.call(name, args, profile);
@@ -12,7 +25,7 @@ export async function call(shell, name, args = {}, profile = "") {
 }
 
 export async function pageEval(app, url, expression) {
-  const session = await app.pageSession((t) => t.type === "page" && t.url.startsWith(url), { label: `page ${url}` });
+  const session = await app.connect(await app.pageLoaded(url, { prefix: true }));
   return evaluate(session, expression);
 }
 
@@ -141,12 +154,12 @@ export default {
 
     await t.check("clearing one site's data removes only its cookies and storage", async () => {
       await setStorage(state, tab(), "data.ardia.test", "f06data", t);
-      await setStorage(state, tab(), "keep.ardia.test", "f06keep", t);
+      await setStorage(state, tab(), "www.ardia-keep.test", "f06keep", t);
       const cleared = await call(state.shell, "sites.clearData", { origin: `http://data.ardia.test:${t.fixtures.ports.http}` });
       const data = await storageOf(state, tab(), "data.ardia.test", t);
-      const kept = await storageOf(state, tab(), "keep.ardia.test", t);
+      const kept = await storageOf(state, tab(), "www.ardia-keep.test", t);
       if (hasCookie(data, "f06data") || data.storage.includes("f06data")) throw new Error(`data.ardia.test kept ${JSON.stringify(data)}`);
-      if (!hasCookie(kept, "f06keep") || !kept.storage.includes("f06keep")) throw new Error(`keep.ardia.test lost ${JSON.stringify(kept)}`);
+      if (!hasCookie(kept, "f06keep") || !kept.storage.includes("f06keep")) throw new Error(`www.ardia-keep.test lost ${JSON.stringify(kept)}`);
       return { cleared, data, kept };
     });
 
@@ -168,7 +181,7 @@ export default {
       await state.shell.command("clearBrowsingData");
       await state.shell.clickText("Cancel", { timeout: 10000 });
       await until(async () => !(await state.shell.text()).includes("Cookies, site data and cached files"), { timeout: 6000, label: "the dialog to close" });
-      const kept = await storageOf(state, tab(), "keep.ardia.test", t);
+      const kept = await storageOf(state, tab(), "www.ardia-keep.test", t);
       if (!hasCookie(kept, "f06keep")) throw new Error(`Cancel cleared data: ${JSON.stringify(kept)}`);
       return kept;
     });
@@ -181,9 +194,9 @@ export default {
       await state.shell.clickText("Clear Data", { timeout: 10000 });
       await until(async () => !(await state.shell.text()).includes("Cookies, site data and cached files"), { timeout: 15000, label: "the dialog to finish" });
       const kept = await until(async () => {
-        const seen = await storageOf(state, tab(), "keep.ardia.test", t);
+        const seen = await storageOf(state, tab(), "www.ardia-keep.test", t);
         return hasCookie(seen, "f06keep") || seen.storage.includes("f06keep") ? false : seen;
-      }, { timeout: 15000, label: "keep.ardia.test data to be gone" });
+      }, { timeout: 15000, label: "www.ardia-keep.test data to be gone" });
       const entries = (await call(state.shell, "history.query", { maxUrls: 500, maxVisits: 1 })).entries;
       if (entries.some((e) => e.u === visited)) throw new Error("the visit is still in history");
       return { kept, history: entries.length };

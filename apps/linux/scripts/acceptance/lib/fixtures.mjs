@@ -9,7 +9,7 @@ export const SUGGEST_HOST = "suggestqueries.google.com";
 export const FIND_WORD = "needle";
 export const MEDIA_TITLE = "Acceptance tone";
 
-export function toneWav({ seconds = 1, rate = 8000, frequency = 440 } = {}) {
+export function toneWav({ seconds = 8, rate = 8000, frequency = 440 } = {}) {
   const samples = Math.round(seconds * rate);
   const wav = Buffer.alloc(44 + samples * 2);
   wav.write("RIFF", 0, "ascii");
@@ -128,7 +128,7 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     const tint = /^\/tint\/(meta|header|background|plain)$/.exec(url.pathname);
     if (tint) {
       if (tint[1] === "meta") return html("Tint meta", "<h1>Tint meta</h1>", '<meta name="theme-color" content="#336699">');
-      if (tint[1] === "header") return html("Tint header", '<header style="position:sticky;top:0;height:120px;background:#aa2244"></header><h1>Tint header</h1>');
+      if (tint[1] === "header") return html("Tint header", '<style>body{margin:0}</style><header style="position:sticky;top:0;height:120px;background:#aa2244"></header><h1>Tint header</h1>');
       if (tint[1] === "background") return send(200, "text/html; charset=utf-8", '<!doctype html><html><head><title>Tint background</title></head><body style="background:#22aa66"><h1>Tint background</h1></body></html>');
       return html("Tint plain", "<h1>Tint plain</h1>");
     }
@@ -196,8 +196,8 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     badcert: () => `https://badcert.ardia.test:${ports.https}/badcert`,
     find: (count, label) => `http://plain.ardia.test:${ports.http}/find?count=${count}&label=${encodeURIComponent(label)}`,
     isolation: (host = "isolation.ardia.test") => `http://${host}:${ports.http}/isolation`,
-    download: (name, size = 4096) => `http://plain.ardia.test:${ports.http}/download/${name}?size=${size}`,
-    slow: (name, size = 4 << 20) => `http://plain.ardia.test:${ports.http}/slow/${name}?size=${size}`,
+    download: (name, size = 4096) => `https://secure.ardia.test:${ports.https}/download/${name}?size=${size}`,
+    slow: (name, size = 4 << 20) => `https://secure.ardia.test:${ports.https}/slow/${name}?size=${size}`,
     print: () => `http://plain.ardia.test:${ports.http}/print`,
     zoom: (host = "zoom.ardia.test") => `http://${host}:${ports.http}/zoom`,
     storage: (host, set) => `http://${host}:${ports.http}/storage${set ? `?set=${encodeURIComponent(set)}` : ""}`,
@@ -218,7 +218,7 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
   };
   links = url;
   const chromiumArgs = [
-    `--host-resolver-rules=MAP *.ardia.test 127.0.0.1, MAP ${SUGGEST_HOST} 127.0.0.1:${ports.https}, MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1`,
+    `--host-resolver-rules=MAP *.ardia.test 127.0.0.1, MAP *.ardia-keep.test 127.0.0.1, MAP ${SUGGEST_HOST} 127.0.0.1:${ports.https}, MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1`,
     ...tls.chromiumArgs,
   ];
   return {

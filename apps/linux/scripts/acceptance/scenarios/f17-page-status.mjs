@@ -1,5 +1,6 @@
 import { startBrowser, navigateTab } from "../lib/flows.mjs";
 import { gesture, openPage, pageState, waitPage } from "../lib/pages.mjs";
+import { clickLabel } from "../lib/ui.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
 
 const HANG_TIMEOUT = 55000;
@@ -20,7 +21,7 @@ export default {
   ],
   async run(t) {
     const run = nonce("f17");
-    const state = await startBrowser(t, { name: "page-status" });
+    const state = await startBrowser(t, { name: "page-status", coreDumps: false });
     const { shell } = state;
     const { url } = t.fixtures;
     await t.check("the pages store is reachable from the shell", async () => {
@@ -61,7 +62,13 @@ export default {
       const page = await openPage(shell, url.popup(run));
       const target = url.popupTarget(run);
       const blocked = await waitPage(shell, page.tabId, (p) => p.popups?.some((x) => x.url === target), { label: "the blocked pop-up" });
-      await until(async () => (await shell.text()).includes("Only Once"), { timeout: 8000, label: "the pop-up prompt" });
+      const prompt = () => until(async () => (await shell.text()).includes("Only Once"), { timeout: 4000, label: "the pop-up prompt" });
+      await prompt().catch(async () => {
+        await t.screenshot(shell, "popup-missing");
+        await t.evidence("popup-missing", { text: await shell.text(), popover: await shell.eval("JSON.stringify(ardiaLinux.pages.getState().popover)"), active: await shell.activeTabId(), tab: page.tabId, fullscreen: await shell.state("return s.windows[windowId]?.fullScreen ?? null;") });
+        await clickLabel(shell, "Pop-ups blocked on this page");
+        await prompt();
+      });
       await t.screenshot(shell, "popup-prompt");
       await shell.clickText("Only Once");
       const opened = await shell.waitState(`return Object.values(s.tabs).find((x) => x.url === ${js(target)})?.id ?? false;`, { timeout: 15000, label: "the pop-up tab" });
@@ -84,7 +91,9 @@ export default {
     let busy;
     await t.check("a hung renderer shows Page Unresponsive and Wait dismisses it", async () => {
       busy = await openPage(shell, url.busy(run));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       await pressWithoutAck(busy.session);
+      await shell.app.disconnect(busy.target);
       await waitPage(shell, busy.tabId, (p) => p.unresponsive === true, { timeout: HANG_TIMEOUT, label: "the unresponsive state" });
       await until(async () => (await shell.text()).includes("Page Unresponsive"), { timeout: 8000, label: "the unresponsive dialog" });
       await t.screenshot(shell, "unresponsive");

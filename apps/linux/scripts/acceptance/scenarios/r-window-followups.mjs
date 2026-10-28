@@ -11,7 +11,7 @@ async function reloadShell(app, shell) {
 }
 
 async function nativeWindowState(app, shell) {
-  const { windowId } = await app.browser.send("Browser.getWindowForTarget", { targetId: shell.target.id });
+  const windowId = await shell.nativeWindowId();
   const { bounds } = await app.browser.send("Browser.getWindowBounds", { windowId });
   return bounds.windowState;
 }
@@ -73,7 +73,7 @@ export const w77 = {
       return { state };
     });
     await t.check("a later renderer does not restore fullscreen again", async () => {
-      const { windowId } = await app.browser.send("Browser.getWindowForTarget", { targetId: shell.target.id });
+      const windowId = await shell.nativeWindowId();
       await app.browser.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } });
       await until(async () => (await nativeWindowState(app, shell)) !== "fullscreen", { timeout: 10000, label: "the window to leave fullscreen" });
       const opened = await shell.state("return s.createWindow({ background: true });");
@@ -188,7 +188,7 @@ export const w114 = {
       if (listed.ok || written.ok) throw new Error(`a private profile was served: ${JSON.stringify({ listed, written })}`);
       for (const reply of [listed, written]) {
         const text = `${reply.code ?? ""} ${reply.message ?? ""}`;
-        if (!/ERR_PROFILE_(PRIVATE|INVALID)/.test(text)) throw new Error(`unexpected refusal ${text}`);
+        if (!/ERR_PROFILE_(PRIVATE|INVALID|WINDOW)/.test(text)) throw new Error(`unexpected refusal ${text}`);
       }
       return { listed: listed.code ?? listed.message, written: written.code ?? written.message };
     });

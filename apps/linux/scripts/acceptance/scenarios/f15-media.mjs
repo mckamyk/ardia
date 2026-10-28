@@ -18,7 +18,7 @@ export async function viewCallWithoutGesture(shell, tabId, call) {
 }
 
 export async function mediaPage(state, url) {
-  const target = await state.app.pageTarget((t) => t.type === "page" && t.url === url, { label: `media page ${url}` });
+  const target = await state.app.pageLoaded(url);
   return state.app.connect(target);
 }
 

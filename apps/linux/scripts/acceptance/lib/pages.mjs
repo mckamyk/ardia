@@ -14,7 +14,7 @@ export async function waitPage(shell, tabId, test, { timeout = 15000, label = `p
 export async function openPage(shell, url) {
   const tabId = await shell.newTab(url);
   await shell.waitTabUrl(tabId, (u) => u === url, { label: `tab to commit ${url}` });
-  const target = await shell.app.pageTarget((t) => t.type === "page" && t.url === url, { label: `page target ${url}` });
+  const target = await shell.app.pageLoaded(url);
   const session = await shell.app.connect(target);
   return { tabId, target, session };
 }

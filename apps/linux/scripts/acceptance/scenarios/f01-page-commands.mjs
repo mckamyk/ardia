@@ -2,7 +2,6 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { evaluate } from "../lib/cdp.mjs";
 import { findVerdict, nextActive } from "../lib/assertions.mjs";
-import { MODIFIER } from "../lib/ardia.mjs";
 import { startBrowser } from "../lib/flows.mjs";
 import { FIND_WORD } from "../lib/fixtures.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
@@ -26,8 +25,16 @@ async function openSplit(shell, fixtures, run) {
   if (!result?.ok) throw new Error(`openSplitPane failed: ${JSON.stringify(result)}`);
   const tabB = result.tabId;
   await shell.waitTabUrl(tabB, (url) => url === urlB, { label: "pane B to load" });
-  const targets = await Promise.all([urlA, urlB].map((url) => shell.app.pageTarget((t) => t.type === "page" && t.url === url, { label: `page target ${url}` })));
+  const targets = await Promise.all([urlA, urlB].map((url) => shell.app.pageLoaded(url)));
   return { tabA, tabB, urlA, urlB, targetA: targets[0], targetB: targets[1] };
+}
+
+async function focusPane(shell, tabId) {
+  return until(async () => {
+    if ((await shell.activeTabId()) !== tabId) await shell.state(`s.activate(${js(tabId)}); return true;`);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return (await shell.activeTabId()) === tabId;
+  }, { timeout: 8000, label: `pane ${tabId} to stay active` });
 }
 
 const findState = (shell, tabId) => shell.state(`return s.find[${js(tabId)}] ?? null;`);
@@ -74,7 +81,7 @@ async function attachedPages(app, ids) {
 }
 
 async function openDevTools(app, shell, tabId, command, expectedTarget, otherTarget) {
-  await shell.state(`s.activate(${js(tabId)}); return true;`);
+  await focusPane(shell, tabId);
   await shell.command(command);
   const frontends = await until(async () => {
     const list = await devtoolsTargets(app);
@@ -89,7 +96,7 @@ async function openDevTools(app, shell, tabId, command, expectedTarget, otherTar
 }
 
 async function closeDevTools(app, shell, tabId) {
-  await shell.state(`s.activate(${js(tabId)}); return true;`);
+  await focusPane(shell, tabId);
   await shell.command("toggleDevTools");
   await until(async () => (await devtoolsTargets(app)).length === 0, { timeout: 15000, label: "docked DevTools to close" });
 }
@@ -103,7 +110,7 @@ export default {
     { name: "System print dialog prints the correct pane", steps: ["Open two split panes with different text.", "Focus pane B, choose Print Using System Dialog (Ctrl+Shift+P).", "Confirm the GTK/portal print dialog previews pane B and printing to a file writes pane B's text."] },
     { name: "Save Page writes the focused pane", steps: ["Focus pane B and press Ctrl+S.", "Choose a scratch folder in the native save dialog and save as 'Webpage, Complete' and as 'Single File'.", "Confirm the saved files contain pane B's text and a _files folder for the complete variant."], reason: "Chromium's Save Page always asks for a path through a native file dialog" },
     { name: "Docked DevTools layout and focus", steps: ["Open DevTools on pane A, dock it bottom, right and left; drag the splitter each time.", "Check overlays (find bar, menus) draw over the frontend and the page keeps its corner radius.", "Close DevTools; keyboard focus returns to pane A.", "Undock DevTools; its own window opens and Toggle reveals it."] },
-    { name: "DevTools and Find shortcuts from page focus", steps: ["Click into pane B's page content.", "Press Ctrl+Alt+I, Ctrl+Shift+J and Ctrl+Shift+C; DevTools opens on pane B each time in the right panel."] },
+    { name: "DevTools and Find shortcuts from page focus", steps: ["Click into pane B's page content.", "Press Ctrl+F; pane B's find bar opens and pane A's stays closed.", "Press Ctrl+Alt+I, Ctrl+Shift+J and Ctrl+Shift+C; DevTools opens on pane B each time in the right panel."], reason: "Ardia's shortcuts are handled at the window's Aura root, which CDP key events sent to a page never reach" },
   ],
   async run(t) {
     const run = nonce("f01");
@@ -157,7 +164,7 @@ export default {
     await t.check("Print saves pane A as a PDF", async () => {
       const dirs = [downloads, join(scratch, "home", "Downloads")];
       const before = await filesIn(dirs, (name) => name.endsWith(".pdf"));
-      await shell.state(`s.activate(${js(split.tabA)}); return true;`);
+      await focusPane(shell, split.tabA);
       await shell.command("print");
       const pdfs = await until(async () => {
         const now = await filesIn(dirs, (name) => name.endsWith(".pdf") && !before.includes(name));
@@ -166,19 +173,8 @@ export default {
       return { pdfs };
     });
 
-    await t.check("Ctrl+F from page focus opens find on that pane", async () => {
-      const page = await app.connect(split.targetB);
-      await page.send("Page.bringToFront").catch(() => {});
-      await evaluate(page, "document.body.focus(), true");
-      await page.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "f", code: "KeyF", windowsVirtualKeyCode: 70, modifiers: MODIFIER.ctrl });
-      await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "f", code: "KeyF", windowsVirtualKeyCode: 70, modifiers: MODIFIER.ctrl });
-      return until(async () => {
-        const f = await findState(shell, split.tabB);
-        return f?.open ? f : false;
-      }, { timeout: 8000, label: "find bar on pane B from page focus" });
-    });
     await t.check("Save Page command reaches the native host without failing the shell", async () => {
-      await shell.state(`s.activate(${js(split.tabB)}); return true;`);
+      await focusPane(shell, split.tabB);
       await shell.command("savePage");
       await new Promise((resolve) => setTimeout(resolve, 1500));
       if (app.exited) throw new Error("the browser exited after Save Page");
@@ -196,6 +192,7 @@ export default {
       const urlA = t.fixtures.url.find(4, `bg-${run}`);
       const tabA = await background.shell.newTab(urlA);
       await background.shell.waitTabUrl(tabA, (url) => url === urlA);
+      await background.app.pageLoaded(urlA);
       await background.shell.state(`s.setFind(${js(tabA)}, { open: true, query: ${js(FIND_WORD)}, focusRequest: Date.now() }); return true;`);
       const find = await until(async () => {
         const f = await findState(background.shell, tabA);
