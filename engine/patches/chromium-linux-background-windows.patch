@@ -1,7 +1,9 @@
-A Linux background instance (ARDIA_BACKGROUND=1 or --ardia-background) never asks for activation: BrowserView::Show
-maps the window inactive and leaves an already visible one alone, and BrowserView::Activate does nothing. On X11 an
-inactive map sets _NET_WM_USER_TIME to 0, so the window manager doesn't focus it. Chrome shows its startup window
-before the Ardia host starts, so the launch environment is read in BasicStartupComplete instead of waiting for
+A Linux background instance (ARDIA_BACKGROUND=1 or --ardia-background) never asks the platform for activation:
+BrowserView::Show maps a hidden window inactive (maximizing it afterwards when its saved state was maximized, which
+Widget::ShowInactive would otherwise drop) and leaves an already visible one alone, and BrowserView::Activate keeps
+the active-browser bookkeeping but skips the platform activation. On X11 an inactive map sets _NET_WM_USER_TIME to 0
+so the window manager doesn't focus it; Wayland compositors decide focus on map themselves. Chrome shows its startup
+window before the Ardia host starts, so the launch environment is read in BasicStartupComplete instead of waiting for
 StartLinuxHost.
 
 --- a/chrome/app/chrome_main_delegate.cc
@@ -49,12 +51,16 @@ StartLinuxHost.
      browser_widget_->Activate();
      return;
    }
-@@ -2318,7 +2329,11 @@
+@@ -2318,10 +2329,21 @@
  
    // Guard against destruction by platform event handlers called during Show().
    auto weak_ptr = weak_ptr_factory_.GetWeakPtr();
 -  browser_widget_->Show();
++  ui::mojom::WindowShowState ardia_saved_state =
++      ui::mojom::WindowShowState::kDefault;
 +  if (ArdiaLinuxBackgroundInstance()) {
++    gfx::Rect ardia_saved_bounds;
++    GetSavedWindowPlacement(browser_widget_.get(), &ardia_saved_bounds, &ardia_saved_state);
 +    browser_widget_->ShowInactive();
 +  } else {
 +    browser_widget_->Show();
@@ -62,13 +68,20 @@ StartLinuxHost.
    if (!weak_ptr) {
      return;
    }
-@@ -2381,6 +2396,9 @@
++  if (ardia_saved_state == ui::mojom::WindowShowState::kMaximized) {
++    browser_widget_->Maximize();
++  }
+ 
+   OnWindowDidShow();
+ 
+@@ -2400,7 +2422,9 @@
+   // `BrowserView::Show()` does.
+   BrowserActiveStateManager::From(browser_)->DidBecomeActive();
+ #endif
+-  browser_widget_->Activate();
++  if (!ArdiaLinuxBackgroundInstance()) {
++    browser_widget_->Activate();
++  }
  }
  
- void BrowserView::Activate() {
-+  if (ArdiaLinuxBackgroundInstance()) {
-+    return;
-+  }
-   if (browser_widget_->IsClosed()) {
-     // Since the activation is asynchronous, it's possible that the browser has
-     // been closed before the activation is ready, in this case, we don't have
+ void BrowserView::Deactivate() {

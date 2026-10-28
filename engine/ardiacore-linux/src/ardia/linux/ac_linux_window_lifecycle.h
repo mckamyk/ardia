@@ -15,6 +15,7 @@ struct OpenIntent {
   bool behind = false;
   bool utility = false;
   int behind_window = 0;
+  bool hand_back = false;
 };
 
 enum class Presentation { kActivate, kInactive };
@@ -22,15 +23,18 @@ enum class Activation { kNone, kShowInactive, kActivate };
 
 class FocusLedger {
  public:
+  static constexpr int64_t kHandBackAfterFrameMs = 300;
+  static constexpr int64_t kHandBackLimitMs = 3000;
+
   explicit FocusLedger(bool may_activate) : may_activate_(may_activate) {}
 
-  Presentation Create(int window, const OpenIntent& intent);
+  Presentation Create(int window, const OpenIntent& intent, int64_t now_ms = 0);
   Activation Reuse(int window, const OpenIntent& intent, bool own_renderer);
   Activation Focus(int window);
   Activation Ready(int window);
   bool Observe(int window, bool active);
-  std::optional<int> Unrequested(int window);
-  void Settle(int window) { kept_.erase(window); }
+  void Presented(int window, int64_t now_ms);
+  std::optional<int> Unrequested(int window, int64_t now_ms);
   void PointerPressed() {
     ++epoch_;
     ++presses_;
@@ -48,6 +52,8 @@ class FocusLedger {
   struct Kept {
     int window = 0;
     uint64_t presses = 0;
+    int64_t created_ms = 0;
+    std::optional<int64_t> presented_ms = std::nullopt;
   };
 
   bool may_activate_;

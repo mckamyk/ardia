@@ -45,9 +45,13 @@ class BackgroundWindowTests(unittest.TestCase):
             show = extract(view, 'void BrowserView::Show()')
             self.assertLess(show.index('if (browser_widget_->IsVisible()) {\n    if (ArdiaLinuxBackgroundInstance()) {\n      return;'),
                             show.index('browser_widget_->Activate();'))
-            self.assertIn('if (ArdiaLinuxBackgroundInstance()) {\n    browser_widget_->ShowInactive();\n  } else {\n    browser_widget_->Show();', show)
+            self.assertIn('    browser_widget_->ShowInactive();\n  } else {\n    browser_widget_->Show();', show)
             activate = extract(view, 'void BrowserView::Activate()')
-            self.assertTrue(activate.split('{', 1)[1].lstrip().startswith('if (ArdiaLinuxBackgroundInstance()) {\n    return;'))
+            self.assertLess(activate.index('DidBecomeActive();'), activate.index('if (!ArdiaLinuxBackgroundInstance()) {\n    browser_widget_->Activate();'))
+            self.assertEqual(activate.count('return;'), 2)
+            self.assertLess(show.index('GetSavedWindowPlacement(browser_widget_.get(), &ardia_saved_bounds, &ardia_saved_state);'),
+                            show.index('browser_widget_->ShowInactive();'))
+            self.assertLess(show.index('if (!weak_ptr) {'), show.index('if (ardia_saved_state == ui::mojom::WindowShowState::kMaximized) {\n    browser_widget_->Maximize();'))
             self.assertLess(view.index('bool ArdiaLinuxBackgroundInstance()'), view.index('void BrowserView::Show()'))
             main = (pathlib.Path(directory) / FILES[0]).read_text()
             startup = extract(main, 'std::optional<int> ChromeMainDelegate::BasicStartupComplete()')

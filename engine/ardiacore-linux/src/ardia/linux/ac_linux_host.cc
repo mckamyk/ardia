@@ -163,6 +163,8 @@
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_targeter.h"
+#include "ui/compositor/compositor.h"
+#include "ui/compositor/compositor_observer.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -386,7 +388,9 @@ void ActivateNativeWindow(BrowserWindowInterface* browser, linux_window::Activat
   browser->GetWindow()->Activate();
 }
 
-constexpr base::TimeDelta kUnrequestedActivationWindow = base::Seconds(5);
+int64_t FocusClockMs() {
+  return base::TimeTicks::Now().since_origin().InMilliseconds();
+}
 
 class WindowPointerHandler : public ui::EventHandler {
  public:
@@ -842,6 +846,7 @@ class ShellHostView : public views::View,
                       public views::ViewObserver,
                       public views::WidgetObserver,
                       public aura::WindowObserver,
+                      public ui::CompositorObserver,
                       public TabStripModelObserver {
  public:
   METADATA_HEADER(ShellHostView, views::View)
@@ -1198,6 +1203,9 @@ class ShellHostView : public views::View,
   void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override;
   void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds) override;
   void OnWidgetShowStateChanged(views::Widget* widget) override;
+  void OnDidPresentCompositorFrame(ui::Compositor* compositor, uint32_t frame_token,
+                                   const gfx::PresentationFeedback& feedback) override;
+  void OnCompositingShuttingDown(ui::Compositor* compositor) override { presentation_observation_.Reset(); }
   void ReportWindowGeometry();
   void LayoutOverlay();
   void ReattachViewports();
@@ -1281,6 +1289,7 @@ class ShellHostView : public views::View,
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
   base::ScopedObservation<aura::Window, aura::WindowObserver> input_observation_{this};
+  base::ScopedObservation<ui::Compositor, ui::CompositorObserver> presentation_observation_{this};
   base::CallbackListSubscription system_state_subscription_;
   base::CallbackListSubscription calendar_subscription_;
   base::WeakPtrFactory<ShellHostView> weak_factory_{this};
@@ -1795,6 +1804,7 @@ void ShellHostView::Initialize() {
   dialogs_ = std::make_unique<LinuxWindowDialogs>(window_id_, DialogProfile(), GetWidget(),
                                                   ardiacore::BackgroundInstance());
   close_observation_.Observe(GetWidget());
+  if (ui::Compositor* compositor = GetWidget()->GetCompositor()) presentation_observation_.Observe(compositor);
   SeedWindowActivation();
   RestoreFullScreenNow();
   ArmWindowClose();
@@ -2760,7 +2770,7 @@ void BroadcastWindowEvent(const base::DictValue& event) {
 }
 
 void ReturnUnrequestedActivation(int window) {
-  const auto keep = WindowFocus().Unrequested(window);
+  const auto keep = WindowFocus().Unrequested(window, FocusClockMs());
   if (!keep) return;
   const auto found = Hosts().find(*keep);
   if (found != Hosts().end()) ActivateNativeWindow(found->second->browser(), WindowFocus().Focus(*keep));
@@ -2769,9 +2779,15 @@ void ReturnUnrequestedActivation(int window) {
 void ShellHostView::FocusShellOnActivation() {
   views::Widget* widget = GetWidget();
   views::FocusManager* focus = GetFocusManager();
-  if (!widget || !focus || !shell_ || wm::GetModalTransient(widget->GetNativeWindow())) return;
-  if (const views::View* focused = focus->GetFocusedView(); focused && Contains(focused)) return;
+  if (!widget || !focus || !shell_ || !browser_view_ || wm::GetModalTransient(widget->GetNativeWindow())) return;
+  const views::View* focused = focus->GetFocusedView();
+  if (focused && (Contains(focused) || !browser_view_->Contains(focused))) return;
   FocusShell();
+}
+
+void ShellHostView::OnDidPresentCompositorFrame(ui::Compositor*, uint32_t, const gfx::PresentationFeedback&) {
+  WindowFocus().Presented(id_, FocusClockMs());
+  presentation_observation_.Reset();
 }
 
 void ShellHostView::OnWidgetActivationChanged(views::Widget*, bool active) {
@@ -4248,14 +4264,7 @@ void OpenNativeWindow(WindowOpening opening, uint64_t generation, Profile* page,
   request.opener_host = opening.opener_host;
   request.opener_generation = opening.opener_generation;
   RequestedWindows()[created->GetSessionID().id()] = std::move(request);
-  const int created_id = created->GetSessionID().id();
-  const auto presentation = WindowFocus().Create(created_id, opening.intent);
-  ShowNativeWindow(created, presentation);
-  if (presentation == linux_window::Presentation::kInactive) {
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, base::BindOnce([](int window) { WindowFocus().Settle(window); }, created_id),
-        kUnrequestedActivationWindow);
-  }
+  ShowNativeWindow(created, WindowFocus().Create(created->GetSessionID().id(), opening.intent, FocusClockMs()));
   FinishWindowOpening(id, generation, true, base::Value(base::DictValue().Set("pending", true)));
 }
 
@@ -4862,7 +4871,8 @@ void ShellHostView::Invoke(
         .focus = options ? options->FindBool("focus").value_or(true) : true,
         .behind = behind && !behind->empty(),
         .utility = utility,
-        .behind_window = behind_window};
+        .behind_window = behind_window,
+        .hand_back = !GlobalScreenCoordinates()};
     std::optional<linux_window::Requested> requested;
     const base::ListValue* frame = options ? options->FindList("frame") : nullptr;
     if (!utility && frame &&

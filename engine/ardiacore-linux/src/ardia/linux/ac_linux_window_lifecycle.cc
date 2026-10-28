@@ -15,22 +15,30 @@ bool FocusLedger::Wants(const OpenIntent& intent) const {
   return may_activate_ && (intent.utility || (intent.focus && !intent.behind));
 }
 
-Presentation FocusLedger::Create(int window, const OpenIntent& intent) {
+Presentation FocusLedger::Create(int window, const OpenIntent& intent, int64_t now_ms) {
   if (Wants(intent)) {
     Request(window);
     return Presentation::kActivate;
   }
   const int keep = intent.behind_window ? intent.behind_window : active_;
-  if (may_activate_ && keep && keep != window) kept_[window] = {keep, presses_};
+  if (may_activate_ && intent.hand_back && keep && keep != window) {
+    kept_[window] = {.window = keep, .presses = presses_, .created_ms = now_ms};
+  }
   return Presentation::kInactive;
 }
 
-std::optional<int> FocusLedger::Unrequested(int window) {
+void FocusLedger::Presented(int window, int64_t now_ms) {
+  const auto found = kept_.find(window);
+  if (found != kept_.end() && !found->second.presented_ms) found->second.presented_ms = now_ms;
+}
+
+std::optional<int> FocusLedger::Unrequested(int window, int64_t now_ms) {
   const auto found = kept_.find(window);
   if (found == kept_.end()) return std::nullopt;
   const Kept kept = found->second;
   kept_.erase(found);
-  if (kept.presses != presses_) return std::nullopt;
+  if (kept.presses != presses_ || now_ms > kept.created_ms + kHandBackLimitMs) return std::nullopt;
+  if (kept.presented_ms && now_ms > *kept.presented_ms + kHandBackAfterFrameMs) return std::nullopt;
   return kept.window;
 }
 
@@ -38,12 +46,14 @@ Activation FocusLedger::Reuse(int window, const OpenIntent& intent,
                               bool own_renderer) {
   if (!may_activate_ && intent.utility) return Activation::kShowInactive;
   if (!Wants(intent) || (own_renderer && !intent.utility)) return Activation::kNone;
+  kept_.clear();
   Request(window);
   return Activation::kActivate;
 }
 
 Activation FocusLedger::Focus(int window) {
   if (!may_activate_) return Activation::kShowInactive;
+  kept_.clear();
   Request(window);
   return Activation::kActivate;
 }

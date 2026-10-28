@@ -1,6 +1,6 @@
 # Fix handoff: keyboard focus in new windows, restore-behind focus and background windows (#246, #247, #248)
 
-Branch `linux-window-focus`, based on `linux` at `8bcc3a82`. Native only: `ac_linux_host.cc`, `ac_linux_window_lifecycle.{h,cc}` and a new Linux-only Chromium patch. No UI, shared or macOS code changed.
+Branch `linux-window-focus`, based on `linux` at `3930fa12`. Native only: `ac_linux_host.cc`, `ac_linux_window_lifecycle.{h,cc}` and a new Linux-only Chromium patch. No UI, shared or macOS code changed.
 
 ## #246: compositor focus without keyboard focus
 
@@ -8,9 +8,14 @@ Branch `linux-window-focus`, based on `linux` at `8bcc3a82`. Native only: `ac_li
 
 **Probe on the `ee23b331` package** (headless sway and Xvfb + openbox, a scratch copy of the #240 harness): after launch the window has compositor focus and `document.hasFocus()` is false. Ctrl+L, whose accelerator runs `FocusShell()`, makes it true, and typed text then lands. That is the call this fix adds.
 
-**Fix.** `ShellHostView::OnWidgetActivationChanged(active)` calls `FocusShellOnActivation()` first. It gives the shell WebView views focus (`FocusShell()`) unless:
-- the focus manager's focused view is already inside the Ardia overlay (a page viewport, docked DevTools or the shell itself), or
-- the window has a modal transient child (a dialog keeps focus).
+**Fix.** `ShellHostView::OnWidgetActivationChanged(active)` calls `FocusShellOnActivation()` first. It gives the shell WebView views focus (`FocusShell()`) only when either:
+- nothing holds views focus, or
+- the focused view is part of Chrome's own `BrowserView` UI outside the Ardia overlay (covered and unusable).
+
+It leaves focus alone when:
+- the focused view is inside the overlay (a page viewport, docked DevTools, the shell);
+- the focused view belongs to another widget sharing the focus manager. In 156, tab-modal dialogs (alert, confirm, beforeunload, HTTP auth) are child widgets (`dialog_delegate.cc`, `params.child`), and `Widget::GetFocusManager()` returns the top-level widget's manager. When the window is activated again, `DesktopNativeWidgetAura` restores focus to the dialog's button before the observers run, so Enter keeps going to the dialog;
+- the window has a window-modal transient child (`wm::GetModalTransient`).
 
 Event order on activation:
 1. Ozone reports activation (`wl_keyboard.enter`, X11 `FocusIn`/`_NET_ACTIVE_WINDOW`).
@@ -26,13 +31,16 @@ Activation that arrives before the host attaches is replayed by `SeedWindowActiv
 
 **Root cause.** Restoring a session opens the saved focused window first and the others with `{focus: false, behind: <focused>}` (`windowOpenOrder.ts`). The host shows those with `ShowInactive()`. On X11 that maps them with `_NET_WM_USER_TIME` 0 and the window manager leaves focus alone. Wayland has no inactive map: sway and Hyprland focus every newly mapped toplevel.
 
-**Fix.** `FocusLedger::Create` records, for each regular window created inactive, which window should keep focus: the `behind` window when the renderer may focus it (`FocusReaches`), otherwise the window active at that moment. If the compositor activates the new window anyway, `OnWidgetActivationChanged` asks `FocusLedger::Unrequested`, which returns the kept window once, and the host activates it again (`Show` + `Activate`, an `xdg_activation_v1` request on Wayland).
+**Fix.** On Wayland only (`!GlobalScreenCoordinates()`, `OpenIntent::hand_back`), `FocusLedger::Create` records, for each regular window created inactive, which window should keep focus: the `behind` window when the renderer may focus it (`FocusReaches`), otherwise the window active at that moment. If the compositor activates the new window as it maps, `OnWidgetActivationChanged` asks `FocusLedger::Unrequested`, which returns the kept window once, and the host activates it again (`Show` + `Activate`, an `xdg_activation_v1` request).
 
-The hand-back is dropped when:
-- any mouse or touch press happens in an Ardia window after creation (the user chose);
-- 5 seconds pass after creation (`kUnrequestedActivationWindow`), so a later keyboard switch to that window is never undone;
-- either window closes (`Forget`);
-- the instance is a background one (it never activates).
+Only the compositor's focus-on-map is undone, never the user's own activation:
+- **Not on X11.** There `ShowInactive` maps with `_NET_WM_USER_TIME` 0 (`X11Window::Map`), so any activation is the user's.
+- **First activation only.** That activation consumes the entry, whatever happens to it.
+- **Around the first frame.** It must come no later than 300 ms (`kHandBackAfterFrameMs`) after the window's first presented frame. `ShellHostView` observes its compositor's `OnDidPresentCompositorFrame` and reports the first one (`Presented`). A wl_surface maps on its first buffer commit, and sway or Hyprland focus it right then; a person needs longer than that to see the window and switch to it. As a backstop, if no frame is ever reported, nothing is handed back later than 3 s (`kHandBackLimitMs`) after creation.
+- **Explicit focus clears it.** Any explicit activation request clears every pending hand-back: `ArdiaShell.focusWindow`, a re-open asking for focus (`Reuse`), or the fullscreen restore's final focus.
+- **Pointer press.** Any mouse or touch press in an Ardia window after creation cancels it. With click-to-focus the keyboard enter can precede the button event; the first-frame bound covers that case.
+- **Closing either window** removes it (`Forget`).
+- **Background instances** never activate, so nothing is armed.
 
 The new window still broadcasts its `focus` event, and the kept window's follows, so the store ends on the saved focused window. On Wayland the compositor decides whether to grant the activation: the harness's sway sets `focus_on_window_activation focus`; Hyprland's default `misc:focus_on_activate` is off, so there the kept window may only be marked urgent.
 
@@ -42,8 +50,10 @@ The new window still broadcasts its `focus` event, and the kept window's follows
 
 **Fix.** `engine/patches/chromium-linux-background-windows.patch` (Linux, after `chromium-ardia-linux-layer.patch`):
 - `ChromeMainDelegate::BasicStartupComplete` calls `ardiacore::InitializeLinuxLaunchConfig()`, so `--ardia-background` is set from `ARDIA_BACKGROUND=1` before any window exists. It is idempotent; `StartLinuxHost` still calls it.
-- In a background instance, `BrowserView::Show()` maps a hidden window with `Widget::ShowInactive()` and leaves an already visible one alone.
-- In a background instance, `BrowserView::Activate()` does nothing.
+- In a background instance, `BrowserView::Show()` maps a hidden window with `Widget::ShowInactive()` and leaves an already visible one alone. `ShowInactive` turns a saved maximized state into the restored bounds (`widget.cc`), so `Show()` reads the saved placement (`GetSavedWindowPlacement`, as the widget did at init) and calls `Maximize()` after the inactive show when it was maximized.
+- In a background instance, `BrowserView::Activate()` still runs `BrowserActiveStateManager::DidBecomeActive()`, so the last-active browser stays right for `window.focus()`, `windows.update({focused: true})` and CDP `activateTarget`. Only the platform activation (`browser_widget_->Activate()`) is skipped.
+
+The patch applies on both X11 and Wayland. It only matters on X11.
 
 On X11 an inactive map sets `_NET_WM_USER_TIME` to 0 (`X11Window::Map`). openbox honours it: in F22X the restored behind window, which the host already shows inactive, never took focus. On Wayland a client can't refuse focus on map; sway and Hyprland will still focus the window. That is compositor policy, not something Ardia requests. The window stays mapped and visible, so the harness's screenshots of it still work.
 
@@ -51,14 +61,22 @@ On X11 an inactive map sets `_NET_WM_USER_TIME` to 0 (`X11Window::Map`). openbox
 
 | Test | Before | After |
 | --- | --- | --- |
-| `test_window_lifecycle.py` `keyboard-focus`: activation focuses the shell; not when a page/overlay view holds focus or a modal is up; seeded activation too | fail | pass |
-| `test_window_lifecycle.py` `restored-behind`: a compositor activation of a behind window activates the kept window once; a pointer press cancels it | fail | pass |
-| `test_window_lifecycle.py` ledger program (`Unrequested`, `Settle`, `Forget`, background, nothing to keep); the existing `LEDGER` program had no runner, so `WindowLifecycleLedgerTests` now compiles and runs it | fail | pass |
-| `test_background_windows.py`: series position, switch name, and the patched `Show`/`Activate`/`BasicStartupComplete` on the 156 sources with `patch -F0` | fail | pass |
+| `keyboard-focus`: activation (the fake restores the stored view first, as `DesktopNativeWidgetAura` does) focuses the shell when nothing or Chrome's covered UI holds focus; not when an overlay view does or a window-modal is up; seeded activation too | fail | pass |
+| `tab-modal-dialog`: a dialog button restored on reactivation keeps focus | fail with the first version | pass |
+| `restored-behind`: on Wayland a compositor activation at the first frame activates the kept window once; a pointer press cancels it; on X11 nothing is handed back | fail | pass |
+| `users-activation-stays`: an activation 1.7 s after the first frame, and one after `ArdiaShell.focusWindow`, are never undone | fail with the first version | pass |
+| Ledger program (`Unrequested`, `Presented`, X11, first-frame bound, 3 s backstop, `Focus`/`Reuse` clearing); the existing `LEDGER` program had no runner, so `WindowLifecycleLedgerTests` now compiles and runs it | fail | pass |
+| `test_background_windows.py`: series position, switch name, the patched `Show` (inactive, then `Maximize` after the weak-pointer check when saved maximized), `Activate` (`DidBecomeActive` kept, only the platform activation skipped) and `BasicStartupComplete` on the 156 sources with `patch -F0` | fail | pass |
 | `scripts/linux/syntax-check-156.sh ac_linux_host.cc ac_linux_window_lifecycle.cc` | | pass |
 | `chrome_main_delegate.cc` and `browser_view.cc` with the patch applied, clang `-fsyntax-only` with their `chrome_initial.ninja` and `ui.ninja` flags | | pass |
 
-Removing the `FocusShellOnActivation()` call, the `ReturnUnrequestedActivation()` call or the patch file each makes its test fail.
+Putting back each reviewed behaviour makes a test fail:
+- the old focus rule;
+- arming on X11;
+- `Focus` not clearing the hand-back;
+- no first-frame bound;
+- removing the `FocusShellOnActivation()` or `ReturnUnrequestedActivation()` call;
+- the old patch.
 
 ## Needs the next build
 
