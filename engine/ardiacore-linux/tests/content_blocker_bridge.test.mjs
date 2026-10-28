@@ -8,7 +8,7 @@ const page = readFileSync(new URL("../content-blocker/ardia-linux-bridge.html", 
 const EXTENSION = "fajbdaomknpkicfjcpipdmcpoamdmilh";
 const OFF = "/^(?:ardia-blocking-off|)/";
 
-function fakeUblock({ ready = true } = {}) {
+function fakeUblock({ ready = true, invalidated = false } = {}) {
   const state = {
     whitelist: ["chrome-extension-scheme", "moz-extension-scheme"],
     whitelistDefault: ["chrome-extension-scheme", "moz-extension-scheme"],
@@ -53,7 +53,7 @@ function fakeUblock({ ready = true } = {}) {
       }
     },
   };
-  return { state, storage, messaging, ready };
+  return { state, storage, messaging, ready, invalidated };
 }
 
 function load({ origin = `chrome-extension://${EXTENSION}`, ublock = fakeUblock() } = {}) {
@@ -71,6 +71,7 @@ function load({ origin = `chrome-extension://${EXTENSION}`, ublock = fakeUblock(
     },
   };
   const background = ublock.ready ? { "µBlock": { isReadyPromise: Promise.resolve() } } : {};
+  let looks = 0;
   const context = {
     document: { documentElement: root },
     location: { origin, href: `${origin}/ardia-linux-bridge.html` },
@@ -87,7 +88,12 @@ function load({ origin = `chrome-extension://${EXTENSION}`, ublock = fakeUblock(
     },
     chrome: {
       runtime: { id: EXTENSION, lastError: undefined },
-      extension: { getBackgroundPage: () => background },
+      extension: {
+        getBackgroundPage: () => {
+          if (ublock.invalidated && ++looks > 1) throw new Error("Extension context invalidated.");
+          return background;
+        },
+      },
       i18n: { getUILanguage: () => "en" },
       storage: {
         local: {
@@ -226,6 +232,12 @@ test("errors are reported, never success: dev failure, unknown operations, forei
   assert.match((await foreign.call("state")).error, /not the extension page/);
   const stalled = load({ ublock: fakeUblock({ ready: false }) });
   assert.match((await stalled.call("state", {}, { deadlineMs: 50 })).error, /timed out|never started/);
+});
+
+test("a bridge page whose extension context was invalidated replies with that error instead of going silent", async () => {
+  const lost = load({ ublock: fakeUblock({ ready: false, invalidated: true }) });
+  const reply = await lost.call("state", {}, { deadlineMs: 1500 });
+  assert.match(reply.error, /Extension context invalidated/);
 });
 
 test("malformed requests are dropped without a reply", async () => {
