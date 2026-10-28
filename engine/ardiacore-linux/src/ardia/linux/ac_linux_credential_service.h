@@ -7,6 +7,8 @@
 #include "base/functional/callback.h"
 #include "base/values.h"
 
+class Profile;
+
 namespace ardia {
 
 namespace linux_sync {
@@ -26,8 +28,11 @@ void LinuxCredentialsInvoke(bool private_window, LinuxShellWebView* shell, const
 
 void LinuxCredentialsReadLogins(const std::string& engine_profile,
                                 base::OnceCallback<void(linux_sync::LoginRead)> done);
-void LinuxCredentialsSaveLogin(const std::string& engine_profile, linux_sync::StoredLogin login, bool replacing,
-                               base::OnceCallback<void(bool)> done);
+enum class LinuxSyncedSave { kSaved, kSkipped, kFailed };
+
+void LinuxCredentialsSaveLogin(const std::string& engine_profile, linux_sync::StoredLogin login,
+                               base::OnceCallback<void(LinuxSyncedSave)> done);
+bool LinuxCredentialsPasswordsUsable(Profile* profile);
 
 }
 

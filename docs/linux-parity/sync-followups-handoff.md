@@ -27,17 +27,29 @@ The last case matters because of how Chromium 156's `LoginDatabase` handles a ro
 - the trailing slash is dropped, and then the realm must be `http(s)://host[:port]` with no path, whitespace or control character (so HTTP-auth realms and Android rows are skipped);
 - empty passwords are skipped;
 - the first row wins for each origin and username;
-- passwords over 4 KiB and usernames over 1 KiB are skipped.
+- passwords over 64 KiB (macOS's bound) and usernames over 1 KiB are skipped.
 
 ### Saving: `savePassword(profile, origin, username, sealed, replacing)`
 
-1. `ParsePasswordSave` checks the arguments. The origin must already be a login origin, the username is at most 1 KiB, `sealed` is at most 16 KiB, and `replacing` is a boolean. Anything else gets `ERR_SYNC_ARGUMENT`.
-2. On the sync sequence, `SyncCore::OpenLogin` opens the sealed value with the origin and username as AAD. A locked key, tampering, a different origin or username, or an empty password returns `false`, and nothing is saved.
-3. On the UI thread, `LinuxCredentialsSaveLogin` builds the existing typed `ArdiaPasswords.save` plan, which reaches `ac_passwords_add` with `passwordHex` in a wiping buffer (F07). When `replacing` is true it first runs the `passwords.remove` plan (`ac_passwords_remove`). This is macOS's delete-then-save, and it is needed because `ac_passwords_add` refuses a login that already exists. Neither call prompts.
+1. `ParsePasswordSave` checks types and outer bounds: fields up to 64 KiB, `sealed` up to 128 KiB. Anything else gets `ERR_SYNC_ARGUMENT`. A login whose origin isn't a login origin, or whose username is over 1 KiB, parses as not holdable.
+2. On the sync sequence, `SyncCore::OpenLogin` opens the sealed value with the origin and username as AAD. A locked key, tampering, or a different origin or username returns `false`, as on macOS.
+3. On the UI thread, `credentials::PlanSyncedLogin` builds two plans: `passwords.remove` (`ac_passwords_remove`) and the typed `ArdiaPasswords.save` (`ac_passwords_add` with `passwordHex`). The origin must already be normalized. The save always removes first, whatever `replacing` says. This handles a local row that Linux's read filtered out (an empty password, or a second realm spelling of the same origin): `ac_passwords_add` would refuse it as already saved. A missing login removes as a no-op. Neither call prompts.
+
+**Logins Linux can't hold.** These are a password over Linux's 4 KiB credential bound, a NUL in the password or username, a username over 1 KiB, or a non-login origin.
+
+- The native save returns `"skipped"` for them, not `false`. Returning `false` made the shared adapter fail every cycle, run its 20 settle reads and stay quiet, so the device stopped publishing its own password edits. Simply returning `true` would be worse: `syncScope` records the value in its base (`scope.ts` `applyAdapter`), the next local read lacks it, and that publishes a delete to every device.
+- So `hostSync.ts` keeps them held. `createHeldLogins` stores `{origin, username, sealed}` per profile in `sync-held-logins.nns`, sealed with `sealLocal`. `readPasswords` folds held logins back into the native list with `created: 0`, so the merge sees them unchanged, also after a reload.
+- A held login is released when:
+  - a local login with the same origin and username appears (the native list wins);
+  - a later save succeeds;
+  - the `passwords.remove` route deletes it (`hostCredentials.ts` calls `releaseHeldLogin`), which is how a remote delete arrives;
+  - the key changes, when Turn On, Enter Phrase or Stop clears the whole store.
+- If the held document can't be opened or parsed, `readPasswords` returns `null`: passwords are skipped, and nothing is deleted.
+- The sync authority sets the store up in `becomeAuthority`, and `refreshSyncDocuments` re-reads the document before the engine starts.
+
+**`status().passwords`.** It reports whether passwords can sync for the window's profile right now: false when `kSkipUndecryptablePasswords` is on, or when the profile's password store is missing or reports an error (`LinuxCredentialsPasswordsUsable`, `credentials::PasswordsSyncUsable`).
 
 Deletions still go through the shared adapter's `deletePassword`, which uses the generic `passwords.remove` route and never carries a secret.
-
-`status().passwords` is now `true`.
 
 ### What isn't wiped
 
@@ -72,7 +84,7 @@ Deletions still go through the shared adapter's `deletePassword`, which uses the
 
 - **The limit.** It is now per name: `linux_policy::DocumentLimit(name)` in `ac_linux_policy.h`. `sync-state.nns` may be up to 48 MiB, and everything else keeps 8 MiB. 48 MiB covers the base64 of the largest state `sealLocal` accepts: a 32 MiB payload framed and padded to 1 KiB, plus the NNS1 magic, nonce and tag. `test_host_policy.py` checks this at compile time against the sync constants.
 - **Where it applies.** `ReadDocument`, `WriteDocument` and the `ArdiaShell.writeDocument`/`saveDocument` branch all use the per-name limit.
-- **The window storage ledger.** The ledger keeps the operation of every pending write to match retries and recover failures. It caps one intent at 16 MiB and the whole ledger at 32 MiB, so it would still have refused a large state. A write above 8 MiB, which only the sync state can be, now records `{"kind":"write","sha256":…}` instead of its contents. Matching and recovery are unchanged: only a later successful write of the same bytes clears a failure. While one such write is pending in a window, another gets `ERR_DOCUMENT_BUSY`, which bounds the memory held. The shared engine already serializes its state saves, and `hostDocuments.ts` serializes every write per renderer. Writes up to 8 MiB are tracked exactly as before.
+- **The window storage ledger.** The ledger keeps the operation of every pending write to match retries and recover failures. It caps one intent at 16 MiB and the whole ledger at 32 MiB, so it would still have refused a large state. A write above 8 MiB, which only the sync state can be, now records `{"kind":"write","sha256":…}` instead of its contents. The file runner hashes and writes it in one task, so the UI thread never hashes up to 48 MiB and writes keep their order. The ledger entry starts with a provisional digest and gets the real one when the write completes. A durable write then clears any older failed entry with the same name and digest (`CompleteStorageIntent`), as reusing one intent did before. Matching and recovery are unchanged: only a later successful write of the same bytes clears a failure. While one such write is pending in a window, another gets `ERR_DOCUMENT_BUSY`, which bounds the memory held. The shared engine already serializes its state saves, and `hostDocuments.ts` serializes every write per renderer. Writes up to 8 MiB are tracked exactly as before.
 - **The bootstrap snapshot.** It skips `sync-state.nns`, so no window reads up to 48 MiB at startup. The sync authority re-reads it through `refreshDocument` before the engine starts, and no other renderer reads it.
 - **Tests.**
   - `test_window_storage.py` (`large-sync-state`): 8 MiB + 1 is refused for other names; 9 MiB and exactly 48 MiB states are written, while 48 MiB + 1 is refused; the ledger holds a digest; a second large write in flight is refused; a failed large write is recovered only by the same bytes.

@@ -776,13 +776,20 @@ void SealedLogins(const std::string& scratch) {
   CHECK(!ReadPasswordsProfile({S(std::string(kMaxProfileBytes + 1, 'p'))}));
   auto save = ParsePasswordSave({S("default"), S("https://bank.example"), S("alice"), S("AAAA"), JsonValue::Bool(true)});
   CHECK(save && save->profile == "default" && save->origin == "https://bank.example" && save->username == "alice" &&
-        save->sealed == "AAAA" && save->replacing);
+        save->sealed == "AAAA" && save->replacing && save->holdable);
   CHECK(ParsePasswordSave({S("default"), S("https://bank.example"), S(""), S("AAAA"), JsonValue::Bool(false)}));
-  CHECK(!ParsePasswordSave({S("default"), S("https://bank.example/path"), S("alice"), S("AAAA"), JsonValue::Bool(false)}));
+  auto pathed = ParsePasswordSave({S("default"), S("https://bank.example/path"), S("alice"), S("AAAA"), JsonValue::Bool(false)});
+  CHECK(pathed && !pathed->holdable);
   CHECK(!ParsePasswordSave({S("default"), S("https://bank.example"), S("alice"), S("AAAA"), S("yes")}));
   CHECK(!ParsePasswordSave({S("default"), S("https://bank.example"), S("alice"), S("AAAA")}));
-  CHECK(!ParsePasswordSave({S("default"), S("https://bank.example"), S(std::string(kMaxLoginUsernameBytes + 1, 'u')), S("AAAA"),
+  auto long_username = ParsePasswordSave({S("default"), S("https://bank.example"), S(std::string(kMaxLoginUsernameBytes + 1, 'u')),
+                                          S("AAAA"), JsonValue::Bool(false)});
+  CHECK(long_username && !long_username->holdable);
+  CHECK(!ParsePasswordSave({S("default"), S("https://bank.example"), S(std::string(kMaxSyncedFieldBytes + 1, 'u')), S("AAAA"),
                             JsonValue::Bool(false)}));
+  CHECK(!ParsePasswordSave({S("default"), S(std::string(kMaxSyncedFieldBytes + 1, 'o')), S("alice"), S("AAAA"),
+                            JsonValue::Bool(false)}));
+  CHECK(kMaxLoginPasswordBytes == 65536 && kMaxSealedPasswordBytes >= 4 * (1 + kNonceBytes + kMaxLoginPasswordBytes + 36 + 2) / 3);
   CHECK(!ParsePasswordSave({S("default"), S("https://bank.example"), S("alice"), S(std::string(kMaxSealedPasswordBytes + 1, 'A')),
                             JsonValue::Bool(false)}));
   CHECK(!ParsePasswordSave({JsonValue::Null(), S("https://bank.example"), S("alice"), S("AAAA"), JsonValue::Bool(false)}));
@@ -842,6 +849,15 @@ void SealedLogins(const std::string& scratch) {
     request.sealed = "not base64!";
     CHECK(!core.OpenLogin(request));
   }
+  const std::string long_password(20000, 'L');
+  Outcome long_sealed = core.SealLogins(Logins(true, {{"https://long.example/", "lee", std::string(long_password), 0},
+                                                      {"https://huge.example/", "hugh", std::string(kMaxLoginPasswordBytes + 1, 'H'), 0}}));
+  CHECK(long_sealed.ok && long_sealed.value.items.size() == 1 && long_sealed.value.items[0].Find("sealed")->text.size() > 16384);
+  auto long_save = ParsePasswordSave({S("default"), S("https://long.example"), S("lee"), S(long_sealed.value.items[0].Find("sealed")->text),
+                                      JsonValue::Bool(false)});
+  CHECK(long_save && long_save->holdable);
+  auto long_opened = long_save ? core.OpenLogin(*long_save) : std::nullopt;
+  CHECK(long_opened && long_opened->password == long_password);
   PasswordSave before_forget{"default", "https://bank.example", "alice@example.com", sealed.value.items[0].Find("sealed")->text, false};
   CHECK(core.OpenLogin(before_forget));
   core.Dispatch("ArdiaSync.forget", {}, NowSeconds());

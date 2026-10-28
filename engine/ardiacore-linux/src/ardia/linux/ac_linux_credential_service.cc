@@ -687,33 +687,38 @@ void LinuxCredentialsReadLogins(const std::string& engine_profile,
   ResolveCredentialProfile(engine_profile, false, base::BindOnce(&ReadLoginsFor, std::move(done)));
 }
 
-void LinuxCredentialsSaveLogin(const std::string& engine_profile, linux_sync::StoredLogin login, bool replacing,
-                               base::OnceCallback<void(bool)> done) {
+void LinuxCredentialsSaveLogin(const std::string& engine_profile, linux_sync::StoredLogin login,
+                               base::OnceCallback<void(LinuxSyncedSave)> done) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  std::vector<credentials::Arg> args;
-  args.push_back(credentials::Arg::String(engine_profile));
-  args.push_back(credentials::Arg::String(login.realm));
-  args.push_back(credentials::Arg::String(login.username));
-  args.push_back(credentials::Arg::String(login.password));
-  credentials::Plan save = credentials::PlanInvoke("ArdiaPasswords.save", args);
-  args.clear();
-  Done saved = base::BindOnce([](base::OnceCallback<void(bool)> done, bool ok, base::Value) { std::move(done).Run(ok); },
-                              std::move(done));
-  if (!replacing) {
-    return Run(engine_profile, false, nullptr, std::move(save), false, std::move(saved));
+  credentials::SyncedLoginPlans plans =
+      credentials::PlanSyncedLogin(engine_profile, login.realm, login.username, login.password);
+  if (!plans.storable) {
+    return std::move(done).Run(LinuxSyncedSave::kSkipped);
   }
-  std::vector<std::pair<std::string, credentials::Arg>> login_key;
-  login_key.emplace_back("origin", credentials::Arg::String(login.realm));
-  login_key.emplace_back("username", credentials::Arg::String(login.username));
-  credentials::Plan remove = credentials::PlanCall("passwords.remove", credentials::Arg::Object(std::move(login_key)));
-  Run(engine_profile, false, nullptr, std::move(remove), false, base::BindOnce(
+  Done saved = base::BindOnce(
+      [](base::OnceCallback<void(LinuxSyncedSave)> done, bool ok, base::Value) {
+        std::move(done).Run(ok ? LinuxSyncedSave::kSaved : LinuxSyncedSave::kFailed);
+      },
+      std::move(done));
+  Run(engine_profile, false, nullptr, std::move(plans.remove), false, base::BindOnce(
       [](std::string engine_profile, credentials::Plan save, Done saved, bool removed, base::Value) {
         if (!removed) {
           return std::move(saved).Run(false, base::Value());
         }
         Run(engine_profile, false, nullptr, std::move(save), false, std::move(saved));
       },
-      engine_profile, std::move(save), std::move(saved)));
+      engine_profile, std::move(plans.save), std::move(saved)));
+}
+
+bool LinuxCredentialsPasswordsUsable(Profile* profile) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  scoped_refptr<password_manager::PasswordStoreInterface> store =
+      profile && !profile->IsOffTheRecord()
+          ? ProfilePasswordStoreFactory::GetForProfile(profile, ServiceAccessType::EXPLICIT_ACCESS)
+          : nullptr;
+  return credentials::PasswordsSyncUsable(
+      base::FeatureList::IsEnabled(password_manager::features::kSkipUndecryptablePasswords), !!store,
+      store ? StoreErrorOf(store->GetError()) : credentials::StoreError::kOther);
 }
 
 }

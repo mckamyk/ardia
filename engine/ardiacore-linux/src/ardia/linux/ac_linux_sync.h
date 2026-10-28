@@ -76,8 +76,9 @@ inline constexpr char kKitTextName[] = "Ardia Recovery Kit.txt";
 inline constexpr size_t kMaxProfileBytes = 256;
 inline constexpr size_t kMaxLoginOriginBytes = 2048;
 inline constexpr size_t kMaxLoginUsernameBytes = 1024;
-inline constexpr size_t kMaxLoginPasswordBytes = 4096;
-inline constexpr size_t kMaxSealedPasswordBytes = 16384;
+inline constexpr size_t kMaxLoginPasswordBytes = 65536;
+inline constexpr size_t kMaxSealedPasswordBytes = 131072;
+inline constexpr size_t kMaxSyncedFieldBytes = 65536;
 
 std::optional<Route> RouteOf(std::string_view method);
 
@@ -118,6 +119,7 @@ struct PasswordSave {
   std::string username;
   std::string sealed;
   bool replacing = false;
+  bool holdable = true;
 };
 
 std::optional<std::string> LoginOrigin(std::string_view realm);

@@ -8,6 +8,7 @@ import { after, test } from "node:test";
 import { Clock } from "../../../packages/sync/src/hlc.ts";
 import { syncScope } from "../../../packages/sync/src/scope.ts";
 import { emptyScope } from "../../../packages/sync/src/scopeState.ts";
+import { createHeldLogins } from "../../../apps/linux/src/hostSync.ts";
 
 const TOOL = process.env.SYNC_DEVICE_TOOL;
 const scratch = mkdtempSync(join(tmpdir(), "ardia-sync-devices-"));
@@ -204,10 +205,28 @@ test("two simulated Linux devices set up, join, merge concurrent and offline edi
 });
 
 class PasswordDevice extends Device {
+  refusedApplies = 0;
+  constructor(name) {
+    super(name);
+    this.documents = new Map();
+    this.held = this.heldLogins();
+  }
+  heldLogins() {
+    return createHeldLogins({
+      read: (name) => this.documents.get(name) ?? null,
+      save: async (name, text) => void this.documents.set(name, text),
+      remove: async (name) => void this.documents.delete(name),
+      seal: (text) => this.tool.call("sealLocal", text),
+      open: (sealed) => this.tool.call("openLocal", sealed),
+    });
+  }
+  async readLogins() {
+    return this.held.merge("default", await this.tool.call("test.sealLogins", true));
+  }
   adapters() {
     const keyOf = (origin, username) => `pws:${origin}\n${username}`;
     const read = async () => {
-      const list = await this.tool.call("test.sealLogins", true);
+      const list = await this.readLogins();
       return list && new Map(list.map((l) => [keyOf(l.origin, l.username), { o: l.origin, u: l.username, s: l.sealed }]));
     };
     return [
@@ -224,9 +243,19 @@ class PasswordDevice extends Device {
           for (const key of changed) {
             const value = visible.get(key);
             const have = local.get(key);
-            if (!value || have?.s === value.s) continue;
-            ok = (await this.tool.call("test.saveLogin", "default", value.o, value.u, value.s, !!have)) && ok;
+            if (!value) {
+              if (have) {
+                await this.tool.call("test.removeLogin", have.o, have.u);
+                await this.held.release("default", have.o, have.u);
+              }
+              continue;
+            }
+            if (have?.s === value.s) continue;
+            const saved = await this.tool.call("test.saveLogin", "default", value.o, value.u, value.s, !!have);
+            if (saved === "skipped") await this.held.hold("default", { origin: value.o, username: value.u, sealed: value.s });
+            ok = (saved === true || saved === "skipped") && ok;
           }
+          if (!ok) this.refusedApplies++;
           return ok;
         },
       },
@@ -268,7 +297,35 @@ test("saved passwords travel between two Linux devices sealed, and never reach t
   assert.equal(await a.hasLogin("https://bank.example", "alice@example.com", "pw-changed-on-b"), true);
   assert.equal(await a.hasLogin("https://bank.example", "alice@example.com", "pw-hunter2-été"), false);
 
-  const secrets = ["pw-hunter2", "pw-empty-username", "pw-changed-on-b", "pw-http-auth-realm", "alice@example.com", "bank.example"];
+  await b.addLogin("https://hidden.example/", "eve", "");
+  await a.addLogin("https://hidden.example/", "eve", "pw-from-a-for-eve");
+  await a.addLogin("https://long.example/", "lee", `pw-long-${"x".repeat(5000)}`);
+  await a.addLogin("https://nul.example/", "nul", "pw-with\u0000nul");
+  for (let i = 0; i < 4; i++) for (const device of [a, b]) await device.sync(scope);
+  assert.equal(await b.hasLogin("https://hidden.example", "eve", "pw-from-a-for-eve"), true);
+  assert.equal(await b.hasLogin("https://long.example", "lee", `pw-long-${"x".repeat(5000)}`), false);
+  assert.equal(await b.hasLogin("https://nul.example", "nul", "pw-with\u0000nul"), false);
+  assert.equal(await b.tool.call("test.saveAttempts", "https://long.example", "lee"), 1);
+  assert.equal(await b.tool.call("test.saveAttempts", "https://nul.example", "nul"), 1);
+  assert.equal(a.refusedApplies + b.refusedApplies, 0);
+  assert.ok((await b.readLogins()).some((l) => l.origin === "https://long.example"));
+  assert.equal([...b.documents.values()].some((text) => text.includes("long.example") || text.includes("pw-long")), false);
+
+  b.held = b.heldLogins();
+  for (let i = 0; i < 2; i++) for (const device of [b, a]) await device.sync(scope);
+  assert.equal(await a.hasLogin("https://long.example", "lee", `pw-long-${"x".repeat(5000)}`), true);
+  assert.equal(await a.hasLogin("https://nul.example", "nul", "pw-with\u0000nul"), true);
+  assert.equal(await b.tool.call("test.saveAttempts", "https://long.example", "lee"), 1);
+
+  await a.tool.call("test.removeLogin", "https://long.example", "lee");
+  for (let i = 0; i < 2; i++) for (const device of [a, b]) await device.sync(scope);
+  assert.equal((await b.readLogins()).some((l) => l.origin === "https://long.example"), false);
+  assert.ok((await b.readLogins()).some((l) => l.origin === "https://nul.example"));
+  for (let i = 0; i < 2; i++) for (const device of [b, a]) await device.sync(scope);
+  assert.equal(await a.hasLogin("https://long.example", "lee", `pw-long-${"x".repeat(5000)}`), false);
+  assert.equal(a.refusedApplies + b.refusedApplies, 0);
+
+  const secrets = ["pw-hunter2", "pw-empty-username", "pw-changed-on-b", "pw-http-auth-realm", "pw-from-a", "pw-long", "pw-with", "alice@example.com", "bank.example"];
   for (const path of walk(folder)) {
     if (!statSync(path).isFile()) continue;
     const data = readFileSync(path);

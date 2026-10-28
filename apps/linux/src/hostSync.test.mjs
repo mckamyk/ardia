@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { credentialModuleMethod } from "./hostCredentials.ts";
 import { createHostDocuments } from "./hostDocuments.ts";
 import { resolveHostModule } from "./hostModules.ts";
 import {
+  HELD_LOGINS_DOCUMENT,
   SYNC_CAPABILITIES,
+  configureHeldLogins,
+  createHeldLogins,
   base32,
   keyringMessage,
   loadSyncDeviceName,
   newSyncDeviceId,
   presentSyncState,
   refreshSyncDocuments,
+  releaseHeldLogin,
   syncDeviceName,
   syncModuleMethod,
   withChosenSyncFolder,
@@ -134,6 +140,75 @@ test("saved passwords go to the sync authority's typed native path and only seal
   const refused = fakeHost((method) => (method === "ArdiaSync.readPasswords" ? null : false));
   assert.equal(await syncModuleMethod(refused, "ArdiaSync", "readPasswords")("default"), null);
   assert.equal(await syncModuleMethod(refused, "ArdiaSync", "savePassword")("default", "https://bank.example", "alice", "AdGh", false), false);
+});
+
+function heldIo(docs = new Map(), { sealFails = false, openFails = false } = {}) {
+  return {
+    docs,
+    read: (name) => docs.get(name) ?? null,
+    save: async (name, text) => void docs.set(name, text),
+    remove: async (name) => void docs.delete(name),
+    seal: async (text) => (sealFails ? null : `sealed:${Buffer.from(text).toString("base64")}`),
+    open: async (sealed) => (openFails ? null : Buffer.from(sealed.slice(7), "base64").toString()),
+  };
+}
+
+test("a login Linux can't hold stays held, sealed, so later reads and restarts still show it, until a local save or a delete", async () => {
+  const io = heldIo();
+  const held = createHeldLogins(io);
+  const local = [{ origin: "https://bank.example", username: "alice", sealed: "LOCAL", created: 5 }];
+  const lee = { origin: "https://long.example", username: "lee", sealed: "REMOTE" };
+  assert.deepEqual(await held.merge("default", local), local);
+  assert.equal(io.docs.has(HELD_LOGINS_DOCUMENT), false);
+  await held.hold("default", lee);
+  const stored = io.docs.get(HELD_LOGINS_DOCUMENT);
+  assert.ok(stored.startsWith("sealed:") && !stored.includes("long.example") && !stored.includes("REMOTE"));
+  const restarted = createHeldLogins(io);
+  assert.deepEqual(await restarted.merge("default", local), [...local, { ...lee, created: 0 }]);
+  assert.deepEqual(await restarted.merge("work", local), local);
+  const savedHere = [...local, { origin: "https://long.example", username: "lee", sealed: "NEWLOCAL", created: 9 }];
+  assert.deepEqual(await restarted.merge("default", savedHere), savedHere);
+  assert.equal(io.docs.has(HELD_LOGINS_DOCUMENT), false);
+  await restarted.hold("default", lee);
+  await restarted.release("default", lee.origin, lee.username);
+  assert.equal(io.docs.has(HELD_LOGINS_DOCUMENT), false);
+  assert.deepEqual(await restarted.merge("default", local), local);
+  assert.equal(await held.merge("default", null), null);
+
+  const locked = createHeldLogins(heldIo(new Map([[HELD_LOGINS_DOCUMENT, "sealed:e30="]]), { openFails: true }));
+  assert.equal(await locked.merge("default", local), null);
+  await locked.clear();
+  assert.deepEqual(await locked.merge("default", local), local);
+  const corrupt = createHeldLogins(heldIo(new Map([[HELD_LOGINS_DOCUMENT, `sealed:${Buffer.from("[1,2]").toString("base64")}`]])));
+  assert.equal(await corrupt.merge("default", local), null);
+  await assert.rejects(createHeldLogins(heldIo(new Map(), { sealFails: true })).hold("default", lee));
+});
+
+test("the sync adapter holds a login the native save skipped, and a delete through the passwords route releases it", async () => {
+  const local = [{ origin: "https://bank.example", username: "alice", sealed: "LOCAL", created: 5 }];
+  let saveReply = "skipped";
+  const host = fakeHost((method) => (method === "ArdiaSync.readPasswords" ? local : method === "ArdiaSync.savePassword" ? saveReply : null));
+  const save = syncModuleMethod(host, "ArdiaSync", "savePassword");
+  const read = syncModuleMethod(host, "ArdiaSync", "readPasswords");
+  configureHeldLogins(null);
+  assert.equal(await save("default", "https://long.example", "lee", "REMOTE", false), false);
+  const io = heldIo();
+  configureHeldLogins(createHeldLogins(io));
+  try {
+    assert.equal(await save("default", "https://long.example", "lee", "REMOTE", false), true);
+    assert.deepEqual(await read("default"), [...local, { origin: "https://long.example", username: "lee", sealed: "REMOTE", created: 0 }]);
+    await credentialModuleMethod(host, "ArdiaPasswords", "call")("remove", "default", JSON.stringify({ origin: "https://long.example", username: "lee" }));
+    assert.deepEqual(await read("default"), local);
+    assert.equal(await save("default", "https://long.example", "lee", "REMOTE", false), true);
+    saveReply = true;
+    assert.equal(await save("default", "https://long.example", "lee", "SHORTER", true), true);
+    assert.equal(io.docs.has(HELD_LOGINS_DOCUMENT), false);
+    saveReply = false;
+    assert.equal(await save("default", "https://long.example", "lee", "BROKEN", true), false);
+    await releaseHeldLogin("default", "https://nowhere.example", "x");
+  } finally {
+    configureHeldLogins(null);
+  }
 });
 
 test("the sync module adapter keeps device ids local and sends every other call as a typed sync invoke", async () => {
@@ -361,4 +436,21 @@ test("refreshing sync documents drops journal parts stranded after a gap", async
   assert.ok(refreshed.includes("sync.json") && refreshed.includes("sync-state.nns") && refreshed.includes("sync-journal.nns"));
   assert.equal(refreshed.filter((name) => /^sync-journal-\d+\.nns$/.test(name)).length, 12);
   await assert.rejects(refreshSyncDocuments({ refresh: async () => { throw new Error("read failed"); }, remove: async () => {}, maxParts: 3 }), /read failed/);
+});
+
+test("the sync authority keeps a sealed held-logins store and clears it whenever the sync key changes", () => {
+  const engine = readFileSync(new URL("./syncEngine.ts", import.meta.url), "utf8");
+  const become = engine.slice(engine.indexOf("async function becomeAuthority"), engine.indexOf("export function startLinuxSync"));
+  assert.match(become, /heldLogins = createHeldLogins\(\{/);
+  assert.match(become, /configureHeldLogins\(heldLogins\);/);
+  assert.match(become, /seal: async \(text\) => SyncNative\?\.sealLocal\(text\)/);
+  assert.match(become, /open: async \(sealed\) => SyncNative\?\.openLocal\(sealed\)/);
+  assert.ok(become.indexOf("configureHeldLogins(") < become.indexOf("engine.startSync()"));
+  const remote = engine.slice(engine.indexOf("function remoteFor"), engine.indexOf("async function becomeAuthority"));
+  for (const method of ["turnOnSync", "enterRecoveryPhrase", "stopSync"]) {
+    const start = remote.indexOf(`    ${method}:`);
+    const next = remote.slice(start + 6).search(/\n {4}[a-zA-Z]+: /);
+    const body = remote.slice(start, next < 0 ? undefined : start + 6 + next);
+    assert.match(body, /clearHeldLogins\(\)/, method);
+  }
 });

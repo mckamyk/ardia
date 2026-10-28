@@ -1,5 +1,6 @@
 import type { ArdiaHost } from "./host";
 import { callHost, hostProfile, invokeHost } from "./host.ts";
+import { releaseHeldLogin } from "./hostSync.ts";
 
 export const CREDENTIAL_CAPABILITIES = [
   "ArdiaPasswords.status",
@@ -96,7 +97,9 @@ async function domainCall(host: ArdiaHost, domain: "passwords" | "autofill", ver
     return JSON.stringify({ number: typeof reply?.number === "string" ? reply.number : null });
   }
   if (SECRET_CALLS.has(name)) throw credentialError("ERR_SECRET_ROUTE", "Secret operations use their dedicated native method");
-  return shape(name, await callHost(name, profile, typeof args === "string" ? args : "{}", host));
+  const reply = shape(name, await callHost(name, profile, typeof args === "string" ? args : "{}", host));
+  if (name === "passwords.remove") await releaseHeldLogin(profile, input.origin, input.username);
+  return reply;
 }
 
 export function credentialModuleMethod(host: ArdiaHost, name: string, method: string): unknown {

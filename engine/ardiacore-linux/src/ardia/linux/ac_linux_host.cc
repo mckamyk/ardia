@@ -2205,6 +2205,14 @@ void ShellHostView::CompleteStorageIntent(const StorageTicket& ticket,
   --intent->pending;
   if (failed) intent->failure = std::max(intent->failure, ticket.sequence);
   else if (durable && intent->failure <= ticket.sequence) intent->failure = 0;
+  if (durable && !failed) {
+    std::erase_if(storage_intents_, [&](const auto& item) {
+      if (item == intent || item->name != intent->name || item->operation != intent->operation ||
+          item->pending || item->failure > ticket.sequence) return false;
+      storage_bytes_ -= item->bytes;
+      return true;
+    });
+  }
   if (!intent->pending && !intent->failure) {
     storage_bytes_ -= intent->bytes;
     std::erase(storage_intents_, intent);
@@ -4502,7 +4510,28 @@ void ShellHostView::Invoke(
           }))
         return std::move(done).Run(false, base::Value(base::DictValue()
             .Set("code", "ERR_DOCUMENT_BUSY").Set("message", "A large document is still being written")));
-      operation.Set("sha256", StorageDigest(*contents));
+      operation.Set("sha256", "pending-" + std::to_string(storage_sequence_ + 1));
+      auto ticket = BeginStorageIntent(name, std::move(operation));
+      if (!ticket)
+        return std::move(done).Run(false, base::Value(base::DictValue()
+            .Set("code", "ERR_DOCUMENT_LIMIT").Set("message", "Window storage ledger is full")));
+      using Directory = decltype(DocumentDirectory(profile()));
+      FileRunner()->PostTaskAndReplyWithResult(
+          FROM_HERE, base::BindOnce(
+              [](Directory directory, std::string name, std::optional<std::string> contents) {
+                std::pair<std::string, bool> written{StorageDigest(*contents), false};
+                written.second = WriteDocument(directory, name, contents);
+                return written;
+              }, DocumentDirectory(profile()), name, std::move(contents)),
+          base::BindOnce(
+              [](base::WeakPtr<ShellHostView> host, StorageTicket ticket,
+                 base::OnceCallback<void(bool, base::Value)> done, std::pair<std::string, bool> written) {
+                ticket.intent->operation.Set("sha256", written.first);
+                if (host) host->CompleteStorageIntent(ticket, written.second, !written.second);
+                std::move(done).Run(written.second,
+                    written.second ? base::Value() : base::Value("Could not persist the document"));
+              }, GetWeakPtr(), std::move(*ticket), std::move(done)));
+      return;
     } else if (contents) {
       operation.Set("contents", *contents);
     }

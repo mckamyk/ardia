@@ -13,8 +13,8 @@ LINUX = ROOT / 'src/ardia/linux'
 SEALED = REPO / 'packages/sync/tests/fixtures/sealed-0.2.32.b64'
 WORDLIST = REPO / 'packages/sync/ios/Core/Wordlist.swift'
 HELPERS = ['ac_linux_sync.cc', 'ac_linux_sync_crypto.cc', 'ac_linux_sync_wordlist.cc', 'ac_linux_sync_json.cc',
-           'ac_linux_sync_vault.cc', 'ac_linux_sync_keystore.cc']
-SOURCES = HELPERS + ['ac_linux_sync.h', 'ac_linux_sync_crypto.h', 'ac_linux_sync_json.h', 'ac_linux_sync_vault.h',
+           'ac_linux_sync_vault.cc', 'ac_linux_sync_keystore.cc', 'ac_linux_credentials.cc']
+SOURCES = HELPERS[:-1] + ['ac_linux_sync.h', 'ac_linux_sync_crypto.h', 'ac_linux_sync_json.h', 'ac_linux_sync_vault.h',
                      'ac_linux_sync_keystore.h', 'ac_linux_sync_service.cc', 'ac_linux_sync_service.h']
 LIBSECRET = next((path for path in ['/usr/lib/libsecret-1.so.0', '/usr/lib/x86_64-linux-gnu/libsecret-1.so.0',
                                     '/usr/lib64/libsecret-1.so.0'] if os.path.exists(path)), None)
@@ -126,8 +126,18 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn('kSkipUndecryptablePasswords', credentials)
         self.assertIn('credentials::Store::kPasswords, probes.passwords', credentials[credentials.index('void ReadLoginsFor'):])
         save = credentials[credentials.index('void LinuxCredentialsSaveLogin'):]
-        self.assertIn('credentials::PlanInvoke("ArdiaPasswords.save"', save)
-        self.assertIn('credentials::PlanCall("passwords.remove"', save)
+        self.assertIn('credentials::PlanSyncedLogin(', save)
+        self.assertIn('if (!plans.storable)', save)
+        self.assertLess(save.index('std::move(plans.remove)'), save.index('std::move(plans.save)'))
+        usable = credentials[credentials.index('bool LinuxCredentialsPasswordsUsable'):]
+        self.assertIn('credentials::PasswordsSyncUsable(', usable)
+        self.assertIn('kSkipUndecryptablePasswords', usable)
+        self.assertIn('GetError()', usable)
+        self.assertIn('if (!parsed->holdable) return std::move(done).Run(true, base::Value(kSkippedLogin));', service)
+        self.assertIn('LinuxSyncedSave::kSkipped', service)
+        status = service[service.index('void SyncStatus('):]
+        self.assertIn('LinuxCredentialsPasswordsUsable(', status)
+        self.assertIn('if (method == "ArdiaSync.status") return SyncStatus(', service)
         for forbidden in ['LOG(', 'VLOG(', 'printf', 'TRACE_EVENT', 'SCOPED_CRASH_KEY']:
             self.assertNotIn(forbidden, credentials)
         vault = (LINUX / 'ac_linux_sync_vault.cc').read_text()

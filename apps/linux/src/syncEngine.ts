@@ -6,6 +6,8 @@ import { SyncNative } from "../../browser/src/platform/sync";
 import { ardiaHost, type ArdiaHost } from "./host";
 import {
   claimSyncAuthority,
+  configureHeldLogins,
+  createHeldLogins,
   keyringMessage,
   loadSyncDeviceName,
   presentSyncState,
@@ -16,7 +18,7 @@ import {
   withChosenSyncFolder,
   type SyncKeyStoreStatus,
 } from "./hostSync.ts";
-import { deleteDocument, refreshDocument } from "./shims/shellBase";
+import { deleteDocument, readDocument, refreshDocument, saveDocument } from "./shims/shellBase";
 import {
   INTERACTIVE_CALL_TIMEOUT_MS,
   SYNC_CHANNEL,
@@ -33,20 +35,31 @@ export const useSync = create<SyncUi>()(() => ({ ...engine.useSync.getState(), s
 
 let authority: SyncAuthority | null = null;
 let keyStore: SyncKeyStoreStatus | null = null;
+let heldLogins: ReturnType<typeof createHeldLogins> | null = null;
+
+const clearHeldLogins = () => heldLogins?.clear().catch((error: unknown) => console.warn("[ardia linux] sync", error instanceof Error ? error.message : error));
 
 function remoteFor(host: ArdiaHost): SyncRemote {
   return {
     syncNow: () => engine.syncNow(),
     turnOnSync: async (folder: string) => {
       const result = await engine.turnOnSync(folder);
+      if (!("error" in result)) await clearHeldLogins();
       if ("error" in result && result.error === KEYCHAIN_ERROR) {
         keyStore = await syncKeyStoreStatus(host).catch(() => keyStore);
         return { error: keyringMessage(keyStore, true) ?? "Couldn’t save the sync key in your keyring." };
       }
       return result;
     },
-    enterRecoveryPhrase: (folder: string, text: string) => engine.enterRecoveryPhrase(folder, text),
-    stopSync: (options?: { deleteData?: boolean }) => engine.stopSync(options),
+    enterRecoveryPhrase: async (folder: string, text: string) => {
+      const result = await engine.enterRecoveryPhrase(folder, text);
+      if ("ok" in result) await clearHeldLogins();
+      return result;
+    },
+    stopSync: async (options?: { deleteData?: boolean }) => {
+      await engine.stopSync(options);
+      await clearHeldLogins();
+    },
     setTypeSynced: (type: DataType, enabled: boolean) => engine.setTypeSynced(type, enabled),
     setProfileSynced: (profileId: string, enabled: boolean) => engine.setProfileSynced(profileId, enabled),
     addRemoteProfile: (syncId: string) => engine.addRemoteProfile(syncId),
@@ -64,6 +77,14 @@ async function becomeAuthority(host: ArdiaHost) {
   }
   await loadSyncDeviceName(host);
   keyStore = await syncKeyStoreStatus(host).catch(() => null);
+  heldLogins = createHeldLogins({
+    read: readDocument,
+    save: saveDocument,
+    remove: deleteDocument,
+    seal: async (text) => SyncNative?.sealLocal(text),
+    open: async (sealed) => SyncNative?.openLocal(sealed),
+  });
+  configureHeldLogins(heldLogins);
   engine.startSync();
   return { store: engine.useSync, remote: remoteFor(host) };
 }

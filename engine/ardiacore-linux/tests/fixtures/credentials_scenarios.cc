@@ -418,6 +418,30 @@ void Origins() {
 
 }
 
+void SyncedLogins() {
+  SyncedLoginPlans plans = PlanSyncedLogin("default", "https://example.com", "me", kPassword);
+  assert(plans.storable);
+  ExpectEngine(plans.remove, "ac_passwords_remove", R"({"origin":"https://example.com","username":"me"})", Reply::kOk,
+               {Store::kPasswords});
+  ExpectEngine(plans.save, "ac_passwords_add",
+               std::string(R"({"origin":"https://example.com","username":"me","passwordHex":")") + Hex(kPassword) + "\"}",
+               Reply::kOk, {Store::kPasswords});
+  assert(PlanSyncedLogin("default", "https://example.com", "", kPassword).storable);
+  assert(!PlanSyncedLogin("default", "https://example.com", "me", std::string(kMaxSecretBytes + 1, 'p')).storable);
+  assert(!PlanSyncedLogin("default", "https://example.com", "me", std::string("a\0b", 3)).storable);
+  assert(!PlanSyncedLogin("default", "https://example.com", std::string("m\0e", 3), kPassword).storable);
+  assert(!PlanSyncedLogin("default", "https://example.com", std::string(kMaxUsernameBytes + 1, 'u'), kPassword).storable);
+  assert(!PlanSyncedLogin("default", "https://example.com", "me", "").storable);
+  assert(!PlanSyncedLogin("default", "https://example.com/path", "me", kPassword).storable);
+  assert(!PlanSyncedLogin("default", "https://Example.com", "me", kPassword).storable);
+  assert(PasswordsSyncUsable(false, true, StoreError::kNone));
+  assert(!PasswordsSyncUsable(true, true, StoreError::kNone));
+  assert(!PasswordsSyncUsable(false, false, StoreError::kNone));
+  assert(!PasswordsSyncUsable(false, true, StoreError::kKeychain));
+  assert(!PasswordsSyncUsable(false, true, StoreError::kInactionable));
+  assert(!PasswordsSyncUsable(false, true, StoreError::kTemporary));
+}
+
 int main(int argc, char** argv) {
   StorageProtection();
   assert(argc == 2);
@@ -428,5 +452,6 @@ int main(int argc, char** argv) {
   Wiping();
   ExportCleanup(argv[1]);
   Origins();
+  SyncedLogins();
   std::puts("credentials scenarios passed");
 }

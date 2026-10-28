@@ -150,15 +150,15 @@ std::optional<std::string> ReadPasswordsProfile(const std::vector<JsonValue>& ar
 
 std::optional<PasswordSave> ParsePasswordSave(const std::vector<JsonValue>& args) {
   auto profile = ReadPasswordsProfile(args);
-  const std::string* origin = StringArg(args, 1, kMaxLoginOriginBytes);
-  const std::string* username = StringArg(args, 2, kMaxLoginUsernameBytes);
+  const std::string* origin = StringArg(args, 1, kMaxSyncedFieldBytes);
+  const std::string* username = StringArg(args, 2, kMaxSyncedFieldBytes);
   const std::string* sealed = StringArg(args, 3, kMaxSealedPasswordBytes);
   const JsonValue* replacing = ArgAt(args, 4);
   if (!profile || !origin || !username || !sealed || !replacing || replacing->type != JsonValue::Type::kBool) {
     return std::nullopt;
   }
-  if (LoginOrigin(*origin) != *origin) return std::nullopt;
-  return PasswordSave{std::move(*profile), *origin, *username, *sealed, replacing->flag};
+  const bool holdable = LoginOrigin(*origin) == *origin && username->size() <= kMaxLoginUsernameBytes;
+  return PasswordSave{std::move(*profile), *origin, *username, *sealed, replacing->flag, holdable};
 }
 
 std::optional<Route> RouteOf(std::string_view method) {

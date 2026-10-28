@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 
+#include "ardia/linux/ac_linux_credentials.h"
 #include "ardia/linux/ac_linux_sync.h"
 #include "ardia/linux/ac_linux_sync_json.h"
 #include "ardia/linux/ac_linux_sync_keystore.h"
@@ -25,8 +26,8 @@ const std::string* Text(const std::vector<JsonValue>& args, size_t index) {
   return index < args.size() && args[index].is_string() ? &args[index].text : nullptr;
 }
 
-std::optional<Outcome> LoginStore(std::map<LoginKey, StoredLogin>& logins, SyncCore& core, const std::string& method,
-                                  const std::vector<JsonValue>& args) {
+std::optional<Outcome> LoginStore(std::map<LoginKey, StoredLogin>& logins, std::map<LoginKey, int>& attempts, SyncCore& core,
+                                  const std::string& method, const std::vector<JsonValue>& args) {
   if (method == "ArdiaSync.test.addLogin") {
     const std::string* realm = Text(args, 0);
     const std::string* username = Text(args, 1);
@@ -50,11 +51,28 @@ std::optional<Outcome> LoginStore(std::map<LoginKey, StoredLogin>& logins, SyncC
     auto save = ParsePasswordSave(args);
     if (!save) return Outcome::Error("ERR_SYNC_ARGUMENT", "saveLogin arguments");
     const LoginKey key{save->origin, save->username};
-    if (logins.contains(key) && !save->replacing) return Outcome::Value(JsonValue::Bool(false));
+    ++attempts[key];
+    if (!save->holdable) return Outcome::Value(JsonValue::String("skipped"));
     auto opened = core.OpenLogin(*save);
     if (!opened) return Outcome::Value(JsonValue::Bool(false));
+    auto plans = ardia::linux_credentials::PlanSyncedLogin(save->profile, opened->realm, opened->username, opened->password);
+    if (!plans.storable) return Outcome::Value(JsonValue::String("skipped"));
     logins.insert_or_assign(key, std::move(*opened));
     return Outcome::Value(JsonValue::Bool(true));
+  }
+  if (method == "ArdiaSync.test.removeLogin") {
+    const std::string* origin = Text(args, 0);
+    const std::string* username = Text(args, 1);
+    if (!origin || !username) return Outcome::Error("ERR_TOOL", "removeLogin arguments");
+    logins.erase({*origin, *username});
+    return Outcome::Value(JsonValue::Null());
+  }
+  if (method == "ArdiaSync.test.saveAttempts") {
+    const std::string* origin = Text(args, 0);
+    const std::string* username = Text(args, 1);
+    if (!origin || !username) return Outcome::Error("ERR_TOOL", "saveAttempts arguments");
+    const auto found = attempts.find({*origin, *username});
+    return Outcome::Value(JsonValue::Number(found == attempts.end() ? 0 : found->second));
   }
   if (method == "ArdiaSync.test.hasLogin") {
     const std::string* origin = Text(args, 0);
@@ -76,6 +94,7 @@ int main(int argc, char** argv) {
   }
   SyncCore core(MakeFileKeyStore(argv[1]), {argv[2], argv[3]});
   std::map<LoginKey, StoredLogin> logins;
+  std::map<LoginKey, int> attempts;
   std::string line;
   while (std::getline(std::cin, line)) {
     auto request = ParseJson(line);
@@ -85,7 +104,7 @@ int main(int argc, char** argv) {
     } else {
       const std::string& method = request->Find("method")->text;
       const auto& args = request->Find("args")->items;
-      std::optional<Outcome> stored = LoginStore(logins, core, method, args);
+      std::optional<Outcome> stored = LoginStore(logins, attempts, core, method, args);
       Outcome outcome = stored ? std::move(*stored) : core.Dispatch(method, args, NowSeconds());
       reply = outcome.ok ? JsonValue::Object({{"ok", JsonValue::Bool(true)}, {"value", std::move(outcome.value)}})
                          : JsonValue::Object({{"ok", JsonValue::Bool(false)},

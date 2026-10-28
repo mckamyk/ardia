@@ -371,11 +371,15 @@ int main(int argc, char** argv) {
     assert(host.storage_intents_.size() == 1 && host.storage_intents_[0]->operation.Find("contents"));
     Drain();
     const auto big = std::string(9 * 1024 * 1024, 'b');
+    const int digests = storage_digests;
     save("sync-state.nns", big, "ok");
+    assert(storage_digests == digests);
     assert(host.storage_intents_.size() == 1 && host.storage_intents_[0]->operation.Find("sha256") &&
            !host.storage_intents_[0]->operation.Find("contents") && host.storage_intents_[0]->bytes < 1024);
     save("sync-state.nns", std::string(9 * 1024 * 1024, 'c'), "ERR_DOCUMENT_BUSY");
+    assert(storage_digests == digests);
     Drain();
+    assert(storage_digests == digests + 1);
     assert(storage_disk["sync-state.nns"] == big && host.storage_intents_.empty());
     save("sync-state.nns", std::string(limit, 'm'), "ok"); Drain();
     assert(storage_disk["sync-state.nns"]->size() == limit);

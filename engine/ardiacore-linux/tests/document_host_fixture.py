@@ -469,7 +469,8 @@ bool WriteDocument(const std::string&, const std::string&, const std::optional<s
 std::string ArgumentString(const base::ListValue& values, size_t index) { return values[index].GetString(); }
 constexpr char kSessionName[] = "linux-session.json";
 constexpr size_t kDocumentLimit = 8 * 1024 * 1024;
-std::string StorageDigest(std::string_view text) { return std::to_string(std::hash<std::string_view>{}(text)) + ":" + std::to_string(text.size()); }
+int storage_digests = 0;
+std::string StorageDigest(std::string_view text) { ++storage_digests; return std::to_string(std::hash<std::string_view>{}(text)) + ":" + std::to_string(text.size()); }
 struct FileRunnerApi {
   template<class Work, class Reply> void PostTaskAndReplyWithResult(int, Work work, Reply reply) {
     files.PostTask(0, [work = std::move(work), reply = std::move(reply)]() mutable {
