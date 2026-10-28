@@ -59,14 +59,34 @@ test("documents read their native bootstrap and persist writes and removals in o
   const documents = createHostDocuments(host);
   assert.equal(documents.read("settings.json"), '{"theme":"dark"}');
   const write = documents.write("settings.json", '{"theme":"light"}');
+  assert.equal(documents.read("settings.json"), '{"theme":"light"}');
   const remove = documents.remove("settings.json");
-  assert.equal(documents.read("settings.json"), '{"theme":"dark"}');
+  assert.equal(documents.read("settings.json"), null);
   await new Promise(setImmediate);
   assert.equal(requests.length, 1);
   finish();
   await Promise.all([write, remove]);
   assert.equal(documents.read("settings.json"), null);
   assert.deepEqual(requests.map(([method]) => method), ["ArdiaShell.writeDocument", "ArdiaShell.removeDocument"]);
+});
+
+test("documents read back a write or removal before the native write finishes and roll back a failed one", async () => {
+  let fail;
+  const pending = new Promise((_, reject) => { fail = reject; });
+  const { host } = fixture(async (method, args) => method.endsWith("writeDocument") && args.args[1] === '{"step":"failed"}' ? pending : null);
+  host.bootstrap.documents = { "onboarding.json": '{"startedAt":1}' };
+  const documents = createHostDocuments(host);
+  const started = documents.write("onboarding.json", '{"startedAt":2}');
+  assert.equal(documents.read("onboarding.json"), '{"startedAt":2}');
+  await started;
+  const removed = documents.remove("onboarding.json");
+  assert.equal(documents.read("onboarding.json"), null);
+  await removed;
+  const failed = documents.write("onboarding.json", '{"step":"failed"}');
+  assert.equal(documents.read("onboarding.json"), '{"step":"failed"}');
+  fail(new Error("disk full"));
+  await assert.rejects(failed, /disk full/);
+  assert.equal(documents.read("onboarding.json"), null);
 });
 
 test("new host sessions use native IDs and contain no demo URLs", () => {
