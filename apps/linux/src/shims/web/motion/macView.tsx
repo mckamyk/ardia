@@ -1,6 +1,7 @@
-import { forwardRef, useEffect, useRef, type ComponentType, type ForwardedRef, type ReactNode } from "react";
+import { forwardRef, useEffect, useLayoutEffect, useRef, type ComponentType, type ForwardedRef, type ReactNode } from "react";
 import { Animated as WebAnimated, Pressable as WebPressable, StyleSheet, View as WebView } from "react-native-web";
 import "./leftEdge";
+import { reportMountLayout } from "../mountLayout";
 import { currentPointer, watchPointer, type PointerSample } from "./pointer";
 
 type MouseHandler = (e: MacMouseEvent) => void;
@@ -15,6 +16,7 @@ type MacProps = {
   onDoubleClick?: (e: unknown) => void;
   onMouseEnter?: MouseHandler;
   onMouseLeave?: MouseHandler;
+  onLayout?: (event: unknown) => void;
   tooltip?: string;
   pointerEvents?: string;
   focusable?: boolean;
@@ -180,6 +182,9 @@ function clipAtBorderBox(style: unknown) {
 
 export const MacView = forwardRef<unknown, MacProps>(function MacView(props, ref) {
   const { node, domHover } = useMacBehaviour(props);
+  const layoutHandler = useRef(props.onLayout);
+  layoutHandler.current = props.onLayout;
+  useLayoutEffect(() => reportMountLayout(node.current, layoutHandler.current as never, window), []);
   return (
     <BaseView
       {...strip(props)}
