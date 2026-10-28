@@ -7,7 +7,7 @@ import { canonicalSessionValue, cloneSessionValue, equalSessionValue, mergeSessi
 import { sessionStatePatch } from "./hostSessionState.ts";
 import { createWindowDeparture } from "./windowDeparture.ts";
 import { parkWindowPins } from "../../browser/src/state/pins/parkedPins";
-import { inPinnedContainer, newId, snapshotTab } from "../../browser/src/state/browser/model";
+import { inPinnedContainer, isIncognitoProfile, newId, snapshotTab } from "../../browser/src/state/browser/model";
 import { withPrivateWindow } from "./hostWindowProfiles.ts";
 
 const CLOSED_WINDOW_LIMIT = 10;
@@ -33,8 +33,12 @@ function withoutRestoredWindows(saved: HydrateData, now: number): HydrateData {
   };
 }
 
+const seedProfile = ({ profileId, pageProfile }: ArdiaHost["bootstrap"]) =>
+  pageProfile && !isIncognitoProfile(pageProfile) ? pageProfile : profileId;
+
 export function initialHostSession(host: ArdiaHost, saved: HydrateData | null | undefined, now = Date.now()): HydrateData {
-  const { windowId, profileId } = host.bootstrap;
+  const { windowId } = host.bootstrap;
+  const profileId = seedProfile(host.bootstrap);
   if (!windowId || !profileId || /[\\/\0]/.test(windowId + profileId)) throw new Error("Invalid Ardia host bootstrap IDs");
   if (host.bootstrap.startup !== false && saved?.settings?.restoreSession === false) saved = withoutRestoredWindows(saved, now);
   if (saved?.closedWindows) saved = { ...saved, closedWindows: inClosingOrder(saved.closedWindows) };
@@ -186,9 +190,32 @@ type SessionStore = {
 const withoutFocus = ({ focusedWindowId: _, lastProfileId: _last, ...session }: HydrateData) => session;
 const sessionSources = (s: BrowserState) => [s.profiles, s.profileOrder, s.orphanedProfileData, s.windows, s.windowOrder, s.tabs, s.groups, s.splits, s.peeks, s.closedTabs, s.closedWindows, s.closedGroups, s.deletedGroups, s.cleanedTabs, s.parkedPins, s.pinChoices, s.pinSync, s.settings, s.ui.focusOrder, s.ui.lastProfileId];
 
+type StandIn = { windowId: string; profileId?: string };
+
+function windowStandIn(host: ArdiaHost, state: BrowserState, initial: HydrateData): StandIn | undefined {
+  const { windowId, startup } = host.bootstrap;
+  const w = state.windows[windowId];
+  if (startup !== false || !w || w.incognito || initial.windows?.[windowId]) return undefined;
+  return initial.profiles?.[w.profileId] ? { windowId } : { windowId, profileId: w.profileId };
+}
+
+function withoutStandIn(state: BrowserState, standIn: StandIn | undefined): BrowserState {
+  if (!standIn) return state;
+  const { [standIn.windowId]: _, ...windows } = state.windows;
+  const profiles = { ...state.profiles };
+  if (standIn.profileId) delete profiles[standIn.profileId];
+  return {
+    ...state, windows, profiles,
+    windowOrder: state.windowOrder.filter((id) => id !== standIn.windowId),
+    profileOrder: state.profileOrder.filter((id) => id !== standIn.profileId),
+    ui: { ...state.ui, focusOrder: state.ui.focusOrder.filter((id) => id !== standIn.windowId) },
+  };
+}
+
 export function startHostPersistence(host: ArdiaHost, store: SessionStore, initial: HydrateData = host.bootstrap.session ?? {}, snapshot: (state: BrowserState, canonical: HydrateData) => HydrateData = snapshotHostSession) {
   let canonical = initial;
-  const snapshotOf = (state: BrowserState) => snapshot(state, canonical);
+  let standIn = windowStandIn(host, store.getState(), initial);
+  const snapshotOf = (state: BrowserState) => snapshot(withoutStandIn(state, standIn), canonical);
   const writer = createSessionWriter(host, initial, (base, session) => receive(base, session));
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last = canonicalSessionValue(initial)!;
@@ -220,8 +247,9 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
     const local = frozen ?? snapshotOf(state);
     canonical = session;
     const merged = mergeSession(base, local, session);
+    if (standIn && merged.windows?.[standIn.windowId]) standIn = undefined;
     const runtime = { ...merged, ...(merged.closedWindows && { closedWindows: inClosingOrder(merged.closedWindows) }), settings: { ...state.settings, ...merged.settings } };
-    const patch = sessionStatePatch(state, snapshotHostSession(state), runtime);
+    const patch = sessionStatePatch(state, snapshotHostSession(withoutStandIn(state, standIn)), runtime);
     applying = true;
     try {
       if (Object.keys(patch).length) store.setState(patch);
@@ -267,6 +295,13 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, initi
     writer.acceptCanonical(update.session);
     receive(update.base, update.session);
   });
+  if (standIn) {
+    void Promise.resolve(host.invoke("session.read", {})).then((saved) => {
+      if (closing || !sessionObject(saved)) return;
+      writer.acceptCanonical(saved);
+      receive(canonical, saved);
+    }).catch(reportHostError);
+  }
   const final = () => {
     if (closing) return;
     if (closeTokens.size) { closing = true; clearTimeout(timer); timer = undefined; return; }
