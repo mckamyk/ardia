@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { currentRect, desktopShot, desktopUnavailable, openDesktop, startDesktopBrowser } from "../lib/desktopSession.mjs";
+import { openDownloadsPopover } from "../lib/desktopUi.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { until } from "../lib/util.mjs";
 
@@ -44,7 +45,7 @@ async function trashFromPopover(desktop, shell, name) {
   const window = await desktop.focused();
   let row = await shell.rectByText(name, { exact: true });
   if (!row) {
-    await desktop.key("ctrl+shift+j");
+    await openDownloadsPopover(desktop, window, shell);
     row = await until(() => shell.rectByText(name, { exact: true }), { timeout: 8000, label: "the download row in the popover" });
   }
   const frame = await currentRect(desktop, window);
