@@ -124,6 +124,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/contents_container_view.h"
+#include "chrome/browser/ui/views/tab_contents/chrome_web_contents_view_focus_helper.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/search_engines/template_url.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -983,6 +984,7 @@ class ShellHostView : public views::View,
   void OnDevToolsDockChanged(content::WebContents* inspected, content::WebContents* devtools);
   void HideDevToolsViewport(TabBinding* binding);
   void LayoutPane(TabBinding* binding);
+  void KeepPaneFocus(TabBinding* activating);
   void QueueTransaction(std::optional<int> command);
   void EngineEvent(std::string_view topic, const base::DictValue& payload);
   bool ReceivesPrivateDownload(const base::DictValue& download);
@@ -3381,6 +3383,28 @@ void ShellHostView::LayoutPane(TabBinding* binding) {
   }
 }
 
+void ShellHostView::KeepPaneFocus(TabBinding* activating) {
+  for (const auto& [id, binding] : bindings_) {
+    auto* helper = binding->contents()
+        ? ChromeWebContentsViewFocusHelper::FromWebContents(binding->contents()) : nullptr;
+    views::View* stored = helper ? helper->GetStoredFocus() : nullptr;
+    if (!stored || stored == binding->viewport() || stored == binding->devtools_viewport()) continue;
+    for (const auto& [other_id, other] : bindings_) {
+      if (stored == other->viewport() || stored == other->devtools_viewport()) {
+        helper->SetStoredFocusView(binding->viewport());
+        break;
+      }
+    }
+  }
+  views::FocusManager* focus = GetFocusManager();
+  views::View* focused = focus ? focus->GetFocusedView() : nullptr;
+  if (!activating || !activating->contents() || !focused ||
+      (focused != activating->viewport() && focused != activating->devtools_viewport())) return;
+  if (auto* helper = ChromeWebContentsViewFocusHelper::FromWebContents(activating->contents())) {
+    helper->SetStoredFocusView(focused);
+  }
+}
+
 base::DictValue ShellHostView::Strip() const {
   base::ListValue tabs;
   if (browser_) {
@@ -3539,8 +3563,9 @@ void ShellHostView::ReplaceTabContents(content::WebContents* old_contents,
 
 void ShellHostView::OnTabStripModelChanged(
     TabStripModel*, const TabStripModelChange& change,
-    const TabStripSelectionChange&) {
+    const TabStripSelectionChange& selection) {
   if (!browser_) return;
+  if (selection.active_tab_changed()) KeepPaneFocus(nullptr);
   if (change.type() == TabStripModelChange::kReplaced) {
     const auto* replace = change.GetReplace();
     auto weak = GetWeakPtr();
@@ -4108,8 +4133,12 @@ void ShellHostView::StripCommand(
   if (op == "activate") {
     TabBinding* binding = BindingForKey(String(args, "key"));
     const int index = binding ? model->GetIndexOfWebContents(binding->contents()) : -1;
-    if (index < 0) rejected = true;
-    else model->ActivateTabAt(index);
+    if (index < 0) {
+      rejected = true;
+    } else {
+      KeepPaneFocus(binding);
+      model->ActivateTabAt(index);
+    }
   } else if (op == "arrange") {
     const base::ListValue* keys = args.FindList("keys");
     if (!keys) {
