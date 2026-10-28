@@ -154,3 +154,4 @@ test("a white surface is measured along a blank row and a blank column inside it
   const drawn = paint([[{ x: 10, y: 10, width: 16, height: 12 }, [20, 20, 20]]]);
   assert.deepEqual(exactBox(blank, drawn, { x: 8, y: 8, width: 32, height: 16 }), { x: 10, y: 10, width: 16, height: 12 });
 });
+

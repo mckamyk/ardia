@@ -163,12 +163,21 @@ async function devtoolsLink(app, href) {
     for (const nodeId of nodeIds) {
       const node = await session.send("DOM.describeNode", { nodeId }).catch(() => null);
       if (node?.node?.nodeName !== "DEVTOOLS-LINK") continue;
-      const box = await session.send("DOM.getBoxModel", { nodeId }).catch(() => null);
-      const q = box?.model?.content;
-      if (q) return { x: (q[0] + q[2]) / 2, y: (q[1] + q[5]) / 2 };
+      const { object } = await session.send("DOM.resolveNode", { nodeId });
+      const { result } = await session.send("Runtime.callFunctionOn", { objectId: object.objectId, returnByValue: true, functionDeclaration: "function () { const first = (n) => { const r = n.getClientRects?.(); return r && r.length ? r[0] : null; }; let r = first(this); if (!r || !r.width) { const range = document.createRange(); range.selectNodeContents(this.shadowRoot ?? this); r = range.getClientRects()[0] ?? null; } return r && r.width ? { x: r.left + Math.min(r.width / 2, 24), y: r.top + r.height / 2 } : null; }" });
+      if (result?.value) return result.value;
     }
     return false;
   }, { timeout: 15000, label: `the ${href} link in DevTools' Elements tree` });
+}
+
+async function linkAtPoint(app, at) {
+  const session = await app.connect((await app.targets()).find((x) => x.url.startsWith("devtools://")));
+  await session.send("DOM.getDocument", { depth: -1, pierce: true });
+  const hit = await session.send("DOM.getNodeForLocation", { x: Math.round(at.x), y: Math.round(at.y), includeUserAgentShadowDOM: true });
+  const { object } = await session.send("DOM.resolveNode", { nodeId: hit.nodeId });
+  const { result } = await session.send("Runtime.callFunctionOn", { objectId: object.objectId, returnByValue: true, functionDeclaration: "function () { const path = []; for (let n = this; n; n = n.parentElement ?? n.getRootNode?.().host ?? null) { path.push(n.nodeName); if (n.nodeName === 'DEVTOOLS-LINK') return { ok: true, path: path.join(' < ') }; if (path.length > 12) break; } return { ok: false, path: path.join(' < ') }; }" });
+  return result.value;
 }
 
 export const privateLinksSurfacesDesktop = {
@@ -228,6 +237,8 @@ export const privateLinksSurfacesDesktop = {
       const frame = await currentRect(desktop, priv.window);
       const origin = await pageOrigin(priv.shell);
       const beforeTabs = await priv.shell.state("return s.windows[windowId].tabIds.length;");
+      const onLink = await linkAtPoint(state.app, at);
+      if (!onLink.ok) throw new Error(`the point ${JSON.stringify(at)} in DevTools is on ${onLink.path}, not the link`);
       const known = await desktop.windows();
       await rightClickMenu(desktop, { x: frame.x + origin.x + at.x, y: frame.y + origin.y + at.y });
       await desktopShot(t, desktop, "devtools-link-menu");
@@ -286,11 +297,15 @@ export const searchProviderDesktop = {
     const desktop = await openDesktop(t);
     const { app, shell, ext } = await loadFollowups(t, desktop, "search-provider");
     const { settings, window } = await openSettingsWindow(desktop, app, shell, { pane: "Search Engine" });
+    let anchor;
     await t.check("Settings › Search Engine lists Ardia Fixture Search", async () => {
       await settings.waitFor("document.body.innerText.includes('Ardia Fixture Search')", { timeout: 15000, label: "the provider in Settings › Search Engine" });
       await desktopShot(t, desktop, "search-engine-pane");
       const lines = await shellLines(settings);
-      return { rows: lines.filter((l) => /Ardia Fixture Search|ardiasearch/.test(l)) };
+      const pane = lines.slice(lines.lastIndexOf("Search Engine") + 1);
+      anchor = pane.find((l) => l.length > 3 && !/Fixture|ardiasearch|^[×−+]$/.test(l));
+      if (!anchor) throw new Error(`no other row in the pane to recognise it by: ${JSON.stringify(pane.slice(0, 20))}`);
+      return { rows: lines.filter((l) => /Ardia Fixture Search|ardiasearch/.test(l)), anchor };
     }, { critical: true });
     await t.check("removing the extension in Settings › Extensions takes the provider out of Settings › Search Engine", async () => {
       await clickTextIn(desktop, window, settings, "Extensions");
@@ -298,7 +313,8 @@ export const searchProviderDesktop = {
       await removeExtensionInSettings(desktop, window, settings, FOLLOWUP_NAME, async () => !(await shell.call("extensions.list", {})).value.extensions.some((x) => x.id === ext.id));
       await desktopShot(t, desktop, "extension-removed");
       await clickTextIn(desktop, window, settings, "Search Engine");
-      await delay(1500);
+      await settings.waitFor(`document.body.innerText.includes(${js(anchor)})`, { timeout: 10000, label: `the Search Engine pane (its ${anchor} row)` });
+      await delay(1000);
       if ((await settings.text()).includes("Ardia Fixture Search")) throw new Error("the provider is still listed");
       await desktopShot(t, desktop, "search-engine-after-remove");
       return true;
@@ -416,7 +432,8 @@ export const shortcutsDesktop = {
         await delay(1000);
         const other = (await shortcutField(settings, "Duplicate").catch(() => ({ text: "?" }))).text;
         await desktopShot(t, desktop, "shortcut-assign-other");
-        throw new Error(`${error.message}; while recording, the extension's command fired ${fired} time(s); the field shows ${JSON.stringify(other)} after an unused Alt+Shift+K`);
+        const searchValue = await settings.eval(`document.querySelector('input[placeholder="Search actions"]')?.value ?? null`).catch(() => null);
+        throw new Error(`${error.message}; the Search actions field holds ${JSON.stringify(searchValue)}; while recording, the extension's command fired ${fired} time(s); the field shows ${JSON.stringify(other)} after an unused Alt+Shift+K`);
       });
       await desktopShot(t, desktop, "shortcut-assigned");
       const before = (await commandReports(worker)).length;

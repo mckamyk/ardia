@@ -158,11 +158,11 @@ export const windowMenuDesktop = {
     }
     const run = nonce("pv148d");
     const desktop = await openDesktop(t);
-    const session = sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }, { id: "second", urls: [t.fixtures.url.page(2)] }], focused: "main" });
+    const session = sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }, { id: "second", urls: [t.fixtures.url.storage("second.ardia.test")] }], focused: "main" });
     const { app, shell } = await startDesktopBrowser(t, desktop, { name: "window-menu", session });
     const second = await app.shell("second", { timeout: 25000 });
     const mainWindow = await windowFor(desktop, "Acceptance page 1");
-    const secondWindow = await windowFor(desktop, "Acceptance page 2");
+    const secondWindow = await windowFor(desktop, "Storage fixture");
     const priv = await openPrivateByKeys(desktop, app, mainWindow, shell);
     const secret = t.fixtures.url.page(3, `secret-${run}`);
     const tab = await priv.shell.newTab(secret);
@@ -194,31 +194,36 @@ export const windowMenuDesktop = {
       const own = await openWindowMenu(t, desktop, privWindow, priv.shell, "private-window-menu");
       const ticked = own.filter((r) => r.checked);
       if (ticked.length !== 1 || !/Incognito|Private/.test(ticked[0].title)) throw new Error(`ticks ${JSON.stringify(own)}`);
-      const target = own.find((r) => !r.checked && r.title.startsWith("Personal"));
-      if (!target) throw new Error(`no regular window in ${JSON.stringify(own.map((r) => r.title))}`);
+      const target = own.find((r) => !r.checked && r.title.includes("second.ardia.test"));
+      if (!target) throw new Error(`no entry for the second window in ${JSON.stringify(own.map((r) => r.title))}`);
       await chooseRow(desktop, privWindow, priv.shell, own, target.title);
-      const focused = await waitFocused(desktop, (w) => w.id !== privWindow.id, { label: "a regular window focused" });
+      const focused = await waitFocused(desktop, (w) => w.id === secondWindow.id, { label: `${target.title}'s window (${secondWindow.title}) focused` });
       return { titles: own.map((r) => r.title), chose: target.title, focused: focused.title };
     });
     await t.stop(app);
   },
 };
 
-async function downloadsPopoverLines(desktop, window, shell, name) {
+async function downloadsPopoverLines(desktop, window, shell) {
   await focusInto(desktop, window, shell);
-  await desktop.key("ctrl+shift+j");
+  const labels = await shell.labels();
+  const label = labels.find((l) => /^Downloads/.test(l));
+  if (!label) throw new Error(`no Downloads button in ${shell.windowId}: ${JSON.stringify(labels)}`);
+  const button = await labelRect(shell, label);
+  const frame = await currentRect(desktop, window);
+  await desktop.click(frame.x + button.x, frame.y + button.y);
   await delay(1500);
   const lines = await shellLines(shell);
   await desktop.key("escape");
   await delay(400);
-  return lines;
+  return { lines, label };
 }
 
 export const privateDownloadsDesktop = {
   id: "F02-72D",
   issue: 72,
   desktop: true,
-  title: "A private window's download is listed by Ctrl+Shift+J only in that window, and never in the regular window, before or after the private window closes (sway)",
+  title: "A private window's download is listed by the Downloads popover only in that window, and never in the regular window, before or after the private window closes (sway)",
   deadline: 300000,
   async run(t) {
     const missing = await desktopUnavailable({ needs: ["grim", "dbusmock", "portal"] });
@@ -244,16 +249,21 @@ export const privateDownloadsDesktop = {
     }, { critical: true });
     const privWindow = priv.window;
     await t.check("the downloads popover in the private window lists it", async () => {
-      const lines = await downloadsPopoverLines(desktop, privWindow, priv.shell);
+      const { lines, label } = await downloadsPopoverLines(desktop, privWindow, priv.shell);
       await desktopShot(t, desktop, "private-popover");
       if (!lines.some((l) => l.includes(name))) throw new Error(`the private popover shows ${JSON.stringify(lines.slice(0, 30))}`);
-      return { listed: true };
+      return { listed: true, button: label };
     });
-    await t.check("the downloads popover in the regular window does not list it", async () => {
-      const lines = await downloadsPopoverLines(desktop, mainWindow, shell);
+    const regularName = `regular-${run}.bin`;
+    await t.check("the downloads popover in the regular window lists the regular window's own download and not the private one", async () => {
+      await portal.pick("SaveFile", [join(folder, regularName)]);
+      await shell.navigate(await shell.activeTabId(), t.fixtures.url.download(regularName, 4096));
+      await until(async () => (await readdir(folder)).includes(regularName), { timeout: 30000, label: `${regularName} on disk` });
+      const { lines } = await downloadsPopoverLines(desktop, mainWindow, shell);
       await desktopShot(t, desktop, "regular-popover");
+      if (!lines.some((l) => l.includes(regularName))) throw new Error(`the regular popover didn't open or doesn't list its own download: ${JSON.stringify(lines.slice(0, 30))}`);
       if (lines.some((l) => l.includes(name))) throw new Error("the regular window lists the private download");
-      return { lines: lines.filter((l) => /\.bin$/.test(l)) };
+      return { own: regularName };
     });
     await t.check("closing the private window with its close button leaves the regular window's popover without it", async () => {
       await focusInto(desktop, privWindow, priv.shell);
@@ -261,7 +271,8 @@ export const privateDownloadsDesktop = {
       const frame = await currentRect(desktop, privWindow);
       await desktop.click(frame.x + close.x, frame.y + close.y);
       await until(async () => !(await liveShells(app)).includes(priv.shell.windowId), { timeout: 15000, label: "the private window to close" });
-      const lines = await downloadsPopoverLines(desktop, mainWindow, shell);
+      const { lines } = await downloadsPopoverLines(desktop, mainWindow, shell);
+      if (!lines.some((l) => l.includes(regularName))) throw new Error(`the regular popover didn't open: ${JSON.stringify(lines.slice(0, 30))}`);
       if (lines.some((l) => l.includes(name))) throw new Error("the regular window lists the private download after it closed");
       return { closed: true };
     });

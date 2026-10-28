@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { evaluate } from "../lib/cdp.mjs";
 import { crxKey, writeCrx } from "../lib/crx.mjs";
 import { clickTextIn, currentRect, desktopShot, desktopUnavailable, hasFocus, openDesktop, openSettingsWindow, startDesktopBrowser, waitFocused } from "../lib/desktopSession.mjs";
-import { clickNeutral, labelRect, networkReachable, whiteBox, pageOrigin, rowToggle, saveCapture, shellLines, surfaceAfter } from "../lib/desktopUi.mjs";
+import { clickDialogButton, clickNeutral, labelRect, networkReachable, whiteBox, pageOrigin, rowToggle, saveCapture, shellLines, surfaceAfter } from "../lib/desktopUi.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
 import { FIXTURE_NAME, listed, prepareExtension } from "./f09-extensions.mjs";
@@ -254,7 +254,7 @@ export const crxDesktop = {
       await shell.waitFor(`document.body.innerText.includes(${js(reEnable)})`, { timeout: 20000, label: "the re-enable prompt" });
       await desktopShot(t, desktop, "crx-reenable-prompt");
       const lines = await shellLines(shell);
-      const permission = lines.find((l) => /history/i.test(l));
+      const permission = lines.slice(lines.indexOf(reEnable) + 1).find((l) => /history/i.test(l));
       if (!permission) throw new Error(`the prompt names no new permission: ${JSON.stringify(lines.slice(lines.indexOf(reEnable), lines.indexOf(reEnable) + 6))}`);
       const off = await fixtureState(shell, pair.v1.id);
       if (off.enabled || off.version !== "2.0") throw new Error(`after the update: ${JSON.stringify({ enabled: off.enabled, version: off.version })}`);
@@ -292,17 +292,10 @@ export const crxDesktop = {
   },
 };
 
-async function clickDialogButton(desktop, window, shell, title, label) {
-  const r = await until(() => shell.eval(`(() => {
-    const heading = [...document.querySelectorAll('*')].filter((n) => (n.innerText ?? '').trim() === ${js(title)} && n.getBoundingClientRect().width > 0).sort((a, b) => a.getBoundingClientRect().width - b.getBoundingClientRect().width)[0];
-    if (!heading) return null;
-    const h = heading.getBoundingClientRect();
-    const buttons = [...document.querySelectorAll('*')].filter((n) => (n.innerText ?? '').trim() === ${js(label)} && n.children.length <= 1 && n.getBoundingClientRect().width > 0).map((n) => n.getBoundingClientRect()).filter((r) => r.top > h.top && r.top - h.bottom < 200 && Math.abs(r.left - h.left) < 400);
-    const b = buttons.sort((a, c) => a.width * a.height - c.width * c.height)[0];
-    return b ? { x: b.left + b.width / 2, y: b.top + b.height / 2 } : null;
-  })()`), { timeout: 8000, label: `${label} in the ${title} dialog` });
-  const frame = await currentRect(desktop, window);
-  await desktop.click(frame.x + r.x, frame.y + r.y);
+export const STORE_HOSTS = ["chromewebstore.google.com", "clients2.google.com", "clients2.googleusercontent.com", "*.gstatic.com", "lh3.googleusercontent.com", "*.gvt1.com"];
+
+export function storeResolverRules() {
+  return `--host-resolver-rules=MAP *.ardia.test 127.0.0.1, MAP * ~NOTFOUND, ${[...STORE_HOSTS, "localhost", "127.0.0.1"].map((host) => `EXCLUDE ${host}`).join(", ")}`;
 }
 
 export const STORE_LISTING = "https://chromewebstore.google.com/detail/ddkjiahejlhfcafbddmgiahcphecmpfh";
@@ -338,7 +331,7 @@ export const storeDesktop = {
       return;
     }
     const desktop = await openDesktop(t);
-    const network = ["--host-resolver-rules=MAP *.ardia.test 127.0.0.1"];
+    const network = [storeResolverRules()];
     const { app, shell } = await startDesktopBrowser(t, desktop, { name: "store", extensions: true, extraArgs: network, session: sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1), STORE_LISTING] }] }) });
     const window = await windowTitled(desktop, "Chrome Web Store");
     const title = `Add “${STORE_NAME}”?`;
@@ -381,9 +374,8 @@ export const storeDesktop = {
     });
     await t.check("closing the store tab while Ardia's dialog is open dismisses it and installs nothing", async () => {
       await add("store-dialog-close-tab");
-      const frame = await currentRect(desktop, window);
-      await desktop.click(frame.x + frame.width / 2, frame.y + 80);
-      await until(() => hasFocus(shell), { timeout: 5000, label: "keyboard focus in the window" });
+      await clickNeutral(desktop, window, shell);
+      if (!(await shows(shell, title))) throw new Error("the dialog closed when the window was clicked, before Ctrl+W");
       await desktop.key("ctrl+w");
       await shell.waitState(`return !s.windows[windowId].tabIds.some((id) => (s.tabs[id]?.url ?? "").includes(${js(STORE_ID)})) || null;`, { timeout: 10000, label: "the store tab to close" });
       await until(async () => !(await shows(shell, title)), { timeout: 8000, label: "the dialog to close with the tab" });

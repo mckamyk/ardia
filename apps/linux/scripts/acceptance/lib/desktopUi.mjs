@@ -189,8 +189,12 @@ export async function openSettingsRow(desktop, window, settings, name) {
 }
 
 export async function removeExtensionInSettings(desktop, window, settings, name, gone) {
-  await openSettingsRow(desktop, window, settings, name);
-  const button = await until(() => settings.rectByText("Remove Extension…"), { timeout: 10000, label: "Remove Extension… on the extension's page" });
+  let button = null;
+  for (let attempt = 0; attempt < 2 && !button; attempt++) {
+    await openSettingsRow(desktop, window, settings, name);
+    button = await until(() => settings.rectByText("Remove Extension…"), { timeout: 5000, label: "Remove Extension… on the extension's page" }).catch(() => null);
+  }
+  if (!button) throw new Error(`clicking the ${name} row twice didn't open its page`);
   const frame = await currentRect(desktop, window);
   const { region } = await surfaceAfter(desktop, () => desktop.click(frame.x + button.x, frame.y + button.y), { settle: 1500 });
   if (!region || region.width < 200 || region.height < 80) throw new Error(`no Remove confirmation appeared: change ${JSON.stringify(region)}`);
@@ -199,4 +203,17 @@ export async function removeExtensionInSettings(desktop, window, settings, name,
   await desktop.key("return");
   await until(gone, { timeout: 10000, label: `${name} removed after confirming` });
   return region;
+}
+
+export async function clickDialogButton(desktop, window, shell, title, label) {
+  const r = await until(() => shell.eval(`(() => {
+    const heading = [...document.querySelectorAll('*')].filter((n) => (n.innerText ?? '').trim() === ${js(title)} && n.getBoundingClientRect().width > 0).sort((a, b) => a.getBoundingClientRect().width - b.getBoundingClientRect().width)[0];
+    if (!heading) return null;
+    const h = heading.getBoundingClientRect();
+    const buttons = [...document.querySelectorAll('*')].filter((n) => (n.innerText ?? '').trim() === ${js(label)} && n.children.length <= 1 && n.getBoundingClientRect().width > 0).map((n) => n.getBoundingClientRect()).filter((r) => r.top > h.top && r.top - h.bottom < 200 && Math.abs(r.left - h.left) < 400);
+    const b = buttons.sort((a, c) => a.width * a.height - c.width * c.height)[0];
+    return b ? { x: b.left + b.width / 2, y: b.top + b.height / 2 } : null;
+  })()`), { timeout: 8000, label: `${label} in the ${title} dialog` });
+  const frame = await currentRect(desktop, window);
+  await desktop.click(frame.x + r.x, frame.y + r.y);
 }
