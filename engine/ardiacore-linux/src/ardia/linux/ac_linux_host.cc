@@ -1023,6 +1023,28 @@ class ShellHostView : public views::View,
     }
     return false;
   }
+  TabBinding* PrivateLinkBinding() {
+    TabBinding* fallback = nullptr;
+    for (const auto& [id, binding] : bindings_) {
+      if (!binding->contents() || !binding->page()) continue;
+      if (binding->presented) return binding.get();
+      if (!fallback) fallback = binding.get();
+    }
+    return fallback;
+  }
+  bool OpenSurfacePrivateLink(content::WebContents* contents, const GURL& url) {
+    if (!extension_surfaces_ || !extension_surfaces_->HostsContents(contents)) return false;
+    Profile* page = page_profile();
+    const auto original = page ? ardiacore::LinuxProfileName(page->GetOriginalProfile()) : std::nullopt;
+    TabBinding* binding = PrivateLinkBinding();
+    if (!original || !binding) {
+      LOG(WARNING) << "[ardia] off-the-record link refused: its window has no live page to open a private window from";
+      return true;
+    }
+    binding->ReportPresentation("openWindow", base::DictValue()
+        .Set("url", url.spec()).Set("disposition", "incognito").Set("profile", *original));
+    return true;
+  }
   void NoteAutoPictureInPictureRequested(content::WebContents* contents) {
     for (const auto& [id, binding] : bindings_) {
       if (binding->contents() != contents) continue;
@@ -5200,6 +5222,15 @@ class HostRegistry : public BrowserCollectionObserver,
       observation_{this};
 };
 
+content::WebContents* PrivateLinkSource(content::WebContents* contents) {
+  for (int depth = 0; depth < 4 && contents; ++depth) {
+    DevToolsWindow* devtools = DevToolsWindow::AsDevToolsWindow(contents);
+    if (!devtools) return contents;
+    contents = devtools->GetInspectedWebContents();
+  }
+  return nullptr;
+}
+
 void EngineEvent(void*, const char* topic, const char* json) {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   if (!topic || !json) return;
@@ -5256,10 +5287,15 @@ void StartLinuxHost() {
   };
   g_ardia_linux_off_the_record_navigation = [](content::WebContents* contents, const GURL& url) {
     if (!contents || !url.is_valid()) return false;
+    content::WebContents* source = PrivateLinkSource(contents);
     for (const auto& [id, host] : Hosts()) {
-      if (host->OpenPrivateLink(contents, url)) return true;
+      if (source && host->OpenPrivateLink(source, url)) return true;
     }
-    return false;
+    for (const auto& [id, host] : Hosts()) {
+      if (host->OpenSurfacePrivateLink(source, url)) return true;
+    }
+    LOG(WARNING) << "[ardia] off-the-record link refused: its source is not an Ardia tab, extension view or DevTools window";
+    return true;
   };
   g_ardia_linux_drag_ended = [](BrowserWindowInterface* browser) {
     if (!browser) return;
