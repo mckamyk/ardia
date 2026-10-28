@@ -71,6 +71,7 @@ struct ImportOptions {
   std::optional<double> history_since;
   std::optional<SecretBytes> chromium_key;
   std::optional<SecretBytes> firefox_primary_password;
+  std::optional<SecretBytes> firefox_card_key;
   double now_ms = 0;
 };
 
@@ -101,6 +102,16 @@ ImportOutcome ReadBrowserProfile(const Environment& environment, std::string_vie
 
 base::ListValue ListExtensions(const Environment& environment, std::string_view browser_id,
                                std::string_view profile_id);
+
+struct FirefoxUnlock {
+  std::string code;
+  std::string message;
+  std::optional<SecretBytes> primary_password;
+  std::optional<SecretBytes> card_key;
+};
+
+FirefoxUnlock UnlockFirefox(const Environment& environment, std::string_view browser_id, SecretBytes primary_password,
+                            Keyring* keyring, int prompt_timeout_ms);
 
 }
 

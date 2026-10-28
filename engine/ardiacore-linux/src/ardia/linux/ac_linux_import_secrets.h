@@ -75,13 +75,23 @@ struct AutofillRead {
   std::vector<ImportedCard> cards;
   int undecryptable = 0;
   int locked_cards = 0;
+  int keyring_cards = 0;
   int portal = 0;
 };
 
 struct FirefoxLoginsRead {
   std::vector<Credential> credentials;
   int undecryptable = 0;
+  std::vector<std::string> notes;
 };
+
+struct FirefoxKeyDatabase {
+  std::string global_salt;
+  std::string check;
+  std::vector<FirefoxKeyRow> rows;
+};
+
+enum class FirefoxLock { kNone, kPrimaryPassword, kOpened };
 
 std::optional<Failure> ReadChromiumCookies(const std::string& directory, ScratchDirectory& scratch,
                                            ImportObserver& observer, const SecretBytes* key, double now_ms,
@@ -94,6 +104,12 @@ std::optional<Failure> ReadChromiumAutofill(const std::string& directory, Scratc
 std::optional<Failure> ReadFirefoxLogins(const std::string& directory, ScratchDirectory& scratch,
                                          ImportObserver& observer, std::string_view primary_password,
                                          FirefoxLoginsRead* out, bool* cancelled);
+std::optional<Failure> ReadFirefoxAutofill(const std::string& directory, ScratchDirectory& scratch,
+                                           ImportObserver& observer, std::string_view primary_password,
+                                           const SecretBytes* card_key, AutofillRead* out, bool* cancelled);
+FirefoxLock FirefoxProfileLock(const std::string& directory, ScratchDirectory& scratch, const ImportObserver& observer,
+                               std::string_view primary_password);
+bool FirefoxCardsNeedKeyring(const std::string& directory, ScratchDirectory& scratch, const ImportObserver& observer);
 
 struct ImportedData {
   std::vector<ImportedCookie> cookies;

@@ -77,6 +77,9 @@ test("production graph uses current Linux adapters and one canonical shared stat
     [`${linux}liveSources.ts`, `${linux}hostLive.ts`],
   ];
   for (const [importer, adapter] of liveImporters) assert.ok(graph.get(importer)?.importedIds.includes(adapter), `${importer} uses ${adapter}`);
+  assert.deepEqual(ids.filter((id) => id.split("?")[0] === `${browser}components/import/steps/UnlockStep.tsx`), []);
+  assert.deepEqual(ids.filter((id) => id.split("?")[0] === `${linux}LinuxUnlockStep.tsx`), [`${linux}LinuxUnlockStep.tsx`]);
+  assert.deepEqual(graph.get(`${linux}LinuxUnlockStep.tsx`)?.importers, [`${browser}components/import/ImportWindow.tsx`]);
 
   const coreSuggestFetcher = `${repo}packages/core/src/suggestFetcher.ts`;
   assert.deepEqual(graph.get(coreSuggestFetcher)?.importers, [`${linux}suggestFetcher.ts`]);

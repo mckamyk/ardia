@@ -182,3 +182,20 @@ test("an unlock expires with the native key's ten-minute lifetime", async () => 
   assert.equal(api.isBrowserUnlocked("chrome"), false);
   assert.equal(api.isBrowserUnlocked("brave"), true);
 });
+
+test("an import result keeps only well-formed PNG favicons for http and https pages", async () => {
+  const { api, calls, emit } = fixture();
+  const running = api.importData("firefox", "a.default", ["bookmarks"]);
+  await settle();
+  const png = "iVBORw0KGgoAAAANSUhEUg==";
+  emit({ jobId: calls[0].args[0], type: "done", result: { favicons: [
+    { page: "https://a.example/", icon: "https://a.example/favicon.ico", png },
+    { page: "javascript:alert(1)", icon: "https://b.example/i.png", png },
+    { page: "https://c.example/", icon: "https://c.example/i.png", png: "R0lGODlh" },
+    { page: "https://d.example/", icon: 4, png },
+    { page: "https://e.example/", icon: "https://e.example/i.png", png: "iVBORw0KGgo!!" },
+    "nope",
+  ] } });
+  const result = await running;
+  assert.deepEqual(result.favicons, [{ page: "https://a.example/", icon: "https://a.example/favicon.ico", png }]);
+});

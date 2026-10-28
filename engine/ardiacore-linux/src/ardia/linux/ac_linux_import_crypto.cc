@@ -22,7 +22,6 @@ constexpr unsigned char kBasicKey[16] = {0xfd, 0x62, 0x1f, 0xe5, 0xa2, 0xb4, 0x0
 constexpr unsigned char kEmptyKey[16] = {0xd0, 0xd0, 0xec, 0x9c, 0x7d, 0x77, 0xd4, 0x3a,
                                          0xc5, 0x41, 0x87, 0xfa, 0x48, 0x18, 0xd1, 0x7f};
 constexpr std::string_view kPasswordCheck = "password-check";
-constexpr std::string_view kLoginsDatabaseLabel = "as-logins-key";
 constexpr unsigned char kCkaId[16] = {0xf8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01};
 constexpr int kMaxDerDepth = 16;
 
@@ -367,8 +366,20 @@ const SecretBytes* FirefoxKeys::For(std::string_view id) const {
   return keys_.empty() ? nullptr : &keys_[preferred_].second;
 }
 
-FirefoxKey FirefoxMasterKeys(std::string_view global_salt, std::string_view password_check,
-                             const std::vector<FirefoxKeyRow>& rows, std::string_view primary_password, FirefoxKeys* keys) {
+namespace {
+
+std::string_view KeyLabel(std::string_view label) {
+  while (!label.empty() && label.back() == '\0') label.remove_suffix(1);
+  return label;
+}
+
+bool IsApplicationServicesKey(std::string_view label) {
+  const std::string_view name = KeyLabel(label);
+  return name == kFirefoxLoginsKeyLabel || name == kFirefoxAutofillKeyLabel;
+}
+
+FirefoxKey CheckFirefoxPassword(std::string_view global_salt, std::string_view password_check,
+                                std::string_view primary_password) {
   SecretBytes check;
   const PbeResult checked = DecryptFirefoxPbe(password_check, global_salt, primary_password, &check);
   if (checked == PbeResult::kUnsupported) return FirefoxKey::kUnsupported;
@@ -376,11 +387,20 @@ FirefoxKey FirefoxMasterKeys(std::string_view global_salt, std::string_view pass
   if (checked != PbeResult::kOk || check.value().compare(0, kPasswordCheck.size(), kPasswordCheck) != 0) {
     return FirefoxKey::kLocked;
   }
+  return FirefoxKey::kOk;
+}
+
+}
+
+FirefoxKey FirefoxMasterKeys(std::string_view global_salt, std::string_view password_check,
+                             const std::vector<FirefoxKeyRow>& rows, std::string_view primary_password, FirefoxKeys* keys) {
+  const FirefoxKey checked = CheckFirefoxPassword(global_salt, password_check, primary_password);
+  if (checked != FirefoxKey::kOk) return checked;
   const std::string_view cka_id(reinterpret_cast<const char*>(kCkaId), sizeof(kCkaId));
   bool unsupported = false;
   bool candidates = false;
   for (const FirefoxKeyRow& row : rows) {
-    if (row.a11.empty() || row.a3 == kLoginsDatabaseLabel) continue;
+    if (row.a11.empty() || IsApplicationServicesKey(row.a3)) continue;
     candidates = true;
     SecretBytes decrypted;
     const PbeResult result = DecryptFirefoxPbe(row.a11, global_salt, primary_password, &decrypted);
@@ -494,6 +514,159 @@ bool DecompressMozLz4(std::string_view data, std::string* out) {
                       (static_cast<size_t>(static_cast<uint8_t>(data[11])) << 24);
   if (size == 0 || size > kMaxMozLz4Bytes) return false;
   return DecompressLz4Block(data.substr(12), size, out);
+}
+
+FirefoxKey FirefoxPasswordState(std::string_view global_salt, std::string_view password_check,
+                                std::string_view primary_password) {
+  return CheckFirefoxPassword(global_salt, password_check, primary_password);
+}
+
+FirefoxKey FirefoxNamedKey(std::string_view global_salt, std::string_view password_check,
+                           const std::vector<FirefoxKeyRow>& rows, std::string_view primary_password,
+                           std::string_view label, SecretBytes* key) {
+  const FirefoxKey checked = CheckFirefoxPassword(global_salt, password_check, primary_password);
+  if (checked != FirefoxKey::kOk) return checked;
+  bool unsupported = false;
+  bool found = false;
+  for (const FirefoxKeyRow& row : rows) {
+    if (row.a11.empty() || KeyLabel(row.a3) != label) continue;
+    found = true;
+    SecretBytes decrypted;
+    const PbeResult result = DecryptFirefoxPbe(row.a11, global_salt, primary_password, &decrypted);
+    if (result == PbeResult::kUnsupported) unsupported = true;
+    if (result != PbeResult::kOk || decrypted.value().size() != 32) continue;
+    *key = std::move(decrypted);
+    return FirefoxKey::kOk;
+  }
+  if (!found) return FirefoxKey::kMissing;
+  return unsupported ? FirefoxKey::kUnsupported : FirefoxKey::kMalformed;
+}
+
+std::string Base64Encode(std::string_view data) {
+  static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve((data.size() + 2) / 3 * 4);
+  size_t i = 0;
+  for (; i + 2 < data.size(); i += 3) {
+    const uint32_t triple = (static_cast<uint8_t>(data[i]) << 16) | (static_cast<uint8_t>(data[i + 1]) << 8) |
+                            static_cast<uint8_t>(data[i + 2]);
+    out.push_back(kAlphabet[(triple >> 18) & 63]);
+    out.push_back(kAlphabet[(triple >> 12) & 63]);
+    out.push_back(kAlphabet[(triple >> 6) & 63]);
+    out.push_back(kAlphabet[triple & 63]);
+  }
+  if (i < data.size()) {
+    const bool two = i + 1 < data.size();
+    const uint32_t triple = (static_cast<uint8_t>(data[i]) << 16) | (two ? static_cast<uint8_t>(data[i + 1]) << 8 : 0);
+    out.push_back(kAlphabet[(triple >> 18) & 63]);
+    out.push_back(kAlphabet[(triple >> 12) & 63]);
+    out.push_back(two ? kAlphabet[(triple >> 6) & 63] : '=');
+    out.push_back('=');
+  }
+  return out;
+}
+
+bool Base64UrlDecode(std::string_view text, std::string* out) {
+  std::string standard(text);
+  for (char& c : standard) {
+    if (c == '-') c = '+';
+    else if (c == '_') c = '/';
+    else if (c == '+' || c == '/' || c == '=') return false;
+  }
+  const bool ok = Base64Decode(standard, out);
+  Wipe(standard);
+  return ok;
+}
+
+bool DecryptAesGcm(std::string_view key, std::string_view iv, std::string_view cipher, std::string_view tag,
+                   std::string_view aad, std::string* plain) {
+  plain->clear();
+  const EVP_CIPHER* algorithm = key.size() == 16 ? EVP_aes_128_gcm() : key.size() == 32 ? EVP_aes_256_gcm() : nullptr;
+  if (!algorithm || iv.size() != kGcmIvBytes || tag.size() != kGcmTagBytes) return false;
+  std::string out(cipher.size() + 16, '\0');
+  int written = 0;
+  int last = 0;
+  int ignored = 0;
+  std::string expected(tag);
+  EVP_CIPHER_CTX* context = EVP_CIPHER_CTX_new();
+  const bool ok =
+      context && EVP_DecryptInit_ex(context, algorithm, nullptr, nullptr, nullptr) == 1 &&
+      EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) == 1 &&
+      EVP_DecryptInit_ex(context, nullptr, nullptr, Bytes(key), Bytes(iv)) == 1 &&
+      (aad.empty() || EVP_DecryptUpdate(context, nullptr, &ignored, Bytes(aad), static_cast<int>(aad.size())) == 1) &&
+      EVP_DecryptUpdate(context, reinterpret_cast<unsigned char*>(out.data()), &written, Bytes(cipher),
+                        static_cast<int>(cipher.size())) == 1 &&
+      EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_TAG, static_cast<int>(expected.size()), expected.data()) == 1 &&
+      EVP_DecryptFinal_ex(context, reinterpret_cast<unsigned char*>(out.data()) + written, &last) == 1;
+  EVP_CIPHER_CTX_free(context);
+  if (!ok || written < 0 || last < 0) {
+    Wipe(out);
+    return false;
+  }
+  plain->assign(out, 0, static_cast<size_t>(written + last));
+  Wipe(out);
+  return true;
+}
+
+bool DecryptFirefoxJwe(std::string_view compact, const SecretBytes& key, std::string* plain) {
+  plain->clear();
+  std::vector<std::string_view> parts;
+  size_t start = 0;
+  while (parts.size() < 6) {
+    const size_t dot = compact.find('.', start);
+    parts.push_back(compact.substr(start, dot == std::string_view::npos ? std::string_view::npos : dot - start));
+    if (dot == std::string_view::npos) break;
+    start = dot + 1;
+  }
+  if (parts.size() != 5 || !parts[1].empty() || key.value().size() != 32) return false;
+  std::string header;
+  std::string iv;
+  std::string cipher;
+  std::string tag;
+  if (!Base64UrlDecode(parts[0], &header) || !Base64UrlDecode(parts[2], &iv) || !Base64UrlDecode(parts[3], &cipher) ||
+      !Base64UrlDecode(parts[4], &tag)) {
+    return false;
+  }
+  std::string compactHeader;
+  for (const char c : header) {
+    if (c != ' ' && c != '\n' && c != '\r' && c != '\t') compactHeader.push_back(c);
+  }
+  if (compactHeader.find("\"alg\":\"dir\"") == std::string::npos ||
+      compactHeader.find("\"enc\":\"A256GCM\"") == std::string::npos) {
+    return false;
+  }
+  const bool ok = DecryptAesGcm(key.value(), iv, cipher, tag, parts[0], plain) && ValidUtf8Text(*plain);
+  if (!ok) {
+    Wipe(*plain);
+    plain->clear();
+  }
+  return ok;
+}
+
+bool DecryptFirefoxOsKeyStore(std::string_view base64, const SecretBytes& key, std::string* plain) {
+  plain->clear();
+  std::string raw;
+  if (!Base64Decode(base64, &raw) || raw.size() < kGcmIvBytes + kGcmTagBytes) return false;
+  const std::string_view bytes(raw);
+  const bool ok = DecryptAesGcm(key.value(), bytes.substr(0, kGcmIvBytes),
+                                bytes.substr(kGcmIvBytes, bytes.size() - kGcmIvBytes - kGcmTagBytes),
+                                bytes.substr(bytes.size() - kGcmTagBytes), std::string_view(), plain) &&
+                  ValidUtf8Text(*plain);
+  Wipe(raw);
+  if (!ok) {
+    Wipe(*plain);
+    plain->clear();
+  }
+  return ok;
+}
+
+std::optional<SecretBytes> FirefoxOsKeyStoreKey(std::string_view secret) {
+  std::string raw;
+  if (!Base64Decode(secret, &raw) || (raw.size() != 16 && raw.size() != 32)) {
+    Wipe(raw);
+    return std::nullopt;
+  }
+  return SecretBytes(std::move(raw));
 }
 
 }

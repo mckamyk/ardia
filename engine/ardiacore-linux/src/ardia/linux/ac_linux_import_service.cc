@@ -64,6 +64,7 @@ using Emit = base::RepeatingCallback<void(base::Value)>;
 using Flag = base::RefCountedData<std::atomic<bool>>;
 
 constexpr size_t kMaxJobs = 8;
+constexpr char kCardKeySuffix[] = "#cards";
 constexpr base::TaskTraits kBlocking = {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
                                         base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN};
 constexpr base::TaskTraits kKeyring = {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
@@ -157,6 +158,11 @@ KeyRead ReadSafeStorageKey(li::SafeStorageItem item) {
     if (read.key.value().size() != li::kChromiumKeyBytes) read.status = li::KeyringStatus::kUnavailable;
   }
   return read;
+}
+
+li::FirefoxUnlock ReadFirefoxSecrets(li::Environment environment, std::string browser, li::SecretBytes primary_password) {
+  std::unique_ptr<li::Keyring> keyring = li::SystemKeyring();
+  return li::UnlockFirefox(environment, browser, std::move(primary_password), keyring.get(), li::kKeyringPromptTimeoutMs);
 }
 
 base::ListValue ListBrowsersWithKeyring(li::Environment environment) {
@@ -607,9 +613,15 @@ class ImportService {
     if (browser->family == li::Family::kFirefox) {
       const bool given = values.size() > 2 && values[2].is_string();
       if (given && values[2].GetString().size() > 4096) return Fail(std::move(done), "invalid", "Invalid unlock request");
-      unlocked_.Set(requester.owner, browser_id, li::SecretBytes(given ? values[2].GetString() : std::string()), NowMs());
+      if (unlocking_.contains(requester.owner)) return Fail(std::move(done), "busy", "An unlock is already waiting");
+      unlocking_.insert(requester.owner);
       std::move(done).Run(true, base::Value(true));
-      requester.emit.Run(base::Value(base::DictValue().Set("jobId", request).Set("type", "unlocked")));
+      base::ThreadPool::PostTaskAndReplyWithResult(
+          FROM_HERE, kKeyring,
+          base::BindOnce(&ReadFirefoxSecrets, CurrentEnvironment(), browser_id,
+                         li::SecretBytes(given ? values[2].GetString() : std::string())),
+          base::BindOnce(&ImportService::FirefoxUnlocked, weak_factory_.GetWeakPtr(), requester.owner, request,
+                         browser_id, SecretGeneration(requester.owner), requester.emit));
       return;
     }
     std::optional<li::SafeStorageItem> item = li::SafeStorageFor(browser_id);
@@ -639,6 +651,27 @@ class ImportService {
       event.Set("type", "failed");
       event.Set("code", li::KeyringErrorCode(read.status));
       event.Set("message", li::KeyringErrorMessage(read.status, name));
+    }
+    emit.Run(base::Value(std::move(event)));
+  }
+
+  void FirefoxUnlocked(std::string owner, std::string request, std::string browser, int generation, Emit emit,
+                       li::FirefoxUnlock unlock) {
+    unlocking_.erase(owner);
+    base::DictValue event;
+    event.Set("jobId", request);
+    if (generation != SecretGeneration(owner) || terminating_) {
+      event.Set("type", "failed");
+      event.Set("code", "cancelled");
+      event.Set("message", "The unlock was cancelled");
+    } else if (!unlock.code.empty()) {
+      event.Set("type", "failed");
+      event.Set("code", unlock.code);
+      event.Set("message", unlock.message);
+    } else {
+      if (unlock.primary_password) unlocked_.Set(owner, browser, std::move(*unlock.primary_password), NowMs());
+      if (unlock.card_key) unlocked_.Set(owner, browser + kCardKeySuffix, std::move(*unlock.card_key), NowMs());
+      event.Set("type", "unlocked");
     }
     emit.Run(base::Value(std::move(event)));
   }
@@ -789,6 +822,9 @@ class ImportService {
       } else {
         options.firefox_primary_password = std::move(secret);
       }
+    }
+    if (li::FindBrowser(browser)->family == li::Family::kFirefox) {
+      options.firefox_card_key = unlocked_.Copy(requester.owner, browser + kCardKeySuffix, NowMs());
     }
     const std::string key = JobKey(requester.owner, job);
     if (jobs_.contains(key)) return Fail(std::move(done), "busy", "That import is already running");

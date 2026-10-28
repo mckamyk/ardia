@@ -548,7 +548,9 @@ class ReviewRoundOneTests(ImportFixture):
         out = self.read('chrome', 'Default', ['passwords'])
         self.assertEqual([(c['username'], c['password']) for c in out['credentials']], [('e', 'empty key pass')])
         messages = [w['message'] for w in out['result']['warnings']]
-        self.assertIn("1 password protected by the desktop portal wasn't imported", messages)
+        self.assertIn("1 password protected by the desktop portal wasn't imported. The desktop portal gives each app its own key, "
+                      "so Ardia can't read Google Chrome's. Export them from Google Chrome's password manager as a CSV file and "
+                      "import that file.", messages)
         self.assertFalse(any('decrypted' in m for m in messages))
 
     def test_fifos_are_refused_without_blocking(self):

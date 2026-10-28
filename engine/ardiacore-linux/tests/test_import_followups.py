@@ -575,7 +575,8 @@ class CookieAndAutofillTests(ImportFixture):
         self.assertEqual(cookies['part']['partition'], 'https://top.example')
         warnings = [(w['kind'], w['code'], w['message']) for w in out['result']['warnings']]
         self.assertIn(('cookies', 'undecryptable', "1 cookie couldn't be decrypted"), warnings)
-        self.assertIn(('cookies', 'undecryptable', "1 cookie protected by the desktop portal wasn't imported"), warnings)
+        self.assertIn(('cookies', 'undecryptable', "1 cookie protected by the desktop portal wasn't imported. The desktop portal gives "
+                       "each app its own key, so Ardia can't read Google Chrome's. Sign in to those sites again in Ardia."), warnings)
         self.assertIn(('autofill', 'undecryptable', "1 card couldn't be decrypted"), warnings)
         self.assertFalse(any(code == 'locked' for _, code, _ in warnings))
         result = out['result']

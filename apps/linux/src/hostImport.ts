@@ -339,6 +339,15 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
   };
 }
 
+const WEB_PAGE = /^https?:\/\//;
+const PNG_BASE64 = /^iVBORw0KGgo[A-Za-z0-9+/]*={0,2}$/;
+
+function isFavicon(value: unknown): value is ImportApi.ImportedFavicon {
+  const icon = value as Partial<ImportApi.ImportedFavicon> | null;
+  return !!icon && typeof icon.page === "string" && WEB_PAGE.test(icon.page) && typeof icon.icon === "string" &&
+    typeof icon.png === "string" && PNG_BASE64.test(icon.png);
+}
+
 function normalizeResult(value: unknown, browserId: string, profileId: string): ImportApi.ImportResult {
   const result = (value && typeof value === "object" ? value : {}) as Partial<ImportApi.ImportResult> & Record<string, unknown>;
   const list = <T,>(item: unknown) => (Array.isArray(item) ? (item as T[]) : []);
@@ -357,7 +366,7 @@ function normalizeResult(value: unknown, browserId: string, profileId: string): 
     vaultToken: typeof result.vaultToken === "string" && TOKEN.test(result.vaultToken) ? result.vaultToken : undefined,
     spaces: list(result.spaces),
     favorites: list(result.favorites),
-    favicons: list(result.favicons),
+    favicons: list<ImportApi.ImportedFavicon>(result.favicons).filter(isFavicon),
     failed: list(result.failed),
     warnings: list(result.warnings),
   };
