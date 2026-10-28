@@ -57,6 +57,11 @@ class LinuxPageMedia : public content::WebContentsObserver,
   void OnAudioStateChanged(bool audible) override;
   void DidUpdateAudioMutingState(bool muted) override;
   void MediaPictureInPictureChanged(bool active) override;
+  void MediaStartedPlaying(const MediaPlayerInfo& info, const content::MediaPlayerId& id) override;
+  void MediaStoppedPlaying(const MediaPlayerInfo& info, const content::MediaPlayerId& id,
+                           MediaStoppedReason reason) override;
+  void MediaMetadataChanged(const MediaPlayerInfo& info, const content::MediaPlayerId& id) override;
+  void TitleWasSet(content::NavigationEntry* entry) override;
   void MediaResized(const gfx::Size& size, const content::MediaPlayerId& id) override;
   void MediaDestroyed(const content::MediaPlayerId& id) override;
   void MediaSessionCreated(content::MediaSession* session) override;
@@ -94,6 +99,7 @@ class LinuxPageMedia : public content::WebContentsObserver,
   Done pending_picture_in_picture_;
   base::OneShotTimer picture_in_picture_timer_;
   base::flat_map<content::MediaPlayerId, gfx::Size> video_sizes_;
+  base::flat_map<content::MediaPlayerId, bool> playing_players_;
   base::WeakPtrFactory<LinuxPageMedia> weak_factory_{this};
 };
 

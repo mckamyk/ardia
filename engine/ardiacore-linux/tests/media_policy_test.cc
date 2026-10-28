@@ -66,6 +66,26 @@ void Mapping() {
   assert(LinuxMediaSessionActionName(Action::kPreviousTrack) == "previoustrack" && !LinuxMediaSessionActionName(Action::kRaise));
 }
 
+void PageVideo() {
+  LinuxSessionSample muted;
+  muted.page_video_playing = true;
+  muted.page_title = u"Clips";
+  muted.now_ms = 1700000000000.0;
+  auto video = LinuxNowPlayingFromSession(muted);
+  assert(video && video->has_video && !video->controllable && video->playback_state == "playing");
+  assert(video->title == "Clips" && video->actions.empty() && !video->duration && video->timestamp == 1700000000000.0);
+  muted.page_video_playing = false;
+  assert(!LinuxNowPlayingFromSession(muted));
+  auto audio = Sample();
+  audio.has_video = false;
+  audio.page_video_playing = true;
+  audio.page_title = u"Clips";
+  auto joined = LinuxNowPlayingFromSession(audio);
+  assert(joined && joined->has_video && joined->controllable && joined->title == "Track");
+  audio.page_video_playing = false;
+  assert(!LinuxNowPlayingFromSession(audio)->has_video);
+}
+
 void Events() {
   auto media = LinuxMediaEventData(true, false);
   assert(media.FindBool("playing") == true && media.FindBool("muted") == false && media.size() == 2);
@@ -317,6 +337,7 @@ int main(int argc, char** argv) {
   assert(argc == 2);
   const std::string mode = argv[1];
   if (mode == "mapping") Mapping();
+  else if (mode == "page-video") PageVideo();
   else if (mode == "events") Events();
   else if (mode == "reporter") Reporter();
   else if (mode == "commands") Commands();

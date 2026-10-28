@@ -66,6 +66,8 @@ struct LinuxSessionSample {
   std::optional<double> duration;
   double playback_rate = 1;
   double now_ms = 0;
+  bool page_video_playing = false;
+  std::u16string page_title;
 };
 
 std::optional<std::string_view> LinuxMediaSessionActionName(
