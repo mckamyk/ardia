@@ -35,17 +35,28 @@ The last case matters because of how Chromium 156's `LoginDatabase` handles a ro
 2. On the sync sequence, `SyncCore::OpenLogin` opens the sealed value with the origin and username as AAD. A locked key, tampering, or a different origin or username returns `false`, as on macOS.
 3. On the UI thread, `credentials::PlanSyncedLogin` builds two plans: `passwords.remove` (`ac_passwords_remove`) and the typed `ArdiaPasswords.save` (`ac_passwords_add` with `passwordHex`). The origin must already be normalized. The save always removes first, whatever `replacing` says. This handles a local row that Linux's read filtered out (an empty password, or a second realm spelling of the same origin): `ac_passwords_add` would refuse it as already saved. A missing login removes as a no-op. Neither call prompts.
 
-**Logins Linux can't hold.** These are a password over Linux's 4 KiB credential bound, a NUL in the password or username, a username over 1 KiB, or a non-login origin.
+**Profiles.** The shared adapter passes `engineProfile(profileId)`, which is `""` for the default profile. The Linux adapter maps it with `hostProfile` to the window's profile before the native call, as the credential calls do. The held store keys logins by the adapter's profile string.
 
-- The native save returns `"skipped"` for them, not `false`. Returning `false` made the shared adapter fail every cycle, run its 20 settle reads and stay quiet, so the device stopped publishing its own password edits. Simply returning `true` would be worse: `syncScope` records the value in its base (`scope.ts` `applyAdapter`), the next local read lacks it, and that publishes a delete to every device.
-- So `hostSync.ts` keeps them held. `createHeldLogins` stores `{origin, username, sealed}` per profile in `sync-held-logins.nns`, sealed with `sealLocal`. `readPasswords` folds held logins back into the native list with `created: 0`, so the merge sees them unchanged, also after a reload.
-- A held login is released when:
-  - a local login with the same origin and username appears (the native list wins);
-  - a later save succeeds;
-  - the `passwords.remove` route deletes it (`hostCredentials.ts` calls `releaseHeldLogin`), which is how a remote delete arrives;
-  - the key changes, when Turn On, Enter Phrase or Stop clears the whole store.
-- If the held document can't be opened or parsed, `readPasswords` returns `null`: passwords are skipped, and nothing is deleted.
-- The sync authority sets the store up in `becomeAuthority`, and `refreshSyncDocuments` re-reads the document before the engine starts.
+**Logins Linux can't hold.** These are a password over Linux's 4 KiB credential bound, a NUL in the password or username, a username over 1 KiB, or a non-login origin. The native save returns `"skipped"` for them and leaves any local row alone.
+
+- **Why not `false` or `true`.** Returning `false` made the shared adapter fail every cycle, run its 20 settle reads and stay quiet, so the device stopped publishing its own edits. Returning `true` is worse: `syncScope` records the value as base, the next read lacks it, and that publishes a delete to every device.
+- **The held store.** `hostSync.ts` holds such a login instead, in `sync-held-logins.nns` (sealed with `sealLocal`), keyed by profile, origin and username. Each entry stores the synced sealed value and `replaced`: the local sealed value it superseded, read from the native list when the save was skipped, or `null`.
+- **Reads.** `readPasswords` reports the held value in place of the local row for that key, also after a reload. This stops Linux re-publishing an older local password over a newer one it can't store.
+- **Release.** A held login is released:
+  - when the local value for its key differs from `replaced`, which is a real local edit (sealing is deterministic, so equal sealed strings mean the same password);
+  - when a later synced save succeeds;
+  - when a delete comes through `passwords.remove` (`hostCredentials.ts`), even if the native remove refuses, because a username over 1 KiB or containing NUL fails `LoginArgs` there.
+- **Key changes.** Turn On, and Enter Phrase outside the locked-resume path, run inside `whileResettingHeldLogins`: the store is suspended (reads return `null`, so passwords are skipped) while the engine runs. It is cleared only if the engine began a new document. Enter Phrase on a locked device keeps its device id, key and base (`engine.ts` `loadState`), so the store is kept (`enterPhraseBegins`). Stop doesn't clear it.
+- **Lease.** Only the lease holder has a held store. `syncEngine.ts` drops it when the role leaves `authority` or a lease renewal isn't granted, and reloads it from the document when a renewal is granted again. Without a store, `readPasswords` returns `null`.
+- **Cap.** The store keeps at most 1000 logins and 4 MiB. Past that, `hold` refuses (that save reports `false`) instead of throwing, and `linuxSyncHooks.heldLogins()` reports `{held, refused}`.
+- **Unreadable store.** If the held document can't be opened or parsed, `readPasswords` returns `null`: passwords are skipped, and nothing is deleted.
+- **Tests.** `tests/sync_devices.test.mjs` runs the production shared `passwordsAdapter` with Linux's `ArdiaSync` and `ArdiaPasswords` adapters between a Mac-like device and a Linux device. It covers:
+  - a newer unstorable Mac password that Linux must not revert;
+  - a long-username login, then the Mac deleting it;
+  - a NUL password attempted once;
+  - a renderer restart;
+  - a real local edit on Linux reaching the Mac;
+  - nothing left unapplied, and no plaintext in the folder or the held document.
 
 **`status().passwords`.** It reports whether passwords can sync for the window's profile right now: false when `kSkipUndecryptablePasswords` is on, or when the profile's password store is missing or reports an error (`LinuxCredentialsPasswordsUsable`, `credentials::PasswordsSyncUsable`).
 

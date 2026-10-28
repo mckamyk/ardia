@@ -8,7 +8,6 @@ import { after, test } from "node:test";
 import { Clock } from "../../../packages/sync/src/hlc.ts";
 import { syncScope } from "../../../packages/sync/src/scope.ts";
 import { emptyScope } from "../../../packages/sync/src/scopeState.ts";
-import { createHeldLogins } from "../../../apps/linux/src/hostSync.ts";
 
 const TOOL = process.env.SYNC_DEVICE_TOOL;
 const scratch = mkdtempSync(join(tmpdir(), "ardia-sync-devices-"));
@@ -204,62 +203,77 @@ test("two simulated Linux devices set up, join, merge concurrent and offline edi
   assert.equal(walk(folder).some((path) => path.includes(".ardia-staging-")), false);
 });
 
+let active = null;
+globalThis.acTestNativeModules = {
+  ...(globalThis.acTestNativeModules ?? {}),
+  ArdiaPasswords: { call: (verb, profile, args) => active.passwordsCall(verb, profile, args) },
+};
+const { passwordsAdapter } = await import("../../../apps/browser/src/state/sync/adapters.ts");
+const { configureHeldLogins, createHeldLogins, syncModuleMethod } = await import("../../../apps/linux/src/hostSync.ts");
+const { credentialModuleMethod } = await import("../../../apps/linux/src/hostCredentials.ts");
+
 class PasswordDevice extends Device {
-  refusedApplies = 0;
-  constructor(name) {
+  constructor(name, kind) {
     super(name);
+    this.kind = kind;
     this.documents = new Map();
-    this.held = this.heldLogins();
+    this.host = {
+      bootstrap: { windowId: name, profileId: "default", capabilities: [] },
+      invoke: async (method, { args }) => {
+        if (method === "ArdiaSync.readPasswords") return this.tool.call("test.sealLogins", true);
+        if (method === "ArdiaSync.savePassword") return this.tool.call("test.saveLogin", ...args);
+        throw new Error(`unexpected invoke ${method}`);
+      },
+      call: async (name, _profile, json) => {
+        if (name !== "passwords.remove") throw new Error(`unexpected call ${name}`);
+        const { origin, username } = JSON.parse(json);
+        await this.tool.call("test.removeLogin", origin, username);
+        return JSON.stringify({ ok: true });
+      },
+      onEvent: () => () => {},
+    };
+    this.restartRenderer();
   }
-  heldLogins() {
-    return createHeldLogins({
-      read: (name) => this.documents.get(name) ?? null,
-      save: async (name, text) => void this.documents.set(name, text),
-      remove: async (name) => void this.documents.delete(name),
-      seal: (text) => this.tool.call("sealLocal", text),
-      open: (sealed) => this.tool.call("openLocal", sealed),
-    });
+  restartRenderer() {
+    this.held =
+      this.kind === "linux"
+        ? createHeldLogins({
+            read: (name) => this.documents.get(name) ?? null,
+            save: async (name, text) => void this.documents.set(name, text),
+            remove: async (name) => void this.documents.delete(name),
+            seal: (text) => this.tool.call("sealLocal", text),
+            open: (sealed) => this.tool.call("openLocal", sealed),
+          })
+        : null;
+    const logins =
+      this.kind === "linux"
+        ? {
+            read: (profile) => syncModuleMethod(this.host, "ArdiaSync", "readPasswords")(profile),
+            save: (...args) => syncModuleMethod(this.host, "ArdiaSync", "savePassword")(...args),
+          }
+        : {
+            read: () => this.tool.call("test.sealLogins", true),
+            save: (_profile, origin, username, sealed) => this.tool.call("test.saveLoginAnyway", origin, username, sealed),
+          };
+    this.passwords = passwordsAdapter("default", () => true, logins);
   }
-  async readLogins() {
-    return this.held.merge("default", await this.tool.call("test.sealLogins", true));
+  passwordsCall(verb, profile, args) {
+    if (this.kind === "linux") return credentialModuleMethod(this.host, "ArdiaPasswords", "call")(verb, profile, args);
+    const { origin, username } = JSON.parse(args);
+    return this.tool.call("test.removeLoginAnyway", origin, username).then(() => JSON.stringify({ ok: true }));
   }
   adapters() {
-    const keyOf = (origin, username) => `pws:${origin}\n${username}`;
-    const read = async () => {
-      const list = await this.readLogins();
-      return list && new Map(list.map((l) => [keyOf(l.origin, l.username), { o: l.origin, u: l.username, s: l.sealed }]));
-    };
-    return [
-      {
-        prefix: "pws:",
-        extract: async () => {
-          const local = await read();
-          return local ? { values: local } : null;
-        },
-        apply: async (visible, changed) => {
-          const local = await read();
-          if (!local) return false;
-          let ok = true;
-          for (const key of changed) {
-            const value = visible.get(key);
-            const have = local.get(key);
-            if (!value) {
-              if (have) {
-                await this.tool.call("test.removeLogin", have.o, have.u);
-                await this.held.release("default", have.o, have.u);
-              }
-              continue;
-            }
-            if (have?.s === value.s) continue;
-            const saved = await this.tool.call("test.saveLogin", "default", value.o, value.u, value.s, !!have);
-            if (saved === "skipped") await this.held.hold("default", { origin: value.o, username: value.u, sealed: value.s });
-            ok = (saved === true || saved === "skipped") && ok;
-          }
-          if (!ok) this.refusedApplies++;
-          return ok;
-        },
-      },
-    ];
+    return [this.passwords];
+  }
+  async sync(scope) {
+    active = this;
+    configureHeldLogins(this.held);
+    try {
+      return await super.sync(scope);
+    } finally {
+      configureHeldLogins(null);
+      active = null;
+    }
   }
   addLogin(realm, username, password, created = fakeNow) {
     return this.tool.call("test.addLogin", realm, username, password, created);
@@ -267,68 +281,84 @@ class PasswordDevice extends Device {
   hasLogin(origin, username, password) {
     return this.tool.call("test.hasLogin", origin, username, password);
   }
+  async reported(origin, username) {
+    active = this;
+    configureHeldLogins(this.held);
+    try {
+      const list = await syncModuleMethod(this.host, "ArdiaSync", "readPasswords")("");
+      return list?.find((login) => login.origin === origin && login.username === username)?.sealed ?? null;
+    } finally {
+      configureHeldLogins(null);
+      active = null;
+    }
+  }
 }
 
-test("saved passwords travel between two Linux devices sealed, and never reach the folder or JS as plaintext", { skip: !TOOL }, async () => {
+test("saved passwords sync between a Mac and Linux through the production adapter, sealed, and Linux never reverts or deletes what it can't store", { skip: !TOOL }, async () => {
   const scope = "p:passwords-profile";
-  const a = new PasswordDevice("passwords-a");
-  const b = new PasswordDevice("passwords-b");
-  assert.equal(await a.tool.call("createPhrase", a.id), true);
-  await a.tool.call("createChain", folder);
-  const words = await a.tool.call("recoveryWords");
-  assert.deepEqual(await b.tool.call("enterPhrase", b.id, words.join(" "), folder), { ok: true });
+  const mac = new PasswordDevice("passwords-mac", "mac");
+  const linux = new PasswordDevice("passwords-linux", "linux");
+  const both = async (count, order = [mac, linux]) => {
+    for (let i = 0; i < count; i++) for (const device of order) await device.sync(scope);
+  };
+  assert.equal(await mac.tool.call("createPhrase", mac.id), true);
+  await mac.tool.call("createChain", folder);
+  const words = await mac.tool.call("recoveryWords");
+  assert.deepEqual(await linux.tool.call("enterPhrase", linux.id, words.join(" "), folder), { ok: true });
 
-  await a.addLogin("https://bank.example/", "alice@example.com", "pw-hunter2-été");
-  await a.addLogin("https://shop.example/", "", "pw-empty-username");
-  await a.addLogin("https://shop.example/basic-realm", "bob", "pw-http-auth-realm");
-  assert.equal(await a.tool.call("test.sealLogins", false), null);
-  const sealed = await a.tool.call("test.sealLogins", true);
-  assert.deepEqual(sealed.map((l) => [l.origin, l.username]).sort(), [["https://bank.example", "alice@example.com"], ["https://shop.example", ""]]);
-  for (const login of sealed) assert.deepEqual(Object.keys(login).sort(), ["created", "origin", "sealed", "username"]);
-
-  for (let i = 0; i < 2; i++) for (const device of [a, b]) await device.sync(scope);
-  assert.equal(await b.hasLogin("https://bank.example", "alice@example.com", "pw-hunter2-été"), true);
-  assert.equal(await b.hasLogin("https://shop.example", "", "pw-empty-username"), true);
-  assert.equal(await b.hasLogin("https://shop.example/basic-realm", "bob", "pw-http-auth-realm"), false);
+  await mac.addLogin("https://bank.example/", "alice@example.com", "pw-hunter2-été");
+  await mac.addLogin("https://shop.example/", "", "pw-empty-username");
+  await linux.addLogin("https://hidden.example/", "eve", "");
+  await mac.addLogin("https://hidden.example/", "eve", "pw-from-mac-for-eve");
+  await both(2);
+  assert.equal(await linux.hasLogin("https://bank.example", "alice@example.com", "pw-hunter2-été"), true);
+  assert.equal(await linux.hasLogin("https://shop.example", "", "pw-empty-username"), true);
+  assert.equal(await linux.hasLogin("https://hidden.example", "eve", "pw-from-mac-for-eve"), true);
 
   fakeNow += 60_000;
-  await b.addLogin("https://bank.example", "alice@example.com", "pw-changed-on-b");
-  for (let i = 0; i < 2; i++) for (const device of [b, a]) await device.sync(scope);
-  assert.equal(await a.hasLogin("https://bank.example", "alice@example.com", "pw-changed-on-b"), true);
-  assert.equal(await a.hasLogin("https://bank.example", "alice@example.com", "pw-hunter2-été"), false);
+  const long = `pw-long-${"x".repeat(5000)}`;
+  await mac.addLogin("https://bank.example/", "alice@example.com", long);
+  await both(3);
+  assert.equal(await mac.hasLogin("https://bank.example", "alice@example.com", long), true);
+  assert.equal(await linux.hasLogin("https://bank.example", "alice@example.com", "pw-hunter2-été"), true);
+  assert.notEqual(await linux.reported("https://bank.example", "alice@example.com"), null);
+  assert.notEqual(
+    await linux.reported("https://bank.example", "alice@example.com"),
+    (await linux.tool.call("test.sealLogins", true)).find((login) => login.origin === "https://bank.example").sealed,
+  );
 
-  await b.addLogin("https://hidden.example/", "eve", "");
-  await a.addLogin("https://hidden.example/", "eve", "pw-from-a-for-eve");
-  await a.addLogin("https://long.example/", "lee", `pw-long-${"x".repeat(5000)}`);
-  await a.addLogin("https://nul.example/", "nul", "pw-with\u0000nul");
-  for (let i = 0; i < 4; i++) for (const device of [a, b]) await device.sync(scope);
-  assert.equal(await b.hasLogin("https://hidden.example", "eve", "pw-from-a-for-eve"), true);
-  assert.equal(await b.hasLogin("https://long.example", "lee", `pw-long-${"x".repeat(5000)}`), false);
-  assert.equal(await b.hasLogin("https://nul.example", "nul", "pw-with\u0000nul"), false);
-  assert.equal(await b.tool.call("test.saveAttempts", "https://long.example", "lee"), 1);
-  assert.equal(await b.tool.call("test.saveAttempts", "https://nul.example", "nul"), 1);
-  assert.equal(a.refusedApplies + b.refusedApplies, 0);
-  assert.ok((await b.readLogins()).some((l) => l.origin === "https://long.example"));
-  assert.equal([...b.documents.values()].some((text) => text.includes("long.example") || text.includes("pw-long")), false);
+  const longUsername = "u".repeat(2000);
+  await mac.addLogin("https://site.example/", longUsername, "pw-long-username");
+  await mac.addLogin("https://nul.example/", "nul", "pw-with\u0000nul");
+  await both(3);
+  assert.equal(await linux.tool.call("test.saveAttempts", "https://nul.example", "nul"), 1);
+  assert.notEqual(await linux.reported("https://site.example", longUsername), null);
 
-  b.held = b.heldLogins();
-  for (let i = 0; i < 2; i++) for (const device of [b, a]) await device.sync(scope);
-  assert.equal(await a.hasLogin("https://long.example", "lee", `pw-long-${"x".repeat(5000)}`), true);
-  assert.equal(await a.hasLogin("https://nul.example", "nul", "pw-with\u0000nul"), true);
-  assert.equal(await b.tool.call("test.saveAttempts", "https://long.example", "lee"), 1);
+  linux.restartRenderer();
+  await both(2, [linux, mac]);
+  assert.equal(await mac.hasLogin("https://bank.example", "alice@example.com", long), true);
+  assert.equal(await mac.hasLogin("https://site.example", longUsername, "pw-long-username"), true);
+  assert.equal(await mac.hasLogin("https://nul.example", "nul", "pw-with\u0000nul"), true);
+  assert.equal(await linux.tool.call("test.saveAttempts", "https://nul.example", "nul"), 1);
 
-  await a.tool.call("test.removeLogin", "https://long.example", "lee");
-  for (let i = 0; i < 2; i++) for (const device of [a, b]) await device.sync(scope);
-  assert.equal((await b.readLogins()).some((l) => l.origin === "https://long.example"), false);
-  assert.ok((await b.readLogins()).some((l) => l.origin === "https://nul.example"));
-  for (let i = 0; i < 2; i++) for (const device of [b, a]) await device.sync(scope);
-  assert.equal(await a.hasLogin("https://long.example", "lee", `pw-long-${"x".repeat(5000)}`), false);
-  assert.equal(a.refusedApplies + b.refusedApplies, 0);
+  await mac.tool.call("test.removeLoginAnyway", "https://site.example", longUsername);
+  await both(3);
+  assert.equal(await linux.reported("https://site.example", longUsername), null);
+  assert.equal(await mac.hasLogin("https://site.example", longUsername, "pw-long-username"), false);
 
-  const secrets = ["pw-hunter2", "pw-empty-username", "pw-changed-on-b", "pw-http-auth-realm", "pw-from-a", "pw-long", "pw-with", "alice@example.com", "bank.example"];
+  fakeNow += 60_000;
+  await linux.addLogin("https://bank.example/", "alice@example.com", "pw-edited-on-linux");
+  await both(2, [linux, mac]);
+  assert.equal(await mac.hasLogin("https://bank.example", "alice@example.com", "pw-edited-on-linux"), true);
+  assert.equal(await linux.hasLogin("https://bank.example", "alice@example.com", "pw-edited-on-linux"), true);
+
+  assert.deepEqual(linux.state.unapplied, []);
+  assert.deepEqual(mac.state.unapplied, []);
+  const secrets = ["pw-hunter2", "pw-empty-username", "pw-from-mac", "pw-long", "pw-with", "pw-edited", "alice@example.com", "bank.example"];
   for (const path of walk(folder)) {
     if (!statSync(path).isFile()) continue;
     const data = readFileSync(path);
     for (const secret of secrets) assert.equal(data.includes(secret), false, `${secret} in ${path}`);
   }
+  for (const text of linux.documents.values()) for (const secret of secrets) assert.equal(text.includes(secret), false);
 });

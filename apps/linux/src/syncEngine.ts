@@ -8,6 +8,9 @@ import {
   claimSyncAuthority,
   configureHeldLogins,
   createHeldLogins,
+  enterPhraseBegins,
+  heldLoginsStatus,
+  whileResettingHeldLogins,
   keyringMessage,
   loadSyncDeviceName,
   presentSyncState,
@@ -37,29 +40,38 @@ let authority: SyncAuthority | null = null;
 let keyStore: SyncKeyStoreStatus | null = null;
 let heldLogins: ReturnType<typeof createHeldLogins> | null = null;
 
-const clearHeldLogins = () => heldLogins?.clear().catch((error: unknown) => console.warn("[ardia linux] sync", error instanceof Error ? error.message : error));
+function adoptHeldLogins() {
+  heldLogins = createHeldLogins({
+    read: readDocument,
+    save: saveDocument,
+    remove: deleteDocument,
+    seal: async (text) => SyncNative?.sealLocal(text),
+    open: async (sealed) => SyncNative?.openLocal(sealed),
+  });
+  configureHeldLogins(heldLogins);
+}
+
+function dropHeldLogins() {
+  heldLogins = null;
+  configureHeldLogins(null);
+}
 
 function remoteFor(host: ArdiaHost): SyncRemote {
   return {
     syncNow: () => engine.syncNow(),
     turnOnSync: async (folder: string) => {
-      const result = await engine.turnOnSync(folder);
-      if (!("error" in result)) await clearHeldLogins();
+      const result = await whileResettingHeldLogins(() => engine.turnOnSync(folder), (result) => !("error" in result));
       if ("error" in result && result.error === KEYCHAIN_ERROR) {
         keyStore = await syncKeyStoreStatus(host).catch(() => keyStore);
         return { error: keyringMessage(keyStore, true) ?? "Couldn’t save the sync key in your keyring." };
       }
       return result;
     },
-    enterRecoveryPhrase: async (folder: string, text: string) => {
-      const result = await engine.enterRecoveryPhrase(folder, text);
-      if ("ok" in result) await clearHeldLogins();
-      return result;
+    enterRecoveryPhrase: (folder: string, text: string) => {
+      const begins = enterPhraseBegins(engine.useSync.getState());
+      return whileResettingHeldLogins(() => engine.enterRecoveryPhrase(folder, text), (result) => begins && "ok" in result);
     },
-    stopSync: async (options?: { deleteData?: boolean }) => {
-      await engine.stopSync(options);
-      await clearHeldLogins();
-    },
+    stopSync: (options?: { deleteData?: boolean }) => engine.stopSync(options),
     setTypeSynced: (type: DataType, enabled: boolean) => engine.setTypeSynced(type, enabled),
     setProfileSynced: (profileId: string, enabled: boolean) => engine.setProfileSynced(profileId, enabled),
     addRemoteProfile: (syncId: string) => engine.addRemoteProfile(syncId),
@@ -77,14 +89,7 @@ async function becomeAuthority(host: ArdiaHost) {
   }
   await loadSyncDeviceName(host);
   keyStore = await syncKeyStoreStatus(host).catch(() => null);
-  heldLogins = createHeldLogins({
-    read: readDocument,
-    save: saveDocument,
-    remove: deleteDocument,
-    seal: async (text) => SyncNative?.sealLocal(text),
-    open: async (sealed) => SyncNative?.openLocal(sealed),
-  });
-  configureHeldLogins(heldLogins);
+  adoptHeldLogins();
   engine.startSync();
   return { store: engine.useSync, remote: remoteFor(host) };
 }
@@ -100,7 +105,15 @@ export function startLinuxSync(options: { host?: ArdiaHost; candidate: boolean; 
     locks: options.locks,
     channel,
     mirror: useSync,
-    claim: () => claimSyncAuthority(host),
+    claim: async () => {
+      const claim = await claimSyncAuthority(host);
+      if (!claim.granted) dropHeldLogins();
+      else if (!heldLogins && authority?.isAuthority()) adoptHeldLogins();
+      return claim;
+    },
+    onRole: (role) => {
+      if (role !== "authority") dropHeldLogins();
+    },
     release: () => releaseSyncAuthority(host),
     become: () => becomeAuthority(host),
     present: (state) => presentSyncState(state, keyStore),
@@ -113,6 +126,7 @@ export function startLinuxSync(options: { host?: ArdiaHost; candidate: boolean; 
 export const linuxSyncHooks = {
   state: () => useSync.getState(),
   role: () => authority?.role() ?? "unavailable",
+  heldLogins: () => heldLoginsStatus(),
   turnOnSync: (folder: string) => turnOnSync(folder),
   enterRecoveryPhrase: (folder: string, text: string) => enterRecoveryPhrase(folder, text),
   stopSync: (options?: { deleteData?: boolean }) => stopSync(options),

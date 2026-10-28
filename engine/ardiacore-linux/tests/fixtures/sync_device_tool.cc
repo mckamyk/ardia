@@ -60,12 +60,30 @@ std::optional<Outcome> LoginStore(std::map<LoginKey, StoredLogin>& logins, std::
     logins.insert_or_assign(key, std::move(*opened));
     return Outcome::Value(JsonValue::Bool(true));
   }
-  if (method == "ArdiaSync.test.removeLogin") {
+  if (method == "ArdiaSync.test.removeLogin" || method == "ArdiaSync.test.removeLoginAnyway") {
     const std::string* origin = Text(args, 0);
     const std::string* username = Text(args, 1);
     if (!origin || !username) return Outcome::Error("ERR_TOOL", "removeLogin arguments");
-    logins.erase({*origin, *username});
+    if (method == "ArdiaSync.test.removeLogin") {
+      namespace credentials = ardia::linux_credentials;
+      std::vector<std::pair<std::string, credentials::Arg>> login;
+      login.emplace_back("origin", credentials::Arg::String(*origin));
+      login.emplace_back("username", credentials::Arg::String(*username));
+      const credentials::Plan plan = credentials::PlanCall("passwords.remove", credentials::Arg::Object(std::move(login)));
+      if (!plan.ok()) return Outcome::Error(plan.code, plan.message);
+    }
+    logins.erase({KeyRealm(*origin), *username});
     return Outcome::Value(JsonValue::Null());
+  }
+  if (method == "ArdiaSync.test.saveLoginAnyway") {
+    const std::string* origin = Text(args, 0);
+    const std::string* username = Text(args, 1);
+    const std::string* sealed = Text(args, 2);
+    if (!origin || !username || !sealed) return Outcome::Error("ERR_TOOL", "saveLoginAnyway arguments");
+    auto opened = core.OpenLogin({"default", *origin, *username, *sealed, true, true});
+    if (!opened) return Outcome::Value(JsonValue::Bool(false));
+    logins.insert_or_assign({*origin, *username}, std::move(*opened));
+    return Outcome::Value(JsonValue::Bool(true));
   }
   if (method == "ArdiaSync.test.saveAttempts") {
     const std::string* origin = Text(args, 0);

@@ -97,9 +97,18 @@ async function domainCall(host: ArdiaHost, domain: "passwords" | "autofill", ver
     return JSON.stringify({ number: typeof reply?.number === "string" ? reply.number : null });
   }
   if (SECRET_CALLS.has(name)) throw credentialError("ERR_SECRET_ROUTE", "Secret operations use their dedicated native method");
-  const reply = shape(name, await callHost(name, profile, typeof args === "string" ? args : "{}", host));
-  if (name === "passwords.remove") await releaseHeldLogin(profile, input.origin, input.username);
-  return reply;
+  if (name === "passwords.remove") {
+    let reply: string;
+    try {
+      reply = shape(name, await callHost(name, profile, typeof args === "string" ? args : "{}", host));
+    } catch (error) {
+      if (await releaseHeldLogin(profile, input.origin, input.username)) return JSON.stringify({ ok: true });
+      throw error;
+    }
+    await releaseHeldLogin(profile, input.origin, input.username);
+    return reply;
+  }
+  return shape(name, await callHost(name, profile, typeof args === "string" ? args : "{}", host));
 }
 
 export function credentialModuleMethod(host: ArdiaHost, name: string, method: string): unknown {

@@ -1,5 +1,5 @@
 import type { ArdiaHost } from "./host";
-import { invokeHost } from "./host.ts";
+import { hostProfile, invokeHost } from "./host.ts";
 
 export const SYNC_CAPABILITIES = [
   "ArdiaSync.folderInfo",
@@ -115,7 +115,7 @@ export const HELD_LOGINS_DOCUMENT = "sync-held-logins.nns";
 export const SYNC_DOCUMENTS = ["sync.json", "sync-state.nns", "sync-journal.nns", HELD_LOGINS_DOCUMENT] as const;
 
 export type SealedLoginEntry = { origin: string; username: string; sealed: string; created: number };
-export type HeldLogin = { origin: string; username: string; sealed: string };
+export type HeldLogin = { origin: string; username: string; sealed: string; replaced: string | null };
 type HeldByProfile = Record<string, Record<string, HeldLogin>>;
 
 export type HeldLoginsIo = {
@@ -126,8 +126,12 @@ export type HeldLoginsIo = {
   open(sealed: string): Promise<string | null | undefined>;
 };
 
+export const HELD_LOGINS_LIMIT = 1000;
+export const HELD_LOGINS_MAX_BYTES = 4 * 1024 * 1024;
+
 const loginKey = (origin: string, username: string) => `${origin}\n${username}`;
 const isText = (value: unknown): value is string => typeof value === "string";
+const heldCount = (held: HeldByProfile) => Object.values(held).reduce((sum, logins) => sum + Object.keys(logins).length, 0);
 
 function parseHeld(text: string): HeldByProfile | null {
   let parsed: unknown;
@@ -142,22 +146,27 @@ function parseHeld(text: string): HeldByProfile | null {
     if (!logins || typeof logins !== "object" || Array.isArray(logins)) return null;
     held[profile] = {};
     for (const login of Object.values(logins)) {
-      const { origin, username, sealed } = (login ?? {}) as Partial<HeldLogin>;
-      if (!isText(origin) || !isText(username) || !isText(sealed)) return null;
-      held[profile][loginKey(origin, username)] = { origin, username, sealed };
+      const { origin, username, sealed, replaced } = (login ?? {}) as Partial<HeldLogin>;
+      if (!isText(origin) || !isText(username) || !isText(sealed) || !(replaced === null || isText(replaced))) return null;
+      held[profile][loginKey(origin, username)] = { origin, username, sealed, replaced };
     }
   }
   return held;
 }
 
-export function createHeldLogins(io: HeldLoginsIo) {
+export function createHeldLogins(io: HeldLoginsIo, limits: { maxLogins?: number; maxBytes?: number } = {}) {
+  const maxLogins = limits.maxLogins ?? HELD_LOGINS_LIMIT;
+  const maxBytes = limits.maxBytes ?? HELD_LOGINS_MAX_BYTES;
   let held: HeldByProfile | null = null;
+  let suspended = 0;
+  let refused = 0;
   const load = async (): Promise<HeldByProfile | null> => {
     if (held) return held;
     const stored = io.read(HELD_LOGINS_DOCUMENT);
     if (!stored) return (held = {});
     const text = await io.open(stored);
-    return (held = isText(text) ? parseHeld(text) : null);
+    held = isText(text) ? parseHeld(text) : null;
+    return held;
   };
   const store = async (next: HeldByProfile) => {
     for (const profile of Object.keys(next)) if (!Object.keys(next[profile]!).length) delete next[profile];
@@ -170,37 +179,64 @@ export function createHeldLogins(io: HeldLoginsIo) {
     }
     held = next;
   };
-  const required = async () => {
+  const release = async (profile: string, origin: string, username: string) => {
     const current = await load();
-    if (!current) throw new Error("The logins sync is holding couldn’t be read");
-    return structuredClone(current);
+    if (!current?.[profile]?.[loginKey(origin, username)]) return false;
+    const next = structuredClone(current);
+    delete next[profile]![loginKey(origin, username)];
+    await store(next);
+    return true;
   };
   return {
     async merge(profile: string, list: SealedLoginEntry[] | null | undefined): Promise<SealedLoginEntry[] | null> {
-      if (!list) return null;
+      if (!list || suspended) return null;
       const current = await load();
       if (!current) return null;
       const mine = current[profile] ?? {};
-      const local = new Set(list.map((login) => loginKey(login.origin, login.username)));
-      const kept = Object.entries(mine).filter(([key]) => !local.has(key));
-      if (kept.length !== Object.keys(mine).length) await store({ ...structuredClone(current), [profile]: Object.fromEntries(kept) });
-      return [...list, ...kept.map(([, login]) => ({ ...login, created: 0 }))];
+      const local = new Map(list.map((login) => [loginKey(login.origin, login.username), login]));
+      const edited = Object.entries(mine).filter(([key, login]) => local.has(key) && local.get(key)!.sealed !== login.replaced);
+      if (edited.length) {
+        const next = structuredClone(current);
+        for (const [key] of edited) delete next[profile]![key];
+        await store(next);
+      }
+      const shown = Object.entries(held?.[profile] ?? {});
+      const hidden = new Set(shown.map(([key]) => key));
+      return [
+        ...list.filter((login) => !hidden.has(loginKey(login.origin, login.username))),
+        ...shown.map(([, login]) => ({ origin: login.origin, username: login.username, sealed: login.sealed, created: 0 })),
+      ];
     },
-    async hold(profile: string, login: HeldLogin) {
-      const next = await required();
+    async hold(profile: string, login: HeldLogin): Promise<boolean> {
+      if (suspended) return false;
+      const current = await load();
+      if (!current) return false;
+      const next = structuredClone(current);
       next[profile] = { ...next[profile], [loginKey(login.origin, login.username)]: { ...login } };
-      await store(next);
+      if (heldCount(next) > maxLogins || JSON.stringify(next).length > maxBytes) {
+        refused++;
+        return false;
+      }
+      try {
+        await store(next);
+      } catch {
+        return false;
+      }
+      return true;
     },
+    release,
     async clear() {
       await io.remove(HELD_LOGINS_DOCUMENT);
       held = {};
     },
-    async release(profile: string, origin: string, username: string) {
-      const current = await load();
-      if (current && !current[profile]?.[loginKey(origin, username)]) return;
-      const next = await required();
-      delete next[profile]![loginKey(origin, username)];
-      await store(next);
+    suspend() {
+      suspended++;
+    },
+    resume() {
+      suspended = Math.max(0, suspended - 1);
+    },
+    status() {
+      return { held: held ? heldCount(held) : 0, refused };
     },
   };
 }
@@ -212,9 +248,26 @@ export function configureHeldLogins(store: HeldLogins | null) {
   heldLogins = store;
 }
 
-export async function releaseHeldLogin(profile: string, origin: unknown, username: unknown) {
-  if (heldLogins && isText(origin) && isText(username)) await heldLogins.release(profile, origin, username);
+export const heldLoginsStatus = () => heldLogins?.status() ?? null;
+
+export async function releaseHeldLogin(profile: string, origin: unknown, username: unknown): Promise<boolean> {
+  return !!heldLogins && isText(origin) && isText(username) && (await heldLogins.release(profile, origin, username));
 }
+
+export const enterPhraseBegins = (ui: { enabled: boolean; status: string }) => !(ui.enabled && ui.status === "locked");
+
+export async function whileResettingHeldLogins<T>(run: () => Promise<T>, began: (result: T) => boolean): Promise<T> {
+  const store = heldLogins;
+  store?.suspend();
+  try {
+    const result = await run();
+    if (began(result)) await store?.clear();
+    return result;
+  } finally {
+    store?.resume();
+  }
+}
+
 export const MAX_JOURNAL_PARTS = 1000;
 export const journalPartName = (n: number) => `sync-journal-${n}.nns`;
 
@@ -266,19 +319,25 @@ export function syncModuleMethod(host: ArdiaHost, name: string, method: string):
   }
   if (method === "readPasswords") {
     return async (profile: string) => {
-      const list = (await invoke(host, method)(profile)) as SealedLoginEntry[] | null;
-      return heldLogins ? heldLogins.merge(profile, list) : list;
+      const store = heldLogins;
+      if (!store) return null;
+      const list = (await invoke(host, method)(hostProfile(profile, host))) as SealedLoginEntry[] | null;
+      return store.merge(profile, list);
     };
   }
   if (method === "savePassword") {
     return async (profile: string, origin: string, username: string, sealed: string, replacing: boolean) => {
-      const saved = await invoke(host, method)(profile, origin, username, sealed, replacing);
+      const store = heldLogins;
+      const owner = hostProfile(profile, host);
+      const saved = await invoke(host, method)(owner, origin, username, sealed, replacing);
       if (saved === "skipped") {
-        if (!heldLogins) return false;
-        await heldLogins.hold(profile, { origin, username, sealed });
-        return true;
+        if (!store) return false;
+        const local = (await invoke(host, "readPasswords")(owner)) as SealedLoginEntry[] | null;
+        if (!local) return false;
+        const replaced = local.find((login) => login.origin === origin && login.username === username)?.sealed ?? null;
+        return store.hold(profile, { origin, username, sealed, replaced });
       }
-      if (saved === true) await heldLogins?.release(profile, origin, username);
+      if (saved === true) await store?.release(profile, origin, username);
       return saved === true;
     };
   }

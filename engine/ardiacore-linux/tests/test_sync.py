@@ -79,7 +79,9 @@ class SyncHelperTests(unittest.TestCase):
             self.skipTest('node is unavailable')
         with tempfile.TemporaryDirectory(prefix='ardia-sync-tool-') as directory:
             tool = build(self, directory, 'sync_device_tool', 'sync_device_tool.cc')
-            output = run(self, ['node', '--test', '--test-reporter=tap', ROOT / 'tests/sync_devices.test.mjs'],
+            output = run(self, ['node', '--experimental-strip-types', '--no-warnings', '--import',
+                                REPO / 'apps/linux/scripts/host-test-loader.mjs', '--test', '--test-reporter=tap',
+                                ROOT / 'tests/sync_devices.test.mjs'],
                          env={'SYNC_DEVICE_TOOL': str(tool)}, timeout=300)
             self.assertIn("# pass 2", output)
             self.assertIn('# skipped 0', output)
