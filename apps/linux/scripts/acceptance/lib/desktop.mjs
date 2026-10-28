@@ -316,6 +316,12 @@ function swayDriver(desktop) {
     async keyDown(key) {
       await desktop.keyboard.send({ op: "down", key });
     },
+    async tap(key) {
+      await desktop.keyboard.send({ op: "tap", key });
+    },
+    async keymap({ layout = "us", variant = "", options = "" } = {}) {
+      await desktop.keyboard.send({ op: "keymap", layout, variant, options });
+    },
     async keyUp(key) {
       await desktop.keyboard.send({ op: "up", key });
     },

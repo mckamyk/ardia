@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { desktopTools, startDesktop } from "../lib/desktop.mjs";
 import { busCall, startFileManager, startPolkit } from "../lib/desktopServices.mjs";
+import { until } from "../lib/util.mjs";
 
 const tools = await desktopTools();
 const skip = !tools.dbusDaemon || !tools.dbusmock ? "needs dbus-daemon and python-dbusmock" : false;
@@ -60,5 +61,23 @@ test("the FileManager1 mock records ShowItems and can fail on request", { skip, 
     await manager.call("SetFail", [true], { signature: "b" });
     await assert.rejects(call(), /refused/);
     assert.deepEqual((await manager.calls()).map((c) => c.uris), [["file:///tmp/a.bin"], ["file:///tmp/a.bin"]]);
+  });
+});
+
+test("the private portal frontend routes FileChooser requests to the scripted backend and records them", { skip: skip || !tools.portal ? "needs dbus-daemon, python-dbusmock and xdg-desktop-portal" : false, timeout: 90000 }, async () => {
+  const { startPortal } = await import("../lib/desktopServices.mjs");
+  await withBuses(async (desktop) => {
+    const portal = await startPortal(desktop);
+    assert.ok(portal.version >= 3, `FileChooser version ${portal.version}`);
+    const open = (title, options) => busCall(desktop, { dest: "org.freedesktop.portal.Desktop", path: "/org/freedesktop/portal/desktop", iface: "org.freedesktop.portal.FileChooser", method: "OpenFile", args: [title === "folder" ? "x11:1" : "", title, options], signature: "ssa{sv}" });
+    await portal.pick("OpenFile", ["/tmp/picked folder"]);
+    await open("folder", { directory: true });
+    await portal.cancel("OpenFile");
+    await open("cancelled", {});
+    const calls = await until(async () => {
+      const list = await portal.calls();
+      return list.length >= 2 ? list : false;
+    }, { timeout: 10000, label: "two recorded requests" });
+    assert.deepEqual(calls.map((c) => [c.method, c.title, c.options.directory ?? null]), [["OpenFile", "folder", true], ["OpenFile", "cancelled", null]]);
   });
 });

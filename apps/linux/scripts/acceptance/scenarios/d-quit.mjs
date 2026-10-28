@@ -1,38 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { desktopShot, desktopUnavailable, focusShellWindow, openDesktop, pointAt, startDesktopBrowser, waitFocused } from "../lib/desktopSession.mjs";
+import { desktopShot, desktopUnavailable, focusShellWindow, inside, openDesktop, pointAt, pressInPrompt, promptAfter, promptLike, startDesktopBrowser, waitFocused } from "../lib/desktopSession.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { until } from "../lib/util.mjs";
-import { changedCells, changedRegion, regions } from "../lib/desktop.mjs";
 
 const QUIT_TITLE = "Are you sure you want to quit Ardia?";
 const twoWindows = (t, settings) => sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }, { id: "second", urls: [t.fixtures.url.page(2)] }], focused: "main", settings });
-const PROMPT_DIFF = { fill: 0.06, gap: 4 };
-const PROMPT_MIN = { width: 250, height: 120 };
-const promptLike = (region) => !!region && region.width >= PROMPT_MIN.width && region.height >= PROMPT_MIN.height && region.width < 1000 && region.height < 700;
-
-async function stableCapture(desktop, { timeout = 20000, quiet = 2 } = {}) {
-  let previous = await desktop.capture();
-  let still = 0;
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    await delay(500);
-    const next = await desktop.capture();
-    const change = changedRegion(previous, next);
-    previous = next;
-    still = !change || change.width * change.height < 64 * 64 ? still + 1 : 0;
-    if (still >= quiet) return next;
-  }
-  throw new Error("the screen never settled before the shortcut");
-}
-
-async function promptAfter(desktop, act, { settle = 1200 } = {}) {
-  const before = await stableCapture(desktop);
-  await act();
-  await delay(settle);
-  const after = await desktop.capture();
-  const found = regions(changedCells(before, after, PROMPT_DIFF), PROMPT_DIFF);
-  return { region: found[0] ?? null, all: found.slice(0, 5), before, after };
-}
 const browserWindows = async (app) => (await app.shells()).filter((s) => !s.utility).length;
 
 async function windowTitled(desktop, text) {
@@ -42,21 +14,6 @@ async function windowTitled(desktop, text) {
   }, { timeout: 15000, label: `the window titled ${text}` }).catch(async (error) => {
     throw new Error(`${error.message}; windows ${JSON.stringify((await desktop.windows()).map((w) => w.title))}`);
   });
-}
-
-async function pressInPrompt(desktop, region, keys) {
-  await desktop.click(region.x + 60, region.y + 30);
-  await delay(200);
-  for (const key of keys) {
-    await desktop.key(key);
-    await delay(150);
-  }
-}
-
-function inside(inner, outer) {
-  const cx = inner.x + inner.width / 2;
-  const cy = inner.y + inner.height / 2;
-  return cx >= outer.x && cx <= outer.x + outer.width && cy >= outer.y && cy <= outer.y + outer.height;
 }
 
 async function quitsWithin(app, timeout = 30000) {
@@ -99,7 +56,7 @@ export default {
     }, { critical: true });
     await t.check("Ctrl+Shift+Q again from the other window raises no second prompt", async () => {
       const shell2 = await warned.app.shell("second", { timeout: 20000 });
-      await pointAt(desktop, second, { x: 90, y: 600 });
+      await desktop.raise(second);
       const { region } = await promptAfter(desktop, () => desktop.key("ctrl+shift+q"), { settle: 2000 });
       await desktopShot(t, desktop, "quit-prompt-again");
       if (promptLike(region) && !inside(region, prompt)) throw new Error(`a second prompt-sized change appeared at ${JSON.stringify(region)}`);
@@ -156,7 +113,7 @@ export default {
     await t.check("Quit from the downloads prompt quits with no second download dialog", async () => {
       const window = (await desktop.windows()).find((w) => w.title.includes("Acceptance page 2")) ?? (await desktop.windows())[0];
       const shell2 = await busy.app.shell("second", { timeout: 20000 });
-      await pointAt(desktop, window, { x: 90, y: 600 });
+      await desktop.raise(window);
       await desktop.key("escape");
       await focusShellWindow(desktop, shell2, window).catch(() => {});
       const before = new Set((await desktop.windows()).map((w) => w.id));

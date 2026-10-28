@@ -4,21 +4,21 @@ import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { connectCdp, evaluate, fetchJson } from "../lib/cdp.mjs";
-import { SOFTWARE_GL } from "../lib/desktopSession.mjs";
+import { SOFTWARE_GL, focusShellWindow, pointAt, visibleField } from "../lib/desktopSession.mjs";
+import { liveRequest, openLiveHyprland } from "../lib/liveHyprland.mjs";
 import { commandBarText, desktopShot, desktopUnavailable, hasFocus, newWindow, openDesktop, startDesktopBrowser, waitFocused, waitTyped } from "../lib/desktopSession.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { until } from "../lib/util.mjs";
 
 const PAGE_TITLE = (n) => `Acceptance page ${n}`;
-const SIDEBAR_POINT = { x: 90, y: 600 };
 
 async function focusWindow(desktop, window, shell) {
-  if (desktop.kind === "x11") await desktop.raise(window).catch(() => {});
-  const field = shell ? await shell.rect("input").catch(() => null) : null;
-  const point = field ?? SIDEBAR_POINT;
-  await desktop.click(window.rect.x + point.x, window.rect.y + point.y);
+  await desktop.raise(window).catch(() => {});
+  const field = shell ? await visibleField(shell) : null;
+  if (field) await pointAt(desktop, window, field);
   await delay(300);
 }
+
 
 async function clickedIntoFocus(desktop, shell) {
   if (await hasFocus(shell)) return;
@@ -66,10 +66,10 @@ async function liveIds(app) {
   return (await app.shells()).map((s) => s.windowId);
 }
 
-function focusChecks({ x11 }) {
-  const label = x11 ? "X11" : "sway";
+function focusChecks({ x11, open, label: named }) {
+  const label = named ?? (x11 ? "X11" : "sway");
   return async (t) => {
-    const desktop = await openDesktop(t, { x11 });
+    const desktop = open ? await open(t) : await openDesktop(t, { x11 });
     await calibrate(t, desktop, label);
     const session = sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }, { id: "second", urls: [t.fixtures.url.page(2)] }], focused: "main" });
     const { app, shell } = await startDesktopBrowser(t, desktop, { name: "focus", session });
@@ -163,8 +163,28 @@ function focusScenario({ id, x11 }) {
 export const f22Sway = focusScenario({ id: "F22D", x11: false });
 export const f22X11 = focusScenario({ id: "F22X", x11: true });
 
-function launchTypingScenario({ id, x11 }) {
-  const label = x11 ? "X11" : "sway";
+const LIVE_REASON = "a live-session check: set ARDIA_ACCEPTANCE_LIVE_HYPRLAND to the Hyprland instance signature to run it on an empty workspace of the logged-in session";
+
+export const f22Hyprland = {
+  id: "F22H",
+  issue: 32,
+  desktop: true,
+  live: true,
+  title: "New windows take focus and keyboard input on the logged-in Hyprland (workspace 9, private buses)",
+  deadline: 300000,
+  manual: [MANUAL_LINK],
+  async run(t) {
+    const request = liveRequest();
+    if (!request) {
+      t.manual("Hyprland: new windows take focus and typing", ["On Hyprland, press Ctrl+N and type 'abc' at once: the new window is in front and holds 'abc'.", "A restored back window stays behind, a background instance never activates, and Settings opens in front with keyboard focus."], LIVE_REASON);
+      return;
+    }
+    await focusChecks({ open: (t2) => openLiveHyprland(t2, request), label: "Hyprland" })(t);
+  },
+};
+
+function launchTypingScenario({ id, x11, live = false }) {
+  const label = live ? "Hyprland" : x11 ? "X11" : "sway";
   return {
     id,
     issue: 79,
@@ -172,12 +192,13 @@ function launchTypingScenario({ id, x11 }) {
     title: `Typing at launch and right after Ctrl+N reaches the new window's command bar (${label})`,
     deadline: 240000,
     async run(t) {
-      const missing = await desktopUnavailable({ x11 });
+      const request = live ? liveRequest() : null;
+      const missing = live ? (request ? null : LIVE_REASON) : await desktopUnavailable({ x11 });
       if (missing) {
         t.manual(`${label}: typing at launch`, ["Launch Ardia and type at once: the command bar holds the text."], missing);
         return;
       }
-      const desktop = await openDesktop(t, { x11 });
+      const desktop = live ? await openLiveHyprland(t, request) : await openDesktop(t, { x11 });
       await calibrate(t, desktop, label);
       const launching = startDesktopBrowser(t, desktop, { name: "launch-typing", session: sessionSeed() });
       await t.check(`${label}: typing at launch reaches the first window's command bar`, async () => {
@@ -191,6 +212,7 @@ function launchTypingScenario({ id, x11 }) {
         return { typed: typed.active };
       });
       const { app, shell } = await launching;
+      const firstWindow = (await desktop.windows())[0];
       await t.check(`${label}: Ctrl+N then immediate typing reaches the new window's command bar`, async () => {
         await clickedIntoFocus(desktop, shell);
         const ids = await liveIds(app);
@@ -202,9 +224,52 @@ function launchTypingScenario({ id, x11 }) {
         });
         return { typed: typed.active };
       });
+      if (x11) return;
+      const keyLabel = live ? "Hyprland" : "sway";
+      const composed = async (shellTo, keymap, keys) => {
+        await desktop.keymap(keymap);
+        try {
+          for (const key of keys) await desktop.tap(key);
+          return await waitTyped(shellTo, "é", { timeout: 5000 }).then((state) => state.active, async () => JSON.stringify(await commandBarText(shellTo)));
+        } finally {
+          await desktop.keymap({});
+        }
+      };
+      await t.check(`${keyLabel}: a dead key and a compose sequence each type é once in a clicked command bar`, async () => {
+        const target = shell;
+        await focusShellWindow(desktop, target, firstWindow);
+        await focusWindow(desktop, firstWindow, target);
+        await desktop.key("ctrl+a");
+        await desktop.tap("backspace");
+        const dead = await composed(target, { layout: "us", variant: "intl" }, ["apostrophe", "e"]);
+        await desktop.key("ctrl+a");
+        await desktop.tap("backspace");
+        const compose = await composed(target, { layout: "us", options: "compose:ralt" }, ["ralt", "apostrophe", "e"]);
+        if (dead !== "é" || compose !== "é") throw new Error(`dead key gave ${dead}, compose gave ${compose}`);
+        return { dead, compose };
+      });
+      await t.check(`${keyLabel}: Ctrl+N then a dead key at once puts é exactly once in the new window's command bar`, async () => {
+        await focusShellWindow(desktop, shell, firstWindow);
+        const ids = await liveIds(app);
+        await desktop.keymap({ layout: "us", variant: "intl" });
+        try {
+          await desktop.key("ctrl+n");
+          await desktop.tap("apostrophe");
+          await desktop.tap("e");
+        } finally {
+          await desktop.keymap({});
+        }
+        const created = await newShell(app, ids);
+        const typed = await waitTyped(created, "é").catch(async (error) => {
+          throw new Error(`${error.message}; new window ${JSON.stringify(await commandBarText(created))}, first window ${JSON.stringify(await commandBarText(shell))}`);
+        });
+        if (typed.active !== "é") throw new Error(`the new field holds ${JSON.stringify(typed.active)}`);
+        return { typed: typed.active };
+      });
     },
   };
 }
 
 export const w79Sway = launchTypingScenario({ id: "W79D", x11: false });
 export const w79X11 = launchTypingScenario({ id: "W79X", x11: true });
+export const w79Hyprland = { ...launchTypingScenario({ id: "W79H", x11: false, live: true }), live: true, title: "Typing at launch, after Ctrl+N and with dead and compose keys on the logged-in Hyprland (workspace 9, private buses)" };

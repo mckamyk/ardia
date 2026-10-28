@@ -82,8 +82,8 @@ export async function startPortal(desktop, { fallback = { response: 1 }, interfa
     backend,
     version,
     answer: (method, answer) => backend.call("Answer", [method, JSON.stringify(answer)], { signature: "ss" }),
-    pick: (method, paths) => backend.call("Answer", [method, JSON.stringify({ response: 0, uris: paths.map((p) => pathToFileURL(p).href) })], { signature: "ss" }),
-    cancel: (method) => backend.call("Answer", [method, JSON.stringify({ response: 1 })], { signature: "ss" }),
+    pick: (method, paths, { delay = 0 } = {}) => backend.call("Answer", [method, JSON.stringify({ response: 0, uris: paths.map((p) => pathToFileURL(p).href), delay })], { signature: "ss" }),
+    cancel: (method, { delay = 0 } = {}) => backend.call("Answer", [method, JSON.stringify({ response: 1, delay })], { signature: "ss" }),
     calls: () => backend.calls(),
   };
 }

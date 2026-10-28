@@ -191,7 +191,7 @@ describe("scenario catalogue", () => {
   });
 
   it("selects by finding or issue number", () => {
-    assert.deepEqual(selectScenarios(["f01", "#33", "18"]).map((s) => s.id), ["F01", "F23", "F08"]);
+    assert.deepEqual(selectScenarios(["f01", "#33", "18"]).map((s) => s.id), ["F01", "F23", "F08", "F08D"]);
     assert.equal(selectScenarios([]).length, SCENARIOS.length);
     assert.throws(() => selectScenarios(["F99"]), /Unknown scenario F99/);
   });

@@ -11,7 +11,7 @@ KEYS = {
     "return": 28, "enter": 28, "ctrl": 29, "control": 29, "semicolon": 39, "apostrophe": 40, "grave": 41, "shift": 42,
     "backslash": 43, "comma": 51, "period": 52, "slash": 53, "alt": 56, "space": 57, "capslock": 58, "home": 102,
     "up": 103, "pageup": 104, "prior": 104, "left": 105, "right": 106, "end": 107, "down": 108, "pagedown": 109,
-    "next": 109, "insert": 110, "delete": 111, "super": 125, "logo": 125, "meta": 125, "menu": 127,
+    "next": 109, "insert": 110, "delete": 111, "ralt": 100, "altgr": 100, "compose": 100, "super": 125, "logo": 125, "meta": 125, "menu": 127,
 }
 for index, letter in enumerate("qwertyuiop"):
     KEYS[letter] = 16 + index
@@ -58,6 +58,9 @@ class Keyboard:
             + message(2, 0, struct.pack("<I", manager[0]) + wl_string("zwp_virtual_keyboard_manager_v1") + struct.pack("<II", 1, 5))
             + message(5, 0, struct.pack("<II", 4, 6))
         )
+        self.load_keymap(keymap)
+
+    def load_keymap(self, keymap):
         data = keymap.encode() + b"\0"
         fd = os.memfd_create("ardia-keymap")
         os.write(fd, data)
@@ -146,9 +149,18 @@ class Keyboard:
             time.sleep(delay)
 
 
+def compile_keymap(layout="us", variant="", options=""):
+    args = ["xkbcli", "compile-keymap", "--layout", layout]
+    if variant:
+        args += ["--variant", variant]
+    if options:
+        args += ["--options", options]
+    return subprocess.run(args, check=True, capture_output=True, text=True).stdout
+
+
 def main():
     runtime, display = sys.argv[1], sys.argv[2]
-    keymap = subprocess.run(["xkbcli", "compile-keymap", "--layout", "us"], check=True, capture_output=True, text=True).stdout
+    keymap = compile_keymap()
     keyboard = Keyboard(os.path.join(runtime, display), keymap)
     print(json.dumps({"ready": True}), flush=True)
     for line in sys.stdin:
@@ -160,6 +172,10 @@ def main():
                 keyboard.combo(request["combo"])
             elif request["op"] == "type":
                 keyboard.type(request["text"], request.get("delay", 0.02))
+            elif request["op"] == "keymap":
+                keyboard.load_keymap(compile_keymap(request.get("layout", "us"), request.get("variant", ""), request.get("options", "")))
+            elif request["op"] == "tap":
+                keyboard.tap(KEYS[request["key"]])
             elif request["op"] == "down":
                 keyboard.key(KEYS[request["key"]], True)
                 keyboard.roundtrip()
