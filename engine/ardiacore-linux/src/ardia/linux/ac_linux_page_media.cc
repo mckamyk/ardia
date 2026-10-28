@@ -173,6 +173,8 @@ void LinuxPageMedia::UpdateNowPlaying() {
     session_.playback_rate = 1;
   }
   session_.now_ms = base::Time::Now().InMillisecondsFSinceUnixEpoch();
+  session_.page_video_playing = std::ranges::any_of(playing_players_, [](const auto& player) { return player.second; });
+  session_.page_title = session_.page_video_playing && web_contents() ? web_contents()->GetTitle() : std::u16string();
   reporter_.SetNowPlaying(LinuxNowPlayingFromSession(session_));
 }
 
@@ -244,12 +246,36 @@ void LinuxPageMedia::RequestPictureInPicture(const base::ListValue& args, bool a
   if (!content::ArdiaLinuxRequestPictureInPicture(contents, *player)) FinishPictureInPicture();
 }
 
+void LinuxPageMedia::MediaStartedPlaying(const MediaPlayerInfo& info, const content::MediaPlayerId& id) {
+  content::WebContents* contents = web_contents();
+  if (!contents || id.frame_routing_id != contents->GetPrimaryMainFrame()->GetGlobalId()) return;
+  playing_players_[id] = info.has_video;
+  UpdateNowPlaying();
+}
+
+void LinuxPageMedia::MediaStoppedPlaying(const MediaPlayerInfo&, const content::MediaPlayerId& id,
+                                         MediaStoppedReason) {
+  if (playing_players_.erase(id)) UpdateNowPlaying();
+}
+
+void LinuxPageMedia::MediaMetadataChanged(const MediaPlayerInfo& info, const content::MediaPlayerId& id) {
+  const auto player = playing_players_.find(id);
+  if (player == playing_players_.end() || player->second == info.has_video) return;
+  player->second = info.has_video;
+  UpdateNowPlaying();
+}
+
+void LinuxPageMedia::TitleWasSet(content::NavigationEntry*) {
+  if (session_.page_video_playing) UpdateNowPlaying();
+}
+
 void LinuxPageMedia::MediaResized(const gfx::Size& size, const content::MediaPlayerId& id) {
   video_sizes_[id] = size;
 }
 
 void LinuxPageMedia::MediaDestroyed(const content::MediaPlayerId& id) {
   video_sizes_.erase(id);
+  if (playing_players_.erase(id)) UpdateNowPlaying();
 }
 
 void LinuxPageMedia::FinishPictureInPicture() {
