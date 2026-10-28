@@ -28,9 +28,9 @@ import { startHostPersistence } from "./hostSession";
 import { startHostData } from "./hostData";
 import { startHostDownloads } from "./hostDownloads";
 import { startHostTabLifecycle } from "./hostTabLifecycle";
-import { startLinuxTabPolicies } from "./hostPolicies";
+import { startLinuxTabPolicies, TAB_POLICY_CHANNEL, watchHostInputActivity } from "./hostPolicies";
 import { watchInstallPromptCancellations } from "./extensionPrompts";
-import { provideNativeModuleProvider } from "./shims/expo-modules-core";
+import { provideNativeModuleProvider, requireNativeModule } from "./shims/expo-modules-core";
 import { setHostPageHooks } from "./hostPageHooks";
 import { applyHostPageTheme, resetHostPage } from "./hostPageLifecycle";
 import { setHostOverlayCheck } from "./hostViewport";
@@ -93,7 +93,11 @@ async function start() {
     startTabPages();
     startNativeSync();
     startHostDownloads(ardiaHost, useBrowser);
-    startLinuxTabPolicies({ target: window, provide: provideNativeModuleProvider, startLifecycle: startTabLifecycle, startTrim: startMemoryTrim });
+    startLinuxTabPolicies({
+      target: window, provide: provideNativeModuleProvider, startLifecycle: startTabLifecycle, startTrim: startMemoryTrim,
+      windowId, locks: navigator.locks, channel: new BroadcastChannel(TAB_POLICY_CHANNEL), privateWindow: !!ardiaHost.bootstrap.privateWindow,
+      activity: (listener) => watchHostInputActivity(requireNativeModule("ArdiaEngine"), listener),
+    });
     watchInstallPromptCancellations(ardiaHost, useExtensions);
     startLinuxSync({ host: ardiaHost, candidate: true, locks: navigator.locks });
     startLinuxAppServices({

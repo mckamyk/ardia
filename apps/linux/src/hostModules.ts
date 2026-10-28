@@ -1,6 +1,7 @@
 import { hostLaunchConfig } from "./hostLaunchConfig.ts";
 import type { ArdiaHost } from "./host";
 import { callHost, hostModuleMethod, hostSupports } from "./host.ts";
+import { linuxMediaCall } from "./hostCast.ts";
 import { credentialModuleMethod } from "./hostCredentials.ts";
 import { syncModuleMethod } from "./hostSync.ts";
 import { linuxSystemMethod } from "./hostFiles.ts";
@@ -40,6 +41,9 @@ export function resolveHostModule(host: ArdiaHost, name: string, method: string)
       if (typeof args !== "string") return Promise.reject(Object.assign(new Error("Document arguments require JSON text"), { code: "ERR_DOCUMENT_REQUEST" }));
       return callHost(`documents.${verb}`, profile, args, host);
     };
+  }
+  if (name === "ArdiaMedia" && method === "call") {
+    return (verb: string, profile: string, args: string) => linuxMediaCall(verb, args) ?? callHost(`media.${verb}`, profile, args, host);
   }
   if (method === "call" && /^Ardia[A-Z]/.test(name)) {
     const domain = name.slice(5, 6).toLowerCase() + name.slice(6);

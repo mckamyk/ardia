@@ -57,6 +57,7 @@ class Value {
   bool is_list() const { return std::holds_alternative<std::shared_ptr<ListValue>>(data_); }
   const DictValue* GetIfDict() const { return is_dict() ? &GetDict() : nullptr; }
   Value Clone() const;
+  friend bool operator==(const Value& a, const Value& b);
  private:
   std::variant<std::monostate, bool, int, double, std::string, std::shared_ptr<DictValue>, std::shared_ptr<ListValue>> data_;
 };
@@ -112,6 +113,18 @@ class ListValue {
 inline Value::Value(DictValue v):data_(std::make_shared<DictValue>(std::move(v))) {}
 inline Value::Value(ListValue v):data_(std::make_shared<ListValue>(std::move(v))) {}
 inline const ListValue* DictValue::FindList(std::string_view key) const { auto* v=Find(key); return v && v->is_list() ? &v->GetList():nullptr; }
+inline bool operator==(const DictValue& a, const DictValue& b) { return a.storage() == b.storage(); }
+inline bool operator==(const ListValue& a, const ListValue& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) if (!(a[i] == b[i])) return false;
+  return true;
+}
+inline bool operator==(const Value& a, const Value& b) {
+  if (a.data_.index() != b.data_.index()) return false;
+  if (a.is_dict()) return a.GetDict() == b.GetDict();
+  if (a.is_list()) return a.GetList() == b.GetList();
+  return a.data_ == b.data_;
+}
 inline Value Value::Clone() const {
   return std::visit([](const auto& v)->Value { using T=std::decay_t<decltype(v)>; if constexpr(std::is_same_v<T,std::monostate>) return Value(); else if constexpr(std::is_same_v<T,std::shared_ptr<DictValue>> || std::is_same_v<T,std::shared_ptr<ListValue>>) return Value(v->Clone()); else return Value(v); },data_);
 }
