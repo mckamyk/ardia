@@ -115,6 +115,9 @@ class PageStateTests(unittest.TestCase):
     def test_blocked_popups_review_open_and_stale_documents(self):
         self.run_case('popups')
 
+    def test_a_remounted_page_keeps_the_blocked_popups_of_its_document(self):
+        self.run_case('remounted-popups')
+
     def test_snapshot_producers_append_after_core_state(self):
         self.run_case('producers')
 

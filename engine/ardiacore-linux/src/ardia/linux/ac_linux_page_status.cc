@@ -121,6 +121,7 @@ LinuxPageStatus::LinuxPageStatus(base::WeakPtr<LinuxPageLease> lease)
   if (auto* popups = Popups()) {
     popups->manager()->AddObserver(this);
     observing_popups_ = true;
+    for (const auto& [id, url] : popups->GetBlockedPopupRequests()) RememberBlocked(id, url);
   }
 }
 
@@ -304,14 +305,20 @@ void LinuxPageStatus::PrimaryMainFrameRenderProcessGone(base::TerminationStatus 
       .Set("status", code).Set("reason", LinuxCrashReason(status)).Set("code", code)));
 }
 
-void LinuxPageStatus::BlockedUrlAdded(int32_t id, const GURL& url) {
+const LinuxPageStatus::BlockedPopup* LinuxPageStatus::RememberBlocked(int32_t id, const GURL& url) {
   auto* contents = Live();
-  if (!contents || !contents->GetPrimaryMainFrame()) return;
-  if (!blocked_.contains(id) && blocked_.size() >= kMaxBlockedPopups) return;
+  if (!contents || !contents->GetPrimaryMainFrame()) return nullptr;
+  if (!blocked_.contains(id) && blocked_.size() >= kMaxBlockedPopups) return nullptr;
   const GURL& committed = contents->GetLastCommittedURL();
   std::string origin = committed.SchemeIsHTTPOrHTTPS()
       ? url::Origin::Create(committed).Serialize() : std::string();
-  blocked_[id] = BlockedPopup{url, origin, contents->GetPrimaryMainFrame()->GetWeakDocumentPtr()};
+  return &(blocked_[id] = BlockedPopup{url, std::move(origin), contents->GetPrimaryMainFrame()->GetWeakDocumentPtr()});
+}
+
+void LinuxPageStatus::BlockedUrlAdded(int32_t id, const GURL& url) {
+  const BlockedPopup* blocked = RememberBlocked(id, url);
+  if (!blocked) return;
+  std::string origin = blocked->origin;
   auto request = lease_ ? lease_->Capture() : std::nullopt;
   if (!request || !request->lease) return;
   request->lease->Emit(*request, "popupBlocked", base::Value(base::DictValue()
