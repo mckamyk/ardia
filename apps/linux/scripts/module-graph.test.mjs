@@ -107,6 +107,14 @@ test("production graph uses current Linux adapters and one canonical shared stat
     assert.deepEqual(graph.get(wrapper).dynamicallyImportedIds, [eager]);
   }
 
+  const extensionsPane = graph.get(`${browser}components/settings/panes/Extensions.tsx`);
+  const lazyOverlays = `\0ardia-lazy:${browser}components/extensions/ExtensionOverlays.tsx`;
+  assert.ok(extensionsPane.importedIds.includes(`${linux}SettingsInstallDialog.tsx`), "the Extensions pane hosts its install dialog through the Linux host");
+  assert.ok(!extensionsPane.importedIds.includes(lazyOverlays));
+  assert.deepEqual(graph.get(`${linux}SettingsInstallDialog.tsx`)?.importers, [`${browser}components/settings/panes/Extensions.tsx`]);
+  assert.ok(graph.get(`${linux}SettingsInstallDialog.tsx`).importedIds.includes(lazyOverlays));
+  assert.ok(graph.get(`${linux}SettingsInstallDialog.tsx`).importedIds.includes(`${linux}installRequestSheet.ts`));
+
   const passwordsPane = graph.get(`${browser}components/settings/panes/Passwords.tsx`);
   assert.ok(passwordsPane.importedIds.includes(`${linux}importedPasswordSave.ts`), "the Passwords pane saves imported handles through the Linux adapter");
   assert.ok(!passwordsPane.importedIds.includes(`${browser}state/site/passwords.ts`));
