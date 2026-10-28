@@ -12,6 +12,8 @@ const linuxKeys: Record<string, readonly string[]> = {
   jumpToSelection: [],
   downloads: ["⌘J", "⌥⌘L"],
   javaScriptConsole: ["⇧⌘J", "⌥⌘J"],
+  inspectElements: ["⇧⌘C", "⌥⌘C"],
+  copyUrl: [],
   zoomIn: ["⌘=", "⇧⌘="],
   back: ["⌘[", "⌥←"],
   forward: ["⌘]", "⌥→"],
