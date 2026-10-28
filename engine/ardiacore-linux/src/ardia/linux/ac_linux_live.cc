@@ -532,6 +532,27 @@ std::string ErrorText(int status, std::string_view body) {
   return out;
 }
 
+namespace {
+
+bool UsageLimitBody(const std::string& body) {
+  const auto parsed = linux_sync::ParseJson(body);
+  if (!parsed || !parsed->is_object()) return false;
+  if (const std::string* message = Text(*parsed, "message")) {
+    if (message->find("secondary rate limit") != std::string::npos) return true;
+  }
+  const JsonValue* error = parsed->Find("error");
+  const JsonValue* errors = error && error->is_object() ? error->Find("errors") : nullptr;
+  if (!errors || !errors->is_array()) return false;
+  for (const JsonValue& item : errors->items) {
+    const std::string* reason = item.is_object() ? Text(item, "reason") : nullptr;
+    if (reason && (*reason == "userRateLimitExceeded" || *reason == "rateLimitExceeded" || *reason == "dailyLimitExceeded"))
+      return true;
+  }
+  return false;
+}
+
+}
+
 std::optional<Outcome> Failure(const HttpResponse& response) {
   if (!response.reached) return Outcome::Error(kErrNetwork, "Couldn't connect");
   if (response.too_large) return Outcome::Error(kErrService, "The service sent too much data");
@@ -542,7 +563,8 @@ std::optional<Outcome> Failure(const HttpResponse& response) {
   if (response.status == 401) return Outcome::Error(kErrSignedOut, "Signed out");
   if (response.status == 403 && header("x-github-sso")) return Outcome::Error(kErrSso, "Needs Single Sign-On");
   const std::string* remaining = header("x-ratelimit-remaining");
-  if (response.status == 429 || (response.status == 403 && remaining && *remaining == "0"))
+  if (response.status == 429 ||
+      (response.status == 403 && ((remaining && *remaining == "0") || header("retry-after") || UsageLimitBody(response.body))))
     return Outcome::Error(kErrRateLimited, "Rate Limit Exceeded");
   if (response.status < 200 || response.status >= 300)
     return Outcome::Error(response.status == 403 ? kErrSignedOut : kErrService, ErrorText(response.status, response.body));

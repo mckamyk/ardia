@@ -98,7 +98,7 @@ struct HttpRequest {
   std::string body;
 };
 
-inline constexpr const char* kResponseHeaders[] = {"x-github-sso", "x-ratelimit-remaining"};
+inline constexpr const char* kResponseHeaders[] = {"x-github-sso", "x-ratelimit-remaining", "retry-after"};
 
 struct HttpResponse {
   bool reached = false;
