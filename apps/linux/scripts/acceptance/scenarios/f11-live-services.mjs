@@ -51,7 +51,7 @@ export default {
   deadline: 420000,
   manual: [
     { name: "Real provider accounts", steps: ["Connect GitHub (token and Sign In with GitHub…), Bitbucket, Notion, Confluence and Google Drive with real accounts in Settings › Live Folders.", "Each Live folder lists the account's pull requests or recent documents; refresh, restart and disconnect behave as in the fixture run."], reason: "needs real provider credentials and OAuth client IDs" },
-    { name: "Tokens live in the desktop keyring", steps: ["Run Ardia normally (not ARDIA_BACKGROUND) with GNOME Keyring or KWallet's Secret Service.", "Connect a service: Seahorse (or KWalletManager) shows an \"Ardia Live Folder Token\" item whose account is the service name; nothing is written under the profile folder.", "Lock the keyring and refresh: the folder says to unlock the keyring; unlocking and refreshing recovers."], reason: "automated in F11K with a private gnome-keyring (a keyring locked at launch fails, #256); KWallet needs a person" },
+    { name: "Tokens live in the desktop keyring", steps: ["Run Ardia normally (not ARDIA_BACKGROUND) with GNOME Keyring or KWallet's Secret Service.", "Connect a service: Seahorse (or KWalletManager) shows an \"Ardia Live Folder Token\" item whose account is the service name; nothing is written under the profile folder.", "Lock the keyring and refresh: the folder says to unlock the keyring; unlocking and refreshing recovers."], reason: "automated in F11K with a private gnome-keyring and its real unlock prompt (a dismissed prompt fails, #256); KWallet needs a person" },
   ],
   async run(t) {
     const run = nonce("f11");

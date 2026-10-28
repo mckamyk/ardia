@@ -94,15 +94,25 @@ export async function buttonNear(shell, row, button) {
 }
 
 export async function scrollToText(desktop, window, shell, text, { attempts = 80, step = 15 } = {}) {
+  let last = null;
+  let still = 0;
   for (let i = 0; i < attempts; i++) {
     const r = await shell.rectByText(text, { exact: true });
     const height = await shell.eval("innerHeight");
     if (r && r.y > 60 && r.y < height - 60) return r;
+    still = r && last && Math.abs(r.y - last.y) < 1 ? still + 1 : 0;
+    last = r;
     const frame = await currentRect(desktop, window);
+    if (still >= 3) {
+      await desktop.click(frame.x + frame.width * 0.6, frame.y + 30);
+      await delay(200);
+      await desktop.key(r && r.y <= 60 ? "prior" : "next");
+      still = 0;
+    }
     await desktop.pointerMove(frame.x + frame.width * 0.6, frame.y + frame.height / 2);
+    await delay(50);
     await desktop.scroll(r && r.y <= 60 ? -step : step);
     await delay(250);
   }
-  const last = await shell.rectByText(text, { exact: true });
   throw new Error(`${text} never scrolled into view (last at ${JSON.stringify(last)})`);
 }

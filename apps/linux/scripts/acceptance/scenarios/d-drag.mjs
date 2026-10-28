@@ -100,7 +100,7 @@ async function dragOut(t, desktop) {
 async function dropIn(t, desktop, { layout }) {
   const work = await t.scratch(`drop-${layout}`);
   const files = [];
-  for (const n of ["one", "two", "three"]) {
+  for (const n of ["single", "one", "two", "three"]) {
     const file = join(work, `dropped-${n}.txt`);
     await writeFile(file, `dropped ${n}\n`);
     files.push(file);
@@ -233,9 +233,9 @@ async function runDragChecks(t, { x11 }) {
       return result;
     });
     await t.check(`dropping three files onto the ${layout === "top" ? "top tab strip" : "sidebar"} opens three file:// tabs`, async () => {
-      const result = await dropFiles(t, desktop, drop.shell, drop.files, point, `${layout} three`);
+      const result = await dropFiles(t, desktop, drop.shell, drop.files.slice(1), point, `${layout} three`);
       await shot(`drop-three-${layout}`);
-      if (result.added.length < 2) throw new Error(JSON.stringify({ result, tabs: await tabUrls(drop.shell) }));
+      if (result.added.length !== 3) throw new Error(JSON.stringify({ result, tabs: await tabUrls(drop.shell) }));
       return result;
     });
     await t.stop(drop.app);

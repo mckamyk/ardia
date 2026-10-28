@@ -28,6 +28,7 @@ async function subordinate() {
 }
 
 export const OTHER_UID = 2000;
+const REFUSED = "Couldn't Move the File to the Trash";
 
 export function driveWrapper({ executable, drive, foreign, uid, gid, sub }) {
   const maps = (kind, own, start) => [`--map-${kind}=0:${start}:1`, `--map-${kind}=${own}:${own}:1`, `--map-${kind}=${OTHER_UID}:${start + 1}:1`].join(" ");
@@ -125,14 +126,19 @@ export default {
       const env = await onDrive(t, desktop, { foreign: true });
       try {
         await trashFromPopover(desktop, env.shell, env.name);
-        await delay(3000);
+        const notice = await until(async () => {
+          const lines = (await env.shell.text()).split("\n").map((l) => l.trim());
+          return lines.includes(REFUSED) ? lines.filter((l) => l === REFUSED || /trash/i.test(l)).slice(0, 3) : false;
+        }, { timeout: 10000, label: `Ardia's "${REFUSED}" notice` });
         await desktopShot(t, desktop, "drive-foreign-trash");
         const trash = join(env.drive, `.Trash-${env.uid}`);
         const inside = await readdir(env.seen(trash)).catch(() => []);
         if (!(await exists(env.seen(env.download.path)))) throw new Error(`the file left its folder; the foreign trash holds ${JSON.stringify(inside)}`);
         if (inside.length) throw new Error(`Ardia wrote into another user's trash: ${JSON.stringify(inside)}`);
-        const row = await env.shell.rectByText(env.name, { exact: true });
-        return { kept: true, rowStillListed: !!row };
+        const reply = await env.shell.call("downloads.list", {});
+        const row = (reply.ok ? reply.value : []).find((d) => d.path === env.download.path);
+        if (!row) throw new Error("the download's row was removed although the file wasn't trashed");
+        return { notice, kept: true, row: row.state };
       } finally {
         await t.stop(env.app);
       }

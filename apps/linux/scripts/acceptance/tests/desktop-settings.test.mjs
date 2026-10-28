@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { desktopTools, startDesktop } from "../lib/desktop.mjs";
+import { desktopTools, privateRuntime, SOCKET_PATH_MAX, startDesktop } from "../lib/desktop.mjs";
 import { startKeyring } from "../lib/desktopKeyring.mjs";
 import { freshenHistory, summaryLine } from "../lib/desktopImport.mjs";
 import { writeImportFixtures } from "../lib/importFixtures.mjs";
 import { colorBox } from "../scenarios/d-drag.mjs";
-import { polkitBusConfig, privatePolkitScript } from "../scenarios/d-package.mjs";
+import { POLKITD, polkitBusConfig, runPrivatePolkit, subordinateIds } from "../scenarios/d-package.mjs";
 import { driveWrapper, OTHER_UID } from "../scenarios/d-trash.mjs";
 
 const tools = await desktopTools();
@@ -86,13 +86,68 @@ test("the removable-drive wrapper mounts a world-writable tmpfs in a user namesp
   assert.doesNotMatch(driveWrapper({ executable: "/a", drive: "/d", foreign: false, uid: 1000, gid: 1000, sub: { uid: 1, gid: 1 } }), /chown/);
 });
 
-test("the private polkitd bus lets the namespace's polkitd user connect and the script always stops its daemons", () => {
+const POLICY_SOURCE = new URL("../../../../../scripts/linux/dev.ardia.linux.policy", import.meta.url).pathname;
+const ids = await subordinateIds();
+const polkitSkip = !ids ? "needs an /etc/subuid and /etc/subgid range" : !(await access(POLKITD).then(() => true, () => false)) ? `needs ${POLKITD}` : !tools.dbusDaemon ? "needs dbus-daemon" : false;
+const polkitdUid = ids ? Number(ids.users.split(":")[1]) + 101 : null;
+
+async function processesOf(uid, dir) {
+  const found = [];
+  for (const pid of (await readdir("/proc")).filter((name) => /^\d+$/.test(name))) {
+    const status = await readFile(`/proc/${pid}/status`, "utf8").catch(() => "");
+    const cmdline = (await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "")).replaceAll("\0", " ");
+    if (new RegExp(`^Uid:\\s+${uid}\\b`, "m").test(status) || cmdline.includes(dir)) found.push(`${pid} ${cmdline.slice(0, 80)}`);
+  }
+  return found;
+}
+
+test("a private polkitd in a user and PID namespace reads a bind-mounted policy, and nothing of it outlives the run", { skip: polkitSkip }, async () => {
+  const dir = await scratch("polkitd");
+  try {
+    const result = await runPrivatePolkit(dir, POLICY_SOURCE, { ids, timeout: 30000 });
+    assert.equal(result.timedOut, false);
+    assert.equal(result.code, 0, `${result.log} ${result.out}`);
+    assert.match(result.out, /^dev\.ardia\.linux\.reauthenticate:/);
+    assert.match(result.out, /implicit active:\s*auth_self/);
+    assert.deepEqual(await processesOf(polkitdUid, dir), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a private polkitd still running at its deadline is killed with its bus", { skip: polkitSkip }, async () => {
+  const dir = await scratch("polkitd-hold");
+  try {
+    const started = Date.now();
+    const result = await runPrivatePolkit(dir, POLICY_SOURCE, { ids, timeout: 6000, hold: 120 });
+    assert.equal(result.timedOut, true);
+    assert.ok(Date.now() - started < 20000);
+    assert.match(result.out, /implicit active:\s*auth_self/, "polkitd answered before the deadline");
+    assert.deepEqual(await processesOf(polkitdUid, dir), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the private polkitd bus lets the namespace's polkitd user connect", () => {
   const config = polkitBusConfig("/tmp/p/system-bus", "/tmp/p/services");
   assert.match(config, /<type>system<\/type>/);
   assert.match(config, /<allow user="\*"\/>/);
   assert.match(config, /<listen>unix:path=\/tmp\/p\/system-bus<\/listen>/);
-  const script = privatePolkitScript("/tmp/p");
-  assert.match(script, /^mount --bind '\/tmp\/p\/actions' \/usr\/share\/polkit-1\/actions \|\| exit 3/);
-  assert.match(script, /pkaction --action-id dev\.ardia\.linux\.reauthenticate --verbose/);
-  assert.match(script, /kill \$polkitd \$bus 2>\/dev\/null\nwait/);
+});
+
+test("a private runtime folder moves to a short temporary path when sway's IPC socket wouldn't fit", async () => {
+  const short = await scratch("rt");
+  const deep = join(short, "a".repeat(40), "b".repeat(40));
+  try {
+    const near = await privateRuntime(short);
+    assert.equal(near.temporary, false);
+    assert.equal(near.runtime, join(short, "runtime"));
+    const far = await privateRuntime(deep);
+    assert.equal(far.temporary, true);
+    assert.ok(join(far.runtime, "sway-ipc.4294967295.4294967295.sock").length <= SOCKET_PATH_MAX);
+    await rm(far.runtime, { recursive: true, force: true });
+  } finally {
+    await rm(short, { recursive: true, force: true });
+  }
 });

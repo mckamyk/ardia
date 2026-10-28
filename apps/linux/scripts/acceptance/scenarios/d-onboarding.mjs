@@ -38,6 +38,19 @@ async function clickInto(desktop, window, shell, { escape = true } = {}) {
   await delay(300);
 }
 
+async function continueState(shell) {
+  return shell.eval(`(() => {
+    const label = [...document.querySelectorAll('*')].filter((n) => (n.innerText ?? '').trim() === 'Continue' && n.getBoundingClientRect().width > 0).sort((a, b) => a.getBoundingClientRect().width * a.getBoundingClientRect().height - b.getBoundingClientRect().width * b.getBoundingClientRect().height)[0];
+    if (!label) return null;
+    const control = label.closest('[role=button], button, [tabindex]') ?? label;
+    const aria = control.getAttribute('aria-disabled');
+    const native = control.disabled === true;
+    const pointer = getComputedStyle(control).pointerEvents;
+    const disabled = aria === 'true' || native;
+    return { disabled, reason: [aria === 'true' ? 'aria-disabled=true' : null, native ? 'disabled' : null, pointer === 'none' ? 'pointer-events:none' : null].filter(Boolean).join(', ') || null };
+  })()`);
+}
+
 async function advance(desktop, shell, label, from, { timeout = 4000 } = {}) {
   const window = await browserWindow(desktop);
   await clickTextIn(desktop, window, shell, label);
@@ -73,7 +86,7 @@ async function walkOnboarding(t, desktop, shell) {
       next = await advance(desktop, shell, "Pin 2 Tabs", here);
     } else next = (await advance(desktop, shell, "Continue", here, { timeout: 10000 })) ?? (await advance(desktop, shell, "Continue", here, { timeout: 10000 }));
     if (!next) {
-      stuck.push(here.title);
+      stuck.push({ step: here.title, continue: await continueState(shell) });
       await desktopShot(t, desktop, `onboarding-stuck-${stuck.length}`);
       next = await advance(desktop, shell, "Skip", here);
       if (!next) throw new Error(`neither Continue nor Skip leaves ${here.title}`);
@@ -107,7 +120,7 @@ export default {
       await desktopShot(t, desktop, "onboarding-finished");
       const saved = JSON.parse(await readFile(join(documentDirectory(scratch), "onboarding.json"), "utf8"));
       if (!saved.completedAt) throw new Error(`onboarding.json ${JSON.stringify(saved)}`);
-      if (walk.stuck.length) throw new Error(`Continue never enabled on ${walk.stuck.join(", ")} (left with Skip); steps ${walk.walked.length}`);
+      if (walk.stuck.length) throw new Error(`Continue didn't move on from ${walk.stuck.map((x) => `${x.step} (${x.continue?.disabled ? `disabled: ${x.continue.reason}` : "enabled"})`).join(", ")}; left with Skip; steps ${walk.walked.length}`);
       return { steps: walk.walked.length };
     }, { timeout: 180000 });
     await t.check("the choices apply in this window: tabs along the top, DuckDuckGo, GitHub and Linear pinned", async () => {
@@ -167,15 +180,21 @@ export default {
       await t.stop(app);
       ({ app, shell } = await startDesktopBrowser(t, desktop, { scratch, label: "settings-replay" }));
       if (await onboardingShown(shell)) throw new Error("onboarding is already showing before the shortcut");
-      const { settings, window } = await openSettingsWindow(desktop, app, shell, { pane: "General" });
-      await clickInto(desktop, window, settings, { escape: false });
+      const { settings, window } = await openSettingsWindow(desktop, app, shell, { pane: "Keyboard Shortcuts" });
+      await scrollToText(desktop, window, settings, "Show Onboarding");
+      const lines = await paneLines(settings);
+      const recorded = lines[lines.indexOf("Show Onboarding") + 1];
+      if (recorded !== SHORTCUT_LABEL) throw new Error(`after the restart Show Onboarding's shortcut is ${JSON.stringify(recorded)}, not ${SHORTCUT_LABEL}`);
+      await clickTextIn(desktop, window, settings, "Keyboard Shortcuts");
+      const focus = await until(() => settings.eval("document.hasFocus() ? (document.activeElement?.tagName ?? 'BODY') : false"), { timeout: 5000, label: "Settings to take keyboard focus from a click on its sidebar" });
+      if (/^(INPUT|TEXTAREA)$/.test(focus)) throw new Error(`a text field (${focus}) has focus in Settings`);
       await desktop.key(SHORTCUT);
       const shown = await until(() => onboardingShown(shell), { timeout: 8000, label: "onboarding in the browser window" }).catch(() => false);
       await desktopShot(t, desktop, "replay-from-settings");
       const settingsText = (await paneLines(settings)).join("\n");
       const inSettings = REPLAY_MARKS.some((m) => settingsText.includes(m));
       if (!shown) throw new Error(`nothing played after ${SHORTCUT_LABEL} in Settings (onboarding in Settings: ${inSettings}); windows ${JSON.stringify((await desktop.windows()).map((w) => w.title))}`);
-      return { shown };
+      return { shown, recorded, focus };
     });
     await t.stop(app);
   },

@@ -54,8 +54,35 @@ def unlock(bus, password):
     return True
 
 
+def prompt_unlock(bus, timeout):
+    from dbus.mainloop.glib import DBusGMainLoop
+    from gi.repository import GLib
+
+    service = bus.get_object(SERVICE, SERVICE_PATH)
+    unlocked, prompt = service.Unlock([dbus.ObjectPath(LOGIN)], dbus_interface="org.freedesktop.Secret.Service")
+    if str(prompt) == "/":
+        return {"dismissed": False, "unlocked": [str(p) for p in unlocked], "prompted": False}
+    loop = GLib.MainLoop()
+    result = {"prompted": True, "dismissed": None, "unlocked": []}
+
+    def completed(dismissed, value):
+        result["dismissed"] = bool(dismissed)
+        result["unlocked"] = [str(p) for p in value] if isinstance(value, (list, dbus.Array)) else []
+        loop.quit()
+
+    bus.add_signal_receiver(completed, signal_name="Completed", dbus_interface="org.freedesktop.Secret.Prompt", path=str(prompt))
+    bus.get_object(SERVICE, prompt).Prompt("", dbus_interface="org.freedesktop.Secret.Prompt")
+    GLib.timeout_add_seconds(timeout, loop.quit)
+    loop.run()
+    return result
+
+
 def main():
     address, op, payload = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+    if op == "prompt-unlock":
+        from dbus.mainloop.glib import DBusGMainLoop
+
+        DBusGMainLoop(set_as_default=True)
     bus = dbus.bus.BusConnection(address)
     if op == "items":
         result = items(bus, payload.get("attributes", {}), payload.get("secrets", False))
@@ -63,6 +90,8 @@ def main():
         result = create(bus, payload["label"], payload["attributes"], payload["secret"], payload.get("contentType", "text/plain"))
     elif op == "unlock":
         result = unlock(bus, payload["password"])
+    elif op == "prompt-unlock":
+        result = prompt_unlock(bus, payload.get("timeout", 60))
     else:
         raise SystemExit(f"unknown op {op}")
     print(json.dumps(result))

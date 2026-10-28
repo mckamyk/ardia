@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { clickTextIn, desktopShot, desktopUnavailable, openDesktop, openSettingsWindow, startDesktopBrowser } from "../lib/desktopSession.mjs";
 import { startPolkit } from "../lib/desktopServices.mjs";
-import { startKeyring } from "../lib/desktopKeyring.mjs";
+import { answerPrompter, enablePrompter, prompterMissing, prompterWindow, startKeyring } from "../lib/desktopKeyring.mjs";
 import { continueToDone, freshenHistory, marks, openImportWindow, summaryLine } from "../lib/desktopImport.mjs";
 import { openPane, paneLines, paneText } from "../lib/desktopSettings.mjs";
 import { savedLogins, writeImportFixtures } from "../lib/importFixtures.mjs";
@@ -12,11 +12,12 @@ import { until } from "../lib/util.mjs";
 
 const SAFE_STORAGE = { label: "Chrome Safe Storage", attributes: { application: "chrome", "xdg:schema": "chrome_libsecret_os_crypt_password_v2" }, secret: KEYRING_SECRET };
 
-async function importDesktop(t, name, { keyring, writeFixtures }) {
+async function importDesktop(t, name, { keyring, writeFixtures, prompter = false }) {
   const desktop = await openDesktop(t, { name });
   await desktop.command("layout tabbed");
   const polkit = await startPolkit(desktop, { mode: "allow" });
   const ring = keyring ? await startKeyring(desktop, { state: keyring, items: [SAFE_STORAGE] }) : null;
+  if (prompter) await enablePrompter(desktop);
   const scratch = await t.scratch(`${name}-profile`);
   await writeProfileSeed(scratch, { session: sessionSeed() });
   const fixtures = await writeFixtures(join(scratch, "home"));
@@ -130,7 +131,7 @@ export const i111Window = {
   title: "The Import window brings tabs, cookies, an address and a card from a Chrome profile: tabs in an Imported group, the site still signed in, Settings › Autofill lists them",
   deadline: 300000,
   async run(t) {
-    const missing = await desktopUnavailable({ needs: ["dbusmock", "keyring"] });
+    const missing = (await prompterMissing()) ?? await desktopUnavailable({ needs: ["dbusmock", "keyring"] });
     if (missing) {
       t.manual("Import window click-through with tabs, cookies and autofill", ["Import Tabs, Cookies and Autofill from a Chrome profile through the Import window: Done shows the counts, tabs open in an Imported group, a site stays signed in, Settings › Autofill lists the address and card."], missing);
       return;
@@ -184,68 +185,79 @@ export const i111Window = {
   },
 };
 
+async function toUnlockStep(desktop, ui) {
+  await clickTextIn(desktop, ui.importWindow, ui.importer, "Continue");
+  await until(async () => (await paneText(ui.importer)).includes("Unlock your data for import"), { timeout: 15000, label: "the Import window's unlock step" });
+}
+
+async function unlockWithPrompt(t, desktop, ui, { allow, shot }) {
+  await clickTextIn(desktop, ui.importWindow, ui.importer, "Continue");
+  const prompt = await prompterWindow(desktop, { timeout: 20000 });
+  if (shot) await desktopShot(t, desktop, shot);
+  await answerPrompter(desktop, prompt, { allow });
+  return prompt;
+}
+
 export const i109Keyring = {
   id: "I109K",
   issue: 109,
   desktop: true,
-  title: "Keyring-protected (v11) Chrome passwords through the Import window with a private gnome-keyring: unlocked imports them, locked refuses with a note, unlocking the keyring and continuing recovers",
+  title: "Keyring-protected (v11) Chrome passwords through the Import window with a private gnome-keyring: Continue raises gnome-keyring's own unlock prompt; dismissed, it refuses with a note; unlocked, it imports; Skip Encrypted Data imports nothing encrypted",
   deadline: 360000,
   async run(t) {
     const missing = await desktopUnavailable({ needs: ["dbusmock", "keyring"] });
     if (missing) {
-      t.manual("GNOME Keyring and KWallet", ["Import passwords from a Chrome profile that uses gnome-libsecret: a locked keyring refuses with a note, unlocking it and continuing imports them."], missing);
+      t.manual("GNOME Keyring and KWallet", ["Import passwords from a Chrome profile that uses gnome-libsecret: the system unlock prompt appears; cancelling imports none and shows the locked note; allowing imports them."], missing);
       return;
     }
-    const passwordsOnly = async (ui) => {
+    const passwordsOnly = async (desktop, ui) => {
       for (const kind of ["Cookies (stay signed in)", "Addresses and cards", "Tabs"]) {
         if ((await marks(ui.importer))[kind]) await clickTextIn(desktop, ui.importWindow, ui.importer, kind);
       }
       const state = await marks(ui.importer);
       if (!state.Passwords || state.Tabs || state["Cookies (stay signed in)"]) throw new Error(`kinds ${JSON.stringify(state)}`);
     };
-    const env = await importDesktop(t, "keyring-locked", { keyring: "locked", writeFixtures: (home) => writeFollowupFixtures(home, { keyring: true }) });
+    const stored = async (scratch, name) => (await savedLogins(join(scratch, "Default", "Login Data"), await t.tempDir(name))).filter((row) => row.origin.includes("ring-"));
+    const env = await importDesktop(t, "keyring-locked", { keyring: "locked", prompter: true, writeFixtures: (home) => writeFollowupFixtures(home, { keyring: true }) });
     const { desktop, app, shell, ring, fixtures } = env;
     const ui = await openImportWindow(desktop, app, shell);
-    await passwordsOnly(ui);
-    await t.check("with the keyring locked, Continue explains that the keyring didn't allow access and imports nothing", async () => {
-      const result = await continueToDone(desktop, ui.importWindow, ui.importer);
-      await desktopShot(t, desktop, "keyring-locked");
-      if (!result.blocked || !/The system keyring didn't allow access to Chrome Safe Storage/.test(result.text)) throw new Error(`no locked note: ${result.text.slice(0, 400)}`);
+    await passwordsOnly(desktop, ui);
+    await toUnlockStep(desktop, ui);
+    await t.check("with the keyring locked, Continue raises gnome-keyring's unlock prompt; Cancel there leaves the note that the keyring didn't allow access and imports nothing", async () => {
+      const prompt = await unlockWithPrompt(t, desktop, ui, { allow: false, shot: "keyring-prompt" });
+      const note = await until(async () => (await paneLines(ui.importer)).find((l) => l.includes("didn't allow access")) ?? false, { timeout: 15000, label: "the locked note after the dismissed prompt" });
+      await desktopShot(t, desktop, "keyring-dismissed");
       await delay(1000);
-      const stored = await savedLogins(join(env.scratch, "Default", "Login Data"), await t.tempDir("logins"));
-      if (stored.some((row) => row.origin.includes("ring-"))) throw new Error("passwords were stored while the keyring was locked");
-      if (!(await ring.locked())) throw new Error("the keyring was unlocked behind the user's back");
-      return { note: result.text.split("\n").find((l) => l.includes("didn't allow access")) };
+      if ((await stored(env.scratch, "dismissed")).length) throw new Error("passwords were stored after the prompt was dismissed");
+      if (!(await ring.locked())) throw new Error("the keyring is unlocked after a dismissed prompt");
+      return { prompt: prompt.title, note };
     });
-    await t.check("after the keyring is unlocked, Continue imports the two keyring-protected passwords and Settings lists them", async () => {
-      await ring.unlock();
-      await clickTextIn(desktop, ui.importWindow, ui.importer, "Continue");
-      await until(async () => !(await paneText(ui.importer)).includes("didn't allow access"), { timeout: 20000, label: "the locked note to clear after Continue" });
-      const done = await continueToDone(desktop, ui.importWindow, ui.importer);
-      const summary = summaryLine(done.text);
-      if (summary !== `Imported ${fixtures.expected.keyringPasswords} passwords.`) throw new Error(`Done says ${JSON.stringify(summary)}: ${done.text.slice(0, 300)}`);
+    await t.check("Continue again raises the prompt; unlocking there imports the two keyring-protected passwords and Settings lists them", async () => {
+      const prompt = await unlockWithPrompt(t, desktop, ui, { allow: true });
+      const done = await until(async () => { const text = await paneText(ui.importer); return /You're all set|Partially imported|Import failed|nothing new/.test(text) ? text : false; }, { timeout: 30000, label: "the Done step after unlocking" });
+      const summary = summaryLine(done);
+      if (summary !== `Imported ${fixtures.expected.keyringPasswords} passwords.`) throw new Error(`Done says ${JSON.stringify(summary)}: ${done.slice(0, 300)}`);
       await clickTextIn(desktop, ui.importWindow, ui.importer, "Finish importing").catch(() => {});
       const rows = await passwordRows(desktop, ui.window, ui.settings, ["ring-one.ardia.test", "ring-two.ardia.test"]);
       await desktopShot(t, desktop, "keyring-imported");
-      return { summary, rows };
-    });
-    await t.check("Skip Encrypted Data with the keyring locked imports nothing encrypted and says so", async () => {
-      await ring.lock();
-      const fresh = await importDesktop(t, "keyring-skip", { keyring: "locked", writeFixtures: (home) => writeFollowupFixtures(home, { keyring: true }) });
+      return { prompt: prompt.title, summary, rows };
+    }, { timeout: 120000 });
+    await t.stop(app);
+    await t.check("Skip Encrypted Data after a dismissed prompt imports nothing encrypted and says so", async () => {
+      const fresh = await importDesktop(t, "keyring-skip", { keyring: "locked", prompter: true, writeFixtures: (home) => writeFollowupFixtures(home, { keyring: true }) });
       try {
         const skip = await openImportWindow(fresh.desktop, fresh.app, fresh.shell);
-        const state = await marks(skip.importer);
-        for (const kind of ["Cookies (stay signed in)", "Addresses and cards", "Tabs"]) if (state[kind]) await clickTextIn(fresh.desktop, skip.importWindow, skip.importer, kind);
-        const first = await continueToDone(fresh.desktop, skip.importWindow, skip.importer);
-        if (!first.blocked) throw new Error(`no unlock refusal: ${first.text.slice(0, 200)}`);
+        await passwordsOnly(fresh.desktop, skip);
+        await toUnlockStep(fresh.desktop, skip);
+        await unlockWithPrompt(t, fresh.desktop, skip, { allow: false });
+        await until(async () => (await paneText(skip.importer)).includes("didn't allow access"), { timeout: 15000, label: "the locked note" });
         await clickTextIn(fresh.desktop, skip.importWindow, skip.importer, "Skip Encrypted Data");
         const done = await until(async () => {
           const text = await paneText(skip.importer);
           return /You're all set|Partially imported|Import failed|nothing new/.test(text) ? text : false;
         }, { timeout: 20000, label: "the Done step after skipping" });
         await desktopShot(t, fresh.desktop, "keyring-skipped");
-        const stored = await savedLogins(join(fresh.scratch, "Default", "Login Data"), await t.tempDir("skip"));
-        if (stored.some((row) => row.origin.includes("ring-"))) throw new Error("skipping stored the keyring passwords");
+        if ((await stored(fresh.scratch, "skip")).length) throw new Error("skipping stored the keyring passwords");
         if (/Imported 2 passwords/.test(done)) throw new Error(`Done claims the passwords: ${done}`);
         return { done: done.split("\n").slice(0, 4) };
       } finally {
@@ -253,6 +265,5 @@ export const i109Keyring = {
         await fresh.desktop.stop();
       }
     }, { timeout: 150000 });
-    await t.stop(app);
   },
 };
