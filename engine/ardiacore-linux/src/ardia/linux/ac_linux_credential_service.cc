@@ -200,15 +200,19 @@ class EncryptionProbe {
   base::WeakPtrFactory<EncryptionProbe> weak_factory_{this};
 };
 
-void WithProbes(Profile* profile, bool encryption, base::OnceCallback<void(Probes)> then) {
-  Probes probes;
-  scoped_refptr<password_manager::PasswordStoreInterface> store =
-      ProfilePasswordStoreFactory::GetForProfile(profile, ServiceAccessType::EXPLICIT_ACCESS);
-  probes.passwords.service = !!store;
-  if (store) {
-    probes.passwords.error = StoreErrorOf(store->GetError());
+void AwaitPasswordStore(scoped_refptr<password_manager::PasswordStoreInterface> store,
+                        base::TimeTicks started,
+                        base::OnceCallback<void(credentials::StoreError)> settled) {
+  const credentials::StoreError error = StoreErrorOf(store->GetError());
+  if (!credentials::AwaitsStore(error, (base::TimeTicks::Now() - started).InMilliseconds())) {
+    return std::move(settled).Run(error);
   }
-  probes.autofill.service = !!autofill::PersonalDataManagerFactory::GetForBrowserContext(profile);
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(&AwaitPasswordStore, std::move(store), started, std::move(settled)),
+      base::Milliseconds(credentials::kStoreReadyPollMs));
+}
+
+void ProbeEncryption(bool encryption, base::OnceCallback<void(Probes)> then, Probes probes) {
   if (!encryption) {
     return std::move(then).Run(probes);
   }
@@ -223,6 +227,25 @@ void WithProbes(Profile* profile, bool encryption, base::OnceCallback<void(Probe
         std::move(then).Run(probes);
       },
       probes, std::move(then)));
+}
+
+void WithProbes(Profile* profile, bool passwords, bool encryption, base::OnceCallback<void(Probes)> then) {
+  Probes probes;
+  scoped_refptr<password_manager::PasswordStoreInterface> store =
+      ProfilePasswordStoreFactory::GetForProfile(profile, ServiceAccessType::EXPLICIT_ACCESS);
+  probes.passwords.service = !!store;
+  probes.autofill.service = !!autofill::PersonalDataManagerFactory::GetForBrowserContext(profile);
+  auto next = base::BindOnce(&ProbeEncryption, encryption, std::move(then));
+  if (!store || !passwords) {
+    return std::move(next).Run(probes);
+  }
+  AwaitPasswordStore(std::move(store), base::TimeTicks::Now(),
+                     base::BindOnce(
+                         [](Probes probes, base::OnceCallback<void(Probes)> next, credentials::StoreError error) {
+                           probes.passwords.error = error;
+                           std::move(next).Run(probes);
+                         },
+                         probes, std::move(next)));
 }
 
 base::DictValue StatusEntry(const credentials::Availability& availability) {
@@ -511,14 +534,16 @@ void RunFor(base::WeakPtr<LinuxShellWebView> shell,
     return RunPreferences(profile, plan, std::move(done));
   }
   bool encryption = plan.reply == credentials::Reply::kStatus;
+  bool passwords = plan.reply == credentials::Reply::kStatus && !autofill_status;
   for (credentials::Store store : plan.requires_stores) {
     encryption = encryption || store != credentials::Store::kAddresses;
+    passwords = passwords || store == credentials::Store::kPasswords;
   }
   base::FilePath export_dir;
   if (plan.asks_for_path) {
     export_dir = DownloadPrefs::FromBrowserContext(profile)->DownloadPath();
   }
-  WithProbes(profile, encryption,
+  WithProbes(profile, passwords, encryption,
              base::BindOnce(&Proceed, profile->GetPath(), std::move(export_dir), std::move(shell), std::move(plan),
                             autofill_status, std::move(done)));
 }

@@ -60,5 +60,18 @@ class CredentialHelperTests(unittest.TestCase):
             self.assertIn(f'.Set({key}', status)
 
 
+    def test_a_loading_password_store_is_awaited_before_it_is_judged(self):
+        service = (LINUX / 'ac_linux_credential_service.cc').read_text()
+        wait = service[service.index('void AwaitPasswordStore('):service.index('void WithProbes(')]
+        self.assertIn('StoreErrorOf(store->GetError())', wait)
+        self.assertIn('credentials::AwaitsStore(error, ', wait)
+        self.assertIn('PostDelayedTask(', wait)
+        self.assertIn('base::Milliseconds(credentials::kStoreReadyPollMs)', wait)
+        probes = service[service.index('void WithProbes('):service.index('base::DictValue StatusEntry(')]
+        self.assertNotIn('GetError()', probes)
+        self.assertIn('AwaitPasswordStore(', probes)
+        run_for = service[service.index('void RunFor('):service.index('void Run(std::string_view')]
+        self.assertIn('WithProbes(profile, passwords, encryption,', run_for)
+
 if __name__ == '__main__':
     unittest.main()

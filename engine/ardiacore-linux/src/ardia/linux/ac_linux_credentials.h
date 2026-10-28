@@ -2,6 +2,7 @@
 #define ARDIA_LINUX_AC_LINUX_CREDENTIALS_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -107,6 +108,11 @@ struct Availability {
 };
 
 Availability Assess(Store store, const Probe& probe);
+
+inline constexpr int64_t kStoreReadyTimeoutMs = 10000;
+inline constexpr int64_t kStoreReadyPollMs = 50;
+
+bool AwaitsStore(StoreError error, int64_t waited_ms);
 
 enum class Reply {
   kAsIs,

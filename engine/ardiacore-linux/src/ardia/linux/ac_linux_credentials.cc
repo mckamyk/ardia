@@ -538,6 +538,10 @@ Availability Assess(Store store, const Probe& probe) {
   return {};
 }
 
+bool AwaitsStore(StoreError error, int64_t waited_ms) {
+  return error == StoreError::kInactionable && waited_ms < kStoreReadyTimeoutMs;
+}
+
 bool HandlesCall(std::string_view name) {
   return Contains(kManagedNames, name) || Contains(kSecretNames, name);
 }

@@ -29,6 +29,7 @@
 #include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -257,6 +258,16 @@ void EngineReplied(void* context, const char* json) {
   std::move(reply->done).Run(true, std::move(*value));
 }
 
+void KeepDeveloperModeForReload(Profile* profile, const std::string& name, const base::DictValue& input) {
+  if (!ext::ReloadsExtensionFolder(name, input)) return;
+  const std::string* id = input.FindString("id");
+  const extensions::Extension* extension =
+      id ? extensions::ExtensionRegistry::Get(profile)->GetExtensionById(*id, extensions::ExtensionRegistry::EVERYTHING)
+         : nullptr;
+  if (!extension || !extensions::Manifest::IsUnpackedLocation(extension->location())) return;
+  extensions::util::SetDeveloperModeForProfile(profile, true);
+}
+
 void Forward(Profile* profile, const std::string& name, base::DictValue input, Done done) {
   const auto* route = ardiacore::linux_contract::FindRoute(name);
   if (!route) return Fail(std::move(done), "ERR_UNKNOWN_CALL", "This call is unavailable on Linux");
@@ -268,6 +279,7 @@ void Forward(Profile* profile, const std::string& name, base::DictValue input, D
   }
   const auto json = base::WriteJson(sent);
   if (!json) return Fail(std::move(done), "ERR_EXTENSION_REQUEST", "The request is not JSON");
+  KeepDeveloperModeForReload(profile, name, input);
   const std::string service(route->service);
   const std::string path = profile->GetPath().value();
   ac_engine_call(service.c_str(), path.c_str(), json->c_str(), &EngineReplied,

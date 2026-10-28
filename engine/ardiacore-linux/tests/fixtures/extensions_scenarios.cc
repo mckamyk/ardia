@@ -178,6 +178,17 @@ void Changes() {
   assert(ChangeFor("extensions.reload", Dict().Set("id", kId), base::Value(Dict()))->event == "reloaded");
   assert(ChangeFor("extensions.configure", Dict().Set("id", kId), base::Value(Dict()))->event == "configured");
   assert(!ChangeFor("extensions.list", Dict(), base::Value(Dict())));
+  assert(ReloadsExtensionFolder("extensions.reload", Dict().Set("id", kId)));
+  assert(ReloadsExtensionFolder("extensions.configure", Dict().Set("id", kId).Set("options", Dict().Set("incognito", base::Value(true)))));
+  assert(ReloadsExtensionFolder("extensions.configure", Dict().Set("id", kId).Set("options", Dict().Set("incognito", base::Value(false)))));
+  assert(ReloadsExtensionFolder("extensions.configure", Dict().Set("id", kId).Set("options", Dict().Set("fileAccess", base::Value(true)))));
+  assert(ReloadsExtensionFolder("extensions.configure", Dict().Set("id", kId).Set("options", Dict().Set("pinned", base::Value(true)).Set("incognito", base::Value(true)))));
+  assert(!ReloadsExtensionFolder("extensions.configure", Dict().Set("id", kId).Set("options", Dict().Set("pinned", base::Value(true)))));
+  assert(!ReloadsExtensionFolder("extensions.configure", Dict().Set("id", kId).Set("options", Dict().Set("siteAccess", "onClick"))));
+  assert(!ReloadsExtensionFolder("extensions.configure", Dict().Set("id", kId).Set("options", Dict().Set("incognito", "yes"))));
+  for (const char* other : {"extensions.setEnabled", "extensions.uninstall", "extensions.install", "extensions.list"}) {
+    assert(!ReloadsExtensionFolder(other, Dict().Set("id", kId)));
+  }
   assert(!ChangeFor("extensions.watchActions", Dict().Set("id", kId), base::Value(Dict())));
   assert(*ChangeEvent(Change{kId, "reloaded"}, "").FindString("profile") == "");
   base::DictValue event = ChangeEvent(Change{kId, "reloaded"}, "work");
