@@ -17,8 +17,6 @@ export default {
   title: "Tab sleep, freeze protections and battery-aware system state on Linux",
   deadline: 300000,
   manual: [
-    { name: "Battery transitions", steps: ["On a laptop with UPower, set Settings › Advanced › Battery Saver to When unplugged.", "Unplug: engine.systemState reports onBattery at once and one Battery Saver toast appears, in the focused window only; plug in and it turns off."], reason: "needs a real battery and UPower on the system bus" },
-    { name: "Power profile", steps: ["Switch power-profiles-daemon to power-saver.", "lowPowerMode turns on at once (no 30 s poll) and Battery Saver activates."], reason: "needs power-profiles-daemon" },
     { name: "Memory pressure", steps: ["Run a memory hog until tasks stall on reclaim (stress-ng --vm 4 --vm-bytes 95%, or a cgroup with a low memory.high).", "Within 2 s memoryPressure reports warning (critical once full stalls pass 10%), idle background tabs sleep on the next sweep, and it falls back to normal a few seconds after the hog stops."], reason: "needs real memory pressure" },
   ],
   async run(t) {

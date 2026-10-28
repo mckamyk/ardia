@@ -11,6 +11,7 @@ export function createContext({ scenario, options, fixtures, resultsDir, scratch
   const checks = [];
   const apps = new Set();
   const scratches = [];
+  const deferred = [];
   const evidenceDir = join(resultsDir, scenario.id);
   let evidenceReady;
   const ensureEvidence = () => (evidenceReady ??= mkdir(evidenceDir, { recursive: true }));
@@ -21,6 +22,9 @@ export function createContext({ scenario, options, fixtures, resultsDir, scratch
     checks,
     evidenceDir,
     log: (message) => log(`[${scenario.id}] ${message}`),
+    defer(stop) {
+      deferred.push(stop);
+    },
     async scratch(name = "profile") {
       const dir = join(scratchRoot, `${scenario.id}-${name}-${scratches.length}`);
       await rm(dir, { recursive: true, force: true });
@@ -90,6 +94,7 @@ export function createContext({ scenario, options, fixtures, resultsDir, scratch
         await app.close().catch(() => {});
         apps.delete(app);
       }
+      for (const stop of deferred.splice(0).reverse()) await Promise.resolve().then(stop).catch(() => {});
       if (keep || failed) return scratches;
       for (const dir of scratches) await rm(dir, { recursive: true, force: true }).catch(() => {});
       return [];

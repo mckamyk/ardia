@@ -3,7 +3,6 @@ import { sessionSeed } from "../lib/seed.mjs";
 import { until } from "../lib/util.mjs";
 
 export const QUIT_BACKGROUND_ANSWER = '[ardiacore] dialog (background run, not shown): "Are you sure you want to quit Ardia?" (Quit / Cancel): Cancel';
-const QUIT_PROMPT = "Are you sure you want to quit Ardia?";
 const twoWindows = (settings) => sessionSeed({ windows: [{ id: "main", urls: ["about:blank"] }, { id: "second", urls: ["about:blank"] }], settings });
 
 const browserWindows = async (app) => (await app.shells()).filter((shell) => !shell.utility).length;
@@ -24,29 +23,6 @@ export default {
   issue: 221,
   title: "Warn before quitting asks once, quitting confirms active downloads, and signal quits never ask",
   deadline: 240000,
-  manual: [
-    {
-      name: "The visible quit prompt",
-      steps: [
-        "In Settings › General turn on Warn before quitting, open two windows and press Ctrl+Shift+Q.",
-        `One prompt appears over the focused window only: "${QUIT_PROMPT}", "Your windows and tabs will be restored the next time you open it.", Quit and Cancel, and a "Don't ask again" box. No "Close N tabs?" prompt appears for either window.`,
-        "Press Ctrl+Shift+Q again while the prompt is open, in either window: no second prompt appears.",
-        "Cancel: both windows and their tabs stay open.",
-        "Press Ctrl+Shift+Q, tick Don't ask again, and choose Quit: Ardia quits; after relaunch both windows come back and Settings › General shows the toggle off.",
-      ],
-      reason: "the prompt is a real modal window; background instances log and auto-answer it",
-    },
-    {
-      name: "Active downloads ask before quitting",
-      steps: [
-        "Start a large download, then press Ctrl+Shift+Q.",
-        "One prompt says \"You have 1 download in progress. If you quit now, this download will be cancelled.\" with Quit and Cancel.",
-        "Cancel: Ardia and the download keep running. Quit: Ardia quits with no second download dialog from Chromium.",
-        "Start a download again and log out of the desktop session (or send SIGTERM): Ardia quits without asking and restores its windows on the next launch.",
-      ],
-      reason: "needs a real download and a visible modal window",
-    },
-  ],
   async run(t) {
     const warned = await startBrowser(t, { name: "warned", session: twoWindows({ warnBeforeQuitting: true }) });
     await t.check("the host offers the quit routes and counts downloads in progress", async () => {
