@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { busConfig, changedRegion, flattenTree, parsePpm, privateEnvironment, regions, changedCells, swayConfig, toolEnvironment } from "../lib/desktop.mjs";
+import { busConfig, changedRegion, flattenTree, parsePpm, privateEnvironment, regions, changedCells, swayConfig, swipeSteps, toolEnvironment } from "../lib/desktop.mjs";
 import { desktopLaunch, sessionEnvironment } from "../lib/desktopSession.mjs";
-import { decodeGlobal, decodeMessages, encodeMessage, encodeString } from "../lib/waylandPointer.mjs";
+import { decodeGlobal, decodeMessages, encodeMessage, encodeString, fingerLiftFrame, fingerScrollFrame } from "../lib/waylandPointer.mjs";
 
 const OWNER = { WAYLAND_DISPLAY: "wayland-1", DISPLAY: ":0", HYPRLAND_INSTANCE_SIGNATURE: "sig", SWAYSOCK: "/run/user/1000/sway.sock", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus", DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/run/dbus/system_bus_socket", XDG_RUNTIME_DIR: "/run/user/1000", SSH_AUTH_SOCK: "/run/user/1000/ssh", PATH: "/usr/bin" };
 
@@ -118,3 +118,40 @@ test("the live-session guard refuses input off workspace 9 or outside its window
   await assert.rejects(other.focus("type"), /isn't on workspace 9/);
   assert.deepEqual(layoutBox([{ x: 0, y: 0, width: 3840, height: 2160 }, { x: 3840, y: 200, width: 1920, height: 1080 }]), { x: 0, y: 0, width: 5760, height: 2160 });
 });
+
+test("a finger swipe is a finger-source horizontal axis frame per step and an axis stop on both axes at lift", () => {
+  const frame = decodeMessages(fingerScrollFrame(6, 100, 12.5)).messages;
+  assert.deepEqual(frame.map((m) => m.opcode), [5, 3, 4]);
+  assert.equal(frame[0].body.readUInt32LE(0), 1);
+  assert.equal(frame[1].body.readUInt32LE(4), 1);
+  assert.equal(frame[1].body.readInt32LE(8), 3200);
+  const lift = decodeMessages(fingerLiftFrame(6, 200)).messages;
+  assert.deepEqual(lift.map((m) => m.opcode), [5, 6, 6, 4]);
+  assert.deepEqual(lift.slice(1, 3).map((m) => m.body.readUInt32LE(4)), [0, 1]);
+  const steps = swipeSteps(300, 24);
+  assert.equal(steps.length, 24);
+  assert.ok(Math.abs(steps.reduce((a, b) => a + b, 0) - 300) < 1e-9);
+  assert.ok(steps[12] > steps[0] && Math.abs(steps[0] - steps[23]) < 1e-9);
+});
+
+test("a white surface is measured along a blank row and a blank column inside its edge", async () => {
+  const { whiteBox, exactBox } = await import("../lib/desktopUi.mjs");
+  const width = 60;
+  const height = 40;
+  const paint = (boxes) => {
+    const data = Buffer.alloc(width * height * 3);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const hit = boxes.find(([b]) => x >= b.x && x < b.x + b.width && y >= b.y && y < b.y + b.height);
+      data.set(hit ? hit[1] : [247, 238, 241], (y * width + x) * 3);
+    }
+    return { width, height, data };
+  };
+  const popup = { x: 20, y: 5, width: 30, height: 20 };
+  const image = paint([[{ x: 30, y: 7, width: 15, height: 4 }, [0, 0, 0]], [popup, [255, 255, 255]], [{ x: 18, y: 4, width: 34, height: 23 }, [230, 230, 230]]]);
+  assert.deepEqual(whiteBox(image, { x: 35, y: 20 }), popup);
+  assert.equal(whiteBox(image, { x: 5, y: 30 }), null);
+  const blank = paint([]);
+  const drawn = paint([[{ x: 10, y: 10, width: 16, height: 12 }, [20, 20, 20]]]);
+  assert.deepEqual(exactBox(blank, drawn, { x: 8, y: 8, width: 32, height: 16 }), { x: 10, y: 10, width: 16, height: 12 });
+});
+
