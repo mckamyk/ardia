@@ -12,7 +12,9 @@ Branch `t3/linux-media-followups`. Source-level work for #123, #125, #126 and #1
 - `tabLifecycle.ts` gets two importer-scoped Vite replacements (only for that importer):
   - `policyPerformance.ts`: the owner applies `engine.batterySaver` and shares its reply on the `ardia.linux.tab-policies` BroadcastChannel. Other windows reuse a reply for the same mode, or wait up to 2 s and then apply it themselves.
   - `policyToasts.ts`: Battery Saver toasts appear only in the renderer that owns the focused window. The host broadcasts window activation to every renderer, so all renderers agree on `ui.focusedWindowId`.
-- A private window whose shell runs in another storage partition gets its own lock and channel, and so acts as its own owner.
+- Private windows never request the lock, never run the trim and ignore the channel; they apply Battery Saver themselves (idempotent), so a private shell in its own storage partition can't become a second owner.
+- Each Battery Saver request takes a generation. A request that timed out waiting for the owner applies only if it is still the latest; otherwise it resolves with the latest request, so a stale fallback can't overwrite a newer mode.
+- The `stop()` that `startLinuxTabPolicies` returns releases a held lock (and hands back one granted later), closes the channel and clears ownership.
 
 ### Page input counts as activity (#125)
 
@@ -21,7 +23,7 @@ Branch `t3/linux-media-followups`. Source-level work for #123, #125, #126 and #1
 
 ### UPower and power profiles by signal (#127)
 
-- `LinuxPowerMonitor` watches four objects with `dbus::PropertySet` on Chromium's shared system bus (`components/dbus`, the bus Chromium's battery status manager uses): UPower `OnBattery`, the `DisplayDevice` (`Type`, `IsPresent`, `Percentage`), and `ActiveProfile` from `org.freedesktop.UPower.PowerProfiles` or `net.hadess.PowerProfiles`.
+- `LinuxPowerMonitor` watches four objects with `dbus::PropertySet` on its own private system bus connection with a dedicated D-Bus runner. It uses its own connection because Chromium's shared bus caches one DisplayDevice proxy that the Battery Status API detaches when its last user goes away: UPower `OnBattery`, the `DisplayDevice` (`Type`, `IsPresent`, `Percentage`), and `ActiveProfile` from `org.freedesktop.UPower.PowerProfiles` or `net.hadess.PowerProfiles`.
 - It runs `GetAll` at start and follows `PropertiesChanged` and invalidations afterwards. When a service gets a new owner it fetches again; when the service goes away the values become invalid. Changes reach `engine.systemState` listeners at once.
 - The first answer waits for every `GetAll` reply or 2 s. Without UPower or a system bus, power and battery still report `unavailable`.
 - Only the memory sample is still periodic: a `/proc` read every 30 s on the blocking sequence, with no D-Bus.
@@ -51,20 +53,21 @@ Branch `t3/linux-media-followups`. Source-level work for #123, #125, #126 and #1
 
 | Command | Result |
 | --- | --- |
-| `python3 -m unittest tests.test_media_policy tests.test_bootstrap_build tests.test_page_state tests.test_page_messages` | 45 passed (includes `power-tracker`); the full discover (415) passed on the combined lane tree |
+| `python3 -m unittest tests.test_media_policy tests.test_power_bus tests.test_bootstrap_build tests.test_page_state tests.test_page_messages tests.test_tab_glue` | 55 passed |
+| `scripts/linux/syntax-check-156.sh ac_linux_power ac_linux_tab_policy ac_linux_host.cc` | 3 of 3 pass |
 | `pnpm --filter @ardia/linux typecheck` | passed |
-| `pnpm --filter @ardia/linux test:host` | 383 passed |
-| `pnpm --filter @ardia/linux test:graph` | 2 passed, 1 failed: `page-state-components.test.mjs` fails the same way on `origin/linux` (the #160 credential-wording plugin rejects the partial build) |
+| `pnpm --filter @ardia/linux test:host` | 425 passed |
+| `pnpm --filter @ardia/linux test:graph` | 3 passed |
 | `pnpm --filter @ardia/linux build` | passed; the bundle routes tabLifecycle's toasts and battery saver through the adapters |
-| `pnpm --filter @ardia/linux acceptance:self-test` | 64 passed |
+| `pnpm --filter @ardia/linux acceptance:self-test` | 68 passed (the stock-Chromium F09 extension check failed once and passed on re-run) |
 
-New cases: `hostPolicies.test.mjs` (5), `hostCast.test.mjs` (2), `power-tracker` in `test_media_policy`. Each failed before its change. The F18 scenario gains the input-activity and single-owner checks.
+New cases: `hostPolicies.test.mjs` (8, including the reproduced stale-fallback race), `test_power_bus.py` (2), `hostCast.test.mjs` (2), `power-tracker` in `test_media_policy`. Each failed before its change. The F18 scenario gains the input-activity and single-owner checks.
 
 ## Needs native runtime acceptance on a Chromium 156 build
 
 None of this has been compiled or run against Chromium 156:
 
-- GN visibility of `//components/dbus` and the `dbus::PropertySet` subclass compile.
+- The `dbus::PropertySet` subclass and the private bus pass `scripts/linux/syntax-check-156.sh`; a GN check, compile and link have not run.
 - UPower and power-profiles-daemon signals on a laptop: unplugging and switching to power-saver change `engine.systemState` at once.
 - A system bus or UPower that is missing in the acceptance environment still answers within 2 s.
 - With two windows, exactly one holds the lock, and closing it hands the trim to the other.
