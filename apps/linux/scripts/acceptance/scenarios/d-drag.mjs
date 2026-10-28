@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { evaluate } from "../lib/cdp.mjs";
-import { currentRect, desktopShot, desktopUnavailable, openDesktop, pointAt, startDesktopBrowser } from "../lib/desktopSession.mjs";
+import { currentRect, desktopShot, desktopUnavailable, openDesktop, pointAt, settledRect, startDesktopBrowser } from "../lib/desktopSession.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { until } from "../lib/util.mjs";
 
@@ -58,9 +58,30 @@ const center = (w) => ({ x: w.rect.x + w.rect.width / 2, y: w.rect.y + w.rect.he
 const tabUrls = (shell) => shell.state("const w = s.windows[windowId]; return (w?.tabIds ?? []).map((id) => s.tabs[id]?.url);");
 const browserWindow = (desktop) => until(async () => (await desktop.windows()).find((w) => / - Ardia$/.test(w.title)) ?? false, { timeout: 15000, label: "the browser window" });
 
+export const SIDEBAR_ROW_SCRIPT = (title) => `(() => {
+  const want = ${JSON.stringify(title)};
+  const text = (n) => (n.innerText ?? '').trim();
+  let label = null;
+  let area = Infinity;
+  for (const n of document.body.querySelectorAll('*')) {
+    if (text(n) !== want || n.closest('[data-testid="ardia-sidebar-hover"]')) continue;
+    const r = n.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0 || r.width * r.height > area) continue;
+    label = n;
+    area = r.width * r.height;
+  }
+  if (!label) return null;
+  let row = label;
+  while (row.parentElement && row.parentElement !== document.body && text(row.parentElement) === want) row = row.parentElement;
+  const r = row.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2, top: r.top, width: r.width, height: r.height };
+})()`;
+
 async function rowOf(shell, title) {
-  return until(() => shell.rectByText(title, { exact: true }), { timeout: 8000, label: `${title} in the sidebar` });
+  return settledRect(() => shell.eval(SIDEBAR_ROW_SCRIPT(title)), { timeout: 8000, label: `${title} at rest in the sidebar` });
 }
+
+export const reorderPoint = (row) => ({ x: row.x, y: row.top + Math.min(2, row.height / 8) });
 
 async function recorderBin(dir) {
   const bin = join(dir, "bin");
@@ -255,12 +276,16 @@ async function runDragChecks(t, { x11 }) {
     const field = await rowOf(shell, "Field page");
     const link = await rowOf(shell, "Link page");
     const frame = await currentRect(desktop, browser);
-    await drag(desktop, { x: frame.x + link.x, y: frame.y + link.y }, { x: frame.x + field.x, y: frame.y + field.y - field.height / 2 + 2 }, { steps: 16 });
+    const above = reorderPoint(field);
+    await drag(desktop, { x: frame.x + link.x, y: frame.y + link.y }, { x: frame.x + above.x, y: frame.y + above.y }, { steps: 16 });
     const after = await until(async () => { const urls = await tabUrls(shell); return urls[0] !== before[0] ? urls : false; }, { timeout: 5000, label: "the order to change" });
     return { before: before.map((u) => u.split("/").pop()), after: after.map((u) => u.split("/").pop()) };
   });
   await t.check("dragging a sidebar tab onto the page makes a split", async () => {
-    const field = await rowOf(shell, "Field page");
+    const field = await until(async () => {
+      const [moved, link] = [await rowOf(shell, "Field page"), await rowOf(shell, "Link page")];
+      return moved.top > link.top ? moved : false;
+    }, { timeout: 8000, label: "the reordered Field page row at rest below Link page" });
     const frame = await currentRect(desktop, browser);
     await drag(desktop, { x: frame.x + field.x, y: frame.y + field.y }, { x: frame.x + frame.width * 0.85, y: frame.y + frame.height / 2 }, { steps: 30, hover: 800 });
     const split = await until(async () => { const s = await shell.state("return Object.values(s.splits ?? {});"); return s.length ? s : false; }, { timeout: 8000, label: "a split" });
