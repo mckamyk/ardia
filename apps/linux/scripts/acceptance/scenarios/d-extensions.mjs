@@ -374,8 +374,11 @@ export const storeDesktop = {
     });
     await t.check("closing the store tab while Ardia's dialog is open dismisses it and installs nothing", async () => {
       await add("store-dialog-close-tab");
-      await clickNeutral(desktop, window, shell);
-      if (!(await shows(shell, title))) throw new Error("the dialog closed when the window was clicked, before Ctrl+W");
+      const heading = await shell.rectByText(title);
+      const frame = await currentRect(desktop, window);
+      await desktop.click(frame.x + heading.x, frame.y + heading.y);
+      await until(() => hasFocus(shell), { timeout: 5000, label: "keyboard focus in the window with the dialog" });
+      if (!(await shows(shell, title))) throw new Error("the dialog closed when its own heading was clicked, before Ctrl+W");
       await desktop.key("ctrl+w");
       await shell.waitState(`return !s.windows[windowId].tabIds.some((id) => (s.tabs[id]?.url ?? "").includes(${js(STORE_ID)})) || null;`, { timeout: 10000, label: "the store tab to close" });
       await until(async () => !(await shows(shell, title)), { timeout: 8000, label: "the dialog to close with the tab" });
