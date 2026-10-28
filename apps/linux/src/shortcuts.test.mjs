@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { keyboardCombo, linuxBindings, linuxMenuShortcuts, linuxNativeBindings } from "./shortcuts.ts";
+import { keyboardCombo, linuxBindings, linuxMenuShortcuts, linuxNativeBindings, recordableShortcut } from "./shortcuts.ts";
 
 const commandAt = (bindings, keyCode, modifiers) => bindings.find((binding) => binding.keyCode === keyCode && binding.modifiers === modifiers);
 const event = (code, modifiers = {}) => ({ code, key: "", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...modifiers });
@@ -58,6 +58,21 @@ test("function-key bindings record and dispatch without modifiers", () => {
   const binding = commandAt(linuxBindings({ focusCommandBar: [combo.key] }), combo.keyCode, combo.flags);
   assert.equal(binding?.command, "focusCommandBar");
   assert.equal(binding?.keyCode, 117);
+});
+
+test("the recorder takes Ctrl, Super and Alt combinations and function keys, as Chromium on Linux does; Shift, AltGr and bare keys alone are refused", () => {
+  const typed = (code, key, modifiers) => ({ code, key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...modifiers });
+  for (const accepted of [typed("KeyK", "k", { ctrlKey: true }), typed("KeyK", "k", { metaKey: true }), typed("KeyU", "U", { altKey: true, shiftKey: true }), typed("KeyK", "k", { altKey: true }), typed("F6", "F6", {})]) {
+    assert.equal(recordableShortcut(accepted), true, JSON.stringify(accepted));
+  }
+  for (const refused of [typed("KeyK", "K", { shiftKey: true }), typed("KeyK", "k", {}), typed("KeyQ", "@", {}), typed("AltLeft", "Alt", { altKey: true }), typed("ShiftLeft", "Shift", { shiftKey: true, altKey: true })]) {
+    assert.equal(recordableShortcut(refused), false, JSON.stringify(refused));
+  }
+  const combo = keyboardCombo(typed("KeyU", "U", { altKey: true, shiftKey: true }));
+  assert.deepEqual([combo.key, combo.modifiers], ["u", ["option", "shift"]]);
+  const binding = commandAt(linuxBindings({ duplicateTab: [combo.key, ...combo.modifiers] }), combo.keyCode, combo.flags);
+  assert.equal(binding?.command, "duplicateTab");
+  assert.deepEqual([binding.keyCode, binding.modifiers], [85, 10]);
 });
 
 test("obsolete overrides do not steal current default bindings", () => {
