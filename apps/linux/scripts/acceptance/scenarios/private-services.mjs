@@ -33,6 +33,8 @@ async function refused(shell, name, args, profile, code) {
 
 const downloadsOf = (shell) => shell.state("return s.downloads ?? [];");
 
+const answerFileChooser = (state, path) => writeFile(join(state.scratch, "file-chooser.txt"), `${path}\n`);
+
 async function waitDownload(shell, test, label, timeout = 25000) {
   return until(async () => (await downloadsOf(shell)).find(test) ?? false, { timeout, label });
 }
@@ -116,13 +118,15 @@ export const privateDownloads = {
     await priv.shell.waitTabUrl(tabId, (u) => u === page);
     const name = `private-${run}.bin`;
     let finished;
-    await t.check("a private download reaches the private window's list as off the record", async () => {
+    await t.check("a private download asks where to save, as Chrome's incognito does, and reaches the private window's list as off the record", async () => {
+      await answerFileChooser(state, join(folder, name));
       await priv.shell.navigate(tabId, t.fixtures.url.download(name, 32768));
       finished = await waitDownload(priv.shell, (d) => d.filename?.endsWith(name) && d.state === "finished", "private download to finish");
       if (finished.offTheRecord !== true) throw new Error(`entry ${JSON.stringify(finished)}`);
+      if (!/save file dialog \(background run, not shown\)/.test(await state.app.logText())) throw new Error("the private download never asked where to save");
       const listed = await ok(priv.shell, "downloads.list", {});
       if (!listed.some((d) => d.id === finished.id)) throw new Error("downloads.list from the private window lacks it");
-      return { id: finished.id, profile: finished.profile };
+      return { id: finished.id, profile: finished.profile, path: finished.path };
     }, { critical: true });
     await t.check("regular windows never see or control it", async () => {
       await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -135,6 +139,7 @@ export const privateDownloads = {
     });
     await t.check("a slow private download pauses, resumes and cancels from its window", async () => {
       const slow = `private-slow-${run}.bin`;
+      await answerFileChooser(state, join(folder, slow));
       await priv.shell.navigate(tabId, t.fixtures.url.slow(slow, 6 << 20));
       const live = await waitDownload(priv.shell, (d) => d.filename?.endsWith(slow) && d.state === "downloading" && d.received > 0, "private slow download progress");
       const foreign = await state.shell.call("downloads.pause", { id: live.id });
