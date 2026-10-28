@@ -24,13 +24,19 @@ void LinuxLinkGestureGate::NotePress(uintptr_t surface) {
   pressed_since_drop_ = true;
   press_surface_ = surface;
   press_open_ = true;
+  dropped_on_ = 0;
 }
 
-void LinuxLinkGestureGate::NoteDragEnded(uintptr_t surface, bool over, double now) {
+void LinuxLinkGestureGate::NoteDrop(uintptr_t target) {
+  if (press_open_) dropped_on_ = target;
+}
+
+void LinuxLinkGestureGate::NoteDragEnded(uintptr_t surface, double now) {
   if (!surface || !press_open_ || surface != press_surface_) return;
   press_open_ = false;
   drop_surface_ = surface;
-  drop_over_ = over;
+  drop_over_ = dropped_on_ == surface;
+  dropped_on_ = 0;
   drop_at_ = now;
   drop_used_ = false;
   pressed_since_drop_ = false;
@@ -66,6 +72,7 @@ void LinuxLinkGestureGate::Forget(uintptr_t surface) {
     press_surface_ = 0;
     press_open_ = false;
   }
+  if (surface == dropped_on_) dropped_on_ = 0;
   if (surface == drop_surface_) {
     drop_surface_ = 0;
     drop_at_ = -1;

@@ -223,7 +223,8 @@ void LinkDrops() {
   Expect(gate.DragSource() == 0, "no press, no drag source");
   gate.NotePress(1);
   Expect(gate.DragSource() == 1, "the pressed page is the drag source");
-  gate.NoteDragEnded(1, true, 2.0);
+  gate.NoteDrop(1);
+  gate.NoteDragEnded(1, 2.0);
   Expect(gate.DragSource() == 0, "a drag end consumes the press");
   Expect(gate.AcceptLinkDrop(2, true, 2.1) == "the drag ended on another page", "another page cannot use the drop");
   Expect(gate.AcceptLinkDrop(1, false, 2.1) == "page not shown", "hidden pages cannot open a drop");
@@ -231,37 +232,59 @@ void LinkDrops() {
   Expect(gate.AcceptLinkDrop(1, true, 2.3) == "that drag already opened a link", "one link per drag");
 
   gate.NotePress(1);
-  gate.NoteDragEnded(1, false, 3.0);
-  Expect(gate.AcceptLinkDrop(1, true, 3.1) == "the drag ended outside the page", "a drop outside the view opens nothing");
+  gate.NoteDragEnded(1, 3.0);
+  Expect(gate.AcceptLinkDrop(1, true, 3.1) == "the drag ended outside the page", "a drag with no drop on an Ardia page opens nothing");
 
   gate.NotePress(1);
-  gate.NoteDragEnded(1, true, 4.0);
+  gate.NoteDrop(2);
+  gate.NoteDragEnded(1, 3.5);
+  Expect(gate.AcceptLinkDrop(1, true, 3.6) == "the drag ended outside the page", "a drop on another window's page opens nothing");
+
+  gate.NotePress(1);
+  gate.NoteDrop(1);
+  gate.NoteDrop(0);
+  gate.NoteDragEnded(1, 3.7);
+  Expect(gate.AcceptLinkDrop(1, true, 3.8) == "the drag ended outside the page", "the last drop of the drag decides, and the shell is no page");
+
+  gate.NoteDrop(1);
+  gate.NotePress(1);
+  gate.NoteDragEnded(1, 3.9);
+  Expect(gate.AcceptLinkDrop(1, true, 3.95) == "the drag ended outside the page", "a drop before the drag's press does not count");
+
+  gate.NotePress(1);
+  gate.NoteDrop(1);
+  gate.NoteDragEnded(1, 4.0);
   Expect(gate.AcceptLinkDrop(1, true, 4.0 + LinuxLinkGestureGate::kDropLifetime + 0.1) == "the drag ended too long ago", "stale drop");
 
   gate.NotePress(1);
-  gate.NoteDragEnded(1, true, 10.0);
+  gate.NoteDrop(1);
+  gate.NoteDragEnded(1, 10.0);
   gate.NotePress(1);
   Expect(gate.AcceptLinkDrop(1, true, 10.1) == "the mouse was pressed again since the drag ended", "pressed since the drop");
 
   gate.NotePress(1);
   gate.NoteRelease(1, 0, 20.0, std::nullopt);
   Expect(gate.DragSource() == 0, "a release that reached the page is a click, not a drag");
-  gate.NoteDragEnded(1, true, 20.1);
+  gate.NoteDrop(1);
+  gate.NoteDragEnded(1, 20.1);
   Expect(gate.AcceptLinkDrop(1, true, 20.2) == "the mouse was pressed again since the drag ended", "a drag end without a pending press is ignored");
   gate.NotePress(1);
-  gate.NoteDragEnded(0, true, 21.0);
+  gate.NoteDrop(1);
+  gate.NoteDragEnded(0, 21.0);
   Expect(!gate.AcceptLinkDrop(1, true, 21.1).empty() && gate.DragSource() == 1, "an unknown source never matches");
 
   gate.NotePress(1);
   gate.NoteRelease(1, kLinuxLinkShift, 50.0, LinuxLinkPoint{4, 4}, true);
   Expect(gate.DragSource() == 1, "the release that ends a drag keeps the drag source");
-  gate.NoteDragEnded(1, true, 50.1);
+  gate.NoteDrop(1);
+  gate.NoteDragEnded(1, 50.1);
   Expect(gate.AcceptLinkDrop(1, true, 50.2).empty(), "a drag the platform ended with a release still opens its link");
   Expect(gate.Decide(Request(1, "shift", 50.3), LinuxPageOptions()).outcome == LinuxLinkOutcome::kNone,
          "the release that ends a drag is no click");
 
   gate.NotePress(5);
-  gate.NoteDragEnded(5, true, 30.0);
+  gate.NoteDrop(5);
+  gate.NoteDragEnded(5, 30.0);
   gate.Forget(5);
   Expect(gate.AcceptLinkDrop(5, true, 30.1) == "no drag from this page ended", "destroyed surface forgets its drop");
 }
