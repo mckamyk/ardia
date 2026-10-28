@@ -97,3 +97,20 @@ test("Ctrl+Shift+Q quits Ardia and Settings lists it as a remappable Ardia short
   assert(!commandAt(linuxBindings({ "std:quit:": ["q", "command", "option"] }), 81, 6));
   assert.equal(linuxMenuShortcuts().filter((entry) => entry.id.startsWith("std:")).length, 1);
 });
+
+test("Ctrl+Shift+C, Chrome's Inspect Element key, opens Inspect Elements next to Ctrl+Alt+C", () => {
+  const bindings = linuxBindings();
+  for (const modifiers of [{ ctrlKey: true, shiftKey: true }, { ctrlKey: true, altKey: true }]) {
+    const combo = keyboardCombo(event("KeyC", modifiers));
+    assert.equal(commandAt(bindings, combo.keyCode, combo.flags)?.command, "inspectElements");
+  }
+  const item = linuxMenuShortcuts().find((entry) => entry.id === "inspectElements");
+  assert.equal(item.defaultKey, "c");
+  assert.deepEqual([...item.defaultModifiers].sort(), ["command", "shift"]);
+  assert.deepEqual(item.aliases, [["c", "option", "command"]]);
+  const copy = linuxMenuShortcuts().find((entry) => entry.id === "copyUrl");
+  assert.equal(copy.key, "");
+  assert.equal(copy.remappable, true);
+  const remapped = keyboardCombo(event("KeyU", { ctrlKey: true, shiftKey: true }));
+  assert.equal(commandAt(linuxBindings({ copyUrl: ["u", "command", "shift"] }), remapped.keyCode, remapped.flags)?.command, "copyUrl");
+});
