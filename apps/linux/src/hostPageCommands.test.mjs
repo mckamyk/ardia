@@ -5,6 +5,7 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { HostTab } from "./hostTab.ts";
 import { HostPageEvents } from "./hostPageEvents.ts";
+import { WEB_STORE_REQUEST, hostPageScript } from "./hostPageScripts.ts";
 
 const bootstrap = readFileSync(new URL("../../../engine/ardiacore-linux/src/ardia/linux/bootstrap.js", import.meta.url), "utf8");
 const webView = readFileSync(new URL("./shims/web/HostWebView.tsx", import.meta.url), "utf8");
@@ -171,4 +172,30 @@ test("a slow favicon download never holds back the tab's viewport or Find", asyn
   assert.equal(await favicon, "data:image/png;base64,");
   await tab.command("stopFinding", ["clear"]);
   assert.deepEqual(sent.slice(3), ["stopFinding"]);
+});
+
+test("a waiting Web Store request never holds back the tab's viewport, focus or other commands", async () => {
+  const sent = [];
+  const waits = [];
+  const host = {
+    bootstrap: { windowId: "store-wait", profileId: "default" },
+    onEvent: () => () => {},
+    invoke(method, args) {
+      sent.push(args.command ?? method);
+      if (method === "tab.create") return Promise.resolve({ browserId: 11, chromeTabId: 11 });
+      if (args.command === "webStoreRequest") return new Promise((resolve) => waits.push(resolve));
+      return Promise.resolve(null);
+    },
+  };
+  const tab = new HostTab(host, { key: "store-wait" }, () => {});
+  await tab.ready;
+  const store = hostPageScript("evaluate", [WEB_STORE_REQUEST]);
+  const request = tab.command(store.command, store.args);
+  await Promise.resolve();
+  const within = (promise, label) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} waited behind the store request`)), 1000).unref())]);
+  await within(tab.viewport({ rect: { x: 0, y: 0, width: 100, height: 100 }, visible: false }), "the viewport");
+  await within(tab.command("focus", []), "focus");
+  assert.deepEqual(sent, ["tab.create", "webStoreRequest", "tab.viewport", "focus"]);
+  waits[0]("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  assert.equal(await request, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 });
