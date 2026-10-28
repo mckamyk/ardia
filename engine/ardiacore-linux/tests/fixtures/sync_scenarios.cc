@@ -15,6 +15,7 @@
 #include <tuple>
 #include <vector>
 
+#include "ardia/linux/ac_linux_policy.h"
 #include "ardia/linux/ac_linux_sync.h"
 #include "ardia/linux/ac_linux_sync_crypto.h"
 #include "ardia/linux/ac_linux_sync_json.h"
@@ -743,6 +744,19 @@ LoginRead Logins(bool complete, std::vector<std::tuple<std::string, std::string,
   return read;
 }
 
+void LargeLocalState(const std::string& scratch) {
+  SyncCore core(MakeFileKeyStore(scratch + "/large-keys"), {scratch + "/large-folder", "Large Device"});
+  CHECK(core.Dispatch("ArdiaSync.createPhrase", {S(NewFileId())}, NowSeconds()).value.flag);
+  std::string state = "{\"covers\":3,\"scopes\":{\"app\":\"";
+  while (state.size() < 12u * 1024 * 1024) state += "history-entry-0123456789abcdef-";
+  state += "\"}}";
+  auto sealed = core.Dispatch("ArdiaSync.sealLocal", {S(state)}, NowSeconds());
+  CHECK(sealed.ok && sealed.value.text.size() > ardia::linux_policy::kDocumentLimit);
+  CHECK(sealed.value.text.size() <= ardia::linux_policy::DocumentLimit(ardia::linux_policy::kSyncStateDocument));
+  CHECK(core.Dispatch("ArdiaSync.openLocal", {S(sealed.value.text)}, NowSeconds()).value.text == state);
+  std::printf("large local state: %zu sealed bytes round trip\n", sealed.value.text.size());
+}
+
 void SealedLogins(const std::string& scratch) {
   CHECK(LoginOrigin("https://bank.example/") == std::optional<std::string>("https://bank.example"));
   CHECK(LoginOrigin("http://intranet.example:8080") == std::optional<std::string>("http://intranet.example:8080"));
@@ -850,6 +864,7 @@ int main(int argc, char** argv) {
     KeyStores(scratch);
     Core(scratch);
     SealedLogins(scratch);
+    LargeLocalState(scratch);
     Lease();
     DeleteRace(scratch);
     SymlinkedChain(scratch);

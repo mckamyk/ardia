@@ -56,6 +56,7 @@ class SyncHelperTests(unittest.TestCase):
             self.assertIn('mac-vector chain gbcx4r55mk3rlaegbggknyx4ta scope nr4ncp5iyqzqgjn6ol4zksqtne', output)
             self.assertIn('cross-format reference files opened and Linux files written', output)
             self.assertIn('sealed logins: 3 sealed, partial and locked reads refused', output)
+            self.assertRegex(output, r'large local state: \d{8} sealed bytes round trip')
             verified = run(self, ['node', ROOT / 'tests/sync_reference.mjs', 'verify', root / 'linux'])
             self.assertIn('reference verified 2 Linux files and 1 passwords', verified)
             for secret in ['hunter2-password', 'correct horse', 'linux-password', 'intranet-password', 'realm-password']:

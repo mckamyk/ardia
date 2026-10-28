@@ -150,6 +150,7 @@
 #include "content/public/browser/webui_config.h"
 #include "content/public/browser/webui_config_map.h"
 #include "content/public/common/url_constants.h"
+#include "crypto/sha2.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "net/base/net_errors.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
@@ -220,7 +221,7 @@ extern base::FilePath (*g_ardia_native_messaging_manifest)(const std::string& ho
 namespace ardia {
 namespace {
 
-constexpr size_t kDocumentLimit = 8 * 1024 * 1024;
+constexpr size_t kDocumentLimit = linux_policy::kDocumentLimit;
 constexpr size_t kAssetLimit = 32 * 1024 * 1024;
 constexpr char kSessionName[] = "linux-session.json";
 
@@ -472,9 +473,13 @@ std::optional<std::string> ReadDocument(const base::FilePath& directory,
     return std::nullopt;
   }
   std::string contents;
-  return base::ReadFileToStringWithMaxSize(file, &contents, kDocumentLimit)
+  return base::ReadFileToStringWithMaxSize(file, &contents, linux_policy::DocumentLimit(name))
              ? std::make_optional(std::move(contents))
              : std::nullopt;
+}
+
+std::string StorageDigest(std::string_view contents) {
+  return base::HexEncode(crypto::SHA256HashString(contents));
 }
 
 struct StoredDocument {
@@ -497,7 +502,7 @@ bool WriteDocument(const base::FilePath& directory,
                    const std::string& name,
                    const std::optional<std::string>& contents) {
   if (!linux_policy::ValidDocumentName(name) ||
-      (contents && contents->size() > kDocumentLimit) ||
+      (contents && contents->size() > linux_policy::DocumentLimit(name)) ||
       !PrepareDocuments(directory)) {
     return false;
   }
@@ -551,7 +556,8 @@ base::DictValue ReadDocuments(const base::FilePath& directory) {
   size_t bytes = 0;
   for (auto file = files.Next(); !file.empty(); file = files.Next()) {
     const std::string name = file.BaseName().value();
-    if (name == kSessionName || LinuxDocuments::Reserved(name)) continue;
+    if (name == kSessionName || LinuxDocuments::Reserved(name) ||
+        linux_policy::DocumentLimit(name) > kDocumentLimit) continue;
     auto contents = ReadDocument(directory, name);
     if (contents && documents.size() < 128 &&
         bytes + contents->size() <= kDocumentLimit) {
@@ -4484,13 +4490,22 @@ void ShellHostView::Invoke(
         return std::move(done).Run(false, base::Value("Document text is required"));
       }
       contents = values[1].GetString();
-      if (contents->size() > kDocumentLimit)
+      if (contents->size() > linux_policy::DocumentLimit(name))
         return std::move(done).Run(false, base::Value(base::DictValue()
             .Set("code", "ERR_DOCUMENT_LIMIT").Set("message", "Document storage limit exceeded")));
     }
     base::DictValue operation;
     operation.Set("kind", contents ? "write" : "remove");
-    if (contents) operation.Set("contents", *contents);
+    if (contents && contents->size() > kDocumentLimit) {
+      if (std::ranges::any_of(storage_intents_, [](const auto& intent) {
+            return intent->pending && intent->operation.Find("sha256");
+          }))
+        return std::move(done).Run(false, base::Value(base::DictValue()
+            .Set("code", "ERR_DOCUMENT_BUSY").Set("message", "A large document is still being written")));
+      operation.Set("sha256", StorageDigest(*contents));
+    } else if (contents) {
+      operation.Set("contents", *contents);
+    }
     if (!TrackStorageWrite(name, std::move(operation), done))
       return std::move(done).Run(false, base::Value(base::DictValue()
           .Set("code", "ERR_DOCUMENT_LIMIT").Set("message", "Window storage ledger is full")));

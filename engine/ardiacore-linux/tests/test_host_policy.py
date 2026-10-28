@@ -76,5 +76,36 @@ int main() {
             subprocess.run([str(binary)], check=True)
 
 
+    def test_only_the_sync_state_may_exceed_the_document_limit_and_its_bound_covers_every_sealed_state(self):
+        compiler = shutil.which('clang++') or shutil.which('c++')
+        if compiler is None:
+            self.skipTest('C++ compiler is unavailable')
+        code = r'''#include <cassert>
+#include "ardia/linux/ac_linux_policy.h"
+#include "ardia/linux/ac_linux_sync.h"
+int main() {
+  using namespace ardia;
+  constexpr size_t mib = 1024 * 1024;
+  static_assert(linux_policy::kDocumentLimit == 8 * mib);
+  assert(linux_policy::DocumentLimit(linux_policy::kSyncStateDocument) == linux_policy::kSyncStateDocumentLimit);
+  assert(linux_policy::DocumentLimit("sync-state.nns") > linux_policy::kDocumentLimit);
+  for (const char* name : {"settings.json", "sync.json", "sync-journal.nns", "sync-journal-1.nns", "sync-state.nns.bak", "live.json"})
+    assert(linux_policy::DocumentLimit(name) == linux_policy::kDocumentLimit);
+  constexpr size_t plain = 4 + linux_sync::kMaxPayloadBytes;
+  constexpr size_t padded = (plain + linux_sync::kFilePadding - 1) / linux_sync::kFilePadding * linux_sync::kFilePadding;
+  constexpr size_t sealed = 4 + linux_sync::kNonceBytes + padded + linux_sync::kTagBytes;
+  static_assert(4 * ((sealed + 2) / 3) <= linux_policy::kSyncStateDocumentLimit);
+  static_assert(linux_policy::kSyncStateDocumentLimit <= 48 * mib);
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='ardia-document-limit-test-') as scratch:
+            scratch = pathlib.Path(scratch)
+            cpp = scratch / 'limit.cc'
+            cpp.write_text(code)
+            binary = scratch / 'limit'
+            subprocess.run([compiler, '-std=c++20', '-Wall', '-Werror', '-I', str(SOURCE), str(cpp), '-o', str(binary)], check=True, capture_output=True)
+            subprocess.run([str(binary)], check=True)
+
+
 if __name__ == '__main__':
     unittest.main()
