@@ -161,8 +161,6 @@ export function syncModuleMethod(host: ArdiaHost, name: string, method: string):
       return invoke(host, method)(current ?? null);
     };
   }
-  if (method === "readPasswords") return () => Promise.resolve(null);
-  if (method === "savePassword") return () => Promise.resolve(false);
   if (SYNC_METHODS.has(`ArdiaSync.${method}`)) return invoke(host, method);
   return undefined;
 }

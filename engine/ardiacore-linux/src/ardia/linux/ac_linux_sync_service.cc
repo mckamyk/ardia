@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ardia/core/ac_launch_switches.h"
+#include "ardia/linux/ac_linux_credential_service.h"
 #include "ardia/linux/ac_linux_files.h"
 #include "ardia/linux/ac_linux_sync.h"
 #include "ardia/linux/ac_linux_sync_crypto.h"
@@ -367,6 +368,40 @@ void SaveKit(base::WeakPtr<LinuxShellWebView> shell, base::WeakPtr<Profile> prof
                std::move(split.second));
 }
 
+void ReadPasswords(const std::vector<sync::JsonValue>& args, Done done) {
+  auto profile = sync::ReadPasswordsProfile(args);
+  if (!profile) return Fail(std::move(done), "ERR_SYNC_ARGUMENT", "A profile is required");
+  LinuxCredentialsReadLogins(*profile, base::BindOnce(
+      [](Done done, sync::LoginRead read) {
+        Runner()->PostTaskAndReplyWithResult(
+            FROM_HERE, base::BindOnce([](sync::LoginRead read) { return Core().SealLogins(std::move(read)); },
+                                      std::move(read)),
+            base::BindOnce(&Reply, std::move(done)));
+      },
+      std::move(done)));
+}
+
+void SavePassword(const std::vector<sync::JsonValue>& args, Done done) {
+  auto parsed = sync::ParsePasswordSave(args);
+  if (!parsed) return Fail(std::move(done), "ERR_SYNC_ARGUMENT", "A profile, login, sealed password and flag are required");
+  const std::string profile = parsed->profile;
+  const bool replacing = parsed->replacing;
+  Runner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce([](sync::PasswordSave save) { return Core().OpenLogin(save); }, std::move(*parsed)),
+      base::BindOnce(
+          [](std::string profile, bool replacing, Done done, std::optional<sync::StoredLogin> login) {
+            if (!login) return std::move(done).Run(true, base::Value(false));
+            LinuxCredentialsSaveLogin(profile, std::move(*login), replacing, base::BindOnce(
+                [](Done done, bool saved) { std::move(done).Run(true, base::Value(saved)); }, std::move(done)));
+          },
+          profile, replacing, std::move(done)));
+}
+
+void SyncPasswords(const std::string& method, const std::vector<sync::JsonValue>& args, Done done) {
+  if (method == "ArdiaSync.readPasswords") return ReadPasswords(args, std::move(done));
+  SavePassword(args, std::move(done));
+}
+
 bool RevokesDisclosure(std::string_view method) {
   return method == "ArdiaSync.forget" || method == "ArdiaSync.createPhrase" || method == "ArdiaSync.enterPhrase";
 }
@@ -416,6 +451,12 @@ void LinuxSyncInvoke(const LinuxSyncCaller& caller, Profile* app_profile, LinuxS
             Reply(std::move(done), std::move(outcome));
           },
           RevokesDisclosure(method), std::move(done)));
+    case sync::Route::kPasswords:
+      if (!Ui().lease.Holds(caller.key, NowMs()))
+        return Fail(std::move(done), "ERR_SYNC_NOT_AUTHORITY", "Another Ardia window is running sync");
+      SyncPasswords(method, args, std::move(done));
+      for (auto& arg : args) sync::WipeJson(arg);
+      return;
     case sync::Route::kCore:
       return Post(method, std::move(args), base::BindOnce(&Reply, std::move(done)));
     case sync::Route::kDisclose:

@@ -122,6 +122,20 @@ function renderer(name, { candidate, locks, lease, engines, channelName }) {
   return { name, authority, mirror, log };
 }
 
+test("saved passwords go to the sync authority's typed native path and only sealed values cross into JS", async () => {
+  const sealedList = [{ origin: "https://bank.example", username: "alice", sealed: "AdGh", created: 1700000000000 }];
+  const host = fakeHost((method) => (method === "ArdiaSync.readPasswords" ? sealedList : method === "ArdiaSync.savePassword" ? true : null));
+  assert.deepEqual(await syncModuleMethod(host, "ArdiaSync", "readPasswords")("default"), sealedList);
+  assert.equal(await syncModuleMethod(host, "ArdiaSync", "savePassword")("default", "https://bank.example", "alice", "AdGh", true), true);
+  assert.deepEqual(host.calls, [
+    { method: "ArdiaSync.readPasswords", args: { args: ["default"] } },
+    { method: "ArdiaSync.savePassword", args: { args: ["default", "https://bank.example", "alice", "AdGh", true] } },
+  ]);
+  const refused = fakeHost((method) => (method === "ArdiaSync.readPasswords" ? null : false));
+  assert.equal(await syncModuleMethod(refused, "ArdiaSync", "readPasswords")("default"), null);
+  assert.equal(await syncModuleMethod(refused, "ArdiaSync", "savePassword")("default", "https://bank.example", "alice", "AdGh", false), false);
+});
+
 test("the sync module adapter keeps device ids local and sends every other call as a typed sync invoke", async () => {
   const host = fakeHost((method) => (method === "ArdiaSync.deviceName" ? "  tux-laptop  " : method === "ArdiaSync.folderInfo" ? { path: "/x" } : true));
   const id = syncModuleMethod(host, "ArdiaSync", "newDeviceId")();
@@ -132,8 +146,6 @@ test("the sync module adapter keeps device ids local and sends every other call 
   assert.equal(syncDeviceName(), "Linux");
   assert.equal(await loadSyncDeviceName(host), "tux-laptop");
   assert.equal(syncModuleMethod(host, "ArdiaSync", "deviceName")(), "tux-laptop");
-  assert.equal(await syncModuleMethod(host, "ArdiaSync", "readPasswords")("1"), null);
-  assert.equal(await syncModuleMethod(host, "ArdiaSync", "savePassword")("1", "https://a", "u", "sealed", false), false);
   assert.equal(syncModuleMethod(host, "ArdiaSync", "nope"), undefined);
   assert.equal(syncModuleMethod(host, "ArdiaPasswords", "write"), undefined);
   host.calls.length = 0;

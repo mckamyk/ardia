@@ -202,3 +202,76 @@ test("two simulated Linux devices set up, join, merge concurrent and offline edi
   }
   assert.equal(walk(folder).some((path) => path.includes(".ardia-staging-")), false);
 });
+
+class PasswordDevice extends Device {
+  adapters() {
+    const keyOf = (origin, username) => `pws:${origin}\n${username}`;
+    const read = async () => {
+      const list = await this.tool.call("test.sealLogins", true);
+      return list && new Map(list.map((l) => [keyOf(l.origin, l.username), { o: l.origin, u: l.username, s: l.sealed }]));
+    };
+    return [
+      {
+        prefix: "pws:",
+        extract: async () => {
+          const local = await read();
+          return local ? { values: local } : null;
+        },
+        apply: async (visible, changed) => {
+          const local = await read();
+          if (!local) return false;
+          let ok = true;
+          for (const key of changed) {
+            const value = visible.get(key);
+            const have = local.get(key);
+            if (!value || have?.s === value.s) continue;
+            ok = (await this.tool.call("test.saveLogin", "default", value.o, value.u, value.s, !!have)) && ok;
+          }
+          return ok;
+        },
+      },
+    ];
+  }
+  addLogin(realm, username, password, created = fakeNow) {
+    return this.tool.call("test.addLogin", realm, username, password, created);
+  }
+  hasLogin(origin, username, password) {
+    return this.tool.call("test.hasLogin", origin, username, password);
+  }
+}
+
+test("saved passwords travel between two Linux devices sealed, and never reach the folder or JS as plaintext", { skip: !TOOL }, async () => {
+  const scope = "p:passwords-profile";
+  const a = new PasswordDevice("passwords-a");
+  const b = new PasswordDevice("passwords-b");
+  assert.equal(await a.tool.call("createPhrase", a.id), true);
+  await a.tool.call("createChain", folder);
+  const words = await a.tool.call("recoveryWords");
+  assert.deepEqual(await b.tool.call("enterPhrase", b.id, words.join(" "), folder), { ok: true });
+
+  await a.addLogin("https://bank.example/", "alice@example.com", "pw-hunter2-été");
+  await a.addLogin("https://shop.example/", "", "pw-empty-username");
+  await a.addLogin("https://shop.example/basic-realm", "bob", "pw-http-auth-realm");
+  assert.equal(await a.tool.call("test.sealLogins", false), null);
+  const sealed = await a.tool.call("test.sealLogins", true);
+  assert.deepEqual(sealed.map((l) => [l.origin, l.username]).sort(), [["https://bank.example", "alice@example.com"], ["https://shop.example", ""]]);
+  for (const login of sealed) assert.deepEqual(Object.keys(login).sort(), ["created", "origin", "sealed", "username"]);
+
+  for (let i = 0; i < 2; i++) for (const device of [a, b]) await device.sync(scope);
+  assert.equal(await b.hasLogin("https://bank.example", "alice@example.com", "pw-hunter2-été"), true);
+  assert.equal(await b.hasLogin("https://shop.example", "", "pw-empty-username"), true);
+  assert.equal(await b.hasLogin("https://shop.example/basic-realm", "bob", "pw-http-auth-realm"), false);
+
+  fakeNow += 60_000;
+  await b.addLogin("https://bank.example", "alice@example.com", "pw-changed-on-b");
+  for (let i = 0; i < 2; i++) for (const device of [b, a]) await device.sync(scope);
+  assert.equal(await a.hasLogin("https://bank.example", "alice@example.com", "pw-changed-on-b"), true);
+  assert.equal(await a.hasLogin("https://bank.example", "alice@example.com", "pw-hunter2-été"), false);
+
+  const secrets = ["pw-hunter2", "pw-empty-username", "pw-changed-on-b", "pw-http-auth-realm", "alice@example.com", "bank.example"];
+  for (const path of walk(folder)) {
+    if (!statSync(path).isFile()) continue;
+    const data = readFileSync(path);
+    for (const secret of secrets) assert.equal(data.includes(secret), false, `${secret} in ${path}`);
+  }
+});

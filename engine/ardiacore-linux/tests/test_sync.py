@@ -55,9 +55,10 @@ class SyncHelperTests(unittest.TestCase):
             self.assertIn('sync scenarios passed', output)
             self.assertIn('mac-vector chain gbcx4r55mk3rlaegbggknyx4ta scope nr4ncp5iyqzqgjn6ol4zksqtne', output)
             self.assertIn('cross-format reference files opened and Linux files written', output)
+            self.assertIn('sealed logins: 3 sealed, partial and locked reads refused', output)
             verified = run(self, ['node', ROOT / 'tests/sync_reference.mjs', 'verify', root / 'linux'])
             self.assertIn('reference verified 2 Linux files and 1 passwords', verified)
-            for secret in ['hunter2-password', 'correct horse', 'linux-password']:
+            for secret in ['hunter2-password', 'correct horse', 'linux-password', 'intranet-password', 'realm-password']:
                 self.assertNotIn(secret, output)
             if LIBSECRET:
                 bus = f'unix:path={root / "no-such-bus"}'
@@ -79,7 +80,7 @@ class SyncHelperTests(unittest.TestCase):
             tool = build(self, directory, 'sync_device_tool', 'sync_device_tool.cc')
             output = run(self, ['node', '--test', '--test-reporter=tap', ROOT / 'tests/sync_devices.test.mjs'],
                          env={'SYNC_DEVICE_TOOL': str(tool)}, timeout=300)
-            self.assertIn('# pass 1', output)
+            self.assertIn("# pass 2", output)
             self.assertIn('# skipped 0', output)
 
     def test_sync_sources_never_log_and_stay_registered(self):
@@ -106,6 +107,28 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn('MarkAsConfidential()', service)
         self.assertIn('sync::UseFileKeyStore(', service)
         self.assertIn('GetDefaultUserDataDirectory', service)
+        self.assertIn('case sync::Route::kPasswords:', service)
+        passwords = service[service.index('case sync::Route::kPasswords:'):]
+        self.assertLess(passwords.index('Ui().lease.Holds(caller.key, NowMs())'), passwords.index('SyncPasswords('))
+        self.assertIn('Core().SealLogins(std::move(read))', service)
+        self.assertIn('Core().OpenLogin(save)', service)
+        self.assertIn('LinuxCredentialsReadLogins(', service)
+        self.assertIn('LinuxCredentialsSaveLogin(', service)
+        self.assertNotIn('->password', service)
+        self.assertNotIn('.password', service)
+        credentials = (LINUX / 'ac_linux_credential_service.cc').read_text()
+        reader = credentials[credentials.index('class SyncLoginReader'):]
+        self.assertIn('GetAutofillableLogins(', reader)
+        self.assertIn('password_value.secure_value()', reader)
+        self.assertIn('SecretUTF8(', reader)
+        self.assertNotIn('password_value.value()', reader)
+        self.assertIn('kSkipUndecryptablePasswords', credentials)
+        self.assertIn('credentials::Store::kPasswords, probes.passwords', credentials[credentials.index('void ReadLoginsFor'):])
+        save = credentials[credentials.index('void LinuxCredentialsSaveLogin'):]
+        self.assertIn('credentials::PlanInvoke("ArdiaPasswords.save"', save)
+        self.assertIn('credentials::PlanCall("passwords.remove"', save)
+        for forbidden in ['LOG(', 'VLOG(', 'printf', 'TRACE_EVENT', 'SCOPED_CRASH_KEY']:
+            self.assertNotIn(forbidden, credentials)
         vault = (LINUX / 'ac_linux_sync_vault.cc').read_text()
         for unsafe in ['opendir', 'rmdir', 'lstat', 'unlink']:
             self.assertIsNone(re.search(rf'(?<![a-z_]){unsafe}\(', vault), f'the vault walks paths with {unsafe}')
