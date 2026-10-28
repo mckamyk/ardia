@@ -14,6 +14,8 @@
 #include "ui/base/ime/text_input_client.h"
 #include "ui/events/event.h"
 #include "ui/events/event_rewriter.h"
+#include "ui/events/keycodes/dom/dom_code.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 
 namespace aura {
 class Window;
@@ -26,9 +28,12 @@ class InputMethod;
 
 namespace ardia::linux_window {
 
+int TypeaheadModifierFlag(ui::KeyboardCode key);
+
 class TypeaheadInput : public ui::EventRewriter, public ui::InputMethodObserver, public ui::TextInputClient {
  public:
   using Owns = base::RepeatingCallback<bool(aura::Window* target)>;
+  using Live = base::RepeatingCallback<bool(const ui::KeyEvent& event)>;
 
   TypeaheadInput(aura::WindowTreeHost* host, ui::InputMethod* input, Owns owns);
   TypeaheadInput(const TypeaheadInput&) = delete;
@@ -37,6 +42,7 @@ class TypeaheadInput : public ui::EventRewriter, public ui::InputMethodObserver,
 
   void Start();
   bool capturing() const { return held_.capturing(); }
+  void SetLive(Live live) { live_ = std::move(live); }
   std::vector<ui::KeyEvent> Release();
 
   ui::EventDispatchDetails RewriteEvent(const ui::Event& event, const Continuation continuation) override;
@@ -108,6 +114,8 @@ class TypeaheadInput : public ui::EventRewriter, public ui::InputMethodObserver,
   raw_ptr<ui::InputMethod> input_;
   Owns owns_;
   Typeahead<ui::KeyEvent> held_;
+  Live live_;
+  LiveKeys<ui::DomCode> live_keys_;
   base::WeakPtr<ui::TextInputClient> wanted_;
   bool rewriting_ = false;
   bool observing_ = false;

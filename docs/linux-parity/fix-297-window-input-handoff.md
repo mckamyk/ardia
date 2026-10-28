@@ -73,4 +73,20 @@ These are verified only by unit tests and `scripts/linux/syntax-check-156.sh`. T
 
 ## Shortcuts pressed while keys are held
 
-A new window holds every key from attach until its UI calls `typeaheadReady`, which can take several seconds under swiftshader. Until then the typeahead rewriter swallows keys before `OnKeyEvent`. `ReplayTypeahead` used to feed held keys only to a focused shell text field, so a shortcut pressed in that window was lost. In F02-150D, Ctrl+Shift+I typed 1–4 s after Ctrl+Shift+N never reached `OnKeyEvent` (`--ardia-keyboard-diagnostics`), and opened no DevTools in 7 of 16 runs on the cand-980e7f14 package. Releasing the hold before the key made 4 of 4 pass. Now each held key press that is a registered Ardia shortcut runs through `AcceleratorPressed` when the window is ready, in order with the replayed text, whether or not a field holds focus. It goes through the same gates as `OnKeyEvent`: accelerators enabled, not recording a shortcut, shortcut handling not suspended. Other held keys still reach only the shell's own text field. The 10 s discard still drops everything, shortcuts included.
+A new window holds every key from attach until its UI calls `typeaheadReady`, which can take seconds under swiftshader. The typeahead rewriter swallows those keys before `OnKeyEvent` (#331; F02-150D lost Ctrl+Shift+I this way). #323 settled how shortcuts behave during the hold.
+
+- **Live once commands are ready.** Right after `startNativeSync` installs its command listener, the UI calls `ArdiaShell.commandsReady` (`announceCommandsReady` in `typeahead.ts`). `shortcuts_` is filled earlier, by `startLinuxShortcuts`, before any listener exists, so it can't be the signal. The host then gives `TypeaheadInput` a live predicate (`ShellHostView::LiveShortcut`): a key press matching `shortcuts_` that isn't a `notInText` binding. `RewriteEvent` sends three kinds of key through live (`LiveKeys` in `ac_linux_typeahead.h`), and only text stays held:
+  - live presses;
+  - the releases of those keys;
+  - every modifier release, so the tab switcher sees its Ctrl go up.
+
+  `OnKeyEvent` then runs the shortcut at once with the live modal check, extension commands and switcher handling. When the hold ends, the held text replays into whichever field the shortcut focused.
+- **Before commands are ready**, held shortcuts replay when the window is ready (`ReplayTypeahead`):
+  - Each held press goes through `AcceleratorPressed` and then `ExtensionShortcutPressed`, as live keys do, and releases never do.
+  - It goes through the same gates as `OnKeyEvent`, including the modal check (`OwnsKeyboardTarget` on the focused window).
+  - A tab-switcher press whose modifier release is also held is skipped, since the switcher would otherwise stay open.
+  - Text after the first shortcut that runs is dropped rather than sent to a field the shortcut may be replacing.
+  - The 10 s discard still drops everything.
+- **The UI's wait respects the host's deadline.** The bootstrap carries `typeaheadMs`, the time left on the host's hold when the page was served. The UI's field and idle waits end 250 ms before it, measured from navigation start, which is conservative.
+
+The output watch (#249) follows the widget's own fullscreen state. A video in fullscreen inside a fullscreen window keeps the watch and its pending output target, and saves nothing until the video exits.

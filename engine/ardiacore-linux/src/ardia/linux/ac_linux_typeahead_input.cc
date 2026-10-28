@@ -11,10 +11,35 @@
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_input_mode.h"
 #include "ui/base/ime/text_input_type.h"
+#include "ui/events/event_constants.h"
+#include "ui/events/keycodes/dom/dom_code.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/range/range.h"
 
 namespace ardia::linux_window {
+
+int TypeaheadModifierFlag(ui::KeyboardCode key) {
+  switch (key) {
+    case ui::VKEY_SHIFT:
+    case ui::VKEY_LSHIFT:
+    case ui::VKEY_RSHIFT:
+      return ui::EF_SHIFT_DOWN;
+    case ui::VKEY_CONTROL:
+    case ui::VKEY_LCONTROL:
+    case ui::VKEY_RCONTROL:
+      return ui::EF_CONTROL_DOWN;
+    case ui::VKEY_MENU:
+    case ui::VKEY_LMENU:
+    case ui::VKEY_RMENU:
+      return ui::EF_ALT_DOWN;
+    case ui::VKEY_LWIN:
+    case ui::VKEY_RWIN:
+      return ui::EF_COMMAND_DOWN;
+    default:
+      return ui::EF_NONE;
+  }
+}
 
 TypeaheadInput::TypeaheadInput(aura::WindowTreeHost* host, ui::InputMethod* input, Owns owns)
     : host_(host), input_(input), owns_(std::move(owns)) {}
@@ -71,7 +96,13 @@ ui::EventDispatchDetails TypeaheadInput::RewriteEvent(const ui::Event& event, co
     return SendEvent(continuation, &event);
   }
   if (!owns_.Run(FocusedTarget())) return SendEvent(continuation, &event);
-  if (held_.Hold(ui::KeyEvent(*event.AsKeyEvent()))) return DiscardEvent(continuation);
+  const ui::KeyEvent& key = *event.AsKeyEvent();
+  const bool pressed = key.type() == ui::EventType::kKeyPressed;
+  if (live_ && live_keys_.Pass(pressed, key.code(), pressed && live_.Run(key),
+                               TypeaheadModifierFlag(key.key_code()) != ui::EF_NONE)) {
+    return SendEvent(continuation, &event);
+  }
+  if (held_.Hold(ui::KeyEvent(key))) return DiscardEvent(continuation);
   return SendEvent(continuation, &event);
 }
 

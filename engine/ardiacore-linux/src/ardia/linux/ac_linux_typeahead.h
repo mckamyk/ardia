@@ -1,6 +1,7 @@
 #ifndef ARDIA_LINUX_AC_LINUX_TYPEAHEAD_H_
 #define ARDIA_LINUX_AC_LINUX_TYPEAHEAD_H_
 
+#include <algorithm>
 #include <cstddef>
 #include <utility>
 #include <vector>
@@ -37,6 +38,27 @@ class Typeahead {
   enum class State { kIdle, kCapturing, kOverflowed, kDone };
   State state_ = State::kIdle;
   std::vector<Event> held_;
+};
+
+template <typename Code>
+class LiveKeys {
+ public:
+  bool Pass(bool pressed, Code code, bool shortcut, bool modifier) {
+    const auto found = std::find(codes_.begin(), codes_.end(), code);
+    if (pressed) {
+      if (!shortcut) return false;
+      if (found == codes_.end()) codes_.push_back(code);
+      return true;
+    }
+    if (found != codes_.end()) {
+      codes_.erase(found);
+      return true;
+    }
+    return modifier;
+  }
+
+ private:
+  std::vector<Code> codes_;
 };
 
 }

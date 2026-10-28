@@ -45,7 +45,7 @@ import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setS
 import { startUtility } from "./utility";
 import { installProfileWindows } from "./hostWindowProfiles";
 import { focus } from "../../browser/src/state/browser/actions";
-import { announceTypeaheadReady, windowExpectsField } from "./typeahead";
+import { announceCommandsReady, announceTypeaheadReady, windowExpectsField } from "./typeahead";
 import { linuxSyncHooks, startLinuxSync } from "./syncEngine";
 import { linuxLiveHooks } from "./liveHooks";
 import { connectCalendar, refreshCalendar, setCalendarHidden, useCalendar } from "../../browser/src/state/live/calendar";
@@ -101,6 +101,7 @@ async function start() {
     await persistence.flush();
     startTabPages();
     startNativeSync();
+    announceCommandsReady(ardiaHost);
     startHostDownloads(ardiaHost, useBrowser);
     startLinuxTabPolicies({
       target: window, provide: provideNativeModuleProvider, startLifecycle: startTabLifecycle, startTrim: startMemoryTrim,

@@ -17,7 +17,7 @@ const fakeHost = (capabilities, invoke = async () => null) => ({
 });
 
 test("the native shell methods the shared UI waits on are advertised, and a Linux fallback only stands in for a native method the host doesn't advertise", () => {
-  for (const method of ["restoreFullScreen", "typeaheadReady", "pickFiles"]) assert.ok(advertised.has(`ArdiaShell.${method}`), method);
+  for (const method of ["restoreFullScreen", "typeaheadReady", "commandsReady", "pickFiles"]) assert.ok(advertised.has(`ArdiaShell.${method}`), method);
   const shadowed = [...host.matchAll(/method == "ArdiaShell\.(\w+)"/g)].map((match) => match[1]).filter((method) => linuxShellMethod(method) && !advertised.has(`ArdiaShell.${method}`));
   assert.deepEqual(shadowed, []);
 });
