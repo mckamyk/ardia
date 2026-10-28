@@ -24,10 +24,10 @@ export function watchTabViewport(element: HTMLElement, visible: () => boolean, r
     if (stopped) return;
     const rect = element.getBoundingClientRect();
     const viewport = tabViewport(rect, { width: window.innerWidth, height: window.innerHeight }, visible() && !document.hidden && element.isConnected);
-    const hoverCards = [...document.querySelectorAll<HTMLElement>('[data-testid="ardia-sidebar-hover"] > div > div')];
+    const overlays = [...document.querySelectorAll<HTMLElement>('[data-testid="ardia-sidebar-hover"] > div > div, [data-testid="ardia-page-overlay"] > div > div')];
     const popup = document.querySelector<HTMLElement>(EXTENSION_POPUP);
     const above = popup && !popup.contains(element) ? popup : null;
-    const covering = above ? [...hoverCards, above] : hoverCards;
+    const covering = above ? [...overlays, above] : overlays;
     const dismiss = above && document.querySelector<HTMLElement>(EXTENSION_POPUP_DISMISS);
     if (viewport.visible) {
       const occlusions = covering.map((card) => card.getBoundingClientRect()).filter((card) => card.width > 0 && card.height > 0 && card.left < rect.right && card.right > rect.left && card.top < rect.bottom && card.bottom > rect.top);
