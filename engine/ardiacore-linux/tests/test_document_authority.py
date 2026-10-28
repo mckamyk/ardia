@@ -20,6 +20,7 @@ PRELUDE = r'''
 #include <utility>
 #include <vector>
 #include "ardia/linux/ac_linux_document_service.h"
+#include "ardia/linux/ac_linux_policy.h"
 using namespace ardia;
 namespace base {
 struct FilePath {
@@ -154,7 +155,7 @@ int main() {
   base::link = false;
   assert(ReadCanonicalDocument(root, "secrets.json").state == LinuxDocumentRead::State::kError);
   reads.clear();
-  base::FileEnumerator::entries = {"live.json", "live.canonical.json", "settings.json", "linux-session.json"};
+  base::FileEnumerator::entries = {"live.json", "live.canonical.json", "settings.json", "linux-session.json", "sync-state.nns"};
   const auto bootstrap = ReadDocuments(root);
   assert(bootstrap.size() == 1 && bootstrap.FindString("settings.json"));
   assert(reads == std::vector<std::string>{"settings.json"});

@@ -1,6 +1,6 @@
 import type { Plugin } from "vite";
 
-type Wording = { file: string; replacements: [string, string][] };
+export type Wording = { file: string; replacements: [string, string][] };
 
 export const CREDENTIAL_WORDING: readonly Wording[] = [
   {
@@ -38,31 +38,35 @@ export const CREDENTIAL_WORDING: readonly Wording[] = [
 
 const marker = "/apps/browser/src/";
 
-export function rewordCredentials(id: string, code: string): string | null {
+export function rewordWith(list: readonly Wording[], source: string, id: string, code: string): string | null {
   const at = id.indexOf(marker);
   if (at < 0) return null;
   const path = id.slice(at + marker.length).split("?")[0];
-  const wording = CREDENTIAL_WORDING.find((entry) => entry.file === path);
+  const wording = list.find((entry) => entry.file === path);
   if (!wording) return null;
   let reworded = code;
   for (const [from, to] of wording.replacements) {
-    if (!reworded.includes(from)) throw new Error(`${path} no longer contains ${JSON.stringify(from.slice(0, 80))}; update apps/linux/credentialWording.ts`);
+    if (!reworded.includes(from)) throw new Error(`${path} no longer contains ${JSON.stringify(from.slice(0, 80))}; update apps/linux/${source}`);
     reworded = reworded.replace(from, () => to);
   }
   return reworded;
 }
 
-export function credentialWording(): Plugin {
+export function rewordCredentials(id: string, code: string): string | null {
+  return rewordWith(CREDENTIAL_WORDING, "credentialWording.ts", id, code);
+}
+
+export function wordingPlugin(name: string, list: readonly Wording[], source: string): Plugin {
   const applied = new Set<string>();
   let building = false;
   return {
-    name: "ardia-linux:credential-wording",
+    name,
     enforce: "pre",
     configResolved(config) {
       building = config.command === "build";
     },
     transform(code, id) {
-      const reworded = rewordCredentials(id, code);
+      const reworded = rewordWith(list, source, id, code);
       if (reworded === null) return null;
       applied.add(id.slice(id.indexOf(marker) + marker.length).split("?")[0] ?? "");
       return { code: reworded, map: null };
@@ -71,8 +75,12 @@ export function credentialWording(): Plugin {
       if (!building || error) return;
       const settingsPanes = [...this.getModuleIds()].some((id) => id.includes(`${marker}components/settings/panes/`));
       if (!settingsPanes) return;
-      const missing = CREDENTIAL_WORDING.map((entry) => entry.file).filter((file) => !applied.has(file));
-      if (missing.length) this.error(`credentialWording.ts never reworded ${missing.join(", ")}; update apps/linux/credentialWording.ts`);
+      const missing = list.map((entry) => entry.file).filter((file) => !applied.has(file));
+      if (missing.length) this.error(`${source} never reworded ${missing.join(", ")}; update apps/linux/${source}`);
     },
   };
+}
+
+export function credentialWording(): Plugin {
+  return wordingPlugin("ardia-linux:credential-wording", CREDENTIAL_WORDING, "credentialWording.ts");
 }

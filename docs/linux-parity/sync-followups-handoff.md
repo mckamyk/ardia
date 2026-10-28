@@ -1,0 +1,144 @@
+# Sync follow-ups handoff: passwords, large state, Linux wording (#145, #146, #147)
+
+These are follow-ups to the Linux sync port (`p-sync-handoff.md`, #138 for #23). All three were built and tested from source. The native changes pass `scripts/linux/syntax-check-156.sh`, but none has run in a Chromium 156 build yet. Runtime acceptance stays with #23; the manual rows are in `acceptance-suite.md` under #23 F13.
+
+## #145 Saved passwords sync through a sealed native path
+
+Before, `ArdiaSync.readPasswords` returned `null` and `savePassword` returned `false`, so the shared passwords adapter skipped passwords. Both are now typed routes (`Route::kPasswords`) that only the sync lease holder may call. Anyone else gets `ERR_SYNC_NOT_AUTHORITY`, and private windows get `ERR_PRIVATE_SERVICE` as before.
+
+### Reading: `readPasswords(profile)`
+
+1. `ac_linux_sync_service.cc` validates the profile name (`ReadPasswordsProfile`, at most 256 bytes) and calls `LinuxCredentialsReadLogins` in `ac_linux_credential_service.cc`.
+2. That resolves the profile with the credential resolver (`ResolveCredentialProfile`), so private and off-the-record profiles are refused. It then runs the same store probe as the other password calls (`WithProbes` and `Assess(kPasswords)`). A store that is unavailable, still loading after 10 s, or without a working key gives an incomplete read.
+3. `SyncLoginReader` calls `PasswordStoreInterface::GetAutofillableLogins`. This never asks for authentication, unlike `ac_passwords_reveal`. Blocklisted and federated rows are skipped. Each password goes from `PasswordString::secure_value()` (a wiping `SecureU16String`) through `SecretUTF8` into a `linux_sync::StoredLogin`. A `StoredLogin` wipes its password when destroyed, and wipes the source when moved or copied in, so no stray copy is left in a moved-from short string. The reader gives up after 30 s.
+4. The rows move to the sync sequence, where `SyncCore::SealLogins` seals each password with `SyncKeys::SealPassword` and wipes the plaintext. JS receives only `[{origin, username, sealed, created}]`. `created` is milliseconds since the Unix epoch, as on macOS.
+
+**When a read is refused.** `null` makes the shared adapter skip passwords this cycle, so nothing is read, deleted or overwritten. A read is refused when:
+
+- the sync key is locked;
+- the store errors or is unavailable;
+- the reader times out;
+- `kSkipUndecryptablePasswords` is enabled.
+
+The last case matters because of how Chromium 156's `LoginDatabase` handles a row that fails to decrypt. By default on Linux it fails the whole read. Only with `kSkipUndecryptablePasswords` does it return the other rows as if nothing happened, and the consumer can't tell. Refusing whenever that feature is on is the Linux equivalent of macOS's `undecryptable > 0` check.
+
+**Which rows are kept.** These follow macOS's `loginOrigin`:
+
+- the trailing slash is dropped, and then the realm must be `http(s)://host[:port]` with no path, whitespace or control character (so HTTP-auth realms and Android rows are skipped);
+- empty passwords are skipped;
+- the first row wins for each origin and username;
+- passwords over 64 KiB (macOS's bound) and usernames over 1 KiB are skipped.
+
+### Saving: `savePassword(profile, origin, username, sealed, replacing)`
+
+1. `ParsePasswordSave` checks types and outer bounds: fields up to 64 KiB, `sealed` up to 128 KiB. Anything else gets `ERR_SYNC_ARGUMENT`. A login whose origin isn't a login origin, or whose username is over 1 KiB, parses as not holdable.
+2. On the sync sequence, `SyncCore::OpenLogin` opens the sealed value with the origin and username as AAD. A locked key, tampering, or a different origin or username returns `false`, as on macOS.
+3. On the UI thread, `credentials::PlanSyncedLogin` builds two plans: `passwords.remove` (`ac_passwords_remove`) and the typed `ArdiaPasswords.save` (`ac_passwords_add` with `passwordHex`). The origin must already be normalized. The save always removes first, whatever `replacing` says. This handles a local row that Linux's read filtered out (an empty password, or a second realm spelling of the same origin): `ac_passwords_add` would refuse it as already saved. A missing login removes as a no-op. Neither call prompts.
+
+**Profiles.** The shared adapter passes `engineProfile(profileId)`, which is `""` for the default profile. The Linux adapter maps it with `hostProfile` to the window's profile before the native call, as the credential calls do. The held store keys logins by the adapter's profile string.
+
+**Logins Linux can't hold.** These are a password over Linux's 4 KiB credential bound, a NUL in the password or username, a username over 1 KiB, or a non-login origin. The native save returns `"skipped"` for them and leaves any local row alone.
+
+- **Why not `false` or `true`.** Returning `false` made the shared adapter fail every cycle, run its 20 settle reads and stay quiet, so the device stopped publishing its own edits. Returning `true` is worse: `syncScope` records the value as base, the next read lacks it, and that publishes a delete to every device.
+- **The held store.** `hostSync.ts` holds such a login instead, in `sync-held-logins.nns` (sealed with `sealLocal`), keyed by profile, origin and username. Each entry stores the synced sealed value and `replaced`: the local sealed value it superseded, read from the native list when the save was skipped, or `null`.
+- **Reads.** `readPasswords` reports the held value in place of the local row for that key, also after a reload. This stops Linux re-publishing an older local password over a newer one it can't store.
+- **Release.** A held login is released:
+  - when the local value for its key differs from `replaced`, which is a real local edit (sealing is deterministic, so equal sealed strings mean the same password);
+  - when a later synced save succeeds;
+  - when a delete comes through `passwords.remove` (`hostCredentials.ts`). If the native remove refuses (a username over 1 KiB or containing NUL fails `LoginArgs`, or the store is unavailable), the login is released only when a fresh native read no longer contains it (`releaseHeldLoginIfGone`). Otherwise the native value would reappear and undo the delete.
+- **Key changes.** Turn On, and Enter Phrase outside the locked-resume path, run inside `whileResettingHeldLogins`: the store is suspended (reads return `null`, so passwords are skipped) while the engine runs. It is cleared only if the engine began a new document. If clearing fails, the change is rolled back: Turn On stops sync and deletes the chain it just created, and Enter Phrase stops sync. The caller gets an error. Enter Phrase on a locked device keeps its device id, key and base (`engine.ts` `loadState`), so the store is kept (`enterPhraseBegins`). Stop doesn't clear it.
+- **Lease.** Only the lease holder has a held store. `syncEngine.ts` drops it when the role leaves `authority` or a lease renewal isn't granted, and reloads it from the document when a renewal is granted again. Without a store, `readPasswords` returns `null`.
+- **Cap.** The store keeps at most 1000 logins and 4 MiB. Past that, `hold` refuses (that save reports `false`) instead of throwing, and `linuxSyncHooks.heldLogins()` reports `{held, refused}`. `refused` counts distinct logins, not attempts.
+- **Deleted profiles.** While sync runs, a profile that disappears from the browser store has its held logins dropped (`dropProfiles`). The first snapshot never prunes, so a profile list that is still loading can't drop held logins.
+- **Read limit.** The native read publishes only usernames up to 1 KiB, the bound the Linux remove and save plans accept. A login Linux could not delete is never published, because a remote delete of it could never be applied.
+- **Unreadable store.** If the held document can't be opened or parsed, `readPasswords` returns `null`: passwords are skipped, and nothing is deleted.
+- **Tests.** `tests/sync_devices.test.mjs` runs the production shared `passwordsAdapter` with Linux's `ArdiaSync` and `ArdiaPasswords` adapters between a Mac-like device and a Linux device. It covers:
+  - a newer unstorable Mac password that Linux must not revert;
+  - a long-username login, then the Mac deleting it;
+  - a NUL password attempted once;
+  - a renderer restart;
+  - a real local edit on Linux reaching the Mac;
+  - nothing left unapplied, and no plaintext in the folder or the held document.
+
+**`status().passwords`.** It reports whether passwords can sync for the window's profile right now: false when `kSkipUndecryptablePasswords` is on, or when the profile's password store is missing or reports an error (`LinuxCredentialsPasswordsUsable`, `credentials::PasswordsSyncUsable`).
+
+Deletions still go through the shared adapter's `deletePassword`, which uses the generic `passwords.remove` route and never carries a secret.
+
+### What isn't wiped
+
+- Chromium's own copies, as in `f07-security-notes.md`: the `StoredCredential` vector the store returns (its `PasswordString` is cleared, not cleansed); the UTF-16 inside `ac_passwords_add`; and the IPC buffers of the sealed values, which aren't secret.
+- The base64 sealed strings, which are ciphertext.
+
+### Tests
+
+- `tests/fixtures/sync_scenarios.cc` (`SealedLogins`):
+  - origin filtering and argument parsing;
+  - locked and partial reads give `null`;
+  - three of seven rows survive, and sealing is deterministic;
+  - non-ASCII passwords and empty usernames round-trip;
+  - wrong origins and usernames, tampered and non-base64 values, and opening after `forget` all fail;
+  - a moved `StoredLogin` leaves an empty source;
+  - the output never contains a password.
+- `tests/sync_devices.test.mjs` adds a second scenario. Two device processes on the real `SyncCore` sync passwords through the real `syncScope` merge. The device tool keeps a fake login store natively, so JS only handles sealed values. The scenario covers:
+  - setup and join;
+  - an HTTP-auth realm that is never synced;
+  - a password changed on the other device replaces the old one;
+  - no password, origin or username anywhere in the folder.
+- `test_sync.py` checks the source:
+  - the lease gate comes before the password routes;
+  - the reader uses `GetAutofillableLogins`, `secure_value()` and `SecretUTF8`, never `password_value.value()`;
+  - the read refuses under `kSkipUndecryptablePasswords` and checks the store with `Assess`;
+  - the save uses the typed plans;
+  - the sync service never touches a `.password`;
+  - nothing logs.
+- `src/hostSync.test.mjs`: both methods are typed invokes that carry only sealed values.
+
+## #146 The sync state may grow past 8 MiB
+
+- **The limit.** It is now per name: `linux_policy::DocumentLimit(name)` in `ac_linux_policy.h`. `sync-state.nns` may be up to 48 MiB, and everything else keeps 8 MiB. 48 MiB covers the base64 of the largest state `sealLocal` accepts: a 32 MiB payload framed and padded to 1 KiB, plus the NNS1 magic, nonce and tag. `test_host_policy.py` checks this at compile time against the sync constants.
+- **Where it applies.** `ReadDocument`, `WriteDocument` and the `ArdiaShell.writeDocument`/`saveDocument` branch all use the per-name limit.
+- **The window storage ledger.** The ledger keeps the operation of every pending write to match retries and recover failures. It caps one intent at 16 MiB and the whole ledger at 32 MiB, so it would still have refused a large state. A write above 8 MiB, which only the sync state can be, now records `{"kind":"write","sha256":…}` instead of its contents. The file runner hashes and writes it in one task, so the UI thread never hashes up to 48 MiB and writes keep their order. The ledger entry starts with a provisional digest and gets the real one when the write completes. A durable write then clears any older failed entry with the same name and digest (`CompleteStorageIntent`), as reusing one intent did before. Matching and recovery are unchanged: only a later successful write of the same bytes clears a failure. While one such write is pending in a window, another gets `ERR_DOCUMENT_BUSY`, which bounds the memory held. The shared engine already serializes its state saves, and `hostDocuments.ts` serializes every write per renderer. Writes up to 8 MiB are tracked exactly as before.
+- **The bootstrap snapshot.** It skips `sync-state.nns`, so no window reads up to 48 MiB at startup. The sync authority re-reads it through `refreshDocument` before the engine starts, and no other renderer reads it.
+- **Tests.**
+  - `test_window_storage.py` (`large-sync-state`): 8 MiB + 1 is refused for other names; 9 MiB and exactly 48 MiB states are written, while 48 MiB + 1 is refused; the ledger holds a digest; a second large write in flight is refused; a failed large write is recovered only by the same bytes.
+  - `sync_scenarios.cc`: a 12 MiB state seals to more than 8 MiB and reopens.
+  - `test_document_authority.py`: the bootstrap never reads the state.
+
+## #147 Linux wording and kit actions in the Sync pane
+
+`apps/linux/syncWording.ts` rewords shared sources at build time, the way `credentialWording.ts` (#160) rewords the credential panes. The shared panes aren't forked. `credentialWording.ts` now exports the small factory both use (`rewordWith`, `wordingPlugin`). A replacement that no longer matches fails the Linux build and names the file to update. So does a listed file that was never transformed.
+
+| Source | Change on Linux |
+| --- | --- |
+| `panes/Sync.tsx` | Computers and devices instead of Macs, and Syncthing, Nextcloud or Dropbox instead of iCloud Drive. The iCloud-off warning means the default folder's parent is missing on Linux, so it now says that and offers Choose… instead of opening macOS System Settings. Open Sync Folder replaces Show Sync Folder in Finder. "Add to This Computer", "(This Computer)" and "Just this computer so far" replace the Mac labels. |
+| `panes/SyncSheets.tsx` | The Recovery Kit sheet calls itself a text file and offers Close and Save as Text… only. The PDF preview and the Copy and Share kit actions are gone, because they return `null` on Linux. Show Words, Show Code and Copy Words stay. Elsewhere: the system keyring instead of the Keychain, your phone's camera instead of the iPhone and Universal Clipboard, your other device instead of your other Mac, `~` for `/home/<user>`, and a monospace font instead of Menlo. |
+| `rows/generalRows.ts` | The Sync search row says computers, with Syncthing and Nextcloud keywords instead of iCloud. |
+| `state/sync/syncDoc.ts`, `state/sync/engine.ts` | The Passwords type says "this computer", and the locked message says "this device". The engine's Keychain message for a failed `createPhrase` stays, because `syncEngine.ts` matches it and swaps in the keyring message. |
+
+A PDF kit isn't built; the text kit is the only format.
+
+**Tests.** `src/syncWording.test.mjs` (5 tests, now in `test:host`) checks:
+
+- the reworded pane and sheets match no Mac, iCloud, Finder, iPhone, Keychain or `/Users` wording;
+- the kit sheet has no PDF, preview, copy or share call;
+- every replacement still matches;
+- the Vite config runs the transform;
+- a build fails on a file that was never reworded.
+
+The production bundle was checked for the new strings and for the absence of the old ones.
+
+**Visual check still needed.** I couldn't run a Chromium build here, so nobody has looked at the reworded pane in a window: the kit sheet without its preview column, and the folder warning row.
+
+## Not done
+
+- **#174.** A sealed-password vector produced on a Mac can't be made on Linux; the issue stays open. The Linux and macOS formats are still checked against the independent `node:crypto` reference, and the new two-device scenario uses the same `SealPassword` code.
+
+## Test runs
+
+| Command | Result |
+| --- | --- |
+| `python3 -m unittest discover -s engine/ardiacore-linux/tests` | 469 of 475 pass. The 6 failures also fail on the base: five patch dry-runs fail because the reference 156 tree already has those patches applied, and `test_downloads` expects a `//components/download/public/common` dependency the base BUILD.gn doesn't list. After the rebase, `test_sync`, `test_window_storage`, `test_document_host`, `test_document_authority`, `test_host_policy`, `test_quit` and `test_chromium_close` pass. |
+| `pnpm --filter @ardia/linux test:host` | 459 of 459 pass after the rebase. |
+| `pnpm --filter @ardia/linux acceptance:self-test`, `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs` | 79 of 79 and 8 of 8 pass. |
+| `pnpm --filter @ardia/linux typecheck`, `build`, `test:graph` | Typecheck and build pass; `test:graph` passes 3 of 3. |
+| `scripts/linux/syntax-check-156.sh ac_linux_sync ac_linux_credential_service ac_linux_host.cc` | All 9 files pass. |

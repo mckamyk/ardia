@@ -784,6 +784,32 @@ Plan PlanExport(std::string_view path) {
                 {Store::kPasswords});
 }
 
+SyncedLoginPlans PlanSyncedLogin(std::string_view profile, std::string_view origin, std::string_view username,
+                                 std::string_view password) {
+  SyncedLoginPlans plans;
+  const std::optional<std::string> normalized = NormalizeOrigin(origin);
+  if (!normalized || *normalized != origin) {
+    return plans;
+  }
+  std::vector<Arg> values;
+  values.push_back(Arg::String(profile));
+  values.push_back(Arg::String(origin));
+  values.push_back(Arg::String(username));
+  values.push_back(Arg::String(password));
+  plans.save = PlanInvoke("ArdiaPasswords.save", values);
+  values.clear();
+  std::vector<std::pair<std::string, Arg>> login;
+  login.emplace_back("origin", Arg::String(origin));
+  login.emplace_back("username", Arg::String(username));
+  plans.remove = PlanCall("passwords.remove", Arg::Object(std::move(login)));
+  plans.storable = plans.save.ok() && plans.remove.ok();
+  return plans;
+}
+
+bool PasswordsSyncUsable(bool skip_undecryptable, bool service, StoreError error) {
+  return !skip_undecryptable && service && error == StoreError::kNone;
+}
+
 Failure ClassifyEngineError(std::string_view message) {
   struct Known {
     std::string_view message;
