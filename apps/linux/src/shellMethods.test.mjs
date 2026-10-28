@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
-import { resolveHostModule } from "./hostModules.ts";
+import { reachesNativeHostUnchecked, resolveHostModule } from "./hostModules.ts";
 import { linuxShellMethod } from "./shellMethods.ts";
 import { requireNativeModule } from "./shims/expo-modules-core.ts";
 
@@ -9,35 +9,117 @@ const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const nativeHost = read("../../../engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc");
 const bootstrap = nativeHost.slice(nativeHost.indexOf("base::DictValue ShellHostView::Bootstrap() const {"), nativeHost.indexOf("void ShellHostView::LayoutOverlay()"));
 const advertised = [...bootstrap.matchAll(/\.Append\("([A-Za-z]+\.[A-Za-z]+)"\)/g)].map((match) => match[1]);
+const engineDir = new URL("../../../engine/ardiacore-linux/src/ardia/linux/", import.meta.url);
+const routedNatively = new Set(readdirSync(engineDir).filter((file) => /\.(cc|h)$/.test(file)).flatMap((file) => [...readFileSync(new URL(file, engineDir), "utf8").matchAll(/"(Ardia[A-Za-z]+\.[A-Za-z]+)"/g)].map((match) => match[1])));
 
-const SHARED_MODULES = [
-  ["ArdiaShell", "../../../packages/shell/src/shellNative.ts", "ShellNative"],
-  ["ArdiaApp", "../../../packages/shell/src/app.ts", "AppModule"],
-  ["ArdiaSystem", "../../../packages/shell/src/system.tsx", "SystemNative"],
-  ["ArdiaMagnifyArea", "../../../packages/shell/src/system.tsx", "MagnifyAreaNative"],
-  ["ArdiaFileDrop", "../../../packages/shell/src/system.tsx", "FileDropNative"],
-  ["ArdiaCalendar", "../../../packages/shell/src/live.ts", "CalendarNative"],
-  ["ArdiaKeychain", "../../../packages/shell/src/live.ts", "KeychainNative"],
-  ["ArdiaDockSelection", "../../../packages/shell/src/views.tsx", "DockSelectionNative"],
-  ["ArdiaInlineCompletion", "../../../packages/shell/src/inlineCompletion.ts", "InlineCompletionNative"],
-  ["ArdiaTranslate", "../../../packages/shell/src/translation.ts", "TranslationModule"],
-];
+const SHELL_SOURCES = new URL("../../../packages/shell/src/", import.meta.url);
+const shellSources = readdirSync(SHELL_SOURCES).filter((file) => /\.tsx?$/.test(file)).map((file) => readFileSync(new URL(file, SHELL_SOURCES), "utf8"));
 
-function declared(file, type) {
-  const source = read(file);
+function typeBody(source, type) {
   const start = source.indexOf(`export type ${type} = {`);
-  assert.ok(start >= 0, `${file} no longer declares ${type}`);
+  if (start < 0) return null;
   const open = source.indexOf("{", start);
   let depth = 0;
-  let end = open;
-  for (; end < source.length; end++) {
+  for (let end = open; end < source.length; end++) {
     if (source[end] === "{") depth++;
-    if (source[end] === "}" && --depth === 0) break;
+    if (source[end] === "}" && --depth === 0) return source.slice(open + 1, end);
   }
-  return [...source.slice(open + 1, end).matchAll(/^ {2}(\w+)\??(\(|<|:)/gm)]
-    .map((match) => ({ name: match[1], method: match[2] !== ":" }))
+  return null;
+}
+
+function members(body) {
+  const parts = [];
+  let depth = 0;
+  let current = "";
+  let previous = "";
+  for (const char of body) {
+    if ("({<[".includes(char)) depth++;
+    if (")}]".includes(char) || (char === ">" && previous !== "=")) depth--;
+    previous = char;
+    if (depth === 0 && (char === ";" || char === "\n")) {
+      parts.push(current);
+      current = "";
+    } else current += char;
+  }
+  parts.push(current);
+  return parts.map((part) => part.trim().match(/^(\w+)\??\s*(\(|<|:)(.*)$/s)).filter(Boolean)
+    .map(([, name, mark, rest]) => ({ name, method: mark !== ":" || /=>/.test(rest) }))
     .filter((member) => member.name !== "addListener");
 }
+
+function moduleMap(type) {
+  const body = typeBody(readFileSync(new URL("nativeModules.ts", SHELL_SOURCES), "utf8"), type);
+  assert.ok(body, `packages/shell/src/nativeModules.ts no longer declares ${type}`);
+  return [...body.matchAll(/(\w+): (\w+);/g)].map(([, module, typeName]) => {
+    const declared = shellSources.map((source) => typeBody(source, typeName)).find((found) => found !== null);
+    assert.ok(declared !== undefined, `${typeName} for ${module} is not declared in packages/shell/src`);
+    return { module, methods: members(declared).filter((member) => member.method).map((member) => member.name) };
+  });
+}
+
+const REQUIRED = moduleMap("ShellNativeModules");
+const OPTIONAL = moduleMap("ShellOptionalNativeModules");
+const linuxExposes = (module) => advertised.some((capability) => capability === module || capability.startsWith(`${module}.`));
+
+const DEV_HOOKS = [
+  "ArdiaApp.devRenderIntroMusic",
+  "ArdiaApp.devRunAppleScript",
+  "ArdiaApp.devSnapshotWindow",
+  "ArdiaApp.devSetPointer",
+  "ArdiaApp.devSetMouseButtons",
+  "ArdiaApp.devLeftEdgePointer",
+  "ArdiaApp.devLeftEdgeStats",
+  "ArdiaApp.devHoverStats",
+  "ArdiaApp.devMenuCommand",
+  "ArdiaApp.devTypeKeys",
+  "ArdiaApp.devKeyEquivalent",
+  "ArdiaApp.devClick",
+  "ArdiaApp.devCrash",
+  "ArdiaMagnifyArea.devMagnify",
+  "ArdiaFileDrop.devDrag",
+  "ArdiaFileDrop.devLastFileDrag",
+];
+const TRACKED_IN_305 = [
+  "ArdiaApp.updaterState",
+  "ArdiaApp.checkForUpdates",
+  "ArdiaApp.setAutomaticUpdateChecks",
+  "ArdiaApp.setAutomaticUpdateDownloads",
+  "ArdiaApp.setUpdateChannel",
+  "ArdiaApp.setWindowActivity",
+  "ArdiaApp.share",
+  "ArdiaApp.shareVia",
+  "ArdiaApp.isInDock",
+  "ArdiaApp.addToDock",
+  "ArdiaApp.appIcons",
+  "ArdiaApp.appIcon",
+  "ArdiaApp.setAppIcon",
+  "ArdiaApp.notificationPermission",
+  "ArdiaApp.requestNotificationPermission",
+  "ArdiaApp.postNotification",
+  "ArdiaApp.removeNotifications",
+  "ArdiaApp.openNotificationSettings",
+  "ArdiaApp.setScriptState",
+  "ArdiaApp.replyToScript",
+  "ArdiaApp.systemInfo",
+  "ArdiaApp.crashReports",
+  "ArdiaSystem.menuShortcuts",
+  "ArdiaSystem.recordShortcut",
+  "ArdiaSystem.cancelRecording",
+  "ArdiaKeychain.get",
+  "ArdiaKeychain.set",
+  "ArdiaKeychain.delete",
+  "ArdiaDockSelection.iconTheme",
+  "ArdiaInlineCompletion.complete",
+  "ArdiaTranslate.userLanguages",
+  "ArdiaTranslate.languageName",
+  "ArdiaTranslate.detect",
+  "ArdiaTranslate.status",
+  "ArdiaTranslate.supportedLanguages",
+  "ArdiaTranslate.prepare",
+  "ArdiaTranslate.translate",
+  "ArdiaTranslate.translateBlocks",
+];
+const ALLOWED_TO_REJECT = new Set([...DEV_HOOKS, ...TRACKED_IN_305]);
 
 const linuxHost = () => ({
   bootstrap: { windowId: "main", profileId: "default", capabilities: [...advertised] },
@@ -50,22 +132,51 @@ const SHIM_SOURCES = ["./shims/shell.tsx", "./shims/shellBase.tsx", "./shortcuts
 const fromShim = (method) => new RegExp(`export (?:const|function|async function) ${method}\\b|export \\{[^}]*\\b${method}\\b[^}]*\\}|hostShellLocals[^\\n]*\\b${method}\\b|method === "${method}"`).test(SHIM_SOURCES);
 const nativelyImplemented = (method) => nativeHost.includes(`method == "ArdiaShell.${method}"`);
 
-test("every method the shared native module types declare resolves to a callable on Linux, so a shared call can't throw 'is not a function'", () => {
+function audit(modules = [...REQUIRED, ...OPTIONAL.filter(({ module }) => linuxExposes(module))]) {
   const host = linuxHost();
   const missing = [];
-  for (const [module, file, type] of SHARED_MODULES) {
-    for (const { name, method } of declared(file, type)) {
-      if (method && typeof resolveHostModule(host, module, name) !== "function") missing.push(`${module}.${name}`);
+  const unchecked = [];
+  for (const { module, methods } of modules) {
+    for (const method of methods) {
+      const resolved = resolveHostModule(host, module, method);
+      const name = `${module}.${method}`;
+      if (typeof resolved !== "function") missing.push(name);
+      else if (module === "ArdiaShell" ? !nativelyImplemented(method) && !linuxShellMethod(method) && !fromShim(method) : reachesNativeHostUnchecked(resolved) && !advertised.includes(name) && !routedNatively.has(name) && !ALLOWED_TO_REJECT.has(name)) unchecked.push(name);
     }
   }
-  assert.deepEqual(missing, []);
+  return { missing, unchecked };
+}
+
+test("the audited modules are read from packages/shell's native module map, optional ones included", () => {
+  assert.deepEqual(REQUIRED.map(({ module }) => module).filter((module) => ["ArdiaShell", "ArdiaApp", "ArdiaSystem", "ArdiaGlassEffect"].includes(module)), ["ArdiaShell", "ArdiaApp", "ArdiaSystem", "ArdiaGlassEffect"]);
+  assert.deepEqual(OPTIONAL.map(({ module }) => module), ["ArdiaCli", "ArdiaUserScripts"]);
+  assert.deepEqual(REQUIRED.find(({ module }) => module === "ArdiaGlassEffect").methods, ["isLiquidGlass"]);
+  const app = REQUIRED.find(({ module }) => module === "ArdiaApp").methods;
+  for (const method of ["updaterState", "isInDock", "devCrash"]) assert.ok(app.includes(method), method);
+  for (const { module } of OPTIONAL) assert.equal(linuxExposes(module), false, `${module} is advertised, so its methods are audited`);
 });
 
-test("every ArdiaShell method is implemented by the native host, a Linux shell method or a shell shim export", () => {
-  const unimplemented = declared(SHARED_MODULES[0][1], SHARED_MODULES[0][2])
-    .map(({ name }) => name)
-    .filter((name) => !nativelyImplemented(name) && !linuxShellMethod(name) && !fromShim(name));
-  assert.deepEqual(unimplemented, []);
+test("every shared native method resolves to a callable on Linux and reaches a Linux adapter, an advertised or routed native method, or the explicit allow-to-reject list", () => {
+  assert.deepEqual(audit(), { missing: [], unchecked: [] });
+});
+
+test("a method added to a shared module type without a Linux path fails the audit", () => {
+  const app = REQUIRED.find(({ module }) => module === "ArdiaApp");
+  const shell = REQUIRED.find(({ module }) => module === "ArdiaShell");
+  assert.deepEqual(audit([{ module: "ArdiaApp", methods: [...app.methods, "bogusAppMethod"] }, { module: "ArdiaShell", methods: [...shell.methods, "bogusShellMethod"] }]).unchecked, ["ArdiaApp.bogusAppMethod", "ArdiaShell.bogusShellMethod"]);
+});
+
+test("the allow-to-reject list names only methods that still reach the native host unadvertised", () => {
+  const host = linuxHost();
+  const declared = new Set(REQUIRED.flatMap(({ module, methods }) => methods.map((method) => `${module}.${method}`)));
+  const stale = [...ALLOWED_TO_REJECT].filter((name) => {
+    const [module, method] = name.split(".");
+    return !declared.has(name) || !reachesNativeHostUnchecked(resolveHostModule(host, module, method)) || advertised.includes(name) || routedNatively.has(name);
+  });
+  assert.deepEqual(stale, []);
+});
+
+test("every ArdiaShell method resolves to its Linux fallback while the native host doesn't advertise it", () => {
   for (const name of ["watchLeftEdge", "setDragEscapeCapture", "saveKeyResponder", "raiseView", "animateWindowClose", "dragPreviewBegin"]) {
     assert.equal(resolveHostModule(linuxHost(), "ArdiaShell", name), linuxShellMethod(name), name);
   }
@@ -236,7 +347,7 @@ test("window close animations, the drag preview and focus cancellation settle im
     assert.equal(await resolveHostModule(host, "ArdiaShell", name)(), undefined, name);
   }
   assert.equal(resolveHostModule(host, "ArdiaShell", "switcherPointerMoved")(), false);
-  for (const name of ["fetchBangList", "startDictation", "pickFiles"]) {
+  for (const name of ["fetchBangList", "startDictation"]) {
     await assert.rejects(resolveHostModule(host, "ArdiaShell", name)(null), { code: "ERR_UNAVAILABLE" }, name);
   }
 });

@@ -19,6 +19,9 @@ const synchronousMethods: Record<string, Record<string, unknown>> = {
   ArdiaGlassEffect: { isLiquidGlass: false },
 };
 
+const nativeFallthroughs = new WeakSet<object>();
+export const reachesNativeHostUnchecked = (resolved: unknown) => typeof resolved === "function" && nativeFallthroughs.has(resolved);
+
 export function resolveHostModule(host: ArdiaHost, name: string, method: string): unknown {
   if (name === "ArdiaApp" && method === "launchConfig") return () => hostLaunchConfig(host);
   if (name === "ArdiaShell" && !hostSupports(`${name}.${method}`, host)) {
@@ -57,5 +60,7 @@ export function resolveHostModule(host: ArdiaHost, name: string, method: string)
   if (constants && method in constants) return constants[method];
   const defaults = synchronousDefaults[name];
   if (defaults && method in defaults) return defaults[method];
-  return hostModuleMethod(name, method, host);
+  const fallthrough = hostModuleMethod(name, method, host);
+  nativeFallthroughs.add(fallthrough);
+  return fallthrough;
 }

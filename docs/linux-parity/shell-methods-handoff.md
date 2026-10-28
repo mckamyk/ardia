@@ -18,30 +18,36 @@ The shared UI calls `ArdiaShell` through `packages/shell`, whose wrappers call t
 | `raiseView` | Raises the element and `levels` ancestors above their siblings with a z-index one higher than theirs, and restores their own z-index afterwards. |
 | `animateWindowClose`, `cancelFocusMove`, `replyToTerminate`, `dragPreview*` | Settle at once. Linux has no close animation, no pending native focus move and no terminate handshake, and draws no floating drag preview outside the window. |
 | `switcherPointerMoved` | `false` until `startLinuxShortcuts` registers its tracker. |
-| `fetchBangList`, `startDictation`, `pickFiles` | Reject with `ERR_UNAVAILABLE`. |
+| `pickFiles` | Native. `LinuxPickFiles` (`ac_linux_files.cc`) opens the desktop's multi-file chooser (portal or GTK through `ui::SelectFileDialog`) and answers with `file://` URLs, as macOS does. A cancel answers an empty list, a background instance answers an empty list without a dialog, and only one chooser opens at a time. Engines that don't advertise it get the explicit rejection below. |
+| `fetchBangList`, `startDictation`, `pickFiles` on an engine without the native chooser | Reject with `ERR_UNAVAILABLE`. |
 | `ArdiaSystem.hapticTick` | Settles quietly; Linux has no haptics. It used to reject as unsupported on every cross-window drag. |
 
 The shell shim's exports still cover `showMenu`, `setTrafficLightsCenter`, `setAppearance`, `confirm`, `prompt` and `claimFocus`.
 
 ## The audit
 
-`apps/linux/src/shellMethods.test.mjs` reads the method types the shared native modules declare in `packages/shell/src` (`ShellNative`, `AppModule`, `SystemNative`, `CalendarNative`, `KeychainNative`, `TranslationModule` and the rest). Every declared method must resolve to a callable on Linux with the capabilities `ac_linux_host.cc` advertises. Every `ArdiaShell` method must also be implemented by the native host (`method == "ArdiaShell.<name>"`), by `linuxShellMethod`, or by a shell-shim export. A method added to the shared types without a Linux path fails this test.
+`apps/linux/src/shellMethods.test.mjs` reads the module map from `ShellNativeModules` and `ShellOptionalNativeModules` in `packages/shell/src/nativeModules.ts`. It then finds each module's type in `packages/shell/src` and lists its methods; the optional modules are `ArdiaCli` and `ArdiaUserScripts`.
 
-These still reach the native host and reject as unsupported Linux host methods:
+- **Optional modules.** They are audited only when the host advertises them. Otherwise the Linux expo shim returns `null` for them and the shared callers fall back.
+- **Callable.** Every method must resolve to a callable with the capabilities `ac_linux_host.cc` advertises.
+- **ArdiaShell.** Each method must be implemented by the native host (`method == "ArdiaShell.<name>"`), by `linuxShellMethod`, or by a shell-shim export.
+- **Every other module.** `resolveHostModule` marks its generic fall-through to the native host (`reachesNativeHostUnchecked`). A method that ends there must meet one of these:
+  - It is advertised in the bootstrap.
+  - Its name is routed in `engine/ardiacore-linux/src/ardia/linux`.
+  - It is on the test's explicit allow-to-reject list: `DEV_HOOKS`, the macOS developer hooks, and `TRACKED_IN_305`, the Mac-only features tracked in #305.
+- **Stale entries.** A list entry that stops falling through fails the test.
 
-- **Updater, Dock and app icons:** `ArdiaApp.updaterState` and friends, `isInDock`, `addToDock`, `appIcons`.
-- **Sharing and notifications:** `share`, `shareVia`, the notification methods.
-- **Scripts and dev hooks:** `setScriptState`, `replyToScript`, `ArdiaApp.dev*`.
-- **Other modules:** `ArdiaKeychain.*`, `ArdiaTranslate.*`, `ArdiaInlineCompletion.complete`, `ArdiaDockSelection.iconTheme`.
-
-Shared callers handle the rejection; they are tracked as a follow-up rather than given silent fallbacks.
+The test adds a fake `ArdiaApp.bogusAppMethod` and `ArdiaShell.bogusShellMethod` and expects the audit to report both. Adding the method to `AppModule` itself also fails the audit.
 
 ## Verification
 
-- **Unit tests.** `pnpm --filter @ardia/linux test:host`, including `shellMethods.test.mjs` (9 tests; 7 fail against the previous `hostModules.ts`).
+- **Unit tests.** `pnpm --filter @ardia/linux test:host`, including `shellMethods.test.mjs` (12 tests) and `shellCapabilities.test.mjs`.
+- **Native.** `engine/ardiacore-linux/tests/test_open_files.py` covers the chooser's wiring, and `scripts/linux/syntax-check-156.sh ac_linux_files.cc ac_linux_host.cc` passes. Open File… needs the next Chromium build for its end-to-end check.
 - **End to end.** The desktop-session harness ran against the `ee23b331` engine with this UI in a private sway session:
   - **Ctrl+S.** Hides the sidebar with the window intact. A pointer at the left edge peeks it; Ctrl+S restores it. The shipped UI logs `crashed TypeError: Kt.watchLeftEdge is not a function` and blanks the window.
   - **Splits.** F20D's tab-to-page split passes.
   - **Reorder.** Dropping a row in the top quarter of the row above reorders the sidebar.
 
 F20D's reorder check drops 11.5 px into a 34 px row, inside the shared targeting's "drop onto" band (25–75 % of a row). By design that never reorders, on macOS either.
+
+Follow-ups: no drag preview card on Linux (#325), and Escape cancels a drag only while the shell has keyboard focus (#326).

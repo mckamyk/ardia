@@ -55,6 +55,7 @@
 #include "dbus/object_path.h"
 #include "dbus/object_proxy.h"
 #include "extensions/browser/webstore_installer.h"
+#include "net/base/filename_util.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/aura/env.h"
 #include "ui/base/clipboard/file_info.h"
@@ -519,6 +520,56 @@ class DownloadFolderPicker : public ui::SelectFileDialog::Listener {
   scoped_refptr<ui::SelectFileDialog> dialog_;
 };
 
+
+bool& FilesPickerOpen() {
+  static bool open = false;
+  return open;
+}
+
+class OpenFilesPicker : public ui::SelectFileDialog::Listener {
+ public:
+  static void Start(gfx::NativeWindow window, Done done) {
+    FilesPickerOpen() = true;
+    auto* picker = new OpenFilesPicker(std::move(done));
+    picker->dialog_ = ui::SelectFileDialog::Create(picker, nullptr);
+    if (!picker->dialog_) {
+      Done failed = std::move(picker->done_);
+      picker->Finish();
+      return Fail(std::move(failed), "ERR_FILE_PICKER_UNAVAILABLE", "No file dialog is available on this desktop");
+    }
+    picker->dialog_->SelectFile(ui::SelectFileDialog::SELECT_OPEN_MULTI_FILE, u"Open File", base::FilePath(),
+                                nullptr, 0, base::FilePath::StringType(), window);
+  }
+
+  void FileSelected(const ui::SelectedFileInfo& file, int) override { Reply({file}); }
+  void MultiFilesSelected(const std::vector<ui::SelectedFileInfo>& files) override { Reply(files); }
+  void FileSelectionCanceled() override { Reply({}); }
+
+  ~OpenFilesPicker() override = default;
+
+ private:
+  explicit OpenFilesPicker(Done done) : done_(std::move(done)) {}
+
+  void Reply(const std::vector<ui::SelectedFileInfo>& files) {
+    Done done = std::move(done_);
+    base::ListValue urls;
+    for (const auto& file : files) urls.Append(net::FilePathToFileURL(file.path()).spec());
+    Finish();
+    if (done) std::move(done).Run(true, base::Value(std::move(urls)));
+  }
+
+  void Finish() {
+    if (finished_) return;
+    finished_ = true;
+    FilesPickerOpen() = false;
+    if (dialog_) dialog_->ListenerDestroyed();
+    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
+  }
+
+  Done done_;
+  bool finished_ = false;
+  scoped_refptr<ui::SelectFileDialog> dialog_;
+};
 }
 
 void LinuxPickFolder(gfx::NativeWindow window, const base::ListValue& values, Done done) {
@@ -539,6 +590,17 @@ void LinuxPickFolder(gfx::NativeWindow window, const base::ListValue& values, Do
                                    ? base::UTF8ToUTF16(prompt) : std::u16string(u"Choose a Download Folder");
   DownloadFolderPicker::Start(window, downloads::ValidLocalPath(current) ? base::FilePath(current) : base::FilePath(),
                               title, std::move(done));
+}
+
+void LinuxPickFiles(gfx::NativeWindow window, const base::ListValue& values, Done done) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!values.empty()) return Fail(std::move(done), "ERR_FILES_REQUEST", "Choosing files to open takes no arguments");
+  if (ardiacore::BackgroundInstance()) {
+    LOG(INFO) << "Ardia background instance: file picker requested";
+    return std::move(done).Run(true, base::Value(base::ListValue()));
+  }
+  if (FilesPickerOpen()) return Fail(std::move(done), "ERR_FILE_PICKER_OPEN", "A file dialog is already open");
+  OpenFilesPicker::Start(window, std::move(done));
 }
 
 LinuxShellWebView::LinuxShellWebView(content::BrowserContext* context) : views::WebView(context) {}

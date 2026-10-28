@@ -16,10 +16,19 @@ const fakeHost = (capabilities, invoke = async () => null) => ({
   onEvent: () => () => {},
 });
 
-test("the native shell methods the shared UI waits on are advertised, and no Linux fallback shadows a native implementation", () => {
-  for (const method of ["restoreFullScreen", "typeaheadReady"]) assert.ok(advertised.has(`ArdiaShell.${method}`), method);
-  const shadowed = [...host.matchAll(/method == "ArdiaShell\.(\w+)"/g)].map((match) => match[1]).filter((method) => linuxShellMethod(method));
+test("the native shell methods the shared UI waits on are advertised, and a Linux fallback only stands in for a native method the host doesn't advertise", () => {
+  for (const method of ["restoreFullScreen", "typeaheadReady", "pickFiles"]) assert.ok(advertised.has(`ArdiaShell.${method}`), method);
+  const shadowed = [...host.matchAll(/method == "ArdiaShell\.(\w+)"/g)].map((match) => match[1]).filter((method) => linuxShellMethod(method) && !advertised.has(`ArdiaShell.${method}`));
   assert.deepEqual(shadowed, []);
+});
+
+test("Open File… reaches the native chooser, and an engine without it rejects explicitly instead of hanging", async () => {
+  const calls = [];
+  const current = fakeHost([...advertised], async (method, args) => { calls.push([method, args]); return ["file:///home/user/a.pdf"]; });
+  assert.deepEqual(await resolveHostModule(current, "ArdiaShell", "pickFiles")(), ["file:///home/user/a.pdf"]);
+  assert.deepEqual(calls, [["ArdiaShell.pickFiles", { args: [] }]]);
+  const older = fakeHost([...advertised].filter((capability) => capability !== "ArdiaShell.pickFiles"));
+  await assert.rejects(resolveHostModule(older, "ArdiaShell", "pickFiles")(), { code: "ERR_UNAVAILABLE" });
 });
 
 test("native shell methods reach the host whether or not they are advertised", async () => {
