@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -161,6 +162,11 @@ struct DevToolsWindow {
     if (strategy) *strategy = strategies[inspected];
     return found->second;
   }
+  static DevToolsWindow* AsDevToolsWindow(content::WebContents* contents) {
+    static DevToolsWindow window;
+    return contents && !companions.contains(contents) ? &window : nullptr;
+  }
+  static inline std::set<content::WebContents*> companions;
   static inline std::map<content::WebContents*, content::WebContents*> docked;
   static inline std::map<content::WebContents*, DevToolsContentsResizingStrategy> strategies;
 };
@@ -291,6 +297,14 @@ class ShellHostView : public views::View {
   ShellHostView();
   ~ShellHostView();
   void LayoutPane(TabBinding* binding);
+  void OnDevToolsDockChanged(content::WebContents* inspected, content::WebContents* devtools);
+  void HideDevToolsViewport(TabBinding* binding);
+  TabBinding* Binding(int id) {
+    for (auto& binding : bindings) {
+      if (TabId(binding->contents()) == id) return binding.get();
+    }
+    return nullptr;
+  }
   void PresentDevTools(content::WebContents* inspected) {
     if (!inspected) return;
     posted.push_back(base::BindOnce(
