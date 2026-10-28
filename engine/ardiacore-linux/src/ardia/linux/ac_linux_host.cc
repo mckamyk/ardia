@@ -122,7 +122,9 @@
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "chrome/browser/ui/views/frame/browser_frame_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/browser_widget.h"
 #include "chrome/browser/ui/views/frame/contents_container_view.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/search_engines/template_url.h"
@@ -1214,11 +1216,13 @@ class ShellHostView : public views::View,
   void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override;
   void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds) override;
   void OnWidgetShowStateChanged(views::Widget* widget) override;
+  void OnWidgetThemeChanged(views::Widget* widget) override;
   void OnDidPresentCompositorFrame(ui::Compositor* compositor, uint32_t frame_token,
                                    const gfx::PresentationFeedback& feedback) override;
   void OnCompositingShuttingDown(ui::Compositor* compositor) override { presentation_observation_.Reset(); }
   void ReportWindowGeometry();
   void LayoutOverlay();
+  void HideCaptionButtons();
   void ReattachViewports();
   void OnViewBoundsChanged(views::View*) override { LayoutOverlay(); }
   void OnViewIsDeleting(views::View*) override;
@@ -1949,6 +1953,16 @@ void ShellHostView::LayoutOverlay() {
   SetBoundsRect(browser_view_->GetLocalBounds());
   shell_->SetBoundsRect(GetLocalBounds());
   browser_view_->GetActiveContentsWebView()->SetVisible(false);
+  HideCaptionButtons();
+}
+
+void ShellHostView::HideCaptionButtons() {
+  if (!browser_view_ || !browser_view_->browser_widget()) return;
+  if (BrowserFrameView* frame = browser_view_->browser_widget()->GetFrameView()) frame->SetCaptionButtonsOpacity(0.0f);
+}
+
+void ShellHostView::OnWidgetThemeChanged(views::Widget*) {
+  HideCaptionButtons();
 }
 
 void ShellHostView::OnViewIsDeleting(views::View*) {
