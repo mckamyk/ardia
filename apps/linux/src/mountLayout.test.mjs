@@ -57,3 +57,11 @@ test("the Linux TextInput reports its first layout from a layout effect, so focu
   assert.match(shim, /useLayoutEffect\(\(\) => reportMountLayout\(field\.current, layoutHandler\.current as never, window\), \[\]\)/);
   assert.match(shim, /field\.current = node;/);
 });
+
+test("the Linux View reports its first layout from a layout effect, so a pinned toolbar button anchors a popup opened before the next frame", () => {
+  const shim = readFileSync(new URL("./shims/web/motion/macView.tsx", import.meta.url), "utf8");
+  const view = shim.slice(shim.indexOf("export const MacView"), shim.indexOf("const BasePressable"));
+  assert.match(view, /useLayoutEffect\(\(\) => reportMountLayout\(node\.current, layoutHandler\.current as never, window\), \[\]\)/);
+  assert.match(view, /layoutHandler\.current = props\.onLayout;/);
+  assert.match(shim, /node\.current = value;/);
+});
