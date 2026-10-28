@@ -857,6 +857,7 @@ class JoinedHostSourceTests(unittest.TestCase):
         start = method(host, 'void StartLinuxHost()')
         self.assertIn('DevToolsWindow::RegisterLinuxDevToolsLifecycle();', start)
         self.assertIn('g_ardia_devtools_dock_changed = ', start)
+        self.assertIn('found->second->OnDevToolsDockChanged(inspected, devtools);', start)
         emit = method(host, 'void ShellHostView::EmitPageCommandEvent(')
         self.assertIn('ardiacore::EmitLinuxPageEvent(request, "find"', emit)
         self.assertNotIn('SendEvent', emit)

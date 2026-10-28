@@ -980,6 +980,8 @@ class ShellHostView : public views::View,
   void Event(std::string_view module, std::string_view event,
              base::Value payload);
   void PresentDevTools(content::WebContents* inspected);
+  void OnDevToolsDockChanged(content::WebContents* inspected, content::WebContents* devtools);
+  void HideDevToolsViewport(TabBinding* binding);
   void LayoutPane(TabBinding* binding);
   void QueueTransaction(std::optional<int> command);
   void EngineEvent(std::string_view topic, const base::DictValue& payload);
@@ -3274,6 +3276,26 @@ void ShellHostView::PresentDevTools(content::WebContents* inspected) {
           }, GetWeakPtr(), inspected->GetWeakPtr()));
 }
 
+void ShellHostView::OnDevToolsDockChanged(content::WebContents* inspected, content::WebContents* devtools) {
+  if (!inspected) return;
+  TabBinding* binding = Binding(TabId(inspected));
+  views::WebView* tools = binding && binding->contents() == inspected ? binding->devtools_viewport() : nullptr;
+  if (tools && tools->web_contents() && tools->web_contents() != devtools) HideDevToolsViewport(binding);
+  PresentDevTools(inspected);
+}
+
+void ShellHostView::HideDevToolsViewport(TabBinding* binding) {
+  views::WebView* tools = binding->devtools_viewport();
+  if (!tools) return;
+  const bool visible = binding->pane_visible && binding->contents();
+  views::FocusManager* focus = GetFocusManager();
+  const bool focused = focus && tools->Contains(focus->GetFocusedView());
+  if (tools->GetVisible()) binding->devtools_had_focus = focused && !visible;
+  tools->SetVisible(false);
+  tools->SetWebContents(nullptr);
+  if (focused && visible) binding->FocusFromHost();
+}
+
 void ShellHostView::LayoutPane(TabBinding* binding) {
   views::WebView* page = binding->viewport();
   if (!browser_view_) return;
@@ -3321,16 +3343,7 @@ void ShellHostView::LayoutPane(TabBinding* binding) {
     page->SetWebContents(nullptr);
   }
   views::WebView* tools = binding->devtools_viewport();
-  if (!devtools) {
-    if (!tools) return;
-    views::FocusManager* focus = GetFocusManager();
-    const bool focused = focus && tools->Contains(focus->GetFocusedView());
-    if (tools->GetVisible()) binding->devtools_had_focus = focused && !visible;
-    tools->SetVisible(false);
-    tools->SetWebContents(nullptr);
-    if (focused && visible) binding->FocusFromHost();
-    return;
-  }
+  if (!devtools) return HideDevToolsViewport(binding);
   if (auto* container = browser_view_->GetContentsContainerViewFor(contents)) {
     if (container->devtools_web_view()->web_contents() == devtools) {
       container->devtools_web_view()->SetWebContents(nullptr);
@@ -5539,11 +5552,11 @@ void StartLinuxHost() {
     for (const auto& [id, host] : Hosts()) host->NoteInputActivity();
   }));
   g_ardia_devtools_dock_changed = [](BrowserWindowInterface* browser, content::WebContents* inspected,
-                                     content::WebContents*) {
+                                     content::WebContents* devtools) {
     if (!browser || !inspected) return;
     const auto found = Hosts().find(browser->GetSessionID().id());
     if (found == Hosts().end() || found->second->browser() != browser) return;
-    found->second->PresentDevTools(inspected);
+    found->second->OnDevToolsDockChanged(inspected, devtools);
   };
   DevToolsWindow::RegisterLinuxDevToolsLifecycle();
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(std::make_unique<ShellConfig>());

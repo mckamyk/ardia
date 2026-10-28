@@ -291,6 +291,14 @@ class ShellHostView : public views::View {
   ShellHostView();
   ~ShellHostView();
   void LayoutPane(TabBinding* binding);
+  void OnDevToolsDockChanged(content::WebContents* inspected, content::WebContents* devtools);
+  void HideDevToolsViewport(TabBinding* binding);
+  TabBinding* Binding(int id) {
+    for (auto& binding : bindings) {
+      if (TabId(binding->contents()) == id) return binding.get();
+    }
+    return nullptr;
+  }
   void PresentDevTools(content::WebContents* inspected) {
     if (!inspected) return;
     posted.push_back(base::BindOnce(
