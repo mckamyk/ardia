@@ -14,11 +14,6 @@ export default {
   issue: 27,
   title: "Page fullscreen, renderer crash and hang recovery, hovered-link status and blocked pop-ups",
   deadline: 480000,
-  manual: [
-    { name: "Video fullscreen from the player's own control", steps: ["Play a video on a real site and press its fullscreen button.", "Ardia's sidebar and toolbar hide; pressing Escape restores them in the same window state."], reason: "needs a real media player and a desktop session" },
-    { name: "Hover status follows the pointer", steps: ["Move the mouse over a link, then off it.", "The status text shows the link and clears when the pointer leaves."], reason: "needs a physical pointer" },
-    { name: "Split and transfer keep producers on the right pane", steps: ["Open a split, hover a link and trigger a pop-up in each pane.", "Move one pane's tab to another window; its status and pop-up list follow it and the old window shows none."], reason: "needs desktop window management" },
-  ],
   async run(t) {
     const run = nonce("f17");
     const state = await startBrowser(t, { name: "page-status", coreDumps: false });

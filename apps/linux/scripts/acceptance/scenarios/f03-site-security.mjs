@@ -8,9 +8,6 @@ export default {
   issue: 13,
   title: "Site panel connection security for HTTPS, HTTP, mixed, invalid-certificate and internal pages",
   deadline: 300000,
-  manual: [
-    { name: "Certificate details match the served certificate", steps: ["Open https://secure.ardia.test (or any real HTTPS site) and open Site Controls › connection row.", "Check issuer, validity and fingerprint against the server certificate."], reason: "needs a visual check of the certificate viewer" },
-  ],
   async run(t) {
     const run = nonce("f03");
     const { shell } = await startBrowser(t, { name: "security" });

@@ -64,6 +64,7 @@ function page(title, body, head = "") {
 
 export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100 } = {}) {
   const requests = [];
+  const routes = new Map();
   const gates = new Map();
   const streams = new Set();
   const live = createLiveServices();
@@ -87,6 +88,8 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
       response.end(body);
     };
     const html = (title, body, head) => send(200, "text/html; charset=utf-8", page(title, body, head));
+    const custom = routes.get(url.pathname);
+    if (custom) return custom({ request, response, url, secure, send, html });
     if (secure && LIVE_HOSTS.includes(host)) {
       const chunks = [];
       request.on("data", (chunk) => chunks.push(chunk));
@@ -246,6 +249,9 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     chromiumArgs,
     suggestRequests: () => requests.filter((r) => r.host === SUGGEST_HOST),
     live,
+    route(path, handler) {
+      routes.set(path, handler);
+    },
     release(name) {
       const g = gate(name);
       g.released = true;

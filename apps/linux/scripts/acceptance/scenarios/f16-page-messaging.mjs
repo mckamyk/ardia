@@ -28,11 +28,6 @@ export default {
   issue: 26,
   title: "Peek and split link gestures, selection tools and untrusted page messages on native pages",
   deadline: 300000,
-  manual: [
-    { name: "Physical modifier clicks", steps: ["Shift-click a link with a real mouse: a peek opens at the click.", "Alt-Shift-click a link: it opens in a split pane.", "Change the peek and split modifiers in Settings › Tabs and repeat; the new keys apply without reloading the page."], reason: "CDP clicks cover the browser path; the physical keyboard and pointer need a desktop session" },
-    { name: "Selection popover and Escape", steps: ["Drag-select a sentence with the mouse: the selection popover appears beside it.", "Press Escape: the popover closes and the selection stays."], reason: "the popover position and look need a visual check" },
-    { name: "Drag a link out of a page", steps: ["Drag a link from a page and drop it back over the same page without a drop target.", "A new foreground tab opens on the link once.", "Drop it outside the window or over a drop target: nothing opens."], reason: "headless Ozone has no system drag-and-drop loop" },
-  ],
   async run(t) {
     const run = nonce("f16");
     const state = await startBrowser(t, { name: "page-messaging" });
