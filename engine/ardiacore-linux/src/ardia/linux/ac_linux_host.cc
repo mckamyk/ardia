@@ -20,6 +20,7 @@
 #include "ardia/linux/ac_linux_contract.h"
 #include "ardia/linux/ac_linux_auto_pip_service.h"
 #include "ardia/linux/ac_linux_background_dialogs.h"
+#include "ardia/linux/ac_linux_calendar_service.h"
 #include "ardia/linux/ac_linux_close.h"
 #include "ardia/linux/ac_linux_close_hooks.h"
 #include "ardia/linux/ac_linux_credential_service.h"
@@ -978,6 +979,7 @@ class ShellHostView : public views::View,
     LinuxExtensionsWindowClosing(id_);
   }
   void WatchSystemState();
+  void WatchCalendar();
   void NoteInputActivity();
   void OfferTab(content::WebContents* contents) {
     if (contents && contents->GetBrowserContext() == page_profile()) offered_[TabId(contents)] = contents->GetWeakPtr();
@@ -1258,6 +1260,7 @@ class ShellHostView : public views::View,
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
   base::ScopedObservation<aura::Window, aura::WindowObserver> input_observation_{this};
   base::CallbackListSubscription system_state_subscription_;
+  base::CallbackListSubscription calendar_subscription_;
   base::WeakPtrFactory<ShellHostView> weak_factory_{this};
 };
 
@@ -1865,6 +1868,7 @@ base::DictValue ShellHostView::Bootstrap() const {
   capabilities.Append("engine.systemState");
   AppendLinuxSyncCapabilities(capabilities);
   AppendLinuxLiveCapabilities(capabilities);
+  AppendLinuxCalendarCapabilities(capabilities);
   AppendLinuxSiteControlsCapabilities(capabilities);
   for (const char* capability : linux_import::kImportCapabilities) capabilities.Append(capability);
   capabilities.Append("favicons.fetch");
@@ -2969,6 +2973,14 @@ void ShellHostView::WatchSystemState() {
       [](base::WeakPtr<ShellHostView> host, const base::DictValue& state) {
         if (host) host->Event("ArdiaEngine", "engine", base::Value(base::DictValue()
             .Set("name", "engine.systemState").Set("data", state.Clone())));
+      }, GetWeakPtr()));
+}
+
+void ShellHostView::WatchCalendar() {
+  if (calendar_subscription_) return;
+  calendar_subscription_ = WatchLinuxCalendar(base::BindRepeating(
+      [](base::WeakPtr<ShellHostView> host, const base::DictValue& change) {
+        if (host) host->Event("ArdiaCalendar", "onCalendarChanged", base::Value(change.Clone()));
       }, GetWeakPtr()));
 }
 
@@ -4151,6 +4163,13 @@ void ShellHostView::Invoke(
   }
   if (LinuxCredentialsInvokes(method)) {
     return LinuxCredentialsInvoke(!page_profile() || page_profile()->IsOffTheRecord(), shell_, method, values, std::move(done));
+  }
+  if (LinuxCalendarInvokes(method)) {
+    if (!profile() || profile()->ShutdownStarted()) {
+      return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kUnavailable));
+    }
+    WatchCalendar();
+    return LinuxCalendarInvoke(DocumentDirectory(profile()), method, values, std::move(done));
   }
   if (LinuxSyncInvokes(method)) {
     return LinuxSyncInvoke({base::NumberToString(id_) + "#" + base::NumberToString(renderer_generation_),
