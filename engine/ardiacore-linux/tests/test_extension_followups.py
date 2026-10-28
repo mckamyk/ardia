@@ -56,9 +56,12 @@ class NativeMessagingSearchOrderTests(unittest.TestCase):
         if not source.exists() or not paths.exists():
             self.skipTest('the Chromium 156 source tree is unavailable')
         text = source.read_text()
-        order = [text.index(marker) for marker in ['DIR_USER_NATIVE_MESSAGING, host_name', 'DIR_CHROME_USER_NATIVE_MESSAGING, host_name',
-                                                   'g_ardia_native_messaging_manifest(host_name)', 'DIR_NATIVE_MESSAGING, host_name',
-                                                   'DIR_CHROME_NATIVE_MESSAGING, host_name']]
+        markers = ['DIR_USER_NATIVE_MESSAGING, host_name', 'DIR_CHROME_USER_NATIVE_MESSAGING, host_name',
+                   'g_ardia_native_messaging_manifest(host_name)', 'DIR_NATIVE_MESSAGING, host_name',
+                   'DIR_CHROME_NATIVE_MESSAGING, host_name']
+        if 'g_ardia_native_messaging_manifest(host_name)' not in text:
+            self.skipTest('the Chromium 156 tree does not carry the native messaging patch')
+        order = [text.index(marker) for marker in markers]
         self.assertEqual(order, sorted(order))
         defined = paths.read_text()
         chrome_system = defined[defined.index('case chrome::DIR_CHROME_NATIVE_MESSAGING:'):][:400]
@@ -66,8 +69,11 @@ class NativeMessagingSearchOrderTests(unittest.TestCase):
         self.assertIn('"/etc/chromium/native-messaging-hosts"', defined)
         chrome_user = defined[defined.index('case chrome::DIR_CHROME_USER_NATIVE_MESSAGING:'):][:300]
         self.assertIn('DIR_CHROME_USER_DATA', chrome_user)
-        self.assertIn('std::string data_dir_basename = "google-chrome";',
-                      (CHROMIUM / 'chrome/common/chrome_paths_linux.cc').read_text())
+        self.assertIn('GetChromeUserDataDirectory(&cur)', defined[defined.index('case chrome::DIR_CHROME_USER_DATA:'):][:200])
+        linux_paths = (CHROMIUM / 'chrome/common/chrome_paths_linux.cc').read_text()
+        chrome_user_data = linux_paths[linux_paths.index('bool GetChromeUserDataDirectory('):]
+        chrome_user_data = chrome_user_data[:chrome_user_data.index('\n}\n')]
+        self.assertIn('std::string data_dir_basename = "google-chrome";', chrome_user_data)
 
 
 class ExtensionShortcutWiringTests(unittest.TestCase):

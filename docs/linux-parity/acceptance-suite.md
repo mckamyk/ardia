@@ -332,7 +332,7 @@ These manual checks need real accounts, a Mac, real browser profiles, a desktop 
 
 Bugs found and fixed in #241:
 
-- **F11:** GitHub's secondary rate limit (403 with `retry-after` or its "secondary rate limit" message) and Google Drive's `usageLimits` 403s (`userRateLimitExceeded`, `rateLimitExceeded`, `dailyLimitExceeded`) read as signed out, asking the user to sign in again. They now read as rate limited (native `Failure`, which also keeps `retry-after`). macOS's shared `state/live/net.ts` still has the old mapping.
+- **F11:** GitHub's secondary rate limit (403 with `retry-after` or its "secondary rate limit" message) and Google Drive's rate-limit 403s (`userRateLimitExceeded`, `rateLimitExceeded`, `dailyLimitExceeded`; other `usageLimits` reasons such as `accessNotConfigured` are not rate limits) read as signed out, asking the user to sign in again. They now read as rate limited (native `Failure`, which also keeps `retry-after`). macOS's shared `state/live/net.ts` still has the old mapping (#244).
 - **F14:** A GNOME Online Accounts calendar stayed listed when the account's Calendar switch (`[Collection] CalendarEnabled=false`) was off and the child's own `Enabled` stayed true.
 
 ## Notes for the first real run
