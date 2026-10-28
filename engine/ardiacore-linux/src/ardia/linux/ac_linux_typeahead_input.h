@@ -102,6 +102,7 @@ class TypeaheadInput : public ui::EventRewriter, public ui::InputMethodObserver,
 
  private:
   void Stop();
+  aura::Window* FocusedTarget() const;
 
   raw_ptr<aura::WindowTreeHost> host_;
   raw_ptr<ui::InputMethod> input_;

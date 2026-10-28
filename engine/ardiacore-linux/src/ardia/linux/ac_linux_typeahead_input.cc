@@ -70,16 +70,20 @@ ui::EventDispatchDetails TypeaheadInput::RewriteEvent(const ui::Event& event, co
       (event.type() != ui::EventType::kKeyPressed && event.type() != ui::EventType::kKeyReleased)) {
     return SendEvent(continuation, &event);
   }
-  aura::Window* root = host_ ? host_->window() : nullptr;
-  aura::client::FocusClient* focus = root ? aura::client::GetFocusClient(root) : nullptr;
-  aura::Window* target = focus ? focus->GetFocusedWindow() : nullptr;
-  if (!owns_.Run(target ? target : root)) return SendEvent(continuation, &event);
+  if (!owns_.Run(FocusedTarget())) return SendEvent(continuation, &event);
   if (held_.Hold(ui::KeyEvent(*event.AsKeyEvent()))) return DiscardEvent(continuation);
   return SendEvent(continuation, &event);
 }
 
+aura::Window* TypeaheadInput::FocusedTarget() const {
+  aura::Window* root = host_ ? host_->window() : nullptr;
+  aura::client::FocusClient* focus = root ? aura::client::GetFocusClient(root) : nullptr;
+  aura::Window* target = focus ? focus->GetFocusedWindow() : nullptr;
+  return target ? target : root;
+}
+
 void TypeaheadInput::OnTextInputStateChanged(const ui::TextInputClient* client) {
-  if (!held_.capturing() || !input_ || !client || client == this) return;
+  if (!held_.capturing() || !input_ || !client || client == this || !owns_.Run(FocusedTarget())) return;
   wanted_ = const_cast<ui::TextInputClient*>(client)->AsWeakPtr();
   if (input_->GetTextInputClient() != this) input_->SetFocusedTextInputClient(this);
 }

@@ -282,6 +282,51 @@ std::string RevealFailureMessage(const std::vector<RevealBackend>& tried) {
   return text + " couldn't show this file";
 }
 
+LinuxRevealChain::LinuxRevealChain(std::vector<RevealBackend> order) : order_(std::move(order)) {}
+
+std::optional<RevealBackend> LinuxRevealChain::Begin(RevealOutcome* outcome) {
+  if (current_ || done_) return std::nullopt;
+  return Advance(outcome);
+}
+
+std::optional<RevealBackend> LinuxRevealChain::Answer(RevealBackend backend, RevealAnswer answer,
+                                                      RevealOutcome* outcome) {
+  if (done_ || current_ != backend) return std::nullopt;
+  current_.reset();
+  if (answer == RevealAnswer::kShown || answer == RevealAnswer::kCancelled) {
+    done_ = true;
+    *outcome = {true, true, {}, {}};
+    return std::nullopt;
+  }
+  if (answer != RevealAnswer::kUnavailable) tried_.push_back(backend);
+  return Advance(outcome);
+}
+
+std::optional<RevealBackend> LinuxRevealChain::Advance(RevealOutcome* outcome) {
+  if (next_ < order_.size()) {
+    current_ = order_[next_++];
+    return current_;
+  }
+  done_ = true;
+  *outcome = {true, false, tried_.empty() ? "ERR_REVEAL_UNAVAILABLE" : "ERR_REVEAL_FAILED", RevealFailureMessage(tried_)};
+  return std::nullopt;
+}
+
+int OpenRevealTarget(const std::string& path) {
+  if (!ValidLocalPath(path)) return -1;
+  int fd;
+  do {
+    fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW);
+  } while (fd < 0 && errno == EINTR);
+  if (fd < 0) return -1;
+  struct stat info;
+  if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode)) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
+
 bool PathListed(std::string_view path, const std::vector<std::string>& known) {
   if (!ValidLocalPath(path)) return false;
   for (const auto& candidate : known) {
@@ -389,7 +434,7 @@ TrashOutcome TrashInto(const SourceEntry& source, const TrashFolders& trash, con
   if (!localtime_r(&now, &local) || !std::strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%S", &local))
     return Failure("ERR_TRASH", "The deletion date cannot be recorded");
   const std::string record = "[Trash Info]\nPath=" + Escape(recorded_path) + "\nDeletionDate=" + date + "\n";
-  if (before_move) before_move();
+  if (before_move) before_move(TrashStage::kBeforeRecord);
   for (int attempt = 1; attempt <= 1000; ++attempt) {
     const std::string candidate = Candidate(source.name, attempt);
     if (candidate.size() + 10 > 255) return Failure("ERR_TRASH", "The file name is too long for the trash");
@@ -416,6 +461,14 @@ TrashOutcome TrashInto(const SourceEntry& source, const TrashFolders& trash, con
     struct stat linked;
     if (fstatat(trash.files.get(), candidate.c_str(), &linked, AT_SYMLINK_NOFOLLOW) != 0 ||
         linked.st_dev != source.info.st_dev || linked.st_ino != source.info.st_ino) {
+      unlinkat(trash.files.get(), candidate.c_str(), 0);
+      unlinkat(trash.info.get(), info_name.c_str(), 0);
+      return Failure("ERR_FILE_CHANGED", "The file changed while it was being moved to the trash");
+    }
+    if (before_move) before_move(TrashStage::kBeforeRemove);
+    struct stat current;
+    if (fstatat(source.parent.get(), source.name.c_str(), &current, AT_SYMLINK_NOFOLLOW) != 0 ||
+        current.st_dev != source.info.st_dev || current.st_ino != source.info.st_ino) {
       unlinkat(trash.files.get(), candidate.c_str(), 0);
       unlinkat(trash.info.get(), info_name.c_str(), 0);
       return Failure("ERR_FILE_CHANGED", "The file changed while it was being moved to the trash");

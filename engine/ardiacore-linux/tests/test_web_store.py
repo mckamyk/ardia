@@ -47,6 +47,31 @@ class WebStoreQueueTests(unittest.TestCase):
         self.run_case('queue')
 
 
+class WebStoreLifecycleTests(unittest.TestCase):
+    def test_real_web_store_waits_requests_expiry_and_page_changes(self):
+        import re
+        source = LINUX / 'ac_linux_web_store.cc'
+        with tempfile.TemporaryDirectory(prefix='ardia-web-store-life-') as directory:
+            stubs = pathlib.Path(directory) / 'stubs'
+            for header in [source, LINUX / 'ac_linux_web_store.h']:
+                for include in re.findall(r'#include "([^"]+)"', header.read_text()):
+                    if include.startswith('ardia/'):
+                        continue
+                    path = stubs / include
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('#include "web_store_support.h"\n')
+            binary = pathlib.Path(directory) / 'web-store-life'
+            subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++23', '-Wall', '-Wextra', '-Werror', '-g',
+                            '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(stubs),
+                            '-I', str(ROOT / 'tests/fixtures'), '-I', str(ROOT / 'src'), str(source),
+                            str(LINUX / 'ac_linux_web_store_queue.cc'), str(ROOT / 'tests/fixtures/web_store_scenarios.cc'),
+                            '-o', str(binary)], check=True, text=True, timeout=180)
+            result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
+                                    env={**os.environ, 'UBSAN_OPTIONS': 'halt_on_error=1'})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('web store scenarios passed', result.stdout)
+
+
 class WebStoreWiringTests(unittest.TestCase):
     store = (LINUX / 'ac_linux_web_store.cc').read_text()
     host = (LINUX / 'ac_linux_host.cc').read_text()
@@ -65,9 +90,6 @@ class WebStoreWiringTests(unittest.TestCase):
         self.assertIn('OnExtensionUninstallDialogClosed(removed', close)
         self.assertIn('std::exchange(function_, nullptr)', close)
         self.assertIn('queue_.Uninstalled(extension->id())', body(self.store, '  void OnExtensionUninstalled('))
-        self.assertIn('Finish(queue_.Clear(), false)', body(self.store, '  void PrimaryPageChanged(content::Page&) override {'))
-        self.assertIn('Finish(queue_.Clear(), false)', body(self.store, '  void WebContentsDestroyed() override {'))
-        self.assertIn('queue_.Expired(', body(self.store, '  void Expire() {'))
 
     def test_the_relabel_runs_in_ardias_world_on_store_pages_only(self):
         request = body(self.store, 'void LinuxWebStoreRequest(content::WebContents* contents, Done done) {')

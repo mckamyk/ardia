@@ -23,6 +23,14 @@ constexpr int kArmedWaitMs = 30000;
 constexpr int kPolledWaitMs = 5000;
 constexpr int kElevatedWaitMs = 2000;
 constexpr int kMeasureWaitMs = 1000;
+constexpr int kPollFailuresMax = 3;
+
+void Sleep(int timeout_ms) {
+  if (timeout_ms <= 0) return;
+  timespec remaining{timeout_ms / 1000, static_cast<long>(timeout_ms % 1000) * 1000000L};
+  while (nanosleep(&remaining, &remaining) != 0 && errno == EINTR) {
+  }
+}
 
 struct Stall {
   double some = 0;
@@ -277,7 +285,7 @@ int LinuxMemoryPressureWatch::NextWaitMs() const {
   return wait;
 }
 
-void LinuxMemoryPressureWatch::Wait(int timeout_ms) {
+bool LinuxMemoryPressureWatch::Wait(int timeout_ms, int (*poll_fn)(pollfd*, nfds_t, int)) {
   std::vector<pollfd> fds;
   std::vector<size_t> owners;
   for (size_t index = 0; index < sources_.size(); ++index) {
@@ -285,16 +293,26 @@ void LinuxMemoryPressureWatch::Wait(int timeout_ms) {
     fds.push_back({sources_[index].fd, POLLPRI, 0});
     owners.push_back(index);
   }
+  if (fds.empty()) {
+    Sleep(timeout_ms);
+    return true;
+  }
   int ready;
   do {
-    ready = poll(fds.empty() ? nullptr : fds.data(), fds.size(), timeout_ms);
+    ready = poll_fn(fds.data(), fds.size(), timeout_ms);
   } while (ready < 0 && errno == EINTR);
-  if (ready <= 0) return;
+  if (ready < 0) {
+    if (++failures_ >= kPollFailuresMax) Close();
+    Sleep(timeout_ms);
+    return false;
+  }
+  failures_ = 0;
   for (size_t index = 0; index < fds.size(); ++index) {
     Source& source = sources_[owners[index]];
     if (fds[index].revents & (POLLERR | POLLNVAL | POLLHUP)) source.armed = false;
     else if (fds[index].revents & POLLPRI) source.triggered = true;
   }
+  return true;
 }
 
 uint64_t LinuxMonotonicMicroseconds() {

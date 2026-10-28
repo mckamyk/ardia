@@ -91,6 +91,7 @@ chromium chromium-linux-page-agent.patch linux
 chromium chromium-linux-navigation-hold-hook.patch linux
 chromium chromium-linux-autoplay-policy.patch linux
 chromium chromium-linux-web-store-uninstall.patch linux
+chromium chromium-linux-media-player-pip.patch linux
 chromium chromium-linux-branding.patch linux
 
 layer engine/chromium

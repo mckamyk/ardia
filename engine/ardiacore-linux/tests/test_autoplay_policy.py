@@ -20,20 +20,42 @@ def body(source, signature):
     return source[start:end]
 
 
+class AutoplayFollowerTests(unittest.TestCase):
+    def test_existing_tabs_follow_an_autoplay_setting_change(self):
+        import os
+        import re
+        source = LINUX / 'ac_linux_autoplay.cc'
+        with tempfile.TemporaryDirectory(prefix='ardia-autoplay-follow-') as directory:
+            stubs = pathlib.Path(directory) / 'stubs'
+            for header in [source, LINUX / 'ac_linux_autoplay.h']:
+                for include in re.findall(r'#include "([^"]+)"', header.read_text()):
+                    if include.startswith('ardia/'):
+                        continue
+                    path = stubs / include
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('#include "autoplay_support.h"\n')
+            binary = pathlib.Path(directory) / 'autoplay-follow'
+            subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++23', '-Wall', '-Wextra', '-Werror', '-g',
+                            '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(stubs),
+                            '-I', str(ROOT / 'tests/fixtures'), '-I', str(ROOT / 'src'), str(source),
+                            str(ROOT / 'tests/fixtures/autoplay_scenarios.cc'), '-o', str(binary)],
+                           check=True, text=True, timeout=180)
+            result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('autoplay scenarios passed', result.stdout)
+
+
 class AutoplayPolicyTests(unittest.TestCase):
     def test_pages_learn_the_sites_autoplay_block_at_document_start(self):
         channel = (LINUX / 'ac_linux_page_channel.cc').read_text()
         greet = body(channel, 'void LinuxPageChannel::Greet(content::RenderFrameHost& frame) {')
         self.assertIn('LinuxAutoplayBlocked(frame.GetOutermostMainFrame()->GetLastCommittedURL(), frame.GetBrowserContext())', greet)
         self.assertIn('Options().PageConfig(frame.IsInPrimaryMainFrame(), block_autoplay)', greet)
+        attach = body(channel, 'void LinuxPageChannel::Attach(LinuxPageChannelHooks hooks) {')
+        self.assertIn('FollowLinuxAutoplay(&GetWebContents(), base::BindRepeating(&LinuxPageChannel::RefreshPageConfig', attach)
 
     def test_the_block_reads_the_pages_own_profile_autoplay_setting(self):
         autoplay = (LINUX / 'ac_linux_autoplay.cc').read_text()
-        blocked = body(autoplay, 'bool LinuxAutoplayBlocked(const GURL& url, content::BrowserContext* context) {')
-        self.assertIn('url.SchemeIsHTTPOrHTTPS()', blocked)
-        self.assertIn('HostContentSettingsMapFactory::GetForProfile(Profile::FromBrowserContext(context))', blocked)
-        self.assertIn('ContentSettingsType::AUTOPLAY', blocked)
-        self.assertIn('CONTENT_SETTING_BLOCK', blocked)
         install = body(autoplay, 'void InstallLinuxAutoplayPolicy() {')
         self.assertIn('g_ardia_linux_autoplay_blocked = ', install)
         self.assertIn('extern bool (*g_ardia_linux_autoplay_blocked)(content::WebContents* contents);', autoplay)

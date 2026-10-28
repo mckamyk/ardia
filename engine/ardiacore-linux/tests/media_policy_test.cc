@@ -174,6 +174,16 @@ LinuxTabProtection Idle() {
   return {false, false, false, false, false, false, false};
 }
 
+void PictureInPictureChoice() {
+  using P = LinuxPictureInPicturePlayer;
+  assert(!ChooseLinuxPictureInPicturePlayer({}));
+  assert(ChooseLinuxPictureInPicturePlayer({P{false, 100}}) == 0u);
+  assert(ChooseLinuxPictureInPicturePlayer({P{false, 900}, P{true, 100}, P{true, 400}}) == 2u);
+  assert(ChooseLinuxPictureInPicturePlayer({P{true, 0}, P{false, 1000}}) == 0u);
+  assert(ChooseLinuxPictureInPicturePlayer({P{false, 300}, P{false, 300}, P{false, 200}}) == 0u);
+  assert(ChooseLinuxPictureInPicturePlayer({P{false, 0}, P{false, 0}}) == 0u);
+}
+
 void Protection() {
   assert(!LinuxProtectionReason(Idle()));
   const std::pair<std::optional<bool> LinuxTabProtection::*, const char*> fields[] = {
@@ -311,6 +321,7 @@ int main(int argc, char** argv) {
   else if (mode == "reporter") Reporter();
   else if (mode == "commands") Commands();
   else if (mode == "pip") PictureInPicture();
+  else if (mode == "pip-choice") PictureInPictureChoice();
   else if (mode == "protection") Protection();
   else if (mode == "power-tracker") PowerTracker();
   else if (mode == "power") Power();

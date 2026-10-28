@@ -54,6 +54,16 @@ std::optional<double> LinuxWebStoreQueue::NextExpiry() const {
   return next;
 }
 
+bool LinuxWebStoreQueue::HasClaimed() const {
+  return std::any_of(entries_.begin(), entries_.end(), [](const Entry& entry) { return entry.claimed_at.has_value(); });
+}
+
+void LinuxWebStoreQueue::Renew(double now) {
+  for (auto& entry : entries_) {
+    if (entry.claimed_at) entry.claimed_at = now;
+  }
+}
+
 std::vector<uint64_t> LinuxWebStoreQueue::Clear() {
   std::vector<uint64_t> ids;
   for (const auto& entry : entries_) ids.push_back(entry.id);

@@ -44,6 +44,14 @@ for (const action of ["play", "pause", "nexttrack", "previoustrack", "seekto"]) 
 window.startTone = () => audio.play().then(() => true, (error) => String(error));
 `;
 
+const SILENT_VIDEO_SCRIPT = `
+const canvas = document.getElementById("canvas");
+const context = canvas.getContext("2d");
+let frame = 0;
+setInterval(() => { context.fillStyle = frame++ % 2 ? "#204060" : "#406020"; context.fillRect(0, 0, 320, 180); }, 50);
+for (const id of ["big", "small"]) document.getElementById(id).srcObject = canvas.captureStream(20);
+`;
+
 const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 export function suggestionsFor(query) {
@@ -109,6 +117,7 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     if (url.pathname === "/print") return html("Print fixture", "<h1>Ardia print fixture</h1><p>Printable text.</p>");
     if (url.pathname === "/zoom") return html("Zoom fixture", "<h1>Zoom fixture</h1>");
     if (url.pathname === "/media") return html("Media fixture", `<h1>Media fixture</h1><audio id="tone" src="/tone.wav" loop></audio><form><input id="field" name="field" autocomplete="off"></form><script>${MEDIA_SCRIPT}</script>`);
+    if (url.pathname === "/silent-video") return html("Silent video fixture", `<h1>Silent video fixture</h1><canvas id="canvas" width="320" height="180"></canvas><video id="big" muted autoplay playsinline width="320" height="180"></video><video id="small" muted autoplay playsinline width="80" height="45"></video><script>${SILENT_VIDEO_SCRIPT}</script>`);
     if (url.pathname === "/tone.wav") return send(200, "audio/wav", toneWav());
     if (url.pathname === "/pixel.png") return send(200, "image/png", PIXEL_PNG);
     if (url.pathname.startsWith("/ads/banners/")) return send(200, "image/png", PIXEL_PNG);
@@ -212,6 +221,7 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     permissions: () => `https://secure.ardia.test:${ports.https}/permissions`,
     permissionsOrigin: () => `https://secure.ardia.test:${ports.https}`,
     blocker: (host, run) => `http://${host}:${ports.http}/blocker?run=${encodeURIComponent(run)}`,
+    silentVideo: (run = "") => `http://media.ardia.test:${ports.http}/silent-video?run=${encodeURIComponent(run)}`,
     fullscreen: (run = "") => `http://plain.ardia.test:${ports.http}/fullscreen?run=${encodeURIComponent(run)}`,
     hover: (run = "") => `http://plain.ardia.test:${ports.http}/hover?run=${encodeURIComponent(run)}`,
     popup: (run = "") => `http://plain.ardia.test:${ports.http}/popup?run=${encodeURIComponent(run)}`,

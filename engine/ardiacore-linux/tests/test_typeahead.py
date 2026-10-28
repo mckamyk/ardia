@@ -85,6 +85,33 @@ class TypeaheadLedgerTests(unittest.TestCase):
 INPUT = (LINUX / 'ac_linux_typeahead_input.cc').read_text() if (LINUX / 'ac_linux_typeahead_input.cc').exists() else ''
 
 
+class TypeaheadInputTests(unittest.TestCase):
+    def test_real_typeahead_input_holds_keys_and_only_takes_ime_focus_for_this_window(self):
+        compiler = shutil.which('clang++') or shutil.which('c++')
+        if compiler is None:
+            self.skipTest('C++ compiler is unavailable')
+        source = LINUX / 'ac_linux_typeahead_input.cc'
+        with tempfile.TemporaryDirectory(prefix='ardia-typeahead-input-') as scratch:
+            stubs = pathlib.Path(scratch) / 'stubs'
+            for header in [source, LINUX / 'ac_linux_typeahead_input.h']:
+                for include in re.findall(r'#include "([^"]+)"', header.read_text()):
+                    if include.startswith('ardia/'):
+                        continue
+                    path = stubs / include
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('#include "typeahead_input_support.h"\n')
+            binary = pathlib.Path(scratch) / 'typeahead-input'
+            built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-g',
+                                    '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(stubs),
+                                    '-I', str(ROOT / 'tests/fixtures'), '-I', str(SOURCE), str(source),
+                                    str(ROOT / 'tests/fixtures/typeahead_input_scenarios.cc'), '-o', str(binary)],
+                                   capture_output=True, text=True, timeout=180)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+            self.assertIn('typeahead input scenarios passed', ran.stdout)
+
+
 class TypeaheadHostTests(unittest.TestCase):
     def test_regular_windows_hold_keys_from_attach_with_a_deadline_that_discards(self):
         initialize = extract(HOST, 'void ShellHostView::Initialize()')
@@ -103,7 +130,6 @@ class TypeaheadHostTests(unittest.TestCase):
         self.assertIn('held_.capturing()', rewrite)
         self.assertIn('ui::EventType::kKeyReleased', rewrite)
         self.assertIn('owns_.Run(', rewrite)
-        self.assertIn('GetFocusedWindow()', rewrite)
         self.assertLess(rewrite.index('held_.Hold('), rewrite.index('return DiscardEvent(continuation);'))
         self.assertIn('return SendEvent(continuation, &event);', rewrite)
         start = extract(INPUT, 'void TypeaheadInput::Start()')

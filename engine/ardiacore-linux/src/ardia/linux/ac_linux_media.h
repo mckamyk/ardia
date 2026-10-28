@@ -1,6 +1,8 @@
 #ifndef ARDIA_LINUX_AC_LINUX_MEDIA_H_
 #define ARDIA_LINUX_AC_LINUX_MEDIA_H_
 
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -123,6 +125,13 @@ std::optional<LinuxControlPress> ParseLinuxControlPress(const base::ListValue& a
 enum class LinuxPictureInPictureRoute { kAlreadyOpen, kNoActivation, kMediaSession, kElement };
 
 LinuxPictureInPictureRoute RouteLinuxPictureInPicture(bool open, bool activation, bool has_video);
+
+struct LinuxPictureInPicturePlayer {
+  bool playing = false;
+  int64_t area = 0;
+};
+
+std::optional<size_t> ChooseLinuxPictureInPicturePlayer(const std::vector<LinuxPictureInPicturePlayer>& players);
 
 }
 

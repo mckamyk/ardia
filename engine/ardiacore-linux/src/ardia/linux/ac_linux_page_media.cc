@@ -1,6 +1,6 @@
 #include "ardia/linux/ac_linux_page_media.h"
 
-#include "ardia/linux/ac_linux_page_channel.h"
+#include "ardia/linux/ac_linux_content_hooks.h"
 
 #include <algorithm>
 
@@ -8,12 +8,14 @@
 #include "base/location.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "ui/gfx/geometry/size.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "components/performance_manager/public/graph/page_node.h"
 #include "components/performance_manager/public/performance_manager.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "content/public/browser/media_player_id.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -209,34 +211,45 @@ void LinuxPageMedia::RequestPictureInPicture(const base::ListValue& args, bool a
   if (!ParseLinuxControlPress(args)) {
     return std::move(done).Run(false, base::Value("requestPictureInPicture requires a control press"));
   }
+  content::WebContents* contents = web_contents();
   const LinuxPictureInPictureRoute route =
       RouteLinuxPictureInPicture(InPictureInPicture(), activation, session_.active && session_.has_video);
-  content::MediaSession* session = content::MediaSession::GetIfExists(web_contents());
-  LinuxPageChannel* channel = web_contents() ? LinuxPageChannel::FromWebContents(web_contents()) : nullptr;
+  content::MediaSession* session = content::MediaSession::GetIfExists(contents);
+  std::optional<content::MediaPlayerId> player;
   switch (route) {
     case LinuxPictureInPictureRoute::kAlreadyOpen: return std::move(done).Run(true, base::Value(true));
     case LinuxPictureInPictureRoute::kNoActivation: return std::move(done).Run(true, base::Value(false));
     case LinuxPictureInPictureRoute::kMediaSession:
       if (!session) return std::move(done).Run(true, base::Value(false));
       break;
-    case LinuxPictureInPictureRoute::kElement:
-      if (!channel) return std::move(done).Run(true, base::Value(false));
+    case LinuxPictureInPictureRoute::kElement: {
+      const auto candidates = contents ? content::ArdiaLinuxPictureInPictureCandidates(contents)
+                                       : std::vector<std::pair<content::MediaPlayerId, bool>>();
+      std::vector<LinuxPictureInPicturePlayer> players;
+      for (const auto& [id, playing] : candidates) {
+        const auto size = video_sizes_.find(id);
+        players.push_back({playing, size == video_sizes_.end() ? 0 : int64_t{size->second.width()} * size->second.height()});
+      }
+      const auto chosen = ChooseLinuxPictureInPicturePlayer(players);
+      if (!chosen) return std::move(done).Run(true, base::Value(false));
+      player = candidates[*chosen].first;
       break;
+    }
   }
   if (pending_picture_in_picture_) std::move(pending_picture_in_picture_).Run(true, base::Value(false));
   pending_picture_in_picture_ = std::move(done);
-  const uint64_t request = ++picture_in_picture_request_;
   picture_in_picture_timer_.Start(FROM_HERE, kPictureInPictureWait,
       base::BindOnce(&LinuxPageMedia::FinishPictureInPicture, weak_factory_.GetWeakPtr()));
   if (route == LinuxPictureInPictureRoute::kMediaSession) return session->EnterPictureInPicture();
-  channel->EnterPictureInPictureForUser(
-      base::BindOnce(&LinuxPageMedia::ElementPictureInPictureAnswered, weak_factory_.GetWeakPtr(), request));
+  if (!content::ArdiaLinuxRequestPictureInPicture(contents, *player)) FinishPictureInPicture();
 }
 
-void LinuxPageMedia::ElementPictureInPictureAnswered(uint64_t request, bool opened) {
-  if (request != picture_in_picture_request_ || !pending_picture_in_picture_) return;
-  picture_in_picture_timer_.Stop();
-  std::move(pending_picture_in_picture_).Run(true, base::Value(opened || InPictureInPicture()));
+void LinuxPageMedia::MediaResized(const gfx::Size& size, const content::MediaPlayerId& id) {
+  video_sizes_[id] = size;
+}
+
+void LinuxPageMedia::MediaDestroyed(const content::MediaPlayerId& id) {
+  video_sizes_.erase(id);
 }
 
 void LinuxPageMedia::FinishPictureInPicture() {

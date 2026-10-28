@@ -40,6 +40,9 @@ class MemoryPressureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='ardia-psi-') as directory:
             self.run_case('sources', directory)
 
+    def test_repeated_poll_failures_drop_psi_instead_of_spinning(self):
+        self.run_case('poll-failures')
+
     def test_arms_a_kernel_trigger_when_the_system_allows_it(self):
         self.run_case('kernel')
 

@@ -242,4 +242,18 @@ LinuxPictureInPictureRoute RouteLinuxPictureInPicture(bool open, bool activation
   return LinuxPictureInPictureRoute::kMediaSession;
 }
 
+std::optional<size_t> ChooseLinuxPictureInPicturePlayer(const std::vector<LinuxPictureInPicturePlayer>& players) {
+  std::optional<size_t> best;
+  for (size_t index = 0; index < players.size(); ++index) {
+    if (!best) {
+      best = index;
+      continue;
+    }
+    const auto& player = players[index];
+    const auto& chosen = players[*best];
+    if (player.playing != chosen.playing ? player.playing : player.area > chosen.area) best = index;
+  }
+  return best;
+}
+
 }

@@ -85,23 +85,21 @@ class DownloadWiringTests(unittest.TestCase):
         finish = method(files, '  void Finish() {')
         self.assertIn('FolderPickerOpen() = false;', finish)
 
-    def test_reveal_tries_each_desktop_route_and_reports_when_all_fail(self):
+    def test_reveal_runs_the_tested_route_chain_with_a_portal_deadline(self):
         from test_renderer_contract import method
         files = (LINUX / 'ac_linux_files.cc').read_text()
         self.assertNotIn('ShowItemInFolder', files)
-        next_step = method(files, '  void Next() {')
-        self.assertIn('"ERR_REVEAL_FAILED", downloads::RevealFailureMessage(tried_)', next_step)
-        self.assertIn('ProbeService(bus_, kFileManagerService', next_step)
-        answered = method(files, '  void PortalAnswered(dbus_xdg::Results results) {')
-        self.assertIn('kRequestCancelledByUser', answered)
-        self.assertIn('&RevealRequest::Next', answered)
+        self.assertIn('downloads::LinuxRevealChain chain_;', files)
+        self.assertIn('return base::ScopedFD(downloads::OpenRevealTarget(path));', files)
+        portal = method(files, '  void Portal() {')
+        self.assertIn('portal_deadline_.Start(FROM_HERE, kPortalWait,', portal)
+        timed_out = method(files, '  void PortalTimedOut() {')
+        self.assertIn('portal_.reset();', timed_out)
+        self.assertIn('Answer::kTimedOut', timed_out)
         self.assertIn('"OpenDirectory"', method(files, '  void PortalToken(base::ScopedFD fd, std::string token) {'))
         self.assertIn('"ShowItems"', method(files, '  void FileManager(bool available) {'))
-        self.assertIn('if (response.has_value()) return Succeed();\n    Next();', method(files, '  void FileManagerAnswered(dbus_utils::CallMethodResultSig<""> response) {'))
-        self.assertIn('downloads::OpenFolderLaunched(exit_code)', method(files, '  void OpenFolderExited(std::optional<int> exit_code) {'))
         run = method(files, 'std::optional<int> RunOpenFolder(std::string folder, base::LaunchOptions options) {')
         self.assertIn('WaitForExitWithTimeout(kOpenFolderWait, &exit_code)', run)
-        self.assertIn('{"xdg-open", "."}', run)
 
     def test_contract_routes_engine_controls_and_forwards_removals(self):
         code = r'''

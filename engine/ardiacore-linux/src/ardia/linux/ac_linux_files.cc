@@ -21,6 +21,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/memory/weak_ptr.h"
 #include "base/nix/xdg_util.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/process/kill.h"
@@ -31,6 +32,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/ardia/public/ac_engine.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_crx_util.h"
@@ -91,6 +93,7 @@ constexpr char kPortalOpenUri[] = "org.freedesktop.portal.OpenURI";
 constexpr char kFileManagerService[] = "org.freedesktop.FileManager1";
 constexpr char kFileManagerPath[] = "/org/freedesktop/FileManager1";
 constexpr base::TimeDelta kOpenFolderWait = base::Seconds(5);
+constexpr base::TimeDelta kPortalWait = base::Seconds(10);
 
 void Fail(Done done, std::string_view code, std::string_view message) {
   std::move(done).Run(false, base::Value(base::DictValue().Set("code", code).Set("message", message)));
@@ -206,7 +209,7 @@ void ProbeService(scoped_refptr<dbus::Bus> bus, const char* name, base::OnceCall
 }
 
 base::ScopedFD OpenForPortal(const std::string& path) {
-  return base::ScopedFD(HANDLE_EINTR(open(path.c_str(), O_RDONLY | O_CLOEXEC)));
+  return base::ScopedFD(downloads::OpenRevealTarget(path));
 }
 
 std::optional<int> RunOpenFolder(std::string folder, base::LaunchOptions options) {
@@ -225,110 +228,129 @@ class RevealRequest {
  public:
   static void Start(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done,
                     scoped_refptr<dbus::Bus> bus, std::vector<downloads::RevealBackend> order) {
-    (new RevealRequest(std::move(shell), std::move(path), std::move(done), std::move(bus), std::move(order)))->Next();
+    auto* request = new RevealRequest(std::move(shell), std::move(path), std::move(done), std::move(bus), std::move(order));
+    downloads::RevealOutcome outcome;
+    request->Continue(request->chain_.Begin(&outcome), outcome);
   }
 
  private:
+  using Backend = downloads::RevealBackend;
+  using Answer = downloads::RevealAnswer;
+
   RevealRequest(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, scoped_refptr<dbus::Bus> bus,
                 std::vector<downloads::RevealBackend> order)
       : shell_(std::move(shell)), path_(std::move(path)), done_(std::move(done)), bus_(std::move(bus)),
-        order_(std::move(order)) {}
+        chain_(std::move(order)) {}
 
-  void Next() {
-    if (!shell_ || !shell_->GetBrowserContext()) return Finish("ERR_WINDOW_CLOSED", "The window closed");
-    if (next_ == order_.size()) return Finish("ERR_REVEAL_FAILED", downloads::RevealFailureMessage(tried_));
-    switch (order_[next_++]) {
-      case downloads::RevealBackend::kPortal:
-        return Portal();
-      case downloads::RevealBackend::kFileManager:
-        return ProbeService(bus_, kFileManagerService, base::BindOnce(&RevealRequest::FileManager, base::Unretained(this)));
-      case downloads::RevealBackend::kOpenFolder:
-        return OpenFolder();
-      case downloads::RevealBackend::kUnavailable:
-        return Next();
+  void Continue(std::optional<Backend> next, const downloads::RevealOutcome& outcome) {
+    if (outcome.done) {
+      if (outcome.ok) std::move(done_).Run(true, base::Value(true));
+      else Fail(std::move(done_), outcome.code, outcome.message);
+      delete this;
+      return;
+    }
+    if (!next) return;
+    if (!shell_ || !shell_->GetBrowserContext()) {
+      Fail(std::move(done_), "ERR_WINDOW_CLOSED", "The window closed");
+      delete this;
+      return;
+    }
+    switch (*next) {
+      case Backend::kPortal: return Portal();
+      case Backend::kFileManager:
+        return ProbeService(bus_, kFileManagerService,
+                            base::BindOnce(&RevealRequest::FileManager, weak_factory_.GetWeakPtr()));
+      case Backend::kOpenFolder: return OpenFolder();
+      case Backend::kUnavailable: return Answered(Backend::kUnavailable, Answer::kUnavailable);
     }
   }
 
+  void Answered(Backend backend, Answer answer) {
+    downloads::RevealOutcome outcome;
+    const auto next = chain_.Answer(backend, answer, &outcome);
+    Continue(next, outcome);
+  }
+
   void Portal() {
-    tried_.push_back(downloads::RevealBackend::kPortal);
+    portal_deadline_.Start(FROM_HERE, kPortalWait,
+                           base::BindOnce(&RevealRequest::PortalTimedOut, weak_factory_.GetWeakPtr()));
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, kFileReads, base::BindOnce(&OpenForPortal, path_),
-                                                 base::BindOnce(&RevealRequest::PortalOpened, base::Unretained(this)));
+                                                 base::BindOnce(&RevealRequest::PortalOpened, weak_factory_.GetWeakPtr()));
+  }
+
+  void PortalTimedOut() {
+    portal_.reset();
+    Answered(Backend::kPortal, Answer::kTimedOut);
   }
 
   void PortalOpened(base::ScopedFD fd) {
-    if (!fd.is_valid() || !bus_) return Next();
+    if (!fd.is_valid() || !bus_) {
+      portal_deadline_.Stop();
+      return Answered(Backend::kPortal, Answer::kFailed);
+    }
     base::nix::CreateXdgActivationToken(
-        base::BindOnce(&RevealRequest::PortalToken, base::Unretained(this), std::move(fd)));
+        base::BindOnce(&RevealRequest::PortalToken, weak_factory_.GetWeakPtr(), std::move(fd)));
   }
 
   void PortalToken(base::ScopedFD fd, std::string token) {
+    if (!portal_deadline_.IsRunning()) return;
     dbus_xdg::Dictionary options;
     options["activation_token"] = dbus_utils::Variant::Wrap<"s">(token);
     portal_ = std::make_unique<dbus_xdg::Request>(
         bus_, bus_->GetObjectProxy(kPortalService, dbus::ObjectPath(kPortalPath)), kPortalOpenUri, "OpenDirectory",
-        std::move(options), base::BindOnce(&RevealRequest::PortalAnswered, base::Unretained(this)), std::string(), fd);
+        std::move(options), base::BindOnce(&RevealRequest::PortalAnswered, weak_factory_.GetWeakPtr()), std::string(), fd);
   }
 
   void PortalAnswered(dbus_xdg::Results results) {
-    if (results.has_value() || results.error() == dbus_xdg::ResponseError::kRequestCancelledByUser) {
-      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(&RevealRequest::Succeed, base::Unretained(this)));
-      return;
-    }
+    const Answer answer = results.has_value() ? Answer::kShown
+        : results.error() == dbus_xdg::ResponseError::kRequestCancelledByUser ? Answer::kCancelled
+        : Answer::kFailed;
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&RevealRequest::Next, base::Unretained(this)));
+        FROM_HERE, base::BindOnce(&RevealRequest::PortalFinished, weak_factory_.GetWeakPtr(), answer));
+  }
+
+  void PortalFinished(Answer answer) {
+    portal_deadline_.Stop();
+    portal_.reset();
+    Answered(Backend::kPortal, answer);
   }
 
   void FileManager(bool available) {
-    if (!available) return Next();
-    tried_.push_back(downloads::RevealBackend::kFileManager);
+    if (!available) return Answered(Backend::kFileManager, Answer::kUnavailable);
     dbus_utils::CallMethod<"ass", "">(
         bus_->GetObjectProxy(kFileManagerService, dbus::ObjectPath(kFileManagerPath)), kFileManagerService,
-        "ShowItems", base::BindOnce(&RevealRequest::FileManagerAnswered, base::Unretained(this)),
+        "ShowItems", base::BindOnce(&RevealRequest::FileManagerAnswered, weak_factory_.GetWeakPtr()),
         std::vector<std::string>{downloads::FileUrl(path_)}, std::string());
   }
 
   void FileManagerAnswered(dbus_utils::CallMethodResultSig<""> response) {
-    if (response.has_value()) return Succeed();
-    Next();
+    Answered(Backend::kFileManager, response.has_value() ? Answer::kShown : Answer::kFailed);
   }
 
   void OpenFolder() {
-    tried_.push_back(downloads::RevealBackend::kOpenFolder);
     base::nix::CreateLaunchOptionsWithXdgActivation(
-        base::BindOnce(&RevealRequest::OpenFolderLaunch, base::Unretained(this)));
+        base::BindOnce(&RevealRequest::OpenFolderLaunch, weak_factory_.GetWeakPtr()));
   }
 
   void OpenFolderLaunch(base::LaunchOptions options) {
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock(), base::WithBaseSyncPrimitives(), base::TaskPriority::USER_VISIBLE},
         base::BindOnce(&RunOpenFolder, base::FilePath(path_).DirName().value(), std::move(options)),
-        base::BindOnce(&RevealRequest::OpenFolderExited, base::Unretained(this)));
+        base::BindOnce(&RevealRequest::OpenFolderExited, weak_factory_.GetWeakPtr()));
   }
 
   void OpenFolderExited(std::optional<int> exit_code) {
-    if (downloads::OpenFolderLaunched(exit_code)) return Succeed();
-    Next();
-  }
-
-  void Succeed() {
-    std::move(done_).Run(true, base::Value(true));
-    delete this;
-  }
-
-  void Finish(std::string_view code, std::string_view message) {
-    Fail(std::move(done_), code, message);
-    delete this;
+    Answered(Backend::kOpenFolder, downloads::OpenFolderLaunched(exit_code) ? Answer::kShown : Answer::kFailed);
   }
 
   base::WeakPtr<LinuxShellWebView> shell_;
   const std::string path_;
   Done done_;
   scoped_refptr<dbus::Bus> bus_;
-  const std::vector<downloads::RevealBackend> order_;
-  size_t next_ = 0;
-  std::vector<downloads::RevealBackend> tried_;
+  downloads::LinuxRevealChain chain_;
   std::unique_ptr<dbus_xdg::Request> portal_;
+  base::OneShotTimer portal_deadline_;
+  base::WeakPtrFactory<RevealRequest> weak_factory_{this};
 };
 
 void StartReveal(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, scoped_refptr<dbus::Bus> bus,

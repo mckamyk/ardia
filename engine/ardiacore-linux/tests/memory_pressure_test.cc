@@ -1,6 +1,8 @@
 #include <cassert>
 #include <cstdio>
+#include <cerrno>
 #include <fcntl.h>
+#include <poll.h>
 #include <string>
 #include <unistd.h>
 
@@ -117,6 +119,24 @@ void Sources(const char* directory) {
   unlink(broken.c_str());
 }
 
+int failures = 0;
+int FailingPoll(pollfd*, nfds_t, int) {
+  ++failures;
+  errno = EINVAL;
+  return -1;
+}
+
+void PollFailures() {
+  if (access("/proc/pressure/memory", R_OK | W_OK) != 0) return;
+  auto watch = LinuxMemoryPressureWatch::Open({"/proc/pressure/memory"});
+  if (!watch.available() || !watch.armed()) return;
+  assert(!watch.Wait(0, &FailingPoll) && watch.available());
+  assert(!watch.Wait(0, &FailingPoll) && watch.available());
+  assert(!watch.Wait(0, &FailingPoll));
+  assert(failures == 3 && !watch.available() && watch.signal() == "meminfo");
+  assert(watch.Wait(0, &FailingPoll) && failures == 3);
+}
+
 void Kernel() {
   if (access("/proc/pressure/memory", R_OK | W_OK) != 0) return;
   auto watch = LinuxMemoryPressureWatch::Open({"/proc/pressure/memory"});
@@ -137,5 +157,6 @@ int main(int argc, char** argv) {
   else if (mode == "levels") Levels();
   else if (mode == "sources") Sources(argv[2]);
   else if (mode == "kernel") Kernel();
+  else if (mode == "poll-failures") PollFailures();
   else return 2;
 }

@@ -22,6 +22,8 @@ class LinuxWebStoreQueue {
   std::vector<uint64_t> Uninstalled(std::string_view extension_id);
   std::vector<uint64_t> Expired(double now);
   std::optional<double> NextExpiry() const;
+  bool HasClaimed() const;
+  void Renew(double now);
   std::vector<uint64_t> Clear();
   void Forget(uint64_t id);
   bool empty() const { return entries_.empty(); }

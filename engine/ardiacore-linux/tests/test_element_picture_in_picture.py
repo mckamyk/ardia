@@ -1,8 +1,20 @@
-from pathlib import Path
+import pathlib
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 
-LINUX = Path(__file__).resolve().parents[1] / 'src/ardia/linux'
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+LINUX = ROOT / 'src/ardia/linux'
+PATCH = ROOT.parents[0] / 'patches/chromium-linux-media-player-pip.patch'
+CHROMIUM = pathlib.Path.home() / 'ardia-linux-build-156/chromium_git/chromium/src'
+FILES = [
+    'content/browser/media/media_web_contents_observer.cc',
+    'content/browser/media/media_web_contents_observer.h',
+    'content/browser/media/session/media_session_controllers_manager.cc',
+    'content/browser/media/session/media_session_controllers_manager.h',
+]
 
 
 def body(source, signature):
@@ -16,51 +28,47 @@ def body(source, signature):
 
 
 class ElementPictureInPictureTests(unittest.TestCase):
-    agent = (LINUX / 'renderer/ac_linux_page_agent.cc').read_text()
-    channel = (LINUX / 'ac_linux_page_channel.cc').read_text()
-    media = (LINUX / 'ac_linux_page_media.cc').read_text()
-    mojom = (LINUX / 'mojom/page.mojom').read_text()
+    def test_nothing_on_linux_grants_a_page_user_activation(self):
+        for path in [*LINUX.glob('*.cc'), *LINUX.glob('renderer/*.cc')]:
+            self.assertNotIn('NotifyUserActivation', path.read_text(), path.name)
+        mojom = (LINUX / 'mojom/page.mojom').read_text()
+        self.assertNotIn('EnterPictureInPictureForUser', mojom)
+        self.assertNotIn('PictureInPictureDocument', mojom)
 
-    def test_the_agent_answers_two_document_bound_steps(self):
-        self.assertIn('PictureInPictureDocument() => (string? document);', self.mojom)
-        self.assertIn('EnterPictureInPictureForUser(string document) => (bool opened);', self.mojom)
+    def test_the_patch_requests_pip_for_one_available_player_of_the_primary_main_frame(self):
+        series = (ROOT.parents[0] / 'patches/series').read_text()
+        self.assertIn('chromium chromium-linux-media-player-pip.patch linux', series)
+        text = PATCH.read_text()
+        added = '\n'.join(line for line in text.splitlines() if line.startswith('+') and not line.startswith('+++'))
+        self.assertNotRegex(added, r'(?m)^\+\s*/\*|^\+\s*//(?! nogncheck)')
+        if any(not (CHROMIUM / name).exists() for name in FILES) or shutil.which('patch') is None:
+            self.skipTest('Chromium 156 source is unavailable')
+        with tempfile.TemporaryDirectory(prefix='ardia-media-player-pip-') as directory:
+            for name in FILES:
+                target = pathlib.Path(directory) / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text((CHROMIUM / name).read_text())
+            result = subprocess.run(['patch', '-p1', '-F0', '-i', str(PATCH)], cwd=directory, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            observer = (pathlib.Path(directory) / FILES[0]).read_text()
+            candidates = body(observer, 'MediaWebContentsObserver::ArdiaLinuxPictureInPictureCandidates(')
+            self.assertIn('has_video()', candidates)
+            self.assertIn('ArdiaLinuxPictureInPictureAvailable(id)', candidates)
+            self.assertIn('id.frame_routing_id != frame', candidates)
+            request = body(observer, 'bool MediaWebContentsObserver::ArdiaLinuxRequestPictureInPicture(')
+            self.assertIn('media_player_remotes_.find(id)', request)
+            self.assertIn('RequestEnterPictureInPicture(std::nullopt)', request)
+            for name in FILES[1::2]:
+                self.assertIn('#if BUILDFLAG(IS_LINUX)', (pathlib.Path(directory) / name).read_text())
 
-    def test_candidates_are_shown_usable_videos_with_the_playing_and_largest_first(self):
-        scripts = re.sub(r'"\s*\n\s*"', '', self.agent)
-        self.assertIn("v.readyState > 0 && !v.disablePictureInPicture && v.clientWidth * v.clientHeight > 0", scripts)
-        self.assertIn("(b.paused ? 0 : 1) - (a.paused ? 0 : 1) || b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight", scripts)
-        self.assertIn("document.pictureInPictureElement === videos[0]", scripts)
-
-    def test_the_document_answer_comes_only_from_a_main_frame_with_a_candidate(self):
-        answer = body(self.agent, '  void PictureInPictureDocument(PictureInPictureDocumentCallback callback) override {')
-        self.assertIn('IsOutermostMainFrame()', answer)
-        self.assertIn('HasPictureInPictureCandidate(frame)', answer)
-        self.assertIn('std::move(callback).Run(std::nullopt)', answer)
-
-    def test_entering_checks_the_document_grants_activation_once_and_consumes_it(self):
-        enter = body(self.agent, '  void EnterPictureInPictureForUser(const std::string& document,')
-        self.assertLess(enter.index('Token().ToString() != document'), enter.index('NotifyUserActivation('))
-        self.assertLess(enter.index('NotifyUserActivation('), enter.index('RequestExecuteScript('))
-        self.assertLess(enter.index('RequestExecuteScript('), enter.index('ConsumeTransientUserActivation()'))
-        self.assertIn('ISOLATED_WORLD_ID_CHROME_INTERNAL', enter)
-        self.assertIn('blink::mojom::PromiseResultOption::kAwait', enter)
-
-    def test_the_host_enters_only_while_the_pressed_document_is_primary(self):
-        start = body(self.channel, 'void LinuxPageChannel::EnterPictureInPictureForUser(')
-        self.assertIn('GetWeakDocumentPtr()', start)
-        self.assertIn('PictureInPictureDocument(', start)
-        answer = body(self.channel, 'void LinuxPageChannel::PictureInPictureDocumentAnswered(')
-        self.assertIn('AsRenderFrameHostIfValid()', answer)
-        self.assertIn('web_contents()->GetPrimaryMainFrame()', answer)
-        self.assertIn('EnterPictureInPictureForUser(*token', answer)
-
-    def test_pages_without_a_session_video_take_the_element_route(self):
-        request = body(self.media, 'void LinuxPageMedia::RequestPictureInPicture(')
-        self.assertIn('case LinuxPictureInPictureRoute::kElement:', request)
-        self.assertIn('EnterPictureInPictureForUser(', request)
-        self.assertNotIn('kNoVideo', request)
-        answered = body(self.media, 'void LinuxPageMedia::ElementPictureInPictureAnswered(')
-        self.assertIn('request != picture_in_picture_request_', answered)
+    def test_the_host_chooses_among_available_players_and_waits_for_the_window(self):
+        media = (LINUX / 'ac_linux_page_media.cc').read_text()
+        request = body(media, 'void LinuxPageMedia::RequestPictureInPicture(')
+        self.assertIn('content::ArdiaLinuxPictureInPictureCandidates(', request)
+        self.assertIn('ChooseLinuxPictureInPicturePlayer(', request)
+        self.assertIn('content::ArdiaLinuxRequestPictureInPicture(', request)
+        self.assertIn('picture_in_picture_timer_.Start(', request)
+        self.assertIn('video_sizes_[id] = size', body(media, 'void LinuxPageMedia::MediaResized('))
 
 
 if __name__ == '__main__':

@@ -20,7 +20,6 @@
 #include "content/public/browser/document_user_data.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/browser/weak_document_ptr.h"
-#include "mojo/public/cpp/bindings/associated_remote.h"
 #include "ui/gfx/geometry/point_f.h"
 
 namespace blink {
@@ -59,7 +58,7 @@ class LinuxPageChannel : public content::WebContentsObserver,
   void Detach();
   base::ListValue SnapshotEvents();
   void PushOptions();
-  void EnterPictureInPictureForUser(base::OnceCallback<void(bool opened)> opened);
+  void RefreshPageConfig();
   void Post(const std::string& kind, const std::string& json) override;
   void Bind(content::RenderFrameHost* frame,
             mojo::PendingAssociatedReceiver<ardia::linux_page::mojom::PageHost> receiver);
@@ -72,8 +71,6 @@ class LinuxPageChannel : public content::WebContentsObserver,
   void LinkDrop(const std::string& spec);
   friend void NoteLinuxDragEnded(base::FunctionRef<bool(content::WebContents*)> in_window);
   void Call(content::RenderFrameHost* frame, const std::string& kind, const std::string& json);
-  void PictureInPictureDocumentAnswered(content::WeakDocumentPtr document, base::OnceCallback<void(bool)> opened,
-                                        const std::optional<std::string>& token);
   void Greet(content::RenderFrameHost& frame);
   void Watch(content::RenderWidgetHost* widget);
   void ForgetDocument();
@@ -93,7 +90,6 @@ class LinuxPageChannel : public content::WebContentsObserver,
   std::optional<std::string> scroll_;
   base::Value selection_;
   content::WeakDocumentPtr message_document_;
-  mojo::AssociatedRemote<ardia::linux_page::mojom::PageAgent> picture_in_picture_agent_;
   base::WeakPtrFactory<LinuxPageChannel> weak_factory_{this};
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };

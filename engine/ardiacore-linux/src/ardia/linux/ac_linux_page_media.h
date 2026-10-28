@@ -16,10 +16,12 @@
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
+#include "content/public/browser/media_player_id.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/media_session/public/cpp/media_image.h"
 #include "services/media_session/public/cpp/media_metadata.h"
+#include "ui/gfx/geometry/size.h"
 #include "services/media_session/public/cpp/media_position.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
 
@@ -55,6 +57,8 @@ class LinuxPageMedia : public content::WebContentsObserver,
   void OnAudioStateChanged(bool audible) override;
   void DidUpdateAudioMutingState(bool muted) override;
   void MediaPictureInPictureChanged(bool active) override;
+  void MediaResized(const gfx::Size& size, const content::MediaPlayerId& id) override;
+  void MediaDestroyed(const content::MediaPlayerId& id) override;
   void MediaSessionCreated(content::MediaSession* session) override;
   void WebContentsDestroyed() override;
 
@@ -80,7 +84,6 @@ class LinuxPageMedia : public content::WebContentsObserver,
   void MediaCommand(const base::ListValue& args, Done done);
   void RequestPictureInPicture(const base::ListValue& args, bool activation, Done done);
   void FinishPictureInPicture();
-  void ElementPictureInPictureAnswered(uint64_t request, bool opened);
   void ExitPictureInPicture();
 
   LinuxMediaReporter reporter_;
@@ -90,7 +93,7 @@ class LinuxPageMedia : public content::WebContentsObserver,
   mojo::Receiver<media_session::mojom::MediaSessionObserver> receiver_{this};
   Done pending_picture_in_picture_;
   base::OneShotTimer picture_in_picture_timer_;
-  uint64_t picture_in_picture_request_ = 0;
+  base::flat_map<content::MediaPlayerId, gfx::Size> video_sizes_;
   base::WeakPtrFactory<LinuxPageMedia> weak_factory_{this};
 };
 

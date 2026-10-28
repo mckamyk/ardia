@@ -41,13 +41,26 @@ if (store.queued.length) post("result", JSON.stringify(store.queued.shift()));
 else store.waiting = (id) => post("result", JSON.stringify(id));
 `;
 
-export type HostPageScript = { command: string; args: unknown[]; map?: (result: unknown) => unknown };
+export type HostPageScript = { command: string; args: unknown[]; map?: (result: unknown) => unknown; failed?: () => unknown };
+
+export const WEB_STORE_RETRY_MS = 1000;
+
+const superseded = (answer: unknown) => !!answer && typeof answer === "object" && (answer as { superseded?: unknown }).superseded === true;
+
+export function webStoreAnswer(answer: unknown): unknown {
+  if (superseded(answer)) return new Promise(() => {});
+  return typeof answer === "string" ? answer : null;
+}
+
+export function webStoreFailed(): Promise<null> {
+  return new Promise((resolve) => setTimeout(() => resolve(null), WEB_STORE_RETRY_MS));
+}
 
 export function hostPageScript(method: string, args: readonly unknown[]): HostPageScript | null {
   if (args.length !== 1) return null;
   if (method === "evaluate" && args[0] === PICTURE_IN_PICTURE_STATE) return { command: "pictureInPictureState", args: [] };
   if (method === "executeJavaScript" && args[0] === CLOSE_DOCUMENT_PICTURE_IN_PICTURE) return { command: "exitPictureInPicture", args: [] };
   if (method === "evaluate" && args[0] === UNSAVED_WORK) return { command: "editedInput", args: [], map: (edited) => edited !== false };
-  if (method === "evaluate" && args[0] === WEB_STORE_REQUEST) return { command: "webStoreRequest", args: [], map: (id) => (typeof id === "string" ? id : null) };
+  if (method === "evaluate" && args[0] === WEB_STORE_REQUEST) return { command: "webStoreRequest", args: [], map: webStoreAnswer, failed: webStoreFailed };
   return null;
 }

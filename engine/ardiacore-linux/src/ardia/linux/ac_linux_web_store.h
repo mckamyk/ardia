@@ -10,7 +10,8 @@ class WebContents;
 
 namespace ardiacore {
 
-void InstallLinuxWebStore(base::RepeatingCallback<bool(content::WebContents*)> holds_tab);
+void InstallLinuxWebStore(base::RepeatingCallback<bool(content::WebContents*)> holds_tab,
+                          base::RepeatingCallback<bool(content::WebContents*)> confirming);
 void LinuxWebStoreRequest(content::WebContents* contents, base::OnceCallback<void(bool, base::Value)> done);
 
 }

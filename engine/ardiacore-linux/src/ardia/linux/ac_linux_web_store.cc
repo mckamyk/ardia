@@ -61,6 +61,15 @@ base::RepeatingCallback<bool(content::WebContents*)>& HoldsTab() {
   return *holds;
 }
 
+base::RepeatingCallback<bool(content::WebContents*)>& Confirming() {
+  static base::NoDestructor<base::RepeatingCallback<bool(content::WebContents*)>> confirming;
+  return *confirming;
+}
+
+base::Value Superseded() {
+  return base::Value(base::DictValue().Set("superseded", true));
+}
+
 double Now() {
   return base::TimeTicks::Now().since_origin().InSecondsF();
 }
@@ -106,8 +115,8 @@ class LinuxWebStore : public content::WebContentsObserver,
   }
 
   void Wait(Done done) {
-    Release();
-    waiters_.push_back(std::move(done));
+    if (waiter_) std::move(waiter_).Run(true, Superseded());
+    waiter_ = std::move(done);
     Deliver();
   }
 
@@ -134,32 +143,26 @@ class LinuxWebStore : public content::WebContentsObserver,
   void OnShutdown(extensions::ExtensionRegistry*) override { registry_.Reset(); }
 
   void Deliver() {
-    while (!waiters_.empty()) {
-      auto id = queue_.Claim(Now());
-      if (!id) break;
-      Done done = std::move(waiters_.front());
-      waiters_.erase(waiters_.begin());
-      std::move(done).Run(true, base::Value(*id));
+    if (waiter_) {
+      if (auto id = queue_.Claim(Now())) std::move(waiter_).Run(true, base::Value(*id));
     }
     Schedule();
   }
 
   void Schedule() {
-    const auto next = queue_.NextExpiry();
-    if (!next) return expiry_.Stop();
-    expiry_.Start(FROM_HERE, base::Seconds(std::max(0.0, *next - Now())),
-                  base::BindOnce(&LinuxWebStore::Expire, base::Unretained(this)));
+    if (!queue_.HasClaimed()) return ticker_.Stop();
+    if (!ticker_.IsRunning()) {
+      ticker_.Start(FROM_HERE, base::Seconds(1), base::BindRepeating(&LinuxWebStore::Tick, base::Unretained(this)));
+    }
   }
 
-  void Expire() {
+  void Tick() {
+    if (Confirming() && Confirming().Run(web_contents())) queue_.Renew(Now());
     Finish(queue_.Expired(Now()), false);
-    Schedule();
   }
 
   void Release() {
-    auto waiters = std::move(waiters_);
-    waiters_.clear();
-    for (auto& done : waiters) std::move(done).Run(true, base::Value());
+    if (waiter_) std::move(waiter_).Run(true, base::Value());
   }
 
   void Finish(std::vector<uint64_t> ids, bool removed) {
@@ -179,8 +182,8 @@ class LinuxWebStore : public content::WebContentsObserver,
 
   LinuxWebStoreQueue queue_;
   std::map<uint64_t, base::WeakPtr<StoreUninstall>> requests_;
-  std::vector<Done> waiters_;
-  base::OneShotTimer expiry_;
+  Done waiter_;
+  base::RepeatingTimer ticker_;
   base::ScopedObservation<extensions::ExtensionRegistry, extensions::ExtensionRegistryObserver> registry_{this};
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
@@ -203,8 +206,10 @@ std::unique_ptr<extensions::UninstallDialogDelegate> TakeStoreUninstall(
 
 }
 
-void InstallLinuxWebStore(base::RepeatingCallback<bool(content::WebContents*)> holds_tab) {
+void InstallLinuxWebStore(base::RepeatingCallback<bool(content::WebContents*)> holds_tab,
+                          base::RepeatingCallback<bool(content::WebContents*)> confirming) {
   HoldsTab() = std::move(holds_tab);
+  Confirming() = std::move(confirming);
   g_ardia_linux_store_uninstall = &TakeStoreUninstall;
 }
 

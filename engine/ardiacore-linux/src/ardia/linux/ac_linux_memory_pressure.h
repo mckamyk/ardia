@@ -1,6 +1,8 @@
 #ifndef ARDIA_LINUX_AC_LINUX_MEMORY_PRESSURE_H_
 #define ARDIA_LINUX_AC_LINUX_MEMORY_PRESSURE_H_
 
+#include <poll.h>
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -53,7 +55,7 @@ class LinuxMemoryPressureWatch {
   std::string_view signal() const { return available() ? "psi" : "meminfo"; }
   LinuxMemoryLevel Sample(uint64_t now_us);
   int NextWaitMs() const;
-  void Wait(int timeout_ms);
+  bool Wait(int timeout_ms, int (*poll_fn)(pollfd*, nfds_t, int) = &poll);
 
  private:
   struct Source {
@@ -66,6 +68,7 @@ class LinuxMemoryPressureWatch {
   void Close();
 
   std::vector<Source> sources_;
+  int failures_ = 0;
 };
 
 uint64_t LinuxMonotonicMicroseconds();

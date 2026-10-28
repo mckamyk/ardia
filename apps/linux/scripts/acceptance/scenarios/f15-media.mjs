@@ -39,7 +39,7 @@ export default {
   deadline: 300000,
   manual: [
     { name: "Manual PiP of a real video", steps: ["Play a video page (for example a local WebM).", "Use the tab's Picture-in-Picture control in the sidebar or mini player.", "A PiP window opens, the control shows the open state, and pressing it again closes the window and returns to the tab."], reason: "headless Chromium has no compositor surface for a PiP window" },
-    { name: "Manual PiP of a video outside the media session", steps: ["Open a page with a muted, looping video and no audio (so it never joins the Media Session), plus a smaller second video.", "Press the tab's Picture-in-Picture control.", "The larger playing video opens in PiP; a video with disablepictureinpicture is skipped; the page gets no lasting user activation (a window.open from a timer afterwards is still blocked)."], reason: "headless Chromium has no compositor surface for a PiP window" },
+    { name: "Manual PiP of a video outside the media session", steps: ["Open a page with a muted, looping video and no audio (so it never joins the Media Session), plus a smaller second video.", "Press the tab's Picture-in-Picture control.", "The larger playing video opens in PiP; a video with disablepictureinpicture is skipped; the page gets no user activation at all (navigator.userActivation.hasBeenActive stays false)."], reason: "headless Chromium has no compositor surface for a PiP window" },
     { name: "Automatic PiP still separate", steps: ["With Settings › Tabs › Automatic Picture in Picture on, switch away from a playing video tab.", "The PiP window opens on Hyprland at the configured placement and closes when you return; with the setting off nothing opens."], reason: "needs a compositor" },
     { name: "Hear mute", steps: ["Mute a playing tab from its audio badge.", "The sound stops, the badge shows muted, and unmuting restores sound."], reason: "needs an audio device" },
     { name: "Portal capture indicators", steps: ["Share a screen through the xdg-desktop-portal picker on a test page.", "The tab shows the screen-sharing indicator while capturing and it clears when sharing stops."], reason: "needs a desktop portal session" },
@@ -121,6 +121,20 @@ export default {
       await until(async () => (await session(shell, tabId)) === null, { timeout: 10000, label: "the session to clear" });
       await until(async () => !(await audible(shell, tabId)), { timeout: 10000, label: "the audio badge to clear" });
       return true;
+    });
+    await t.check("manual PiP of a video outside the media session never gives the page user activation", async () => {
+      const videoUrl = t.fixtures.url.silentVideo(run);
+      await navigateTab(shell, tabId, videoUrl);
+      const video = await mediaPage(state, videoUrl);
+      await until(() => evaluate(video, "document.getElementById('big').readyState > 0 && !document.getElementById('big').paused", { userGesture: false }), { timeout: 10000, label: "the silent video to play" });
+      if (await evaluate(video, "navigator.userActivation.hasBeenActive", { userGesture: false })) throw new Error("the fixture already had user activation");
+      const requested = await viewCall(shell, tabId, "requestPictureInPicture({ clickAt: 0, control: 0 })");
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const sticky = await evaluate(video, "navigator.userActivation.hasBeenActive", { userGesture: false });
+      const transient = await evaluate(video, "navigator.userActivation.isActive", { userGesture: false });
+      if (sticky || transient) throw new Error(`the page got user activation: sticky=${sticky} transient=${transient}`);
+      await viewCall(shell, tabId, "exitPictureInPicture()");
+      return { requested, sticky, transient };
     });
     await t.check("a site with autoplay blocked plays only after the user interacts", async () => {
       const origin = new URL(url).origin;

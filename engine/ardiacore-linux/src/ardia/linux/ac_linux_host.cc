@@ -1007,6 +1007,7 @@ class ShellHostView : public views::View,
     }
     return nullptr;
   }
+  bool DialogsPending() const { return dialogs_ && dialogs_->controller().pending() > 0; }
   bool HoldsTab(content::WebContents* contents) const {
     for (const auto& [id, binding] : bindings_) {
       if (contents && binding->contents() == contents) return true;
@@ -5382,12 +5383,19 @@ void StartLinuxHost() {
     return true;
   };
   ardiacore::InstallLinuxAutoplayPolicy();
-  ardiacore::InstallLinuxWebStore(base::BindRepeating([](content::WebContents* contents) {
-    for (const auto& [id, host] : Hosts()) {
-      if (host->HoldsTab(contents)) return true;
-    }
-    return false;
-  }));
+  ardiacore::InstallLinuxWebStore(
+      base::BindRepeating([](content::WebContents* contents) {
+        for (const auto& [id, host] : Hosts()) {
+          if (host->HoldsTab(contents)) return true;
+        }
+        return false;
+      }),
+      base::BindRepeating([](content::WebContents* contents) {
+        for (const auto& [id, host] : Hosts()) {
+          if (host->HoldsTab(contents)) return host->DialogsPending();
+        }
+        return false;
+      }));
   g_ardia_linux_drag_ended = [](BrowserWindowInterface* browser) {
     if (!browser) return;
     const auto found = Hosts().find(browser->GetSessionID().id());

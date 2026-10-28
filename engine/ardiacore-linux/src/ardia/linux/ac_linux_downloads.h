@@ -65,6 +65,32 @@ std::vector<RevealBackend> RevealOrder(const RevealProbe& probe);
 bool OpenFolderLaunched(std::optional<int> exit_code);
 std::string RevealFailureMessage(const std::vector<RevealBackend>& tried);
 
+enum class RevealAnswer { kShown, kCancelled, kFailed, kTimedOut, kUnavailable };
+struct RevealOutcome {
+  bool done = false;
+  bool ok = false;
+  std::string code;
+  std::string message;
+};
+
+class LinuxRevealChain {
+ public:
+  explicit LinuxRevealChain(std::vector<RevealBackend> order);
+  std::optional<RevealBackend> Begin(RevealOutcome* outcome);
+  std::optional<RevealBackend> Answer(RevealBackend backend, RevealAnswer answer, RevealOutcome* outcome);
+
+ private:
+  std::optional<RevealBackend> Advance(RevealOutcome* outcome);
+
+  std::vector<RevealBackend> order_;
+  size_t next_ = 0;
+  std::optional<RevealBackend> current_;
+  std::vector<RevealBackend> tried_;
+  bool done_ = false;
+};
+
+int OpenRevealTarget(const std::string& path);
+
 bool PathListed(std::string_view path, const std::vector<std::string>& known);
 
 struct TrashOutcome {
@@ -74,7 +100,8 @@ struct TrashOutcome {
   std::string trashed;
 };
 
-using TrashHook = std::function<void()>;
+enum class TrashStage { kBeforeRecord, kBeforeRemove };
+using TrashHook = std::function<void(TrashStage)>;
 
 std::string TrashDirectory(const char* xdg_data_home, const char* home);
 TrashOutcome MoveToTrash(const std::string& path, const std::string& trash_directory,

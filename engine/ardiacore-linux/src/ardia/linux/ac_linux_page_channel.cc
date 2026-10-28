@@ -148,6 +148,15 @@ void LinuxPageChannel::Attach(LinuxPageChannelHooks hooks) {
   hooks_ = std::move(hooks);
   ForgetDocument();
   PushOptions();
+  FollowLinuxAutoplay(&GetWebContents(), base::BindRepeating(&LinuxPageChannel::RefreshPageConfig,
+                                                             weak_factory_.GetWeakPtr()));
+}
+
+void LinuxPageChannel::RefreshPageConfig() {
+  if (!hooks_) return;
+  GetWebContents().ForEachRenderFrameHost([&](content::RenderFrameHost* frame) {
+    if (frame->GetPage().IsPrimary()) Greet(*frame);
+  });
 }
 
 void LinuxPageChannel::Detach() {
@@ -182,28 +191,6 @@ void LinuxPageChannel::Call(content::RenderFrameHost* frame, const std::string& 
   mojo::AssociatedRemote<ardia::linux_page::mojom::PageAgent> agent;
   frame->GetRemoteAssociatedInterfaces()->GetInterface(&agent);
   agent->Call(kind, json);
-}
-
-void LinuxPageChannel::EnterPictureInPictureForUser(base::OnceCallback<void(bool opened)> opened) {
-  auto answer = mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(opened), false);
-  content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
-  picture_in_picture_agent_.reset();
-  if (!frame || !frame->IsRenderFrameLive() || !frame->IsActive() || !Scriptable(frame)) return std::move(answer).Run(false);
-  frame->GetRemoteAssociatedInterfaces()->GetInterface(&picture_in_picture_agent_);
-  picture_in_picture_agent_->PictureInPictureDocument(
-      base::BindOnce(&LinuxPageChannel::PictureInPictureDocumentAnswered, weak_factory_.GetWeakPtr(),
-                     frame->GetWeakDocumentPtr(), std::move(answer)));
-}
-
-void LinuxPageChannel::PictureInPictureDocumentAnswered(content::WeakDocumentPtr document,
-                                                        base::OnceCallback<void(bool)> opened,
-                                                        const std::optional<std::string>& token) {
-  content::RenderFrameHost* frame = document.AsRenderFrameHostIfValid();
-  if (!token || !frame || frame != web_contents()->GetPrimaryMainFrame() || !frame->IsActive() ||
-      !picture_in_picture_agent_) {
-    return std::move(opened).Run(false);
-  }
-  picture_in_picture_agent_->EnterPictureInPictureForUser(*token, std::move(opened));
 }
 
 void LinuxPageChannel::Greet(content::RenderFrameHost& frame) {
