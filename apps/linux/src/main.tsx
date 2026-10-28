@@ -36,6 +36,7 @@ import { provideNativeModuleProvider, requireNativeModule } from "./shims/expo-m
 import { setHostPageHooks } from "./hostPageHooks";
 import { applyHostPageTheme, resetHostPage } from "./hostPageLifecycle";
 import { setHostOverlayCheck } from "./hostViewport";
+import { setPopupDismissal } from "./popupDismissal";
 import { MenuHost } from "./menus";
 import { startLinuxShortcuts } from "./shortcutsRuntime";
 import { linuxWindowMenu, TrafficLights } from "./TrafficLights";
@@ -91,6 +92,7 @@ async function start() {
       const page = key ? pages.pages[key] : undefined;
       return !!(ui?.panel.open || ui?.downloadsOpen || menuShown() || page?.permission || page?.passwordPrompt || page?.autofillPrompt || page?.externalApp || key && pages.popover[key]);
     });
+    setPopupDismissal({ popup: () => useExtensions.getState().popup, windowOf: (tabId) => useBrowser.getState().tabs[tabId]?.windowId, close: () => useExtensions.setState({ popup: null }) });
     const persistence = startHostPersistence(ardiaHost, useBrowser, saved ?? {});
     setSessionFlush(persistence.flush);
     setSessionDeparture(persistence);

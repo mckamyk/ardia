@@ -4,6 +4,9 @@ export type TabViewport = HostTabViewport & { occlusions?: (HostTabViewport["rec
 
 type Bounds = { x: number; y: number; width: number; height: number };
 
+const EXTENSION_POPUP = '[data-testid="ardia-extension-popup"]';
+const EXTENSION_POPUP_DISMISS = '[data-testid="ardia-extension-popup-dismiss"]';
+
 let overlayBlocked = (_key: string | undefined) => false;
 export const hostOverlayBlocked = (key: string | undefined) => overlayBlocked(key);
 export const setHostOverlayCheck = (check: typeof overlayBlocked) => void (overlayBlocked = check);
@@ -22,8 +25,12 @@ export function watchTabViewport(element: HTMLElement, visible: () => boolean, r
     const rect = element.getBoundingClientRect();
     const viewport = tabViewport(rect, { width: window.innerWidth, height: window.innerHeight }, visible() && !document.hidden && element.isConnected);
     const hoverCards = [...document.querySelectorAll<HTMLElement>('[data-testid="ardia-sidebar-hover"] > div > div')];
+    const popup = document.querySelector<HTMLElement>(EXTENSION_POPUP);
+    const above = popup && !popup.contains(element) ? popup : null;
+    const covering = above ? [...hoverCards, above] : hoverCards;
+    const dismiss = above && document.querySelector<HTMLElement>(EXTENSION_POPUP_DISMISS);
     if (viewport.visible) {
-      const occlusions = hoverCards.map((card) => card.getBoundingClientRect()).filter((card) => card.width > 0 && card.height > 0 && card.left < rect.right && card.right > rect.left && card.top < rect.bottom && card.bottom > rect.top);
+      const occlusions = covering.map((card) => card.getBoundingClientRect()).filter((card) => card.width > 0 && card.height > 0 && card.left < rect.right && card.right > rect.left && card.top < rect.bottom && card.bottom > rect.top);
       if (occlusions.length) viewport.occlusions = occlusions.map(({ x, y, width, height }) => ({ x, y, width, height, paintOutset: 32 }));
       for (let parent: HTMLElement | null = element; parent; parent = parent.parentElement) {
         const style = getComputedStyle(parent);
@@ -43,7 +50,7 @@ export function watchTabViewport(element: HTMLElement, visible: () => boolean, r
       const points = [[left, top], [right, top], [left, bottom], [right, bottom], [(left + right) / 2, (top + bottom) / 2]];
       viewport.visible = points.every(([x, y]) => {
         const hit = document.elementFromPoint(x!, y!);
-        return !!hit && (hit === element || element.contains(hit) || hoverCards.some((card) => card === hit || card.contains(hit)));
+        return !!hit && (hit === element || element.contains(hit) || covering.some((card) => card === hit || card.contains(hit)) || !!dismiss?.contains(hit));
       });
     }
     report(viewport);
