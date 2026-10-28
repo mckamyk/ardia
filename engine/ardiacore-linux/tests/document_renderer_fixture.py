@@ -97,7 +97,9 @@ struct TabBinding {
     event_end = prelude.index('\n  LinuxDocumentClient DocumentClient()', event_start)
     prelude = prelude[:event_start] + '  void Event(std::string_view, std::string_view, base::Value);\n' + prelude[event_end:]
     lifecycle = '\n'.join(method(source, signature) for signature in ['  uint64_t SetHandler(', '  bool OwnsHandler(', '  bool ClearHandler(', '  void RetireRenderer()'])
+    lifecycle = '  std::string LiveCaller() const { return std::to_string(id_); }\n' + lifecycle
     prelude = prelude.replace('ARDIA_LIFECYCLE', lifecycle)
+    prelude = prelude.replace('struct ShellHostView {', 'inline void LinuxLiveCallerGone(const std::string&) {}\nstruct ShellHostView {', 1)
     handlers = []
     handler_source = source[source.index('class HostMessageHandler :'):]
     for name, signature in [
