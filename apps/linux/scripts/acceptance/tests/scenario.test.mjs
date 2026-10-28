@@ -140,7 +140,7 @@ describe("report", () => {
 
 describe("scenario catalogue", () => {
   it("covers every issue #81 names and the later feature issues, once each", () => {
-    assert.deepEqual(SCENARIOS.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 16, 17, 18, 19, 20, 22, 23, 25, 27, 28, 30, 32, 33, 34, 36, 37, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 88, 89, 92, 99, 101, 102, 104, 105, 106, 107, 108, 114, 137]);
+    assert.deepEqual(SCENARIOS.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 16, 17, 18, 19, 20, 22, 23, 25, 26, 27, 28, 30, 32, 33, 34, 35, 36, 37, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 88, 89, 92, 99, 101, 102, 104, 105, 106, 107, 108, 114, 137]);
     assert.equal(new Set(SCENARIOS.map((s) => s.id)).size, SCENARIOS.length);
     for (const s of SCENARIOS) {
       assert.equal(typeof s.run, "function", s.id);
@@ -157,6 +157,17 @@ describe("scenario catalogue", () => {
     const main = await readFile(new URL("../../../src/main.tsx", import.meta.url), "utf8");
     for (const seam of ["webviews", "media: useMedia", "lifecycle: { state: useLifecycle, sleepTab }"]) assert.ok(main.includes(seam), seam);
     assert.deepEqual(selectScenarios(["#25", "F18"]).map((s) => s.id), ["F15", "F18"]);
+  });
+
+  it("drives page messaging, selection, tint and toolbar checks through the shell's seams", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { SHIFT, ALT } = await import("../scenarios/f16-page-messaging.mjs");
+    const { TINTS } = await import("../scenarios/f25-tint-toolbar.mjs");
+    assert.deepEqual([SHIFT, ALT], [8, 1]);
+    assert.deepEqual(TINTS.map((t) => t.source), ["header", "background", "meta", "background"]);
+    const main = await readFile(new URL("../../../src/main.tsx", import.meta.url), "utf8");
+    for (const seam of ["toolbar: useToolbarAutoHide", "state: usePageSelection", "jump: jumpToSelection", "copyQuoteLink: copyLinkToSelection", "replaceInField }"]) assert.ok(main.includes(seam), seam);
+    assert.deepEqual(selectScenarios(["#26", "F25"]).map((s) => s.id), ["F16", "F25"]);
   });
 
   it("selects by finding or issue number", () => {

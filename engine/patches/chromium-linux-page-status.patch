@@ -1,6 +1,6 @@
 --- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
 +++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
-@@ -125,6 +125,14 @@
+@@ -125,6 +125,15 @@
  
  DEFINE_USER_DATA(BrowserWebContentsDelegate);
  
@@ -11,11 +11,22 @@
 +    nullptr;
 +bool (*g_ardia_linux_renderer_responsive)(content::WebContents*,
 +                                          content::RenderWidgetHost*) = nullptr;
++void (*g_ardia_linux_drag_ended)(BrowserWindowInterface*) = nullptr;
 +
  namespace {
  
  const extensions::Extension* GetExtensionForOrigin(
-@@ -796,6 +804,9 @@
+@@ -438,6 +447,9 @@
+ }
+ 
+ void BrowserWebContentsDelegate::HandleDragEnded() {
++  if (g_ardia_linux_drag_ended) {
++    g_ardia_linux_drag_ended(&browser_.get());
++  }
+   window_->HandleDragEnded();
+ }
+ 
+@@ -796,6 +808,9 @@
  
  void BrowserWebContentsDelegate::UpdateTargetURL(content::WebContents* source,
                                                   const GURL& url) {
@@ -25,7 +36,7 @@
    std::vector<StatusBubble*> status_bubbles =
        browser_ui_controller_->GetStatusBubbles();
    for (StatusBubble* status_bubble : status_bubbles) {
-@@ -1091,6 +1102,11 @@
+@@ -1091,6 +1106,11 @@
      content::WebContents* source,
      content::RenderWidgetHost* render_widget_host,
      base::RepeatingClosure hang_monitor_restarter) {
@@ -37,7 +48,7 @@
    // Don't show the page hung dialog when a HTML popup hangs because
    // the dialog will take the focus and immediately close the popup.
    content::RenderWidgetHostView* view = render_widget_host->GetView();
-@@ -1103,6 +1119,10 @@
+@@ -1103,6 +1123,10 @@
  void BrowserWebContentsDelegate::RendererResponsive(
      content::WebContents* source,
      content::RenderWidgetHost* render_widget_host) {

@@ -49,6 +49,7 @@ class LinuxPageMedia : public content::WebContentsObserver,
   bool SessionPlaying() const { return session_.active && session_.playing; }
   LinuxTabProtection Protection(bool visible) const;
   std::optional<bool> UnsavedInput() const;
+  std::optional<bool> EditedInput() const;
 
  private:
   void OnAudioStateChanged(bool audible) override;

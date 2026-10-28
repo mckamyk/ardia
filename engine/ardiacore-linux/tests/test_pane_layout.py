@@ -136,6 +136,7 @@ int main(int argc, char** argv) {
     p.Dock();
     p.host.Show(p.binding, true);
     p.binding->WebContentsDestroyed();
+    assert(ardiacore::forgotten_hangs.size() == 1);
     DrainPosted();
     assert(!p.tools()->GetVisible() && !p.tools()->web_contents());
     assert(!p.binding->viewport()->GetVisible());

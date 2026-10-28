@@ -39,6 +39,7 @@ bool LinuxMayFreeze(const LinuxTabProtection& protection);
 std::optional<bool> LinuxUnsavedInput(std::optional<bool> before_unload,
                                       std::optional<bool> form_interaction,
                                       std::optional<bool> user_edits);
+std::optional<bool> LinuxEditedInput(std::optional<bool> form_interaction, std::optional<bool> user_edits);
 
 struct LinuxPowerSample {
   bool upower = false;

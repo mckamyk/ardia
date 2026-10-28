@@ -73,6 +73,12 @@ std::optional<bool> LinuxUnsavedInput(std::optional<bool> before_unload,
   return false;
 }
 
+std::optional<bool> LinuxEditedInput(std::optional<bool> form_interaction, std::optional<bool> user_edits) {
+  if (form_interaction.value_or(false) || user_edits.value_or(false)) return true;
+  if (!form_interaction || !user_edits) return std::nullopt;
+  return false;
+}
+
 std::string_view LinuxMemoryPressure(uint64_t physical, uint64_t available) {
   if (!physical || available > physical) return "normal";
   const double free = static_cast<double>(available) / static_cast<double>(physical);

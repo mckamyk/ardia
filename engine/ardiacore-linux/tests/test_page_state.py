@@ -109,6 +109,9 @@ class PageStateTests(unittest.TestCase):
     def test_hung_renderer_wait_exit_and_stale_hosts(self):
         self.run_case('hung')
 
+    def test_hangs_without_a_current_page_wait_for_the_next_mounted_page(self):
+        self.run_case('deferred-hang')
+
     def test_blocked_popups_review_open_and_stale_documents(self):
         self.run_case('popups')
 

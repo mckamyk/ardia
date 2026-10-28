@@ -28,6 +28,7 @@ enum class LinuxPageMessageKind {
   kSelection,
   kScroll,
   kTheme,
+  kLinkDrop,
 };
 
 struct LinuxPageMessage {

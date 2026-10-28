@@ -58,6 +58,7 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
   const gates = new Map();
   const streams = new Set();
   const ports = {};
+  let links;
   const hostOf = (request) => String(request.headers.host ?? "").replace(/:\d+$/, "").toLowerCase();
   const gate = (name) => {
     if (!gates.has(name)) {
@@ -119,6 +120,18 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     if (url.pathname === "/hover") return html("Hover fixture", `<a id="link" href="/page/5?hover=${escapeHtml(url.searchParams.get("run") ?? "")}" style="position:absolute;left:20px;top:20px;width:300px;height:120px;display:block;font-size:48px">Hover link</a>`);
     if (url.pathname === "/popup") return html("Popup fixture", `<h1>Popup fixture</h1><script>window.open(${JSON.stringify(`http://plain.ardia.test:${ports.http}/page/8?popup=${encodeURIComponent(url.searchParams.get("run") ?? "")}`)})</script>`);
     if (url.pathname === "/busy") return html("Busy fixture", `<h1>Busy fixture</h1><script>addEventListener("load", () => setTimeout(() => { for (;;) {} }, 200))</script>`);
+    if (url.pathname === "/gestures") {
+      const run = url.searchParams.get("run") ?? "";
+      return html("Gestures fixture", `<a id="link" href="${escapeHtml(links.page(6, run))}" style="display:block;width:320px;height:60px;font-size:32px">Peek link</a><iframe id="frame" src="${escapeHtml(links.gestureFrame(run))}" width="400" height="120" style="border:0"></iframe><p id="words">Ardia selects quoted words</p><textarea id="field">alpha beta alpha</textarea><div id="tall" style="height:4000px"></div>`);
+    }
+    if (url.pathname === "/gesture-frame") return html("Gesture frame", `<a id="link" href="${escapeHtml(links.page(7, url.searchParams.get("run") ?? ""))}" style="display:block;width:320px;height:60px;font-size:32px">Framed link</a>`);
+    const tint = /^\/tint\/(meta|header|background|plain)$/.exec(url.pathname);
+    if (tint) {
+      if (tint[1] === "meta") return html("Tint meta", "<h1>Tint meta</h1>", '<meta name="theme-color" content="#336699">');
+      if (tint[1] === "header") return html("Tint header", '<header style="position:sticky;top:0;height:120px;background:#aa2244"></header><h1>Tint header</h1>');
+      if (tint[1] === "background") return send(200, "text/html; charset=utf-8", '<!doctype html><html><head><title>Tint background</title></head><body style="background:#22aa66"><h1>Tint background</h1></body></html>');
+      return html("Tint plain", "<h1>Tint plain</h1>");
+    }
     const favicon = /^\/favicon\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
     if (favicon) return html(`Favicon ${favicon[1]}`, `<h1>Favicon ${escapeHtml(favicon[1])}</h1>`, `<link rel="icon" href="/icon/${favicon[1]}.png">`);
     const icon = /^\/icon\/([A-Za-z0-9_-]+)\.png$/.exec(url.pathname);
@@ -198,8 +211,12 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     busy: (run = "") => `http://plain.ardia.test:${ports.http}/busy?run=${encodeURIComponent(run)}`,
     favicon: (label, host = "icons.ardia.test") => `http://${host}:${ports.http}/favicon/${label}`,
     icon: (name, host = "icons.ardia.test") => `http://${host}:${ports.http}/icon/${name}.png`,
+    gestures: (run = "") => `http://plain.ardia.test:${ports.http}/gestures?run=${encodeURIComponent(run)}`,
+    gestureFrame: (run = "") => `http://frame.ardia.test:${ports.http}/gesture-frame?run=${encodeURIComponent(run)}`,
+    tint: (kind) => `http://tint.ardia.test:${ports.http}/tint/${kind}`,
     media: (run = "") => `http://media.ardia.test:${ports.http}/media${run ? `?run=${encodeURIComponent(run)}` : ""}`,
   };
+  links = url;
   const chromiumArgs = [
     `--host-resolver-rules=MAP *.ardia.test 127.0.0.1, MAP ${SUGGEST_HOST} 127.0.0.1:${ports.https}, MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1`,
     ...tls.chromiumArgs,

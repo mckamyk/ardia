@@ -9,6 +9,8 @@ import { startNativeSync } from "../../browser/src/state/app/nativeSync";
 import { startTabPages } from "../../browser/src/state/tabs/tabPages";
 import { sleepTab, startTabLifecycle, useLifecycle } from "../../browser/src/state/tabs/tabLifecycle";
 import { useMedia } from "../../browser/src/state/media/media";
+import { useToolbarAutoHide } from "../../browser/src/state/windows/toolbarAutoHide";
+import { copyLinkToSelection, jumpToSelection, replaceInField, usePageSelection } from "../../browser/src/state/site/selection";
 import { webviews } from "../../browser/src/platform/webviews";
 import { startMemoryTrim } from "../../browser/src/state/tabs/memoryTrim";
 import { setNewTabPrewarm } from "../../browser/src/platform/preload";
@@ -42,7 +44,7 @@ import { focus } from "../../browser/src/state/browser/actions";
 import { announceTypeaheadReady } from "./typeahead";
 import { linuxSyncHooks, startLinuxSync } from "./syncEngine";
 
-Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle, sleepTab }, sync: linuxSyncHooks } });
+Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle, sleepTab }, sync: linuxSyncHooks, toolbar: useToolbarAutoHide, selection: { state: usePageSelection, jump: jumpToSelection, copyQuoteLink: copyLinkToSelection, replaceInField } } });
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme });
 setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
 

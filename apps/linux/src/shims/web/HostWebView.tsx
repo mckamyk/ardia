@@ -71,7 +71,7 @@ const HostTabWebView = forwardRef<WebViewHandle, WebViewProps>(function HostTabW
         }
         if (property === "getSecurityInfo") return current.pageResult(property, args);
         const script = hostPageScript(property, args);
-        if (script) return current.command(script.command, script.args);
+        if (script) return script.map ? current.command(script.command, script.args).then(script.map, () => script.map!(null)) : current.command(script.command, script.args);
         if (property === "evaluate") {
           const json = await current.pageResult<string | null>(property, args).catch(() => null);
           if (typeof json !== "string") return null;

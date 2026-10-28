@@ -22,12 +22,15 @@
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
+#include "third_party/blink/public/platform/web_isolated_world_info.h"
+#include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_script_source.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-function.h"
 #include "v8/include/v8-isolate.h"
@@ -38,6 +41,19 @@
 namespace ardia {
 
 namespace {
+
+constexpr char kArdiaPageWorldPolicy[] = "script-src 'none'; object-src 'none'";
+
+void ConfigureArdiaPageWorld() {
+  static bool configured = false;
+  if (configured) return;
+  configured = true;
+  blink::WebIsolatedWorldInfo info;
+  info.security_origin = blink::WebSecurityOrigin(url::Origin());
+  info.content_security_policy = blink::WebString::FromUtf8(kArdiaPageWorldPolicy);
+  info.human_readable_name = blink::WebString::FromUtf8("Ardia");
+  blink::SetIsolatedWorldInfo(ISOLATED_WORLD_ID_ARDIA_PAGE, info);
+}
 
 bool FitsUtf8(v8::Isolate* isolate, v8::Local<v8::String> text, size_t limit) {
   return static_cast<size_t>(text->Length()) <= limit && text->Utf8Length(isolate) <= limit;
@@ -107,6 +123,7 @@ class LinuxPageAgent : public content::RenderFrameObserver,
 
   void Install() {
     Forget();
+    ConfigureArdiaPageWorld();
     blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
     v8::Isolate* isolate = frame->GetAgentGroupScheduler()->Isolate();
     v8::HandleScope handle_scope(isolate);

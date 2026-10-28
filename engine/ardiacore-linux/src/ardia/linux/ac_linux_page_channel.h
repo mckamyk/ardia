@@ -10,6 +10,7 @@
 #include "ardia/linux/ac_linux_theme.h"
 #include "ardia/linux/mojom/page.mojom.h"
 #include "base/functional/callback.h"
+#include "base/functional/function_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "content/public/browser/render_frame_host_receiver_set.h"
@@ -66,6 +67,8 @@ class LinuxPageChannel : public content::WebContentsObserver,
   explicit LinuxPageChannel(content::WebContents* contents);
   void Accept(content::RenderFrameHost& frame, LinuxPageMessage message);
   void Peek(content::RenderFrameHost& frame, const base::DictValue& data);
+  void LinkDrop(const std::string& spec);
+  friend void NoteLinuxDragEnded(base::FunctionRef<bool(content::WebContents*)> in_window);
   void Call(content::RenderFrameHost* frame, const std::string& kind, const std::string& json);
   void Greet(content::RenderFrameHost& frame);
   void Watch(content::RenderWidgetHost* widget);
@@ -94,6 +97,8 @@ void BindLinuxPageHost(content::RenderFrameHost* frame,
                        mojo::PendingAssociatedReceiver<ardia::linux_page::mojom::PageHost> receiver);
 void RegisterLinuxPageHostBinder(content::RenderFrameHost& frame, blink::AssociatedInterfaceRegistry& registry);
 void WatchLinuxShellInput(content::WebContents* shell);
+void SetLinuxInputActivityListener(base::RepeatingClosure listener);
+void NoteLinuxDragEnded(base::FunctionRef<bool(content::WebContents*)> in_window);
 bool SetLinuxPageOption(const std::string& route, const base::DictValue& input, std::string* error);
 void RunLinuxPageEvaluation(content::RenderFrameHost* frame, const std::string& code,
                             base::OnceCallback<void(bool refused, std::optional<std::string> result)> done);
