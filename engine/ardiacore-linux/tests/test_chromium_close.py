@@ -156,6 +156,9 @@ class ChromiumCloseTests(unittest.TestCase):
     def test_download_cancellation(self):
         self.run_scenario('downloads')
 
+    def test_quit_skips_chromiums_download_prompt_once_ardia_asked(self):
+        self.run_scenario('ardia-asked-downloads')
+
     def test_empty_rescan_and_destroy(self):
         self.run_scenario('boundaries')
 

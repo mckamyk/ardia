@@ -238,6 +238,18 @@ LinuxCloseDispatchCompletion::~LinuxCloseDispatchCompletion() {
 
 LinuxCloseHooks g_ardia_linux_close_hooks = {};
 
+namespace {
+bool linux_quit_asks_about_downloads = false;
+}
+
+void SetLinuxQuitAsksAboutDownloads(bool asks) {
+  linux_quit_asks_about_downloads = asks;
+}
+
+bool LinuxQuitAsksAboutDownloads() {
+  return linux_quit_asks_about_downloads;
+}
+
 void RegisterLinuxCloseClient(BrowserWindowInterface* browser,
                               base::RepeatingClosure discard_chrome) {
   linux_close_sequence = true;

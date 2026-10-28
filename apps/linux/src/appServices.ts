@@ -14,7 +14,8 @@ import { trackAppVersion } from "../../browser/src/state/releaseNotes/releaseNot
 import { openReleaseNotesAfterUpdate, openReleaseNotesPage } from "../../browser/src/state/releaseNotes/releaseNotesPage";
 import { showToast } from "../../browser/src/state/splits/actions";
 import type { LinuxCapabilities } from "./hostCapabilities.ts";
-import { hostSupports, invokeHost, type ArdiaHost } from "./host.ts";
+import { ardiaHost, hostSupports, invokeHost, type ArdiaHost } from "./host.ts";
+import { QUIT_COMMAND, createHostQuit, type QuitOutcome } from "./quit.ts";
 
 export const APP_LAUNCH_LOCK = "ardia.linux.app-launch";
 export const APP_LAUNCH_MARK = "ardia.linux.app-launch";
@@ -166,7 +167,24 @@ async function recordPerformanceIssue() {
   if (path) void revealFile(path);
 }
 
+let quitLinux: (() => Promise<QuitOutcome>) | undefined;
+const linuxQuit = () => quitLinux ??= ardiaHost
+  ? createHostQuit(ardiaHost, confirm)
+  : () => Promise.reject(Object.assign(new Error("Quitting needs the Linux host"), { code: "ERR_UNAVAILABLE" }));
+
+function quitApp(windowId: string) {
+  void linuxQuit()().catch((error: unknown) => {
+    if ((error as { code?: string } | null)?.code === "ERR_UNAVAILABLE") return unavailable(windowId, "Quit");
+    report(error);
+    showToast(windowId, "Ardia couldn't quit", "Try again, or close each window.");
+  });
+}
+
 export function runAppCommand(windowId: string, command: CommandEvent["command"], capabilities: LinuxCapabilities): boolean {
+  if ((command as string) === QUIT_COMMAND) {
+    quitApp(windowId);
+    return true;
+  }
   switch (command) {
     case "sendFeedback":
       void sendFeedback(windowId).then(
@@ -203,7 +221,7 @@ export function runAppCommand(windowId: string, command: CommandEvent["command"]
   return false;
 }
 
-export const UTILITY_APP_COMMANDS: ReadonlySet<string> = new Set(["copyDiagnostics", "recordPerformanceIssue", "taskManager"]);
+export const UTILITY_APP_COMMANDS: ReadonlySet<string> = new Set(["copyDiagnostics", "recordPerformanceIssue", "taskManager", QUIT_COMMAND]);
 
 export function startAppCommands(windowId: string, capabilities: LinuxCapabilities, subscribe: typeof onCommand = onCommand, only?: ReadonlySet<string>) {
   return subscribe((event) => {

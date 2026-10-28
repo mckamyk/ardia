@@ -70,6 +70,7 @@ inline std::u16string_view TrimWhitespace(std::u16string_view value, TrimPositio
                 ]:
                     headers[name] = '#include "dialog_views.h"\n'
                 headers['base/location.h'] = '#define FROM_HERE 0\n'
+                headers['base/logging.h'] = '#pragma once\n#include <iostream>\nstruct FakeLogLine { ~FakeLogLine() { std::cerr << std::endl; } template <class T> FakeLogLine& operator<<(const T& value) { std::cerr << value; return *this; } };\n#define LOG(severity) FakeLogLine()\n'
             sources = [str(ROOT / 'src/ardia/linux/ac_linux_dialogs.cc')]
             if views:
                 sources.append(str(ROOT / 'src/ardia/linux/ac_linux_dialog_views.cc'))
@@ -89,6 +90,9 @@ inline std::u16string_view TrimWhitespace(std::u16string_view value, TrimPositio
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
             result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stderr)
+            if views:
+                self.assertIn('[ardiacore] dialog (background run, not shown): "Delete Profile?" (Delete Profile / Keep Profile): Keep Profile\n', result.stderr)
+                self.assertEqual(result.stderr.count('[ardiacore] dialog (background run, not shown)'), 1)
 
 
 if __name__ == '__main__':

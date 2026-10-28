@@ -19,9 +19,13 @@ const linuxKeys: Record<string, readonly string[]> = {
   previousTab: ["⇧⌘[", "⌥⌘←", "⌘⇞", "⌥⌘↑"],
   "tabSwitcher:forward": ["⌘⇥"],
   "tabSwitcher:backward": ["⇧⌘⇥"],
+  "std:quit:": ["⇧⌘Q"],
+};
+export const LINUX_STANDARD_ITEMS: Readonly<Record<string, { command: string; title: string; path: string }>> = {
+  "std:quit:": { command: "quit", title: "Quit Ardia", path: "Ardia" },
 };
 const shiftedKeys: Record<string, string> = { "+": "=", "{": "[", "}": "]" };
-const adapt = (sources: ShortcutSource[]): ShortcutSource[] => sources.filter((source) => !source.id.startsWith("std:") && (source.id.includes(":") || COMMANDS[source.id as keyof typeof COMMANDS]?.title)).map((source) => ({
+const adapt = (sources: ShortcutSource[]): ShortcutSource[] => sources.filter((source) => source.id in LINUX_STANDARD_ITEMS || (!source.id.startsWith("std:") && (source.id.includes(":") || COMMANDS[source.id as keyof typeof COMMANDS]?.title))).map((source) => ({
   ...source,
   keys: (linuxKeys[source.id]?.map(parseShortcut) ?? source.keys).map((shortcut) => {
     const key = shiftedKeys[shortcut.key];
