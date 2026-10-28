@@ -20,14 +20,14 @@ def added_lines(patch):
     return '\n'.join(line for line in patch.splitlines() if line.startswith('+') and not line.startswith('+++'))
 
 
-def dry_run(test, patch, relative):
-    source = CHROMIUM / relative
-    if not source.exists() or shutil.which('patch') is None:
+def dry_run(test, patch, *relatives):
+    if any(not (CHROMIUM / relative).exists() for relative in relatives) or shutil.which('patch') is None:
         test.skipTest('Chromium 156 source is unavailable')
     with tempfile.TemporaryDirectory(prefix='ardia-followup-patch-') as directory:
-        target = pathlib.Path(directory) / relative
-        target.parent.mkdir(parents=True)
-        target.write_text(source.read_text())
+        for relative in relatives:
+            target = pathlib.Path(directory) / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text((CHROMIUM / relative).read_text())
         result = subprocess.run(['patch', '-p1', '--dry-run', '-F0', '-i', str(patch)], cwd=directory, capture_output=True, text=True)
         test.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -59,7 +59,7 @@ class ExtensionShortcutWiringTests(unittest.TestCase):
         self.assertLess(key.index('AcceleratorPressed(accelerator)'), key.index('ExtensionShortcutPressed'))
         pressed = method(self.host, 'bool ShellHostView::ExtensionShortcutPressed(')
         self.assertIn('!ExtensionsListening()', pressed)
-        self.assertIn('IsOffTheRecord()', pressed)
+        self.assertNotIn('IsOffTheRecord()', pressed)
         self.assertIn('ui::Accelerator(event.key_code(), event.flags())', pressed)
         self.assertIn('linux_extension_shortcuts::kActionShortcutEvent', pressed)
         self.assertIn('ExtensionTabKey(contents)', pressed)
@@ -72,6 +72,19 @@ class ExtensionShortcutWiringTests(unittest.TestCase):
         self.assertLess(detach.index('UnregisterAccelerators();'), detach.index('browser_ = nullptr;'))
         destructor = method(self.host, 'ShellHostView::~ShellHostView() {')
         self.assertIn('UnregisterAccelerators();', destructor)
+
+    def test_private_windows_only_get_incognito_allowed_extensions(self):
+        populate = self.glue[self.glue.index('bool LinuxExtensionKeybindings::PopulateCommands('):]
+        populate = populate[:populate.index('\n}\n')]
+        self.assertIn('browser_context()->IsOffTheRecord()', populate)
+        self.assertIn('extensions::util::IsIncognitoEnabled(extension->id(), browser_context())', populate)
+        self.assertLess(populate.index('IsIncognitoEnabled'), populate.index('GetNamedCommands'))
+
+    def test_the_unused_suspend_path_is_gone(self):
+        header = (LINUX / 'ac_linux_extension_keybindings.h').read_text()
+        book = (LINUX / 'ac_linux_extension_shortcuts.h').read_text()
+        self.assertNotIn('OnShortcutHandlingSuspended', header + self.glue)
+        self.assertNotIn('SetSuspended', book)
 
     def test_glue_registers_actions_and_regular_commands_only(self):
         self.assertIn('ShouldIgnoreCommand(const std::string&) const {\n  return false;', self.glue)
@@ -89,14 +102,37 @@ class ExtensionShortcutWiringTests(unittest.TestCase):
 class ExtensionFollowupPatchTests(unittest.TestCase):
     series = (REPO / 'engine/patches/series').read_text()
 
-    def test_settings_overrides_patch_only_adds_linux_to_the_manifest_feature(self):
+    def test_settings_overrides_patch_enables_search_providers_but_not_homepage_or_startup_pages(self):
         self.assertIn('chromium chromium-linux-settings-overrides.patch linux', self.series)
         patch = REPO / 'engine/patches/chromium-linux-settings-overrides.patch'
         text = patch.read_text()
-        self.assertEqual(added_lines(text), '+    "platforms": ["win", "mac", "linux"]')
+        added = added_lines(text)
+        self.assertIn('+    "platforms": ["win", "mac", "linux"]', added)
         self.assertIn('-    "platforms": ["win", "mac"]', text)
-        self.assertIn('"chrome_settings_overrides": {', text)
-        dry_run(self, patch, 'chrome/common/extensions/api/_manifest_features.json')
+        self.assertNotRegex(added, r'^\+\s*(//|/\*)')
+        api = text[text.index('+++ b/chrome/browser/extensions/api/settings_overrides/settings_overrides_api.cc'):]
+        self.assertEqual(api.count('+#if !BUILDFLAG(IS_LINUX)'), 2)
+        guarded = api[api.index('+#if !BUILDFLAG(IS_LINUX)'):]
+        self.assertLess(guarded.index('settings->homepage'), guarded.index('+#endif'))
+        second = guarded[guarded.index('+#endif') + 1:]
+        second = second[second.index('+#if !BUILDFLAG(IS_LINUX)'):]
+        self.assertLess(second.index('settings->startup_pages'), second.index('+#endif'))
+        self.assertLess(second.index('+#endif'), second.index('settings->search_engine'))
+        dry_run(self, patch, 'chrome/common/extensions/api/_manifest_features.json',
+                'chrome/browser/extensions/api/settings_overrides/settings_overrides_api.cc')
+
+    def test_chromium_extension_accelerators_are_not_registered_on_linux(self):
+        self.assertIn('chromium chromium-linux-extension-keybindings.patch linux', self.series)
+        patch = REPO / 'engine/patches/chromium-linux-extension-keybindings.patch'
+        text = patch.read_text()
+        self.assertNotRegex(added_lines(text), r'^\+\s*(//|/\*)')
+        views = text[text.index('+++ b/chrome/browser/ui/views/extensions/extension_keybinding_registry_views.cc'):]
+        self.assertIn('+#if BUILDFLAG(IS_LINUX)\n+  return false;\n+#else', views)
+        action = text[text.index('+++ b/chrome/browser/ui/views/extensions/extension_action_delegate_desktop.cc'):]
+        register = action[action.index('ExtensionActionDelegateDesktop::RegisterCommand() {'):]
+        self.assertTrue(register.split('\n')[1] == '+#if !BUILDFLAG(IS_LINUX)', register[:200])
+        dry_run(self, patch, 'chrome/browser/ui/views/extensions/extension_keybinding_registry_views.cc',
+                'chrome/browser/ui/views/extensions/extension_action_delegate_desktop.cc')
 
     def test_native_messaging_patch_adds_a_linux_lookup_hook_the_host_installs(self):
         self.assertIn('chromium chromium-linux-native-messaging-hosts.patch linux', self.series)
@@ -104,14 +140,19 @@ class ExtensionFollowupPatchTests(unittest.TestCase):
         text = patch.read_text()
         added = added_lines(text)
         self.assertNotRegex(added, r'^\+\s*(//|/\*)')
-        declaration = 'std::vector<base::FilePath> (*g_ardia_native_messaging_directories)()'
+        declaration = 'base::FilePath (*g_ardia_native_messaging_manifest)(const std::string& host_name)'
         self.assertIn(declaration + ' = nullptr;', added)
         self.assertIn('allow_user_level_hosts', added)
+        self.assertNotIn('PathExists', added)
         host = (LINUX / 'ac_linux_host.cc').read_text()
         self.assertIn(f'extern {declaration};', host)
-        self.assertIn('g_ardia_native_messaging_directories = &NativeMessagingDirectories;', host)
-        self.assertLess(text.index('DIR_CHROME_USER_NATIVE_MESSAGING'), text.index('g_ardia_native_messaging_directories()'))
-        self.assertLess(text.index('g_ardia_native_messaging_directories()'), text.index('DIR_NATIVE_MESSAGING, host_name'))
+        lookup = method(host, 'base::FilePath NativeMessagingManifest(const std::string& host_name) {')
+        self.assertIn('linux_native_messaging::FindManifest(', lookup)
+        self.assertIn('linux_native_messaging::ExtraUserDirectories(', lookup)
+        start = method(host, 'void StartLinuxHost() {')
+        self.assertLess(start.index('g_ardia_native_messaging_manifest = &NativeMessagingManifest;'), start.index('StartLinuxExtensions('))
+        self.assertLess(text.index('DIR_CHROME_USER_NATIVE_MESSAGING'), text.index('g_ardia_native_messaging_manifest(host_name)'))
+        self.assertLess(text.index('g_ardia_native_messaging_manifest(host_name)'), text.index('DIR_NATIVE_MESSAGING, host_name'))
         dry_run(self, patch, 'chrome/browser/extensions/api/messaging/launch_context_posix.cc')
 
 

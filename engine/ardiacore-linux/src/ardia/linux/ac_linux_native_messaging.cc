@@ -33,8 +33,8 @@ bool ValidHostName(std::string_view name) {
 }
 
 std::string ConfigRoot(const Environment& environment) {
-  if (Absolute(environment.chrome_config_home)) return environment.chrome_config_home;
-  if (Absolute(environment.xdg_config_home)) return environment.xdg_config_home;
+  if (!environment.chrome_config_home.empty()) return environment.chrome_config_home;
+  if (!environment.xdg_config_home.empty()) return environment.xdg_config_home;
   if (Absolute(environment.home)) return Join(environment.home, ".config");
   return std::string();
 }

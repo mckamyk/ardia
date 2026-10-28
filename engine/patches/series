@@ -29,6 +29,7 @@ chromium chromium-extension-install-prompt-hook.patch
 chromium chromium-linux-action-popup-hook.patch linux
 chromium chromium-linux-settings-overrides.patch linux
 chromium chromium-linux-native-messaging-hosts.patch linux
+chromium chromium-linux-extension-keybindings.patch linux
 chromium chromium-webstore-direct.patch
 chromium chromium-extension-updates.patch
 chromium chromium-component-updater-security-only.patch

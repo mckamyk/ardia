@@ -19,7 +19,7 @@ void ShortcutBook::Unregister(Key key) {
 
 Decision ShortcutBook::Decide(Key key, bool repeat, bool reserved_by_ardia) const {
   Decision decision;
-  if (suspended_ || reserved_by_ardia) return decision;
+  if (reserved_by_ardia) return decision;
   const auto found = entries_.find(key);
   if (found == entries_.end()) return decision;
   decision.extension_id = found->second.extension_id;

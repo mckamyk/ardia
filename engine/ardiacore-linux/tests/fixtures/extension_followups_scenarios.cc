@@ -52,11 +52,6 @@ void ShortcutBookScenarios() {
   decision = book.Decide(named, false, true);
   Expect(decision.route == shortcuts::Route::kNone, "an Ardia shortcut is never shadowed by a command");
 
-  book.SetSuspended(true);
-  Expect(book.Decide(action, false, false).route == shortcuts::Route::kNone, "suspended handling ignores actions");
-  Expect(book.Decide(named, false, false).route == shortcuts::Route::kNone, "suspended handling ignores commands");
-  book.SetSuspended(false);
-
   book.Unregister(named);
   Expect(!book.Contains(named) && book.Decide(named, false, false).route == shortcuts::Route::kNone, "unregistered commands stop");
   book.Register(action, other, "renamed");
@@ -82,7 +77,9 @@ void NativeMessagingScenarios(const std::string& scratch) {
   environment.home = "/home/u";
   Expect(messaging::ConfigRoot(environment) == "/home/u/.config", "home fallback");
   environment.xdg_config_home = "relative";
-  Expect(messaging::ConfigRoot(environment) == "/home/u/.config", "relative XDG_CONFIG_HOME is ignored");
+  Expect(messaging::ConfigRoot(environment) == "relative", "any non-empty XDG_CONFIG_HOME wins, as in Chromium");
+  Expect(messaging::FindManifest(messaging::ExtraUserDirectories(environment), "com.example.host").empty(),
+         "a relative root yields no usable folder");
   environment.xdg_config_home = "/xdg";
   Expect(messaging::ConfigRoot(environment) == "/xdg", "XDG_CONFIG_HOME wins over HOME");
   environment.chrome_config_home = "/chrome-config";

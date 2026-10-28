@@ -8,6 +8,7 @@
 #include "content/public/browser/web_contents.h"
 #include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/command.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/common/extension.h"
 #include "ui/events/event_constants.h"
 
@@ -52,6 +53,10 @@ bool LinuxExtensionKeybindings::Handle(const ui::Accelerator& accelerator, bool 
 }
 
 bool LinuxExtensionKeybindings::PopulateCommands(const extensions::Extension* extension, ui::CommandMap* commands) {
+  if (browser_context()->IsOffTheRecord() &&
+      !extensions::util::IsIncognitoEnabled(extension->id(), browser_context())) {
+    return false;
+  }
   extensions::CommandService* service = extensions::CommandService::Get(browser_context());
   const bool named = service->GetNamedCommands(extension->id(), extensions::CommandService::ACTIVE,
                                                extensions::CommandService::REGULAR, commands);
@@ -71,10 +76,6 @@ bool LinuxExtensionKeybindings::RegisterAccelerator(const ui::Accelerator& accel
 
 void LinuxExtensionKeybindings::UnregisterAccelerator(const ui::Accelerator& accelerator) {
   book_.Unregister(KeyOf(accelerator));
-}
-
-void LinuxExtensionKeybindings::OnShortcutHandlingSuspended(bool suspended) {
-  book_.SetSuspended(suspended);
 }
 
 bool LinuxExtensionKeybindings::ShouldIgnoreCommand(const std::string&) const {

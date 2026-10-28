@@ -36,7 +36,6 @@ class LinuxExtensionKeybindings : public extensions::ExtensionKeybindingRegistry
   bool RegisterAccelerator(const ui::Accelerator& accelerator, const extensions::ExtensionId& extension_id,
                            const std::string& command_name) override;
   void UnregisterAccelerator(const ui::Accelerator& accelerator) override;
-  void OnShortcutHandlingSuspended(bool suspended) override;
   bool ShouldIgnoreCommand(const std::string& command) const override;
 
   raw_ptr<BrowserWindowInterface> browser_;

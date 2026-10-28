@@ -210,7 +210,7 @@ extern void (*g_ardia_linux_drag_ended)(BrowserWindowInterface*);
 extern void (*g_ardia_devtools_dock_changed)(BrowserWindowInterface* browser,
                                              content::WebContents* inspected,
                                              content::WebContents* devtools);
-extern std::vector<base::FilePath> (*g_ardia_native_messaging_directories)();
+extern base::FilePath (*g_ardia_native_messaging_manifest)(const std::string& host_name);
 
 namespace ardia {
 namespace {
@@ -219,17 +219,14 @@ constexpr size_t kDocumentLimit = 8 * 1024 * 1024;
 constexpr size_t kAssetLimit = 32 * 1024 * 1024;
 constexpr char kSessionName[] = "linux-session.json";
 
-std::vector<base::FilePath> NativeMessagingDirectories() {
+base::FilePath NativeMessagingManifest(const std::string& host_name) {
   std::unique_ptr<base::Environment> environment = base::Environment::Create();
   linux_native_messaging::Environment paths;
   paths.home = environment->GetVar("HOME").value_or("");
   paths.xdg_config_home = environment->GetVar("XDG_CONFIG_HOME").value_or("");
   paths.chrome_config_home = environment->GetVar("CHROME_CONFIG_HOME").value_or("");
-  std::vector<base::FilePath> directories;
-  for (const std::string& directory : linux_native_messaging::ExtraUserDirectories(paths)) {
-    directories.emplace_back(directory);
-  }
-  return directories;
+  return base::FilePath(
+      linux_native_messaging::FindManifest(linux_native_messaging::ExtraUserDirectories(paths), host_name));
 }
 
 class ShellHostView;
@@ -1959,7 +1956,7 @@ void ShellHostView::OnKeyEvent(ui::KeyEvent* event) {
 }
 
 bool ShellHostView::ExtensionShortcutPressed(const ui::KeyEvent& event, bool reserved_by_ardia) {
-  if (!ExtensionsListening() || !page_profile() || page_profile()->IsOffTheRecord()) return false;
+  if (!ExtensionsListening() || !page_profile()) return false;
   if (!extension_keybindings_) {
     extension_keybindings_ = std::make_unique<LinuxExtensionKeybindings>(
         browser_.get(), base::BindRepeating(
@@ -5311,8 +5308,8 @@ void StartLinuxHost() {
       }
     }
   });
+  g_ardia_native_messaging_manifest = &NativeMessagingManifest;
   StartLinuxExtensions(std::move(extensions));
-  g_ardia_native_messaging_directories = &NativeMessagingDirectories;
   ac_engine_set_event_sink(EngineEvent, nullptr);
   StartLinuxSiteControls(base::BindRepeating([](Profile* profile, base::Value stats) {
     for (const auto& [id, host] : Hosts()) {

@@ -40,8 +40,6 @@ class ShortcutBook {
 
   void Register(Key key, std::string_view extension_id, std::string_view command);
   void Unregister(Key key);
-  void SetSuspended(bool suspended) { suspended_ = suspended; }
-  bool suspended() const { return suspended_; }
   bool Contains(Key key) const { return entries_.contains(key); }
   size_t size() const { return entries_.size(); }
 
@@ -53,7 +51,6 @@ class ShortcutBook {
     std::string command;
   };
   std::map<Key, Entry> entries_;
-  bool suspended_ = false;
 };
 
 }
