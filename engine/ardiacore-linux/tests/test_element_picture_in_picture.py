@@ -1,3 +1,4 @@
+import contextlib
 import pathlib
 import re
 import shutil
@@ -27,6 +28,27 @@ def body(source, signature):
     return source[start:end]
 
 
+def committed(name):
+    result = subprocess.run(['git', '-C', str(CHROMIUM), 'show', f'HEAD:{name}'], capture_output=True, text=True)
+    return result.stdout if result.returncode == 0 else None
+
+
+@contextlib.contextmanager
+def patched_tree():
+    sources = {name: committed(name) for name in FILES} if CHROMIUM.exists() else {}
+    if not sources or any(text is None for text in sources.values()) or shutil.which('patch') is None:
+        raise unittest.SkipTest('Chromium 156 source is unavailable')
+    with tempfile.TemporaryDirectory(prefix='ardia-media-player-pip-') as directory:
+        for name, text in sources.items():
+            target = pathlib.Path(directory) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        result = subprocess.run(['patch', '-p1', '-F0', '-i', str(PATCH)], cwd=directory, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise AssertionError(result.stdout + result.stderr)
+        yield directory
+
+
 class ElementPictureInPictureTests(unittest.TestCase):
     def test_nothing_on_linux_grants_a_page_user_activation(self):
         for path in [*LINUX.glob('*.cc'), *LINUX.glob('renderer/*.cc')]:
@@ -41,15 +63,7 @@ class ElementPictureInPictureTests(unittest.TestCase):
         text = PATCH.read_text()
         added = '\n'.join(line for line in text.splitlines() if line.startswith('+') and not line.startswith('+++'))
         self.assertNotRegex(added, r'(?m)^\+\s*/\*|^\+\s*//(?! nogncheck)')
-        if any(not (CHROMIUM / name).exists() for name in FILES) or shutil.which('patch') is None:
-            self.skipTest('Chromium 156 source is unavailable')
-        with tempfile.TemporaryDirectory(prefix='ardia-media-player-pip-') as directory:
-            for name in FILES:
-                target = pathlib.Path(directory) / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text((CHROMIUM / name).read_text())
-            result = subprocess.run(['patch', '-p1', '-F0', '-i', str(PATCH)], cwd=directory, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with patched_tree() as directory:
             observer = (pathlib.Path(directory) / FILES[0]).read_text()
             candidates = body(observer, 'MediaWebContentsObserver::ArdiaLinuxPictureInPictureCandidates(')
             self.assertIn('has_video()', candidates)
@@ -60,6 +74,25 @@ class ElementPictureInPictureTests(unittest.TestCase):
             self.assertIn('RequestEnterPictureInPicture(std::nullopt)', request)
             for name in FILES[1::2]:
                 self.assertIn('#if BUILDFLAG(IS_LINUX)', (pathlib.Path(directory) / name).read_text())
+
+    def test_the_patch_lists_main_frame_videos_that_have_played(self):
+        with patched_tree() as directory:
+            observer = (pathlib.Path(directory) / FILES[0]).read_text()
+            self.assertIn('has_played_ = true;', body(observer, 'void SetIsPlaying()'))
+            played = body(observer, 'MediaWebContentsObserver::ArdiaLinuxPlayedVideoPlayers(')
+            self.assertIn('id.frame_routing_id != frame', played)
+            self.assertIn('!info->has_video()', played)
+            self.assertIn('!info->has_played()', played)
+            self.assertIn('info->is_playing()', played)
+            self.assertRegex(observer, r'ArdiaLinuxPlayedVideoPlayers\(\s*WebContents\* contents\) \{')
+        hooks = (LINUX / 'ac_linux_content_hooks.h').read_text()
+        self.assertIn('ArdiaLinuxPlayedVideoPlayers(WebContents* contents);', hooks)
+
+    def test_the_media_entry_is_seeded_only_from_videos_that_have_played(self):
+        media = (LINUX / 'ac_linux_page_media.cc').read_text()
+        created = body(media, 'LinuxPageMedia::LinuxPageMedia(')
+        self.assertIn('content::ArdiaLinuxPlayedVideoPlayers(contents)', created)
+        self.assertNotIn('ArdiaLinuxPictureInPictureCandidates', created)
 
     def test_the_host_chooses_among_available_players_and_waits_for_the_window(self):
         media = (LINUX / 'ac_linux_page_media.cc').read_text()

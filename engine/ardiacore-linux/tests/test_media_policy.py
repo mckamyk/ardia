@@ -40,6 +40,9 @@ class MediaPolicyTests(unittest.TestCase):
     def test_a_playing_video_outside_the_session_reports_a_video_without_controls(self):
         self.run_case('page-video')
 
+    def test_a_video_that_played_stays_known_after_the_renderer_reports_it_stopped(self):
+        self.run_case('page-videos')
+
     def test_event_payloads_match_the_shared_page_types(self):
         self.run_case('events')
 
