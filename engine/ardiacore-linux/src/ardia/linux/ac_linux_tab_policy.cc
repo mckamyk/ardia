@@ -103,4 +103,26 @@ base::DictValue LinuxSystemState(const LinuxPowerSample& sample) {
       .Set("battery", !sample.upower ? "unavailable" : battery ? "present" : "absent");
 }
 
+void LinuxPowerTracker::SetPower(const LinuxPowerSample& power) {
+  const uint64_t physical = sample_.physical_memory;
+  const uint64_t available = sample_.available_memory;
+  sample_ = power;
+  sample_.physical_memory = physical;
+  sample_.available_memory = available;
+}
+
+void LinuxPowerTracker::SetMemory(uint64_t physical, uint64_t available) {
+  sample_.physical_memory = physical;
+  sample_.available_memory = available;
+  memory_ready_ = true;
+}
+
+std::optional<base::DictValue> LinuxPowerTracker::Take() {
+  if (!Ready()) return std::nullopt;
+  base::DictValue state = LinuxSystemState(sample_);
+  if (state_ && *state_ == state) return std::nullopt;
+  state_ = state.Clone();
+  return state;
+}
+
 }

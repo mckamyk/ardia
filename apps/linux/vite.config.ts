@@ -30,7 +30,12 @@ const importedPasswordSave = {
   importer: here("../browser/src/components/settings/panes/Passwords.tsx"),
   replacement: here("./src/importedPasswordSave.ts"),
 };
-const adapters = new Set([...replacements.values(), rawBookmarkAdapter.replacement, importedPasswordSave.replacement]);
+const tabLifecycle = here("../browser/src/state/tabs/tabLifecycle.ts");
+const importerReplacements = new Map([
+  [`${here("../browser/src/state/splits/actions.ts")}\0${tabLifecycle}`, here("./src/policyToasts.ts")],
+  [`${here("../browser/src/platform/performance.ts")}\0${tabLifecycle}`, here("./src/policyPerformance.ts")],
+]);
+const adapters = new Set([...replacements.values(), ...importerReplacements.values(), rawBookmarkAdapter.replacement, importedPasswordSave.replacement]);
 
 function linuxComponents(): Plugin {
   return {
@@ -45,6 +50,8 @@ function linuxComponents(): Plugin {
       if (!importer || adapters.has(importer)) return null;
       const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
       if (resolved?.id === importedPasswordSave.source && importer === importedPasswordSave.importer) return importedPasswordSave.replacement;
+      const scoped = resolved && importerReplacements.get(`${resolved.id}\0${importer}`);
+      if (scoped) return scoped;
       return resolved ? resolveInputAdapter(resolved.id, importer) ?? replacements.get(resolved.id) ?? null : null;
     },
   };

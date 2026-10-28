@@ -244,6 +244,45 @@ void Power() {
   assert(LinuxMemoryPressure(0, 0) == "normal" && LinuxMemoryPressure(10, 20) == "normal");
 }
 
+void PowerTracker() {
+  LinuxPowerTracker tracker;
+  assert(!tracker.Ready() && !tracker.Take());
+  LinuxPowerSample battery;
+  battery.upower = true;
+  battery.on_battery = false;
+  battery.device_type = kLinuxUPowerBattery;
+  battery.is_present = true;
+  battery.percentage = 80;
+  battery.physical_memory = 1;
+  tracker.SetPower(battery);
+  assert(!tracker.Ready() && !tracker.Take());
+  tracker.SetMemory(16ull << 30, 8ull << 30);
+  assert(!tracker.Ready() && !tracker.Take());
+  tracker.PowerAnswered();
+  assert(tracker.Ready());
+  auto first = tracker.Take();
+  assert(first && first->FindBool("onBattery") == false && first->FindDouble("batteryLevel") == 0.8);
+  assert(first->FindDouble("physicalMemory") == double(16ull << 30) && Text(*first, "memoryPressure") == "normal");
+  assert(!tracker.Take() && tracker.state() && *tracker.state() == *first);
+  battery.on_battery = true;
+  tracker.SetPower(battery);
+  auto unplugged = tracker.Take();
+  assert(unplugged && unplugged->FindBool("onBattery") == true && unplugged->FindDouble("physicalMemory") == double(16ull << 30));
+  tracker.SetPower(battery);
+  assert(!tracker.Take());
+  tracker.SetMemory(16ull << 30, 8ull << 30);
+  assert(!tracker.Take());
+  tracker.SetMemory(1000, 40);
+  auto pressure = tracker.Take();
+  assert(pressure && Text(*pressure, "memoryPressure") == "critical");
+  battery.power_profile = "power-saver";
+  tracker.SetPower(battery);
+  assert(tracker.Take()->FindBool("lowPowerMode") == true);
+  tracker.SetPower(LinuxPowerSample());
+  auto gone = tracker.Take();
+  assert(gone && Text(*gone, "power") == "unavailable" && gone->FindBool("onBattery") == false && Text(*gone, "memoryPressure") == "critical");
+}
+
 }
 
 int main(int argc, char** argv) {
@@ -255,6 +294,7 @@ int main(int argc, char** argv) {
   else if (mode == "commands") Commands();
   else if (mode == "pip") PictureInPicture();
   else if (mode == "protection") Protection();
+  else if (mode == "power-tracker") PowerTracker();
   else if (mode == "power") Power();
   else return 2;
 }

@@ -170,6 +170,13 @@ describe("scenario catalogue", () => {
     assert.deepEqual(selectScenarios(["#26", "F25"]).map((s) => s.id), ["F16", "F25"]);
   });
 
+  it("names the same tab-policy lock as the Linux shell", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { POLICY_LOCK } = await import("../scenarios/f18-policies.mjs");
+    const policies = await readFile(new URL("../../../src/hostPolicies.ts", import.meta.url), "utf8");
+    assert.ok(policies.includes(`export const TAB_POLICY_LOCK = "${POLICY_LOCK}";`));
+  });
+
   it("selects by finding or issue number", () => {
     assert.deepEqual(selectScenarios(["f01", "#33", "18"]).map((s) => s.id), ["F01", "F23", "F08"]);
     assert.equal(selectScenarios([]).length, SCENARIOS.length);

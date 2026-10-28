@@ -1,7 +1,9 @@
 #ifndef ARDIA_LINUX_AC_LINUX_POWER_H_
 #define ARDIA_LINUX_AC_LINUX_POWER_H_
 
+#include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "ardia/linux/ac_linux_tab_policy.h"
@@ -12,6 +14,10 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
+
+namespace dbus {
+class Bus;
+}
 
 namespace ardiacore {
 
@@ -25,18 +31,30 @@ class LinuxPowerMonitor {
   base::CallbackListSubscription Subscribe(Listener listener);
 
  private:
+  class Properties;
   LinuxPowerMonitor();
-  ~LinuxPowerMonitor() = default;
+  ~LinuxPowerMonitor();
   void Start();
-  void Poll();
-  void Sampled(LinuxPowerSample sample);
+  void Watch();
+  void SampleMemory();
+  void MemorySampled(std::pair<uint64_t, uint64_t> memory);
+  void PropertiesChanged();
+  void PropertiesAnswered();
+  void Publish();
 
   scoped_refptr<base::SequencedTaskRunner> runner_;
-  std::optional<base::DictValue> state_;
+  scoped_refptr<dbus::Bus> bus_;
+  std::unique_ptr<Properties> upower_;
+  std::unique_ptr<Properties> display_;
+  std::vector<std::unique_ptr<Properties>> profiles_;
+  LinuxPowerTracker tracker_;
+  size_t unanswered_ = 0;
   std::vector<base::OnceCallback<void(base::DictValue)>> waiting_;
   base::RepeatingCallbackList<void(const base::DictValue&)> listeners_;
-  base::RepeatingTimer timer_;
-  bool polling_ = false;
+  base::RepeatingTimer memory_timer_;
+  base::OneShotTimer answer_deadline_;
+  bool started_ = false;
+  bool sampling_ = false;
   base::WeakPtrFactory<LinuxPowerMonitor> weak_factory_{this};
 };
 

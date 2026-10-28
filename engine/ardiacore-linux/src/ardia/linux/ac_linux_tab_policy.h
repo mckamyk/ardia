@@ -57,6 +57,22 @@ inline constexpr uint32_t kLinuxUPowerBattery = 2;
 std::string_view LinuxMemoryPressure(uint64_t physical, uint64_t available);
 base::DictValue LinuxSystemState(const LinuxPowerSample& sample);
 
+class LinuxPowerTracker {
+ public:
+  void SetPower(const LinuxPowerSample& power);
+  void PowerAnswered() { power_ready_ = true; }
+  void SetMemory(uint64_t physical, uint64_t available);
+  bool Ready() const { return power_ready_ && memory_ready_; }
+  std::optional<base::DictValue> Take();
+  const std::optional<base::DictValue>& state() const { return state_; }
+
+ private:
+  LinuxPowerSample sample_;
+  bool power_ready_ = false;
+  bool memory_ready_ = false;
+  std::optional<base::DictValue> state_;
+};
+
 }
 
 #endif
