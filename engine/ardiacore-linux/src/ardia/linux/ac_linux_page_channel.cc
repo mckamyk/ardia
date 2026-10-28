@@ -9,6 +9,7 @@
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
 #include "content/public/browser/page.h"
@@ -21,6 +22,7 @@
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "ui/display/screen.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -36,6 +38,21 @@ LinuxPageOptions& Options() {
 LinuxLinkGestureGate& Gate() {
   static LinuxLinkGestureGate gate;
   return gate;
+}
+
+LinuxInputActivity& Activity() {
+  static LinuxInputActivity activity;
+  return activity;
+}
+
+base::RepeatingClosure& ActivityListener() {
+  static base::NoDestructor<base::RepeatingClosure> listener;
+  return *listener;
+}
+
+bool UserActivity(blink::WebInputEvent::Type type) {
+  return blink::WebInputEvent::IsKeyboardEventType(type) || blink::WebInputEvent::IsMouseEventType(type) ||
+         blink::WebInputEvent::IsTouchEventType(type) || type == blink::WebInputEvent::Type::kMouseWheel;
 }
 
 std::set<LinuxPageChannel*>& Channels() {
@@ -224,6 +241,8 @@ void LinuxPageChannel::Accept(content::RenderFrameHost& frame, LinuxPageMessage 
           .Set("kind", scroll ? "scroll" : "selection").Set("data", std::move(message.data))));
       return;
     }
+    case LinuxPageMessageKind::kLinkDrop:
+      return LinkDrop(*message.data.GetDict().FindString("url"));
     case LinuxPageMessageKind::kTheme: {
       std::optional<LinuxTheme::Sample> sample;
       if (const base::DictValue* dict = message.data.GetIfDict())
@@ -263,6 +282,16 @@ void LinuxPageChannel::Peek(content::RenderFrameHost& frame, const base::DictVal
   emit.Run("openWindow", base::Value(std::move(open)));
 }
 
+void LinuxPageChannel::LinkDrop(const std::string& spec) {
+  const GURL url(spec);
+  if (!hooks_ || !url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) return;
+  const bool visible = hooks_->visible && hooks_->visible.Run();
+  if (!hooks_ || !Gate().AcceptLinkDrop(surface_, visible, Now()).empty()) return;
+  auto emit = hooks_->emit;
+  emit.Run("openWindow", base::Value(base::DictValue()
+      .Set("url", url.spec()).Set("disposition", "foreground").Set("userGesture", true)));
+}
+
 void LinuxPageChannel::Watch(content::RenderWidgetHost* widget) {
   if (!widget || !widgets_.insert(widget).second) return;
   widget->AddInputEventObserver(this);
@@ -296,6 +325,8 @@ void LinuxPageChannel::WebContentsDestroyed() {
 void LinuxPageChannel::OnInputEvent(const content::RenderWidgetHost& widget, const blink::WebInputEvent& event,
                                     input::InputEventSource source) {
   const auto type = event.GetType();
+  if (UserActivity(type) && Activity().Note(Now()) && ActivityListener())
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, ActivityListener());
   if (type != blink::WebInputEvent::Type::kMouseDown && type != blink::WebInputEvent::Type::kMouseUp) return;
   const auto& mouse = static_cast<const blink::WebMouseEvent&>(event);
   if (mouse.button != blink::WebPointerProperties::Button::kLeft) return;
@@ -325,6 +356,22 @@ void RegisterLinuxPageHostBinder(content::RenderFrameHost& frame, blink::Associa
 
 void WatchLinuxShellInput(content::WebContents* shell) {
   if (shell) LinuxPageChannel::GetOrCreate(shell);
+}
+
+void SetLinuxInputActivityListener(base::RepeatingClosure listener) {
+  ActivityListener() = std::move(listener);
+}
+
+void NoteLinuxDragEnded(base::FunctionRef<bool(content::WebContents*)> in_window) {
+  const uintptr_t source = Gate().DragSource();
+  if (!source) return;
+  for (LinuxPageChannel* channel : Channels()) {
+    if (channel->surface_ != source) continue;
+    content::WebContents* contents = &channel->GetWebContents();
+    if (!in_window(contents)) return;
+    const gfx::Point cursor = display::Screen::Get()->GetCursorScreenPoint();
+    return Gate().NoteDragEnded(source, contents->GetContainerBounds().Contains(cursor), Now());
+  }
 }
 
 bool SetLinuxPageOption(const std::string& route, const base::DictValue& input, std::string* error) {

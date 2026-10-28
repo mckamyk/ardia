@@ -40,14 +40,27 @@ struct LinuxLinkDecision {
   std::optional<LinuxLinkPoint> point;
 };
 
+class LinuxInputActivity {
+ public:
+  static constexpr double kInterval = 0.5;
+  bool Note(double now);
+
+ private:
+  double last_ = -1;
+};
+
 class LinuxLinkGestureGate {
  public:
   static constexpr double kGestureLifetime = 10;
   static constexpr double kFallbackLifetime = 60;
+  static constexpr double kDropLifetime = 2;
   void NotePress(uintptr_t surface);
   void NoteRelease(uintptr_t surface, int flags, double now, std::optional<LinuxLinkPoint> point);
   void Forget(uintptr_t surface);
   LinuxLinkDecision Decide(const LinuxLinkRequest& request, const LinuxPageOptions& options);
+  uintptr_t DragSource() const { return press_open_ ? press_surface_ : 0; }
+  void NoteDragEnded(uintptr_t surface, bool over, double now);
+  std::string AcceptLinkDrop(uintptr_t surface, bool visible, double now);
 
  private:
   LinuxLinkDecision FallBack(const LinuxLinkRequest& request, const LinuxPageOptions& options, std::string reason);
@@ -58,6 +71,13 @@ class LinuxLinkGestureGate {
   uint64_t used_sequence_ = 0;
   bool pressed_since_up_ = false;
   std::optional<LinuxLinkPoint> up_point_;
+  uintptr_t press_surface_ = 0;
+  bool press_open_ = false;
+  uintptr_t drop_surface_ = 0;
+  bool drop_over_ = false;
+  bool drop_used_ = true;
+  bool pressed_since_drop_ = false;
+  double drop_at_ = -1;
 };
 
 }

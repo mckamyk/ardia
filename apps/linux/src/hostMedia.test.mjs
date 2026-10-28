@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { HostPageEvents } from "./hostPageEvents.ts";
 import { resetHostPage } from "./hostPageLifecycle.ts";
-import { CLOSE_DOCUMENT_PICTURE_IN_PICTURE, PICTURE_IN_PICTURE_STATE, hostPageScript } from "./hostPageScripts.ts";
+import { CLOSE_DOCUMENT_PICTURE_IN_PICTURE, PICTURE_IN_PICTURE_STATE, UNSAVED_WORK, hostPageScript } from "./hostPageScripts.ts";
 import { hasUnsavedInput, keepAliveReason, shownTabIds } from "./tabKeepAlive.ts";
 import * as sharedKeepAlive from "../../browser/src/state/tabs/tabKeepAlive.ts";
 import { startLinuxTabPolicies, watchInputIdle } from "./hostPolicies.ts";
@@ -103,8 +103,18 @@ test("known shared page scripts map to native commands and unknown scripts stay 
   const media = source("../../browser/src/state/media/media.ts");
   assert.ok(media.includes(`const PIP_STATE = '${PICTURE_IN_PICTURE_STATE}';`), "the shared PiP probe changed; update hostPageScripts.ts");
   assert.ok(media.includes(`view.executeJavaScript("${CLOSE_DOCUMENT_PICTURE_IN_PICTURE}")`), "the shared document PiP close changed; update hostPageScripts.ts");
+  const edited = hostPageScript("evaluate", [UNSAVED_WORK]);
+  assert.equal(edited.command, "editedInput");
+  assert.deepEqual(edited.args, []);
+  assert.equal(edited.map(false), false, "no edits means nothing to keep");
+  assert.equal(edited.map(true), true);
+  assert.equal(edited.map(null), true, "unknown asks before moving the page");
+  assert.equal(hostPageScript("executeJavaScript", [UNSAVED_WORK]), null);
+  const engines = source("../../browser/src/state/engines/actions.ts");
+  assert.ok(engines.includes(`const UNSAVED_WORK = \`${UNSAVED_WORK}\`;`), "the shared unsaved-work probe changed; update hostPageScripts.ts");
   const webView = source("./shims/web/HostWebView.tsx");
   assert.ok(webView.indexOf("hostPageScript(property, args)") < webView.indexOf("current.command(property, args)"));
+  assert.ok(webView.includes("script.map ? current.command(script.command, script.args).then(script.map, () => script.map!(null))"), "a mapped page script treats a refused command as unknown");
 });
 
 test("the unsaved-input adapter asks the native host and treats anything else as unknown", async () => {

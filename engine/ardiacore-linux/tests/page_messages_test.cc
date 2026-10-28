@@ -23,7 +23,8 @@ base::Value Dict(base::DictValue dict) { return base::Value(std::move(dict)); }
 void Kinds() {
   Expect(LinuxPageMessageKindOf("peek") == LinuxPageMessageKind::kPeek, "peek kind");
   Expect(LinuxPageMessageKindOf("scroll") == LinuxPageMessageKind::kScroll, "scroll kind");
-  for (const char* refused : {"notification", "displayMedia", "nowPlaying", "result", "linkDrop", "evaluate", "config", "", "Peek"})
+  Expect(LinuxPageMessageKindOf("linkDrop") == LinuxPageMessageKind::kLinkDrop, "link drop kind");
+  for (const char* refused : {"notification", "displayMedia", "nowPlaying", "result", "LinkDrop", "evaluate", "config", "", "Peek"})
     Expect(!LinuxPageMessageKindOf(refused), refused);
   Expect(LinuxPageMessageEnvelopeFits("scroll", std::string(64 * 1024, 'x')), "64 KiB fits");
   Expect(!LinuxPageMessageEnvelopeFits("scroll", std::string(64 * 1024 + 1, 'x')), "oversized json refused");
@@ -37,7 +38,7 @@ void Senders() {
   const LinuxPageSender child{false, true, true};
   const LinuxPageSender cached{true, true, false};
   const LinuxPageSender prerender{true, false, true};
-  for (auto kind : {LinuxPageMessageKind::kScroll, LinuxPageMessageKind::kSelection, LinuxPageMessageKind::kTheme}) {
+  for (auto kind : {LinuxPageMessageKind::kScroll, LinuxPageMessageKind::kSelection, LinuxPageMessageKind::kTheme, LinuxPageMessageKind::kLinkDrop}) {
     Expect(LinuxPageSenderAccepted(kind, main), "main frame owns tab-level messages");
     Expect(!LinuxPageSenderAccepted(kind, child), "an iframe cannot drive scroll, selection or tint");
   }
@@ -205,6 +206,64 @@ void Gestures() {
   Expect(gate.Decide(Request(0, "shift", 41.1), LinuxPageOptions()).outcome == LinuxLinkOutcome::kNone, "unknown surface never matches");
 }
 
+void LinkDrops() {
+  auto drop = NormalizeLinuxPageMessage(LinuxPageMessageKind::kLinkDrop, Dict(base::DictValue().Set("url", "https://ardia.test/a").Set("x", 1)));
+  Expect(drop && *drop->data.GetDict().FindString("url") == "https://ardia.test/a" && drop->data.GetDict().size() == 1, "link drop rebuilt from its url");
+  for (const char* url : {"javascript:alert(1)", "file:///etc/passwd", "chrome://ardia/", "data:text/html,x", ""})
+    Expect(!NormalizeLinuxPageMessage(LinuxPageMessageKind::kLinkDrop, Dict(base::DictValue().Set("url", url))), url);
+  Expect(!NormalizeLinuxPageMessage(LinuxPageMessageKind::kLinkDrop, Dict(base::DictValue().Set("url", "https://a.test/" + std::string(8192, 'a')))), "oversized link drop");
+  Expect(!NormalizeLinuxPageMessage(LinuxPageMessageKind::kLinkDrop, base::Value("https://ardia.test/")), "link drop needs a dict");
+
+  LinuxLinkGestureGate gate;
+  Expect(gate.AcceptLinkDrop(1, true, 1.0) == "no drag from this page ended", "a page cannot drop without a real drag");
+  Expect(gate.DragSource() == 0, "no press, no drag source");
+  gate.NotePress(1);
+  Expect(gate.DragSource() == 1, "the pressed page is the drag source");
+  gate.NoteDragEnded(1, true, 2.0);
+  Expect(gate.DragSource() == 0, "a drag end consumes the press");
+  Expect(gate.AcceptLinkDrop(2, true, 2.1) == "the drag ended on another page", "another page cannot use the drop");
+  Expect(gate.AcceptLinkDrop(1, false, 2.1) == "page not shown", "hidden pages cannot open a drop");
+  Expect(gate.AcceptLinkDrop(1, true, 2.2).empty(), "a real drag that ended over the page opens");
+  Expect(gate.AcceptLinkDrop(1, true, 2.3) == "that drag already opened a link", "one link per drag");
+
+  gate.NotePress(1);
+  gate.NoteDragEnded(1, false, 3.0);
+  Expect(gate.AcceptLinkDrop(1, true, 3.1) == "the drag ended outside the page", "a drop outside the view opens nothing");
+
+  gate.NotePress(1);
+  gate.NoteDragEnded(1, true, 4.0);
+  Expect(gate.AcceptLinkDrop(1, true, 4.0 + LinuxLinkGestureGate::kDropLifetime + 0.1) == "the drag ended too long ago", "stale drop");
+
+  gate.NotePress(1);
+  gate.NoteDragEnded(1, true, 10.0);
+  gate.NotePress(1);
+  Expect(gate.AcceptLinkDrop(1, true, 10.1) == "the mouse was pressed again since the drag ended", "pressed since the drop");
+
+  gate.NotePress(1);
+  gate.NoteRelease(1, 0, 20.0, std::nullopt);
+  Expect(gate.DragSource() == 0, "a release that reached the page is a click, not a drag");
+  gate.NoteDragEnded(1, true, 20.1);
+  Expect(gate.AcceptLinkDrop(1, true, 20.2) == "the mouse was pressed again since the drag ended", "a drag end without a pending press is ignored");
+  gate.NotePress(1);
+  gate.NoteDragEnded(0, true, 21.0);
+  Expect(!gate.AcceptLinkDrop(1, true, 21.1).empty() && gate.DragSource() == 1, "an unknown source never matches");
+
+  gate.NotePress(5);
+  gate.NoteDragEnded(5, true, 30.0);
+  gate.Forget(5);
+  Expect(gate.AcceptLinkDrop(5, true, 30.1) == "no drag from this page ended", "destroyed surface forgets its drop");
+}
+
+void Activity() {
+  LinuxInputActivity activity;
+  Expect(activity.Note(10.0), "first input is announced");
+  Expect(!activity.Note(10.2), "inputs inside the interval are folded");
+  Expect(!activity.Note(10.0 + LinuxInputActivity::kInterval - 0.01), "still folded");
+  Expect(activity.Note(10.0 + LinuxInputActivity::kInterval), "announced again after the interval");
+  Expect(activity.Note(5.0), "a clock that went backwards announces");
+  Expect(!activity.Note(5.1), "and folds again");
+}
+
 std::string FakeDigest(std::string_view text) { return "d" + std::to_string(text.size()) + ":" + std::string(text.substr(0, 4)); }
 
 constexpr LinuxPageOperation kOperations[] = {
@@ -257,6 +316,8 @@ int main(int argc, char** argv) {
   else if (name == "options") Options();
   else if (name == "gestures") Gestures();
   else if (name == "evaluation") Evaluation();
+  else if (name == "link-drops") LinkDrops();
+  else if (name == "activity") Activity();
   else return 2;
   return 0;
 }

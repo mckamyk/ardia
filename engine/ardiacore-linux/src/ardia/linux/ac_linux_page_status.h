@@ -24,6 +24,12 @@ inline bool LinuxWindowFullScreen(bool widget, bool tab_fullscreen, bool caused_
   return widget && !(tab_fullscreen && caused_by_tab);
 }
 
+bool DeferLinuxHang(content::WebContents* contents, content::RenderWidgetHost* host,
+                    base::RepeatingClosure restarter);
+bool ResolveDeferredLinuxHang(content::WebContents* contents, content::RenderWidgetHost* host);
+void ForgetDeferredLinuxHangs(content::WebContents* contents);
+size_t DeferredLinuxHangs(content::WebContents* contents);
+
 class LinuxPageStatus : public content::WebContentsObserver,
                         public blocked_content::UrlListManager::Observer {
  public:
@@ -54,6 +60,8 @@ class LinuxPageStatus : public content::WebContentsObserver,
   bool Hung() const;
   bool Present(std::string name, base::Value data);
   void ReleaseHang(bool restart);
+  void AdoptDeferredHangs();
+  void DeferHangs();
   blocked_content::PopupBlockerTabHelper* Popups() const;
   void StopObservingPopups();
   base::WeakPtr<LinuxPageLease> lease_;

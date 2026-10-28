@@ -34,6 +34,22 @@ class PageChannelContractTests(unittest.TestCase):
         self.assertIsNone(re.search(r'->ExecuteJavaScript\(', self.source))
         self.assertIn('ISOLATED_WORLD_ID_ARDIA_PAGE', body(self.source, 'void RunLinuxPageEvaluation('))
 
+    def test_link_drops_open_only_through_the_drag_gate(self):
+        drop = body(self.source, 'void LinuxPageChannel::LinkDrop(')
+        self.assertIn('Gate().AcceptLinkDrop(surface_', drop)
+        self.assertIn('"foreground"', drop)
+        ended = body(self.source, 'void NoteLinuxDragEnded(')
+        self.assertIn('Gate().DragSource()', ended)
+        self.assertIn('in_window(contents)', ended)
+        self.assertIn('GetContainerBounds().Contains(cursor)', ended)
+        patch = (Path(__file__).resolve().parents[2] / 'patches/chromium-linux-page-status.patch').read_text()
+        self.assertIn('+  if (g_ardia_linux_drag_ended) {', patch)
+
+    def test_input_activity_is_folded_and_posted(self):
+        observed = body(self.source, 'void LinuxPageChannel::OnInputEvent(')
+        self.assertLess(observed.index('Activity().Note(Now())'), observed.index('kMouseDown && type'))
+        self.assertIn('PostTask(FROM_HERE, ActivityListener())', observed)
+
 
 if __name__ == '__main__':
     unittest.main()

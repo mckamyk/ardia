@@ -120,12 +120,13 @@ std::optional<LinuxPageMessageKind> LinuxPageMessageKindOf(std::string_view kind
   if (kind == "selection") return LinuxPageMessageKind::kSelection;
   if (kind == "scroll") return LinuxPageMessageKind::kScroll;
   if (kind == "theme") return LinuxPageMessageKind::kTheme;
+  if (kind == "linkDrop") return LinuxPageMessageKind::kLinkDrop;
   return std::nullopt;
 }
 
 bool LinuxPageMessageFromMainOnly(LinuxPageMessageKind kind) {
   return kind == LinuxPageMessageKind::kSelection || kind == LinuxPageMessageKind::kScroll ||
-         kind == LinuxPageMessageKind::kTheme;
+         kind == LinuxPageMessageKind::kTheme || kind == LinuxPageMessageKind::kLinkDrop;
 }
 
 bool LinuxPageMessageEnvelopeFits(std::string_view kind, std::string_view json) {
@@ -162,6 +163,11 @@ std::optional<LinuxPageMessage> NormalizeLinuxPageMessage(LinuxPageMessageKind k
     }
     case LinuxPageMessageKind::kTheme:
       return Message(kind, Theme(value));
+    case LinuxPageMessageKind::kLinkDrop: {
+      const std::string* url = dict ? BoundedString(*dict, "url", kLinuxPageUrlMax) : nullptr;
+      if (!url || !IsLinuxPageHttpUrl(*url)) return std::nullopt;
+      return Message(kind, base::Value(base::DictValue().Set("url", *url)));
+    }
   }
   return std::nullopt;
 }

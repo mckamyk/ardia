@@ -1,6 +1,6 @@
 # Linux native acceptance suite (#81)
 
-One command runs the runtime acceptance scenarios for #11, #12, #13, #16, #17, #18, #19, #20, #22, #25, #27, #28, #30, #32, #33, #34, #36, #37, #78, #102, #104, #105, #106, #107, #108 and the private-window follow-ups #71, #72, #73, #88, #89, #99 and #101 against a packaged Linux Ardia build. It runs headless, uses throwaway profiles, and prints the result for each issue as JSON. An issue can be closed with evidence once its result is `pass`. A `manual` result means every automated check passed and the steps that need a person are listed.
+One command runs the runtime acceptance scenarios for #11, #12, #13, #16, #17, #18, #19, #20, #22, #25, #26, #27, #28, #30, #32, #33, #34, #35, #36, #37, #78, #102, #104, #105, #106, #107, #108 and the private-window follow-ups #71, #72, #73, #88, #89, #99 and #101 against a packaged Linux Ardia build. It runs headless, uses throwaway profiles, and prints the result for each issue as JSON. An issue can be closed with evidence once its result is `pass`. A `manual` result means every automated check passed and the steps that need a person are listed.
 
 ## Running it
 
@@ -80,6 +80,7 @@ Local fixtures:
   - The stock-Chromium self-test confirms Chromium reports `contained-mixed-form` for that page.
 - **Downloads.** Attachment endpoints, plus slow bodies. A slow body holds its last chunk until the scenario releases it, so pause, resume and cancel always act on a live transfer.
 - **Content blocker.** F06 uses the uBlock Origin build packaged at `lib/ardia/extensions/ublock` (`scripts/linux/fetch-ubo.sh`, then `package.py --content-blocker`). Set `ARDIA_ACCEPTANCE_CONTENT_BLOCKER` to a prepared extension directory to pass `--ardia-content-blocker-dir` instead. The blocked request is `/ads/banners/<run>.png`, which only EasyList's bundled copy matches (`/ads/banners/*$image`); list updates cannot reach the network, so uBlock uses the lists in its package.
+- **Page messaging and tint.** `/gestures` has a link, a cross-site iframe (`frame.ardia.test`) with its own link, a paragraph to select, a textarea with two matches and a tall block to scroll. `/tint/meta`, `/tint/header`, `/tint/background` and `/tint/plain` each carry one tint source (`#336699`, a sticky `#aa2244` header, a `#22aa66` body, nothing).
 - **Page status.** `/fullscreen`, `/hover` (one large link), `/popup` (calls `window.open` while loading, without a gesture, so Chromium blocks it), `/busy` (spins forever 200 ms after load) and `/favicon/<label>` (links `/icon/<label>.png`). An icon whose name starts with `bad` answers `image/png` with a body that is not an image.
 - **Print.** `--kiosk-printing` with the Save as PDF destination seeded in `Preferences` writes the PDF into the seeded download folder without a dialog. This was verified on stock Chromium 155.
 
@@ -133,6 +134,8 @@ S106, S107 and S108 need `ARDIA_ACCEPTANCE_CONTENT_BLOCKER` (or a package built 
 | W75 | #75 | With `PATH` emptied and no session bus, Show in Folder fails with `ERR_REVEAL_UNAVAILABLE`; when `/dev/shm` is a separate mount, a download there moves to `/dev/shm/.Trash-<uid>` | A finished row never flashing as missing; Show in Folder through a portal or FileManager1 |
 | W76 | #76 | DevTools asked for in the same task that creates a tab opens a frontend and inspects that page (screenshot evidence) | Placement and focus on a fresh tab |
 | W137 | #137 | The extension service answers in the window | Closing the Web Store tab dismisses its install prompt; a CRX prompt stays until answered |
+| F16 | #26 | The page's main world sees no `post`, `__ardiaHost` or `webkit`; a synthetic shift-click and forged `peek`/`linkDrop` `postMessage`s open nothing; a CDP shift-click on a link opens a peek on it and Alt+Shift opens a split pane; a shift-click on a link in a cross-site iframe opens a peek; a double-click selection reaches `ardiaLinux.selection` and Escape in the page clears it; jump to selection scrolls back to it; Copy Quote Link shows its toast; replace in a focused textarea rewrites both matches | Physical modifier clicks and changed modifiers; the popover's position and Escape; dragging a link out of a page |
+| F25 | #35 | A sticky colored header, a body background and a theme-color meta each set `themeColorSource` and the tab's `themeColor` to their color, and a plain page resets it to white; wheel scrolling a long page down sets the toolbar's `scrolledDown` and scrolling back to the top clears it | The toolbar slide and the setting that turns it off; the rendered tint and Extend Website Color |
 
 ## Manual steps
 
@@ -264,12 +267,24 @@ The JSON lists each manual item with these steps. They are kept here so they can
 - **#99 Extensions.** Allow a split-mode extension in incognito: its button shows in a private window and its popup and side panel open there. A spanning-mode extension stays hidden until the shared toolbar shows spanning extensions.
 - **#101 Print and Save Page.** In an isolated profile's window and in a private window, Ctrl+P opens the print preview for that page and Ctrl+S opens the save dialog and writes the page.
 
+**#26 F16**
+
+- **Physical modifier clicks.** Shift-click a link with a real mouse: a peek opens at the click. Alt+Shift-click: it opens in a split pane. Change the peek and split modifiers in Settings › Tabs and repeat; the new keys apply without reloading.
+- **Selection popover.** Drag-select a sentence: the popover appears beside it. Escape closes it.
+- **Drag a link out.** Drag a link from a page and drop it back over the page with no drop target: one foreground tab opens on the link. Dropping outside the window or on a drop target opens nothing.
+
+**#35 F25**
+
+- **Toolbar.** With Hide Toolbar While Scrolling on, scroll a long page down: the toolbar slides away; scroll up: it returns. With the setting off it stays.
+- **Tint.** A site with a colored header and no theme-color, then one with a theme-color: the sidebar and toolbar take each color and reset on a plain page. Extend Website Color off keeps Ardia's colors.
+
 ## Notes for the first real run
 
 The scenarios drive the shared UI through the same seams the existing keyboard test uses:
 
 - `ardiaLinux.store`, `ardiaLinux.pages` (the page store: fullscreen, status, crash, hang and pop-ups), `ardiaLinux.emitCommand`;
 - `ardiaLinux.webviews` (the shared page handles), `ardiaLinux.media` and `ardiaLinux.lifecycle` (`state`, `sleepTab`) for F15 and F18;
+- `ardiaLinux.toolbar` (the toolbar auto-hide store) and `ardiaLinux.selection` (`state`, `jump`, `copyQuoteLink`, `replaceInField`) for F16 and F25;
 - `__ardiaHost.invoke` and `__ardiaHost.call`;
 - `[data-ardia-linux-window]`.
 

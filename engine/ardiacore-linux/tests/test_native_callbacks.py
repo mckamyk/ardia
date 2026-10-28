@@ -84,7 +84,7 @@ class NativeCallbackTests(unittest.TestCase):
           void OfferTab(content::WebContents*) { ++offered; }
           void RemoveChildViewT(views::WebView*) { ++removed_views; }
         };
-        namespace ardiacore { struct LinuxPageChannel { static inline int detached = 0; static LinuxPageChannel* FromWebContents(content::WebContents*) { static LinuxPageChannel channel; return &channel; } void Detach() { ++detached; } }; }
+        namespace ardiacore { struct LinuxPageChannel { static inline int detached = 0; static LinuxPageChannel* FromWebContents(content::WebContents*) { static LinuxPageChannel channel; return &channel; } void Detach() { ++detached; } }; inline int forgotten_hangs = 0; inline void ForgetDeferredLinuxHangs(content::WebContents*) { ++forgotten_hangs; } }
         struct FakePage {
           std::vector<std::string>* log;
           bool EmitClosed() { log->push_back("closed"); return true; }
@@ -194,7 +194,7 @@ class NativeCallbackTests(unittest.TestCase):
           TabBinding binding(&first, &original, &viewport, &tools);
           binding.Attach();
           binding.Rebind(&replacement);
-          assert(ardiacore::LinuxPageChannel::detached == 1);
+          assert(ardiacore::LinuxPageChannel::detached == 1 && ardiacore::forgotten_hangs == 1);
           assert(binding.resets == 1 && !tools.visible && !tools.contents);
           assert(binding.log == std::vector<std::string>{"retired"} && binding.contents_generation_ == 2);
           original.Destroy();

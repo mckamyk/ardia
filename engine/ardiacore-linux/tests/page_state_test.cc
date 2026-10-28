@@ -294,6 +294,11 @@ struct Mount {
       [this] { ++navigations;return base::DictValue().Set("url",page.entry.url.spec()).Set("title","T").Set("canGoBack",true).Set("canGoForward",false).Set("isLoading",false); });
   }
   void Boundary() { content::Page primary;page.Notify([&](auto* observer) { observer->PrimaryPageChanged(primary); }); }
+  void Remount(uint64_t binding) {
+    state=std::make_unique<LinuxPageState>(&browser,window.GetWeakPtr(),&page,&shell,LinuxPageIdentity{7,"tab","claim",2,binding,1,9},
+      [this](std::string module,std::string id,base::DictValue payload) { assert(module=="ArdiaWebView" && id=="7");deliveries.push_back(std::move(payload));if(on_delivery) on_delivery(); },
+      [this] { ++navigations;return base::DictValue().Set("url",page.entry.url.spec()).Set("title","T").Set("canGoBack",true).Set("canGoForward",false).Set("isLoading",false); });
+  }
   void Start(content::NavigationHandle& handle) { page.Notify([&](auto* observer) { observer->DidStartNavigation(&handle); }); }
   void Finish(content::NavigationHandle& handle) { page.Notify([&](auto* observer) { observer->DidFinishNavigation(&handle); }); }
   const base::DictValue& Last() { assert(!deliveries.empty());return deliveries.back(); }
@@ -516,7 +521,9 @@ void Hung() {
   assert(status->Unresponsive(&hung,restart));
   content::NavigationHandle pending;m.Start(pending);assert(status->Responsive(&hung) && m.LastName()=="responsive");
   assert(status->Unresponsive(&hung,restart) && m.LastName()=="unresponsive");m.Finish(pending);
-  m.state->Retire();assert(restarts==2 && !m.state->status());
+  m.state->Retire();assert(restarts==1 && !m.state->status() && DeferredLinuxHangs(&m.page)==1);
+  m.Remount(4);assert(Named(*m.state->CreationState()->FindDict("snapshot"),"unresponsive") && DeferredLinuxHangs(&m.page)==0);
+  assert(m.state->status()->ResolveUnresponsive(base::ListValue().Append(false)) && restarts==2);
   Mount detached;auto* detached_status=detached.state->status();detached.browser.strip.tabs.clear();
   assert(!detached_status->Unresponsive(&hung,restart) && detached.deliveries.empty() && restarts==2);
   detached.browser.strip.tabs.push_back(&detached.page);assert(!Named(*detached.state->CreationState()->FindDict("snapshot"),"unresponsive"));
@@ -527,7 +534,8 @@ void Hung() {
     dying.page.destroying=true;dying.state->Retire();assert(restarts==2);dying.page.destroying=false;
   }
   Mount reentrant;reentrant.state->CreationState();reentrant.on_delivery=[&] { reentrant.state.reset(); };
-  assert(reentrant.state->status()->Unresponsive(&hung,restart) && !reentrant.state && restarts==3);
+  assert(reentrant.state->status()->Unresponsive(&hung,restart) && !reentrant.state && restarts==2 && DeferredLinuxHangs(&reentrant.page)==1);
+  ForgetDeferredLinuxHangs(&reentrant.page);
   {
     Mount two;two.state->CreationState();auto* both=two.state->status();
     content::RenderProcessHost first_process,second_process;first_process.id=21;second_process.id=22;
@@ -544,8 +552,41 @@ void Hung() {
     assert(both->Unresponsive(&a,base::RepeatingClosure([&] { ++ra; })) && both->Unresponsive(&b,base::RepeatingClosure([&] { ++rb; })));
     assert(both->Responsive(&b) && both->Responsive(&a) && two.LastName()=="responsive" && ra==1 && rb==1);
     assert(both->Unresponsive(&a,base::RepeatingClosure([&] { ++ra; })) && both->Unresponsive(&b,base::RepeatingClosure([&] { ++rb; })));
-    two.state->Retire();assert(ra==2 && rb==2);
+    two.state->Retire();assert(ra==1 && rb==1 && DeferredLinuxHangs(&two.page)==2);
+    a.unresponsive=false;two.Remount(5);const auto adopted=two.state->CreationState();
+    assert(Named(*adopted->FindDict("snapshot"),"unresponsive") && DeferredLinuxHangs(&two.page)==0);
+    assert(two.state->status()->ResolveUnresponsive(base::ListValue().Append(false)) && ra==1 && rb==2);
   }
+}
+
+void DeferredHang() {
+  content::RenderProcessHost process;process.id=31;
+  int restarts=0;base::RepeatingClosure restart([&] { ++restarts; });
+  Mount m;auto* status=m.state->status();m.browser.strip.tabs.clear();
+  content::RenderWidgetHost widget(&process,7);widget.unresponsive=true;
+  assert(!status->Unresponsive(&widget,restart) && m.deliveries.empty());
+  assert(DeferLinuxHang(&m.page,&widget,restart) && DeferredLinuxHangs(&m.page)==1 && restarts==0);
+  assert(!DeferLinuxHang(nullptr,&widget,restart) && !DeferLinuxHang(&m.page,nullptr,restart));
+  m.browser.strip.tabs.push_back(&m.page);
+  assert(Named(*m.state->CreationState()->FindDict("snapshot"),"unresponsive") && DeferredLinuxHangs(&m.page)==0);
+  assert(status->ResolveUnresponsive(base::ListValue().Append(false)) && restarts==1);
+  assert(DeferLinuxHang(&m.page,&widget,restart) && ResolveDeferredLinuxHang(&m.page,&widget));
+  assert(!ResolveDeferredLinuxHang(&m.page,&widget) && DeferredLinuxHangs(&m.page)==0);
+  assert(Named(*m.state->CreationState()->FindDict("snapshot"),"responsive") && restarts==1);
+  assert(DeferLinuxHang(&m.page,&widget,restart));widget.unresponsive=false;
+  assert(Named(*m.state->CreationState()->FindDict("snapshot"),"responsive") && DeferredLinuxHangs(&m.page)==0 && restarts==1);
+  {
+    content::RenderWidgetHost gone(&process,8);gone.unresponsive=true;assert(DeferLinuxHang(&m.page,&gone,restart));
+  }
+  content::RenderWidgetHost still(&process,9);still.unresponsive=true;
+  Mount other;assert(DeferLinuxHang(&other.page,&still,restart) && DeferredLinuxHangs(&m.page)==0 && DeferredLinuxHangs(&other.page)==1);
+  assert(Named(*m.state->CreationState()->FindDict("snapshot"),"responsive") && restarts==1);
+  other.page.destroying=true;other.state->Retire();assert(DeferredLinuxHangs(&other.page)==1);
+  ForgetDeferredLinuxHangs(&other.page);assert(DeferredLinuxHangs(&other.page)==0 && restarts==1);
+  Profile profile;auto unclaimed=std::make_unique<content::WebContents>(&profile);content::WebContents* gone_tab=unclaimed.get();
+  assert(DeferLinuxHang(gone_tab,&still,restart) && DeferredLinuxHangs(gone_tab)==1);
+  assert(DeferLinuxHang(gone_tab,&widget,restart) && DeferredLinuxHangs(gone_tab)==2);
+  unclaimed.reset();assert(DeferredLinuxHangs(gone_tab)==0 && restarts==1);
 }
 
 void Popups() {
@@ -619,5 +660,5 @@ void ProducerLifetimes() {
 
 int main(int argc,char** argv) {
   assert(argc==2);std::string mode=argv[1];
-  if(mode=="authority") Authority();else if(mode=="split-profiles") SplitProfiles();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="sampled-theme") SampledTheme();else if(mode=="page-messages") PageMessages();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else if(mode=="page-status") PageStatus();else if(mode=="hung") Hung();else if(mode=="popups") Popups();else if(mode=="producers") Producers();else if(mode=="producer-lifetimes") ProducerLifetimes();else return 2;
+  if(mode=="authority") Authority();else if(mode=="split-profiles") SplitProfiles();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="sampled-theme") SampledTheme();else if(mode=="page-messages") PageMessages();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else if(mode=="page-status") PageStatus();else if(mode=="hung") Hung();else if(mode=="deferred-hang") DeferredHang();else if(mode=="popups") Popups();else if(mode=="producers") Producers();else if(mode=="producer-lifetimes") ProducerLifetimes();else return 2;
 }
