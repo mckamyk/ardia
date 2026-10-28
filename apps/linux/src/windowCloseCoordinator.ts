@@ -34,6 +34,7 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
   type Attempt = {
     request: WindowCloseRequest;
     reason: CloseReason;
+    quitting: boolean;
     controller: AbortController;
     cancelled: boolean;
     suspension?: DialogSuspension;
@@ -80,7 +81,7 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
   });
 
   const decision = (attempt: Attempt): Promise<CloseDecision> => {
-    if (hooks.utility) return Promise.resolve({ decision: "allow", suppressWarning: false });
+    if (hooks.utility || attempt.quitting) return Promise.resolve({ decision: "allow", suppressWarning: false });
     const ask = hooks.ask;
     const signal = attempt.controller.signal;
     return hooks.decide(hooks.windowId, attempt.reason, ask ? (options) => ask(options, signal) : undefined);
@@ -140,7 +141,7 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     }
   };
 
-  const accept = (request: WindowCloseRequest): Promise<void> => {
+  const accept = (request: WindowCloseRequest, { quitting = false }: { quitting?: boolean } = {}): Promise<void> => {
     if (request?.windowId !== hooks.windowId) return Promise.resolve();
     if (!validCloseRequest(request)) return Promise.reject(staleClose());
     const key = closeIdentity(request);
@@ -154,6 +155,7 @@ export function createWindowCloseCoordinator(hooks: WindowCloseCoordinatorHooks)
     const attempt: Attempt = {
       request: { windowId: request.windowId, rendererGeneration: request.rendererGeneration, closeGeneration: request.closeGeneration },
       reason: nextReason ?? "window",
+      quitting,
       controller: new AbortController(),
       cancelled: false,
       dialogsResumed: false,

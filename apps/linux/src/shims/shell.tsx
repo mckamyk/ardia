@@ -69,8 +69,8 @@ const reportClose = (error: unknown) => {
 };
 ardiaHost?.onEvent((module, event, payload) => {
   if (module !== "ArdiaShell" || event !== "shell") return;
-  const envelope = payload as { name: string; data: WindowCloseRequest };
-  if (envelope?.name === "shell.closeRequested") void closeCoordinator.accept(envelope.data).catch(reportClose);
+  const envelope = payload as { name: string; data: WindowCloseRequest; quitting?: boolean };
+  if (envelope?.name === "shell.closeRequested") void closeCoordinator.accept(envelope.data, { quitting: envelope.quitting === true }).catch(reportClose);
   if (envelope?.name === "shell.closeCancelled" && envelope.data?.windowId === ownWindowId)
     closeCoordinator.cancelled(envelope.data);
 });

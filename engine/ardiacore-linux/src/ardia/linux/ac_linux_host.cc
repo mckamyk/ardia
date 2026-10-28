@@ -2259,7 +2259,8 @@ base::DictValue ShellHostView::RequestWindowClose() {
   }
   if (close_.phase() == LinuxClose::Phase::kRequested)
     Event("ArdiaShell", "shell", base::Value(base::DictValue()
-        .Set("name", "shell.closeRequested").Set("data", request.Clone())));
+        .Set("name", "shell.closeRequested").Set("data", request.Clone())
+        .Set("quitting", base::Value(browser_shutdown::IsTryingToQuit()))));
   return request;
 }
 
