@@ -16,6 +16,7 @@ import { showToast } from "../../browser/src/state/splits/actions";
 import type { LinuxCapabilities } from "./hostCapabilities.ts";
 import { ardiaHost, hostSupports, invokeHost, type ArdiaHost } from "./host.ts";
 import { QUIT_COMMAND, createHostQuit, type QuitOutcome } from "./quit.ts";
+import { BROWSER_COMMAND_CHANNEL, BROWSER_WINDOW_COMMANDS, routeToBrowserWindow, serveBrowserCommands, type RouteChannel } from "./browserCommandRoute.ts";
 
 export const APP_LAUNCH_LOCK = "ardia.linux.app-launch";
 export const APP_LAUNCH_MARK = "ardia.linux.app-launch";
@@ -223,9 +224,29 @@ export function runAppCommand(windowId: string, command: CommandEvent["command"]
 
 export const UTILITY_APP_COMMANDS: ReadonlySet<string> = new Set(["copyDiagnostics", "recordPerformanceIssue", "taskManager", QUIT_COMMAND]);
 
-export function startAppCommands(windowId: string, capabilities: LinuxCapabilities, subscribe: typeof onCommand = onCommand, only?: ReadonlySet<string>) {
+const routeChannel = () => typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(BROWSER_COMMAND_CHANNEL) as unknown as RouteChannel;
+
+export async function routeUtilityCommand(windowId: string, command: CommandEvent["command"], channel: RouteChannel | null) {
+  const ran = channel ? await routeToBrowserWindow({ channel, command }) : null;
+  if (!ran) showToast(windowId, "No browser window to show this in", "Open a browser window, then try again.");
+  return ran;
+}
+
+export function startAppCommands(windowId: string, capabilities: LinuxCapabilities, subscribe: typeof onCommand = onCommand, only?: ReadonlySet<string>, channel: () => RouteChannel | null = routeChannel) {
+  let route: RouteChannel | null | undefined;
   return subscribe((event) => {
-    if (event.windowId === windowId && (!only || only.has(event.command))) runAppCommand(windowId, event.command, capabilities);
+    if (event.windowId !== windowId) return;
+    if (!only || only.has(event.command)) runAppCommand(windowId, event.command, capabilities);
+    else if (BROWSER_WINDOW_COMMANDS.has(event.command)) void routeUtilityCommand(windowId, event.command, route === undefined ? (route = channel()) : route).catch(report);
+  });
+}
+
+export function serveUtilityCommands(windowId: string, capabilities: LinuxCapabilities, channel: RouteChannel | null = routeChannel(), focus = (id: string) => invokeHost("ArdiaShell.focusWindow", { args: [id] })) {
+  if (!channel || typeof window === "undefined") return null;
+  return serveBrowserCommands({
+    windowId, channel, focus,
+    target: { addEventListener: (type, listener) => window.addEventListener(type, listener), hasFocus: () => document.hasFocus() },
+    run: (id, command) => runAppCommand(id, command, capabilities),
   });
 }
 
@@ -239,6 +260,7 @@ export function startLinuxAppServices(options: {
 }) {
   const { host, windowId, savedSession, capabilities, locks, marks } = options;
   const commands = startAppCommands(windowId, capabilities);
+  serveUtilityCommands(windowId, capabilities);
   const record = hostLaunchRecord(host);
   const launch = claimAppLaunch({
     locks,

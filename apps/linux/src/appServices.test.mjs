@@ -5,7 +5,7 @@ import { appInfo, docs } from "../../browser/src/test-native/index.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { useOnboarding, onboardingCompletedAt } from "../../browser/src/state/onboarding/onboarding.ts";
 import { useToasts } from "../../browser/src/state/splits/actions.ts";
-import { APP_LAUNCH_LOCK, APP_LAUNCH_MARK, FRESH_PROFILE_DOCUMENT, LAUNCH_STEPS, UTILITY_APP_COMMANDS, claimAppLaunch, hostLaunchRecord, onboardingAction, recordFreshProfile, runAppCommand, runLaunchServices, startAppCommands } from "./appServices.ts";
+import { APP_LAUNCH_LOCK, APP_LAUNCH_MARK, FRESH_PROFILE_DOCUMENT, LAUNCH_STEPS, UTILITY_APP_COMMANDS, claimAppLaunch, hostLaunchRecord, onboardingAction, recordFreshProfile, runAppCommand, runLaunchServices, serveUtilityCommands, startAppCommands } from "./appServices.ts";
 
 const capabilities = { defaultBrowser: false, launchAtLogin: false, thinScrollBars: false, webkit: false, cliControl: false, externalLinks: false, performanceRecording: false, taskManager: false };
 
@@ -263,11 +263,51 @@ test("utility windows run only the app commands that need no browser window", ()
   startAppCommands("settings", capabilities, (listener) => (listeners.push(listener), { remove() {} }), UTILITY_APP_COMMANDS);
   assert.deepEqual([...UTILITY_APP_COMMANDS].sort(), ["copyDiagnostics", "quit", "recordPerformanceIssue", "taskManager"]);
   useToasts.setState({ toasts: {} });
-  listeners[0]({ command: "showOnboarding", windowId: "settings" });
-  assert.equal(useOnboarding.getState().windowId, null);
   listeners[0]({ command: "taskManager", windowId: "settings" });
   assert.equal(toast("settings")?.title, "Not available on Linux yet");
   assert.equal(toast(first), undefined);
+});
+
+test("Show Onboarding pressed in Settings plays in the browser window, not in Settings", async () => {
+  const { first } = twoWindows();
+  const name = `app-route-${process.pid}`;
+  const browserChannel = new BroadcastChannel(name);
+  const settingsChannel = new BroadcastChannel(name);
+  const focused = [];
+  globalThis.window = { addEventListener() {} };
+  globalThis.document = { hasFocus: () => true };
+  const served = serveUtilityCommands(first, capabilities, browserChannel, async (id) => focused.push(id));
+  const listeners = [];
+  startAppCommands("settings", capabilities, (listener) => (listeners.push(listener), { remove() {} }), UTILITY_APP_COMMANDS, () => settingsChannel);
+  try {
+    useToasts.setState({ toasts: {} });
+    listeners[0]({ command: "showOnboarding", windowId: "settings" });
+    for (let i = 0; i < 100 && !useOnboarding.getState().windowId; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(useOnboarding.getState().windowId, first);
+    assert.deepEqual(focused, [first]);
+    assert.equal(toast("settings"), undefined);
+  } finally {
+    served.remove();
+    browserChannel.close();
+    settingsChannel.close();
+    delete globalThis.window;
+    delete globalThis.document;
+  }
+});
+
+test("a browser-window command from Settings with no browser window says so", async () => {
+  twoWindows();
+  const settingsChannel = new BroadcastChannel(`app-route-empty-${process.pid}`);
+  const listeners = [];
+  startAppCommands("settings", capabilities, (listener) => (listeners.push(listener), { remove() {} }), UTILITY_APP_COMMANDS, () => settingsChannel);
+  try {
+    useToasts.setState({ toasts: {} });
+    listeners[0]({ command: "toolTour", windowId: "settings" });
+    for (let i = 0; i < 100 && !toast("settings"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(toast("settings")?.title, "No browser window to show this in");
+  } finally {
+    settingsChannel.close();
+  }
 });
 
 test("only the renderer that runs launch steps leaves the evidence mark", async () => {

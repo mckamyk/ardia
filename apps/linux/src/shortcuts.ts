@@ -1,6 +1,7 @@
 import type { BrowserCommand, MenuShortcut, ShortcutModifier } from "@ardia-real/shell";
 import { COMMANDS, LINUX_STANDARD_ITEMS, shortcutSources } from "./commandCatalog";
 import { resolveShortcuts, type ShortcutOverrides } from "./shortcutFormat";
+import { BROWSER_WINDOW_COMMANDS } from "./browserCommandRoute";
 
 export type Binding = { keyCode: number; modifiers: number; command: BrowserCommand; arg: string | null; notInText: boolean };
 
@@ -62,6 +63,10 @@ export function linuxBindings(overrides: ShortcutOverrides = {}, profiles: reado
     return [{ keyCode, modifiers, command, arg: argOf(id), notInText: command === "returnToPinnedUrl" }];
   }));
 }
+
+export const UTILITY_SHORTCUT_COMMANDS: ReadonlySet<string> = new Set(["closeTab", "openSettings", "findInPage", "quit", "copyDiagnostics", "recordPerformanceIssue", "taskManager", ...BROWSER_WINDOW_COMMANDS]);
+
+export const utilityBindings = (bindings: Binding[]) => bindings.filter((binding) => UTILITY_SHORTCUT_COMMANDS.has(binding.command));
 
 export function keyboardCombo(event: Pick<KeyboardEvent, "code" | "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">) {
   const key = keyOf(event.code)?.[0] ?? (event.key.length === 1 ? event.key.toLowerCase() : "");
