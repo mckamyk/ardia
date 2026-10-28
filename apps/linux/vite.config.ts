@@ -6,6 +6,7 @@ import { credentialWording } from "./credentialWording";
 import { linuxWording } from "./linuxWording";
 import { calendarWording } from "./calendarWording";
 import { syncWording } from "./syncWording";
+import { hasMacModifiers, linuxShortcutText } from "./shortcutText";
 
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const replacements = new Map([
@@ -16,6 +17,7 @@ const replacements = new Map([
   [here("../browser/src/components/settings/Form.tsx"), here("./src/settingsForm.tsx")],
   [here("../browser/src/state/engines/engines.ts"), here("./src/hostEngines.ts")],
   [here("../browser/src/components/sidebar/HoverCard.tsx"), here("./src/SidebarHoverCard.tsx")],
+  [here("../browser/src/components/onboarding/HomeStep.tsx"), here("./src/LinuxHomeStep.tsx")],
   [here("../browser/src/state/settings/settingsWindows.ts"), here("./src/settingsWindows.ts")],
   [here("../browser/src/components/profiles/ProfileIndicator.tsx"), here("./src/ProfileIndicator.tsx")],
   [here("../browser/src/components/sidebar/AddressBar.tsx"), here("./src/SidebarAddressBar.tsx")],
@@ -51,8 +53,8 @@ function linuxComponents(): Plugin {
     enforce: "pre",
     transform(code, id) {
       if (!id.includes("/apps/browser/src/components/")) return null;
-      if (id.endsWith("/settings/searchMatch.ts") || !/[⌘⌥⇧⌃]/.test(code)) return null;
-      return { code: code.replaceAll("⌘", "Ctrl+").replaceAll("⌥", "Alt+").replaceAll("⇧", "Shift+").replaceAll("⌃", "Super+"), map: null };
+      if (id.endsWith("/settings/searchMatch.ts") || !hasMacModifiers(code)) return null;
+      return { code: linuxShortcutText(code), map: null };
     },
     async resolveId(source, importer, options) {
       if (!importer || adapters.has(importer)) return null;

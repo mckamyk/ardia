@@ -12,6 +12,14 @@ export const LINUX_WORDING: readonly Wording[] = [
     replacements: [[`subtitle: "Light by day, dark by night, like your Mac"`, `subtitle: "Light or dark, following your desktop"`]],
   },
   {
+    file: "components/onboarding/previews/MockWindow.tsx",
+    replacements: [["{`Auto · ${look.dark ? \"Dark\" : \"Light\"} like your Mac`}", "{`Auto · ${look.dark ? \"Dark\" : \"Light\"} like your desktop`}"]],
+  },
+  {
+    file: "components/onboarding/previews/scenes/LookScenes.tsx",
+    replacements: [["`Auto · ${toDark ? \"Dark\" : \"Light\"} like your Mac`", "`Auto · ${toDark ? \"Dark\" : \"Light\"} like your desktop`"]],
+  },
+  {
     file: "components/settings/panes/Appearance.tsx",
     replacements: [[`{ value: "system", title: "Follow macOS" }`, `{ value: "system", title: "Follow system" }`]],
   },
