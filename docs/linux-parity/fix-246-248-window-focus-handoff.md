@@ -1,6 +1,6 @@
 # Fix handoff: keyboard focus in new windows, restore-behind focus and background windows (#246, #247, #248)
 
-Branch `linux-window-focus`, based on `linux` at `3930fa12`. Native only: `ac_linux_host.cc`, `ac_linux_window_lifecycle.{h,cc}` and a new Linux-only Chromium patch. No UI, shared or macOS code changed.
+Branch `linux-window-focus`, based on `linux` at `a50dbac6`. Native only: `ac_linux_host.cc`, `ac_linux_window_lifecycle.{h,cc}` and a new Linux-only Chromium patch. No UI, shared or macOS code changed.
 
 ## #246: compositor focus without keyboard focus
 
@@ -38,8 +38,10 @@ Only the compositor's focus-on-map is undone, never the user's own activation:
 - **First activation only.** That activation consumes the entry, whatever happens to it.
 - **Around the first frame.** It must come no later than 300 ms (`kHandBackAfterFrameMs`) after the window's first presented frame. `ShellHostView` observes its compositor's `OnDidPresentCompositorFrame` and reports the first one (`Presented`). A wl_surface maps on its first buffer commit, and sway or Hyprland focus it right then; a person needs longer than that to see the window and switch to it. As a backstop, if no frame is ever reported, nothing is handed back later than 3 s (`kHandBackLimitMs`) after creation.
 - **Explicit focus clears it.** Any explicit activation request clears every pending hand-back: `ArdiaShell.focusWindow`, a re-open asking for focus (`Reuse`), or the fullscreen restore's final focus.
+- **A hand-back doesn't clear the others.** The hand-back's own activation goes through `FocusLedger::HandBack`, which requests activation without clearing. `windowSync` opens the saved window and then every other one behind it in one loop, so when a 3- or 4-window session restores, each behind window that the compositor focuses on map hands focus back in turn.
 - **Pointer press.** Any mouse or touch press in an Ardia window after creation cancels it. With click-to-focus the keyboard enter can precede the button event; the first-frame bound covers that case.
 - **Closing either window** removes it (`Forget`).
+- **Not detected: a keyboard switch right after the map.** A keyboard switch (Super+N, Alt+Tab) to a behind window before its first frame is reported (up to the 3 s backstop), or within 300 ms after it, is still undone. On Wayland those bindings belong to the compositor: the client gets nothing before `wl_keyboard.enter`, which is the same event the compositor sends when it focuses a window on map. There's no cheap signal to tell them apart.
 - **Background instances** never activate, so nothing is armed.
 
 The new window still broadcasts its `focus` event, and the kept window's follows, so the store ends on the saved focused window. On Wayland the compositor decides whether to grant the activation: the harness's sway sets `focus_on_window_activation focus`; Hyprland's default `misc:focus_on_activate` is off, so there the kept window may only be marked urgent.
@@ -64,8 +66,9 @@ On X11 an inactive map sets `_NET_WM_USER_TIME` to 0 (`X11Window::Map`). openbox
 | `keyboard-focus`: activation (the fake restores the stored view first, as `DesktopNativeWidgetAura` does) focuses the shell when nothing or Chrome's covered UI holds focus; not when an overlay view does or a window-modal is up; seeded activation too | fail | pass |
 | `tab-modal-dialog`: a dialog button restored on reactivation keeps focus | fail with the first version | pass |
 | `restored-behind`: on Wayland a compositor activation at the first frame activates the kept window once; a pointer press cancels it; on X11 nothing is handed back | fail | pass |
+| `many-behind`: a 3- and a 4-window restore (saved window plus 2 or 3 behind, opened in one loop); each behind window the compositor focuses hands focus back, so the saved window ends focused | fail before `HandBack` (only the first behind window handed back) | pass |
 | `users-activation-stays`: an activation 1.7 s after the first frame, and one after `ArdiaShell.focusWindow`, are never undone | fail with the first version | pass |
-| Ledger program (`Unrequested`, `Presented`, X11, first-frame bound, 3 s backstop, `Focus`/`Reuse` clearing); the existing `LEDGER` program had no runner, so `WindowLifecycleLedgerTests` now compiles and runs it | fail | pass |
+| Ledger program (`Unrequested`, `Presented`, X11, first-frame bound, 3 s backstop, `Focus`/`Reuse` clearing, `HandBack` keeping the other entries in a 3- and 4-window restore); the existing `LEDGER` program had no runner, so `WindowLifecycleLedgerTests` now compiles and runs it | fail | pass |
 | `test_background_windows.py`: series position, switch name, the patched `Show` (inactive, then `Maximize` after the weak-pointer check when saved maximized), `Activate` (`DidBecomeActive` kept, only the platform activation skipped) and `BasicStartupComplete` on the 156 sources with `patch -F0` | fail | pass |
 | `scripts/linux/syntax-check-156.sh ac_linux_host.cc ac_linux_window_lifecycle.cc` | | pass |
 | `chrome_main_delegate.cc` and `browser_view.cc` with the patch applied, clang `-fsyntax-only` with their `chrome_initial.ninja` and `ui.ninja` flags | | pass |
@@ -74,6 +77,7 @@ Putting back each reviewed behaviour makes a test fail:
 - the old focus rule;
 - arming on X11;
 - `Focus` not clearing the hand-back;
+- handing back through `Focus` instead of `HandBack`;
 - no first-frame bound;
 - removing the `FocusShellOnActivation()` or `ReturnUnrequestedActivation()` call;
 - the old patch.

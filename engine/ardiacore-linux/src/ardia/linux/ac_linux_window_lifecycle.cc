@@ -58,6 +58,12 @@ Activation FocusLedger::Focus(int window) {
   return Activation::kActivate;
 }
 
+Activation FocusLedger::HandBack(int window) {
+  if (!may_activate_) return Activation::kNone;
+  Request(window);
+  return Activation::kActivate;
+}
+
 Activation FocusLedger::Ready(int window) {
   const auto found = pending_.find(window);
   if (found == pending_.end()) return Activation::kNone;

@@ -130,6 +130,25 @@ static void ACompositorActivationOfABehindWindowIsHandedBack() {
   assert(!idle.Unrequested(2, 0));
 }
 
+static void EveryBehindWindowOfARestoreHandsFocusBack() {
+  for (const int windows : {3, 4}) {
+    FocusLedger ledger(true);
+    ledger.Create(1, {.focus = true}, 0);
+    ledger.Observe(1, true);
+    const OpenIntent behind{.focus = false, .behind = true, .behind_window = 1, .hand_back = true};
+    for (int window = 2; window <= windows; ++window) ledger.Create(window, behind, 10 + window);
+    for (int window = 2; window <= windows; ++window) {
+      ledger.Observe(window, true);
+      const auto keep = ledger.Unrequested(window, 50 + window);
+      assert(keep == std::optional<int>(1));
+      assert(ledger.HandBack(*keep) == Activation::kActivate);
+      ledger.Observe(1, true);
+    }
+  }
+  FocusLedger background(false);
+  assert(background.HandBack(1) == Activation::kNone);
+}
+
 static void OnlyTheActivationAroundTheFirstFrameIsHandedBack() {
   FocusLedger x11(true);
   x11.Observe(1, true);
@@ -235,6 +254,7 @@ int main() {
   ObservedActivationIsReportedOncePerTransition();
   ACompositorActivationOfABehindWindowIsHandedBack();
   OnlyTheActivationAroundTheFirstFrameIsHandedBack();
+  EveryBehindWindowOfARestoreHandsFocusBack();
   SharedFramesUseBottomUpPrimaryCoordinates();
   WaylandFramesCarrySizeOnly();
   MalformedFramesAreRejected();
@@ -847,6 +867,37 @@ static void RestoredBehind() {
   ui::OzonePlatform::properties.supports_global_screen_coordinates = true;
 }
 
+static void ARestoreOfManyWindowsEndsOnTheSavedOne() {
+  ui::OzonePlatform::properties.supports_global_screen_coordinates = false;
+  for (const int windows : {3, 4}) {
+    base::TimeTicks::now_ms = 0;
+    BrowserWindowInterface main_browser{1};
+    ShellHostView main(1, "main", &main_browser);
+    main.OnWidgetActivationChanged(&main.widget, true);
+    std::vector<std::unique_ptr<ShellHostView>> behind;
+    for (int n = 2; n <= windows; ++n) {
+      const std::string id = "w-many-" + std::to_string(windows) + "-" + std::to_string(n);
+      Call(main, "ArdiaShell.openWindow", Args(id.c_str(), base::DictValue().Set("focus", false).Set("behind", "main")));
+      BrowserWindowInterface* browser = created_browsers.back().get();
+      behind.push_back(std::make_unique<ShellHostView>(browser->GetSessionID().id(), id, browser));
+    }
+    ShellHostView* active = &main;
+    for (auto& window : behind) {
+      base::TimeTicks::now_ms += 40;
+      window->OnDidPresentCompositorFrame(nullptr, 1, {});
+      active->OnWidgetActivationChanged(&active->widget, false);
+      window->OnWidgetActivationChanged(&window->widget, true);
+      window->OnWidgetActivationChanged(&window->widget, false);
+      main.OnWidgetActivationChanged(&main.widget, true);
+      active = &main;
+    }
+    assert(Count(main_browser.window.calls, "Activate") == windows - 1);
+    for (auto& window : behind) assert(Count(window->browser()->window.calls, "Activate") == 0);
+    main.OnWidgetActivationChanged(&main.widget, false);
+  }
+  ui::OzonePlatform::properties.supports_global_screen_coordinates = true;
+}
+
 static void TheUsersOwnActivationOfABehindWindowStays() {
   ui::OzonePlatform::properties.supports_global_screen_coordinates = false;
   base::TimeTicks::now_ms = 0;
@@ -1287,6 +1338,7 @@ int main(int argc, char** argv) {
   const std::map<std::string, void (*)()> scenarios = {
       {"created", Created}, {"reused", Reused}, {"ready", Ready}, {"clicked", Clicked},
       {"activation", Activation}, {"keyboard-focus", KeyboardFocusFollowsActivation}, {"restored-behind", RestoredBehind}, {"users-activation-stays", TheUsersOwnActivationOfABehindWindowStays},
+      {"many-behind", ARestoreOfManyWindowsEndsOnTheSavedOne},
       {"tab-modal-dialog", ATabModalDialogKeepsFocusAcrossActivation}, {"seeded", Seeded}, {"geometry", Geometry}, {"page-focus", PageFocus},
       {"wayland", Wayland}, {"background", Background}, {"frames", Frames},
       {"fullscreen-restore", FullScreenRestored}, {"fullscreen-given-up", FullScreenGivenUp},
@@ -1455,6 +1507,9 @@ class WindowLifecycleHostTests(unittest.TestCase):
 
     def test_a_restored_behind_window_the_compositor_focuses_hands_focus_back(self):
         self.run_mode('restored-behind')
+
+    def test_a_restore_of_three_or_four_windows_ends_on_the_saved_one(self):
+        self.run_mode('many-behind')
 
     def test_the_users_own_activation_of_a_behind_window_is_never_undone(self):
         self.run_mode('users-activation-stays')

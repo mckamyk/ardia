@@ -31,6 +31,7 @@ class FocusLedger {
   Presentation Create(int window, const OpenIntent& intent, int64_t now_ms = 0);
   Activation Reuse(int window, const OpenIntent& intent, bool own_renderer);
   Activation Focus(int window);
+  Activation HandBack(int window);
   Activation Ready(int window);
   bool Observe(int window, bool active);
   void Presented(int window, int64_t now_ms);

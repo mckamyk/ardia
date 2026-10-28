@@ -2773,7 +2773,7 @@ void ReturnUnrequestedActivation(int window) {
   const auto keep = WindowFocus().Unrequested(window, FocusClockMs());
   if (!keep) return;
   const auto found = Hosts().find(*keep);
-  if (found != Hosts().end()) ActivateNativeWindow(found->second->browser(), WindowFocus().Focus(*keep));
+  if (found != Hosts().end()) ActivateNativeWindow(found->second->browser(), WindowFocus().HandBack(*keep));
 }
 
 void ShellHostView::FocusShellOnActivation() {
