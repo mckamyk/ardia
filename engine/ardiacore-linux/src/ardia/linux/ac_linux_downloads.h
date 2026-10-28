@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <ctime>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -60,6 +61,35 @@ struct RevealProbe {
   bool folder_handler = false;
 };
 RevealBackend ChooseRevealBackend(const RevealProbe& probe);
+std::vector<RevealBackend> RevealOrder(const RevealProbe& probe);
+bool OpenFolderLaunched(std::optional<int> exit_code);
+std::string RevealFailureMessage(const std::vector<RevealBackend>& tried);
+
+enum class RevealAnswer { kShown, kCancelled, kFailed, kTimedOut, kUnavailable };
+struct RevealOutcome {
+  bool done = false;
+  bool ok = false;
+  std::string code;
+  std::string message;
+};
+
+class LinuxRevealChain {
+ public:
+  explicit LinuxRevealChain(std::vector<RevealBackend> order);
+  std::optional<RevealBackend> Begin(RevealOutcome* outcome);
+  std::optional<RevealBackend> Answer(RevealBackend backend, RevealAnswer answer, RevealOutcome* outcome);
+
+ private:
+  std::optional<RevealBackend> Advance(RevealOutcome* outcome);
+
+  std::vector<RevealBackend> order_;
+  size_t next_ = 0;
+  std::optional<RevealBackend> current_;
+  std::vector<RevealBackend> tried_;
+  bool done_ = false;
+};
+
+int OpenRevealTarget(const std::string& path);
 
 bool PathListed(std::string_view path, const std::vector<std::string>& known);
 
@@ -70,9 +100,12 @@ struct TrashOutcome {
   std::string trashed;
 };
 
+enum class TrashStage { kBeforeRecord, kBeforeRemove };
+using TrashHook = std::function<void(TrashStage)>;
+
 std::string TrashDirectory(const char* xdg_data_home, const char* home);
 TrashOutcome MoveToTrash(const std::string& path, const std::string& trash_directory,
-                         std::time_t now);
+                         std::time_t now, const TrashHook& before_move = {});
 std::string MountTop(const std::string& path);
 std::string ResolvedFile(const std::string& path);
 
@@ -83,7 +116,7 @@ struct FolderCheck {
 };
 FolderCheck CheckDownloadFolder(const std::string& path);
 TrashOutcome MoveToTopdirTrash(const std::string& path, const std::string& topdir, uid_t uid,
-                               std::time_t now);
+                               std::time_t now, const TrashHook& before_move = {});
 
 }
 

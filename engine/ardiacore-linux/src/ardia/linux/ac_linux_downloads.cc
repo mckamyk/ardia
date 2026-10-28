@@ -253,6 +253,80 @@ RevealBackend ChooseRevealBackend(const RevealProbe& probe) {
   return RevealBackend::kUnavailable;
 }
 
+std::vector<RevealBackend> RevealOrder(const RevealProbe& probe) {
+  std::vector<RevealBackend> order;
+  if (probe.portal) order.push_back(RevealBackend::kPortal);
+  if (probe.file_manager) order.push_back(RevealBackend::kFileManager);
+  if (probe.xdg_open && probe.folder_handler) order.push_back(RevealBackend::kOpenFolder);
+  return order;
+}
+
+bool OpenFolderLaunched(std::optional<int> exit_code) {
+  return !exit_code || *exit_code == 0;
+}
+
+std::string RevealFailureMessage(const std::vector<RevealBackend>& tried) {
+  std::vector<std::string> names;
+  for (const auto backend : tried) {
+    if (backend == RevealBackend::kPortal) names.push_back("the desktop portal");
+    else if (backend == RevealBackend::kFileManager) names.push_back("the file manager");
+    else if (backend == RevealBackend::kOpenFolder) names.push_back("the folder app");
+  }
+  if (names.empty()) return "No desktop portal, file manager or folder application can show this file";
+  std::string text;
+  for (size_t index = 0; index < names.size(); ++index) {
+    if (index) text += index + 1 == names.size() ? " and " : ", ";
+    text += names[index];
+  }
+  text[0] = static_cast<char>(text[0] - 'a' + 'A');
+  return text + " couldn't show this file";
+}
+
+LinuxRevealChain::LinuxRevealChain(std::vector<RevealBackend> order) : order_(std::move(order)) {}
+
+std::optional<RevealBackend> LinuxRevealChain::Begin(RevealOutcome* outcome) {
+  if (current_ || done_) return std::nullopt;
+  return Advance(outcome);
+}
+
+std::optional<RevealBackend> LinuxRevealChain::Answer(RevealBackend backend, RevealAnswer answer,
+                                                      RevealOutcome* outcome) {
+  if (done_ || current_ != backend) return std::nullopt;
+  current_.reset();
+  if (answer == RevealAnswer::kShown || answer == RevealAnswer::kCancelled) {
+    done_ = true;
+    *outcome = {true, true, {}, {}};
+    return std::nullopt;
+  }
+  if (answer != RevealAnswer::kUnavailable) tried_.push_back(backend);
+  return Advance(outcome);
+}
+
+std::optional<RevealBackend> LinuxRevealChain::Advance(RevealOutcome* outcome) {
+  if (next_ < order_.size()) {
+    current_ = order_[next_++];
+    return current_;
+  }
+  done_ = true;
+  *outcome = {true, false, tried_.empty() ? "ERR_REVEAL_UNAVAILABLE" : "ERR_REVEAL_FAILED", RevealFailureMessage(tried_)};
+  return std::nullopt;
+}
+
+int OpenRevealTarget(const std::string& path) {
+  if (!ValidLocalPath(path)) return -1;
+  int fd;
+  do {
+    fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW);
+  } while (fd < 0 && errno == EINTR);
+  if (fd < 0) return -1;
+  struct stat info;
+  if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode)) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
+
 bool PathListed(std::string_view path, const std::vector<std::string>& known) {
   if (!ValidLocalPath(path)) return false;
   for (const auto& candidate : known) {
@@ -271,31 +345,101 @@ std::string TrashDirectory(const char* xdg_data_home, const char* home) {
 
 namespace {
 
-TrashOutcome SourceFile(const std::string& path, struct stat* source) {
-  if (!ValidLocalPath(path) || path == "/") return Failure("ERR_FILE_PATH", "The file path is invalid");
-  if (lstat(path.c_str(), source) != 0) {
-    return errno == ENOENT ? Failure("ERR_FILE_MISSING", "The file no longer exists")
-                           : Failure("ERR_FILE", "The file cannot be read");
+class Fd {
+ public:
+  explicit Fd(int fd = -1) : fd_(fd) {}
+  Fd(Fd&& other) noexcept : fd_(std::exchange(other.fd_, -1)) {}
+  Fd& operator=(Fd&& other) noexcept {
+    if (this != &other) {
+      Reset();
+      fd_ = std::exchange(other.fd_, -1);
+    }
+    return *this;
   }
-  if (!S_ISREG(source->st_mode)) return Failure("ERR_FILE_TYPE", "Only regular files can be moved to the trash");
+  Fd(const Fd&) = delete;
+  Fd& operator=(const Fd&) = delete;
+  ~Fd() { Reset(); }
+  int get() const { return fd_; }
+  bool valid() const { return fd_ >= 0; }
+
+ private:
+  void Reset() {
+    if (fd_ >= 0) close(fd_);
+    fd_ = -1;
+  }
+  int fd_;
+};
+
+struct SourceEntry {
+  Fd parent;
+  std::string name;
+  struct stat info {};
+};
+
+TrashOutcome OpenSource(const std::string& path, SourceEntry* source) {
+  if (!ValidLocalPath(path) || path == "/") return Failure("ERR_FILE_PATH", "The file path is invalid");
+  const size_t slash = path.rfind('/');
+  source->name = path.substr(slash + 1);
+  source->parent = Fd(open(slash == 0 ? "/" : path.substr(0, slash).c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+  if (!source->parent.valid() || fstatat(source->parent.get(), source->name.c_str(), &source->info, AT_SYMLINK_NOFOLLOW) != 0) {
+    return errno == ENOENT || errno == ENOTDIR ? Failure("ERR_FILE_MISSING", "The file no longer exists")
+                                               : Failure("ERR_FILE", "The file cannot be read");
+  }
+  if (!S_ISREG(source->info.st_mode)) return Failure("ERR_FILE_TYPE", "Only regular files can be moved to the trash");
   return {true, {}, {}, {}};
 }
 
-TrashOutcome TrashInto(const std::string& path, const std::string& trash_directory,
-                       const std::string& recorded_path, std::time_t now) {
-  const std::string files = trash_directory + "/files";
-  const std::string info = trash_directory + "/info";
+Fd OpenDirectoryAt(int parent, const char* name, bool create) {
+  if (create && mkdirat(parent, name, 0700) != 0 && errno != EEXIST) return Fd();
+  Fd fd(openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+  struct stat info;
+  if (!fd.valid() || fstat(fd.get(), &info) != 0 || !S_ISDIR(info.st_mode)) return Fd();
+  return fd;
+}
+
+Fd OpenOwnedDirectoryAt(int parent, const char* name, uid_t uid) {
+  Fd fd = OpenDirectoryAt(parent, name, true);
+  struct stat info;
+  if (!fd.valid() || fstat(fd.get(), &info) != 0 || info.st_uid != uid || (info.st_mode & 0077) != 0) return Fd();
+  return fd;
+}
+
+Fd OpenStickySharedTrash(int top) {
+  Fd fd = OpenDirectoryAt(top, ".Trash", false);
+  struct stat info;
+  if (!fd.valid() || fstat(fd.get(), &info) != 0 || !(info.st_mode & S_ISVTX)) return Fd();
+  return fd;
+}
+
+std::string DirectoryPath(int fd, const std::string& fallback) {
+  char link[PATH_MAX];
+  const std::string proc = "/proc/self/fd/" + std::to_string(fd);
+  const ssize_t length = readlink(proc.c_str(), link, sizeof(link) - 1);
+  if (length <= 0) return fallback;
+  const std::string path(link, static_cast<size_t>(length));
+  if (path.empty() || path[0] != '/' || path.find(" (deleted)") != std::string::npos) return fallback;
+  return path;
+}
+
+struct TrashFolders {
+  Fd files;
+  Fd info;
+  std::string files_path;
+};
+
+TrashOutcome TrashInto(const SourceEntry& source, const TrashFolders& trash, const std::string& recorded_path,
+                       std::time_t now, const TrashHook& before_move) {
   struct tm local;
   char date[32];
   if (!localtime_r(&now, &local) || !std::strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%S", &local))
     return Failure("ERR_TRASH", "The deletion date cannot be recorded");
   const std::string record = "[Trash Info]\nPath=" + Escape(recorded_path) + "\nDeletionDate=" + date + "\n";
-  const std::string name = BaseName(path);
+  if (before_move) before_move(TrashStage::kBeforeRecord);
   for (int attempt = 1; attempt <= 1000; ++attempt) {
-    const std::string candidate = Candidate(name, attempt);
+    const std::string candidate = Candidate(source.name, attempt);
     if (candidate.size() + 10 > 255) return Failure("ERR_TRASH", "The file name is too long for the trash");
-    const std::string info_path = info + "/" + candidate + ".trashinfo";
-    const int fd = open(info_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    const std::string info_name = candidate + ".trashinfo";
+    const int fd = openat(trash.info.get(), info_name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (fd < 0) {
       if (errno == EEXIST) continue;
       return Failure("ERR_TRASH", "The trash record cannot be created");
@@ -303,66 +447,110 @@ TrashOutcome TrashInto(const std::string& path, const std::string& trash_directo
     const bool recorded = WriteAll(fd, record) && fsync(fd) == 0;
     const bool closed = close(fd) == 0;
     if (!recorded || !closed) {
-      unlink(info_path.c_str());
+      unlinkat(trash.info.get(), info_name.c_str(), 0);
       return Failure("ERR_TRASH", "The trash record cannot be written");
     }
-    const std::string destination = files + "/" + candidate;
-    if (link(path.c_str(), destination.c_str()) != 0) {
+    if (linkat(source.parent.get(), source.name.c_str(), trash.files.get(), candidate.c_str(), 0) != 0) {
       const int error = errno;
-      unlink(info_path.c_str());
+      unlinkat(trash.info.get(), info_name.c_str(), 0);
       if (error == EEXIST) continue;
+      if (error == ENOENT) return Failure("ERR_FILE_CHANGED", "The file changed while it was being moved to the trash");
       return error == EXDEV ? Failure("ERR_TRASH_UNAVAILABLE", "The file is on a different file system than the trash")
                             : Failure("ERR_TRASH", "The file cannot be moved to the trash");
     }
-    if (unlink(path.c_str()) != 0) {
-      unlink(destination.c_str());
-      unlink(info_path.c_str());
+    struct stat linked;
+    if (fstatat(trash.files.get(), candidate.c_str(), &linked, AT_SYMLINK_NOFOLLOW) != 0 ||
+        linked.st_dev != source.info.st_dev || linked.st_ino != source.info.st_ino) {
+      unlinkat(trash.files.get(), candidate.c_str(), 0);
+      unlinkat(trash.info.get(), info_name.c_str(), 0);
+      return Failure("ERR_FILE_CHANGED", "The file changed while it was being moved to the trash");
+    }
+    if (before_move) before_move(TrashStage::kBeforeRemove);
+    struct stat current;
+    if (fstatat(source.parent.get(), source.name.c_str(), &current, AT_SYMLINK_NOFOLLOW) != 0 ||
+        current.st_dev != source.info.st_dev || current.st_ino != source.info.st_ino) {
+      unlinkat(trash.files.get(), candidate.c_str(), 0);
+      unlinkat(trash.info.get(), info_name.c_str(), 0);
+      return Failure("ERR_FILE_CHANGED", "The file changed while it was being moved to the trash");
+    }
+    if (unlinkat(source.parent.get(), source.name.c_str(), 0) != 0) {
+      unlinkat(trash.files.get(), candidate.c_str(), 0);
+      unlinkat(trash.info.get(), info_name.c_str(), 0);
       return Failure("ERR_TRASH", "The original file cannot be removed");
     }
-    return {true, {}, {}, destination};
+    return {true, {}, {}, DirectoryPath(trash.files.get(), trash.files_path) + "/" + candidate};
   }
   return Failure("ERR_TRASH", "The trash has too many files with this name");
 }
 
-bool OwnedDirectory(const std::string& path, uid_t uid, bool create) {
-  if (create && mkdir(path.c_str(), 0700) != 0 && errno != EEXIST) return false;
-  struct stat info;
-  return lstat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode) && info.st_uid == uid &&
-         (info.st_mode & 0077) == 0;
+std::optional<TrashFolders> OwnedFolders(int trash, uid_t uid, const std::string& path, dev_t device) {
+  TrashFolders folders{OpenOwnedDirectoryAt(trash, "files", uid), OpenOwnedDirectoryAt(trash, "info", uid),
+                       path + "/files"};
+  struct stat files;
+  if (!folders.files.valid() || !folders.info.valid() || fstat(folders.files.get(), &files) != 0 ||
+      files.st_dev != device)
+    return std::nullopt;
+  return folders;
 }
 
-bool UsableTrash(const std::string& trash, uid_t uid) {
-  return OwnedDirectory(trash, uid, true) && OwnedDirectory(trash + "/files", uid, true) &&
-         OwnedDirectory(trash + "/info", uid, true);
-}
-
-bool StickySharedTrash(const std::string& shared) {
-  struct stat info;
-  return lstat(shared.c_str(), &info) == 0 && S_ISDIR(info.st_mode) && (info.st_mode & S_ISVTX);
+TrashOutcome TopdirTrash(SourceEntry& source, const std::string& path, const std::string& topdir, uid_t uid,
+                         std::time_t now, const TrashHook& before_move) {
+  if (!ValidLocalPath(topdir) && topdir != "/") return Failure("ERR_TRASH_UNAVAILABLE", "The file's volume cannot be found");
+  const std::string prefix = topdir == "/" ? "/" : topdir + "/";
+  if (path.size() <= prefix.size() || path.compare(0, prefix.size(), prefix) != 0)
+    return Failure("ERR_FILE_PATH", "The file is not on this volume");
+  const std::string relative = path.substr(prefix.size());
+  const std::string base = topdir == "/" ? "" : topdir;
+  const std::string user = std::to_string(uid);
+  Fd top(open(topdir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+  if (!top.valid()) return Failure("ERR_TRASH_UNAVAILABLE", "The file's volume cannot be found");
+  if (Fd shared = OpenStickySharedTrash(top.get()); shared.valid()) {
+    Fd own = OpenOwnedDirectoryAt(shared.get(), user.c_str(), uid);
+    if (own.valid()) {
+      if (auto folders = OwnedFolders(own.get(), uid, base + "/.Trash/" + user, source.info.st_dev))
+        return TrashInto(source, *folders, relative, now, before_move);
+    }
+  }
+  const std::string fallback = ".Trash-" + user;
+  Fd own = OpenOwnedDirectoryAt(top.get(), fallback.c_str(), uid);
+  if (own.valid()) {
+    if (auto folders = OwnedFolders(own.get(), uid, base + "/" + fallback, source.info.st_dev))
+      return TrashInto(source, *folders, relative, now, before_move);
+  }
+  return Failure("ERR_TRASH_UNAVAILABLE", "This volume has no usable trash");
 }
 
 }
 
 TrashOutcome MoveToTrash(const std::string& path, const std::string& trash_directory,
-                         std::time_t now) {
-  struct stat source;
-  if (auto checked = SourceFile(path, &source); !checked.ok) return checked;
+                         std::time_t now, const TrashHook& before_move) {
+  SourceEntry source;
+  if (auto checked = OpenSource(path, &source); !checked.ok) return checked;
   if (trash_directory.empty() || !ValidLocalPath(trash_directory))
     return Failure("ERR_TRASH_UNAVAILABLE", "No desktop trash directory is configured");
-  const std::string files = trash_directory + "/files";
-  const std::string info = trash_directory + "/info";
-  if (!MakeDirectories(files) || !MakeDirectories(info))
+  if (!MakeDirectories(trash_directory))
     return Failure("ERR_TRASH_UNAVAILABLE", "The desktop trash directory cannot be created");
+  Fd trash(open(trash_directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+  TrashFolders folders;
+  if (trash.valid()) {
+    folders.files = OpenDirectoryAt(trash.get(), "files", true);
+    folders.info = OpenDirectoryAt(trash.get(), "info", true);
+    folders.files_path = trash_directory + "/files";
+  }
   struct stat target;
-  if (stat(files.c_str(), &target) != 0)
-    return Failure("ERR_TRASH_UNAVAILABLE", "The desktop trash directory cannot be read");
-  if (target.st_dev != source.st_dev) {
+  if (!folders.files.valid() || !folders.info.valid() || fstat(folders.files.get(), &target) != 0)
+    return Failure("ERR_TRASH_UNAVAILABLE", "The desktop trash directory cannot be created");
+  if (target.st_dev != source.info.st_dev) {
     const std::string resolved = ResolvedFile(path);
     const std::string top = resolved.empty() ? std::string() : MountTop(resolved);
     if (top.empty()) return Failure("ERR_TRASH_UNAVAILABLE", "The file's volume cannot be found");
-    return MoveToTopdirTrash(resolved, top, getuid(), now);
+    SourceEntry far;
+    if (auto checked = OpenSource(resolved, &far); !checked.ok) return checked;
+    if (far.info.st_dev != source.info.st_dev || far.info.st_ino != source.info.st_ino)
+      return Failure("ERR_FILE_CHANGED", "The file changed while it was being moved to the trash");
+    return TopdirTrash(far, resolved, top, getuid(), now, before_move);
   }
-  return TrashInto(path, trash_directory, path, now);
+  return TrashInto(source, folders, path, now, before_move);
 }
 
 FolderCheck CheckDownloadFolder(const std::string& path) {
@@ -408,26 +596,10 @@ std::string MountTop(const std::string& path) {
 }
 
 TrashOutcome MoveToTopdirTrash(const std::string& path, const std::string& topdir, uid_t uid,
-                               std::time_t now) {
-  struct stat source;
-  if (auto checked = SourceFile(path, &source); !checked.ok) return checked;
-  if (!ValidLocalPath(topdir) && topdir != "/") return Failure("ERR_TRASH_UNAVAILABLE", "The file's volume cannot be found");
-  const std::string prefix = topdir == "/" ? "/" : topdir + "/";
-  if (path.size() <= prefix.size() || path.compare(0, prefix.size(), prefix) != 0)
-    return Failure("ERR_FILE_PATH", "The file is not on this volume");
-  const std::string relative = path.substr(prefix.size());
-  const std::string base = topdir == "/" ? "" : topdir;
-  const std::string user = std::to_string(uid);
-  std::vector<std::string> candidates;
-  if (StickySharedTrash(base + "/.Trash")) candidates.push_back(base + "/.Trash/" + user);
-  candidates.push_back(base + "/.Trash-" + user);
-  for (const auto& trash : candidates) {
-    if (!UsableTrash(trash, uid)) continue;
-    struct stat files;
-    if (lstat((trash + "/files").c_str(), &files) != 0 || files.st_dev != source.st_dev) continue;
-    return TrashInto(path, trash, relative, now);
-  }
-  return Failure("ERR_TRASH_UNAVAILABLE", "This volume has no usable trash");
+                               std::time_t now, const TrashHook& before_move) {
+  SourceEntry source;
+  if (auto checked = OpenSource(path, &source); !checked.ok) return checked;
+  return TopdirTrash(source, path, topdir, uid, now, before_move);
 }
 
 }

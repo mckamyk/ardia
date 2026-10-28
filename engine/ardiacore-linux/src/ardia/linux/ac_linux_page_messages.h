@@ -77,7 +77,7 @@ struct LinuxPageOptions {
   std::string EffectiveSplit() const;
   std::optional<std::string> ActionFor(std::string_view key) const;
   base::DictValue PeekConfig() const;
-  base::DictValue PageConfig(bool main) const;
+  base::DictValue PageConfig(bool main, bool block_autoplay = false) const;
 };
 
 }

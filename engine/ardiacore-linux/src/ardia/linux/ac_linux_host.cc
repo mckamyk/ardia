@@ -19,6 +19,8 @@
 #include "ardia/linux/ac_linux_policy.h"
 #include "ardia/linux/ac_linux_contract.h"
 #include "ardia/linux/ac_linux_auto_pip_service.h"
+#include "ardia/linux/ac_linux_autoplay.h"
+#include "ardia/linux/ac_linux_web_store.h"
 #include "ardia/linux/ac_linux_background_dialogs.h"
 #include "ardia/linux/ac_linux_calendar_service.h"
 #include "ardia/linux/ac_linux_close.h"
@@ -57,7 +59,7 @@
 #include "ardia/linux/ac_linux_favicons.h"
 #include "ardia/linux/ac_linux_page_status.h"
 #include "ardia/linux/ac_linux_suggest.h"
-#include "ardia/linux/ac_linux_typeahead.h"
+#include "ardia/linux/ac_linux_typeahead_input.h"
 #include "ardia/linux/host_bootstrap.h"
 #include "base/auto_reset.h"
 #include "base/base_paths.h"
@@ -1005,6 +1007,7 @@ class ShellHostView : public views::View,
     }
     return nullptr;
   }
+  bool DialogsPending() const { return dialogs_ && dialogs_->controller().pending() > 0; }
   bool HoldsTab(content::WebContents* contents) const {
     for (const auto& [id, binding] : bindings_) {
       if (contents && binding->contents() == contents) return true;
@@ -1128,6 +1131,7 @@ class ShellHostView : public views::View,
   bool ShellHoldsTextField();
   bool ExtensionShortcutPressed(const ui::KeyEvent& event, bool reserved_by_ardia);
   bool OwnsKeyboardEvent(const ui::KeyEvent& event) const;
+  bool OwnsKeyboardTarget(aura::Window* event_target) const;
   void OnWindowDestroying(aura::Window* window) override;
   void ArmWindowClose();
   void CloseNativeWindow(LinuxClose::Identity identity);
@@ -1260,7 +1264,7 @@ class ShellHostView : public views::View,
   bool app_operation_ = false;
   linux_window::GeometryLedger geometry_{GlobalScreenCoordinates()};
   base::OneShotTimer frame_timer_;
-  linux_window::Typeahead<ui::KeyEvent> typeahead_;
+  std::unique_ptr<linux_window::TypeaheadInput> typeahead_;
   base::OneShotTimer typeahead_timer_;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
@@ -1780,7 +1784,10 @@ void ShellHostView::Initialize() {
   input_window->AddPreTargetHandler(input_handler_.get(), ui::EventTarget::Priority::kSystem);
   input_window->AddPreTargetHandler(&pointer_handler_, ui::EventTarget::Priority::kSystem);
   if (!is_utility()) {
-    typeahead_.Start();
+    typeahead_ = std::make_unique<linux_window::TypeaheadInput>(
+        input_window->GetHost(), GetWidget()->GetInputMethod(),
+        base::BindRepeating(&ShellHostView::OwnsKeyboardTarget, base::Unretained(this)));
+    typeahead_->Start();
     typeahead_timer_.Start(FROM_HERE, base::Seconds(10),
                            base::BindOnce(&ShellHostView::DiscardTypeahead, base::Unretained(this)));
   }
@@ -1913,6 +1920,8 @@ void ShellHostView::UnregisterAccelerators() {
     input_observation_.Reset();
   }
   input_handler_.reset();
+  typeahead_timer_.Stop();
+  typeahead_.reset();
   extension_keybindings_.reset();
   if (focus_manager_) {
     if (shortcut_recording_) focus_manager_->set_shortcut_handling_suspended(false);
@@ -1932,9 +1941,13 @@ void ShellHostView::OnWindowDestroying(aura::Window*) {
 }
 
 bool ShellHostView::OwnsKeyboardEvent(const ui::KeyEvent& event) const {
+  return OwnsKeyboardTarget(static_cast<aura::Window*>(event.target()));
+}
+
+bool ShellHostView::OwnsKeyboardTarget(aura::Window* event_target) const {
   const views::Widget* widget = GetWidget();
   if (!widget) return false;
-  for (auto* target = static_cast<aura::Window*>(event.target()); target; target = target->parent()) {
+  for (auto* target = event_target; target; target = target->parent()) {
     if (const auto* owner = views::Widget::GetWidgetForNativeView(target)) {
       if (owner != widget) return false;
       break;
@@ -1958,12 +1971,12 @@ bool ShellHostView::ShellHoldsTextField() {
 
 void ShellHostView::DiscardTypeahead() {
   typeahead_timer_.Stop();
-  std::ignore = typeahead_.Release();
+  if (typeahead_) std::ignore = typeahead_->Release();
 }
 
 void ShellHostView::ReplayTypeahead(bool field) {
   typeahead_timer_.Stop();
-  std::vector<ui::KeyEvent> held = typeahead_.Release();
+  std::vector<ui::KeyEvent> held = typeahead_ ? typeahead_->Release() : std::vector<ui::KeyEvent>();
   if (!field) return;
   const auto weak = GetWeakPtr();
   for (ui::KeyEvent& event : held) {
@@ -1974,12 +1987,6 @@ void ShellHostView::ReplayTypeahead(bool field) {
 }
 
 void ShellHostView::OnKeyEvent(ui::KeyEvent* event) {
-  if (typeahead_.capturing() && OwnsKeyboardEvent(*event) &&
-      (event->type() == ui::EventType::kKeyPressed || event->type() == ui::EventType::kKeyReleased) &&
-      typeahead_.Hold(ui::KeyEvent(*event))) {
-    event->StopPropagation();
-    return;
-  }
   if (!CanHandleAccelerators() || !OwnsKeyboardEvent(*event) || !focus_manager_ || shortcut_recording_ ||
       focus_manager_->shortcut_handling_suspended() ||
       event->type() != ui::EventType::kKeyPressed) return;
@@ -3651,6 +3658,10 @@ void ShellHostView::TabCommand(
     const bool activation = shell_frame && (press ? shell_frame->ConsumeTransientUserActivation()
                                                   : shell_frame->HasTransientUserActivation());
     return binding->media->Dispatch(command, values, activation, std::move(done));
+  }
+  if (command == "webStoreRequest") {
+    if (!values.empty()) return std::move(done).Run(false, base::Value("webStoreRequest takes no arguments"));
+    return ardiacore::LinuxWebStoreRequest(contents, std::move(done));
   }
   if (command == "captureViewport") {
     auto* view = contents->GetRenderWidgetHostView();
@@ -5371,6 +5382,20 @@ void StartLinuxHost() {
     LOG(WARNING) << "[ardia] off-the-record link refused: its source is not an Ardia tab, extension view or DevTools window";
     return true;
   };
+  ardiacore::InstallLinuxAutoplayPolicy();
+  ardiacore::InstallLinuxWebStore(
+      base::BindRepeating([](content::WebContents* contents) {
+        for (const auto& [id, host] : Hosts()) {
+          if (host->HoldsTab(contents)) return true;
+        }
+        return false;
+      }),
+      base::BindRepeating([](content::WebContents* contents) {
+        for (const auto& [id, host] : Hosts()) {
+          if (host->HoldsTab(contents)) return host->DialogsPending();
+        }
+        return false;
+      }));
   g_ardia_linux_drag_ended = [](BrowserWindowInterface* browser) {
     if (!browser) return;
     const auto found = Hosts().find(browser->GetSessionID().id());

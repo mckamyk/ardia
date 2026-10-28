@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "ardia/linux/ac_linux_autoplay.h"
 #include "ardia/linux/ac_linux_page_evaluation.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
@@ -147,6 +148,15 @@ void LinuxPageChannel::Attach(LinuxPageChannelHooks hooks) {
   hooks_ = std::move(hooks);
   ForgetDocument();
   PushOptions();
+  FollowLinuxAutoplay(&GetWebContents(), base::BindRepeating(&LinuxPageChannel::RefreshPageConfig,
+                                                             weak_factory_.GetWeakPtr()));
+}
+
+void LinuxPageChannel::RefreshPageConfig() {
+  if (!hooks_) return;
+  GetWebContents().ForEachRenderFrameHost([&](content::RenderFrameHost* frame) {
+    if (frame->GetPage().IsPrimary()) Greet(*frame);
+  });
 }
 
 void LinuxPageChannel::Detach() {
@@ -184,8 +194,10 @@ void LinuxPageChannel::Call(content::RenderFrameHost* frame, const std::string& 
 }
 
 void LinuxPageChannel::Greet(content::RenderFrameHost& frame) {
+  const bool block_autoplay =
+      LinuxAutoplayBlocked(frame.GetOutermostMainFrame()->GetLastCommittedURL(), frame.GetBrowserContext());
   Call(&frame, "peekConfig", Json(base::Value(Options().PeekConfig())));
-  Call(&frame, "config", Json(base::Value(Options().PageConfig(frame.IsInPrimaryMainFrame()))));
+  Call(&frame, "config", Json(base::Value(Options().PageConfig(frame.IsInPrimaryMainFrame(), block_autoplay))));
 }
 
 void LinuxPageChannel::PushOptions() {

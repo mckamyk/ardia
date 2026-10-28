@@ -232,6 +232,71 @@ void Reveal() {
   assert(ChooseRevealBackend({.xdg_open = true, .folder_handler = false}) == RevealBackend::kUnavailable);
   assert(ChooseRevealBackend({.folder_handler = true}) == RevealBackend::kUnavailable);
   assert(ChooseRevealBackend({}) == RevealBackend::kUnavailable);
+  using Order = std::vector<RevealBackend>;
+  assert((RevealOrder({.portal = true, .file_manager = true, .xdg_open = true, .folder_handler = true}) ==
+          Order{RevealBackend::kPortal, RevealBackend::kFileManager, RevealBackend::kOpenFolder}));
+  assert((RevealOrder({.portal = true, .xdg_open = true}) == Order{RevealBackend::kPortal}));
+  assert((RevealOrder({.file_manager = true, .xdg_open = true, .folder_handler = true}) ==
+          Order{RevealBackend::kFileManager, RevealBackend::kOpenFolder}));
+  assert(RevealOrder({.folder_handler = true}).empty() && RevealOrder({}).empty());
+  assert(OpenFolderLaunched(std::nullopt) && OpenFolderLaunched(0));
+  assert(!OpenFolderLaunched(1) && !OpenFolderLaunched(3) && !OpenFolderLaunched(4) && !OpenFolderLaunched(-1));
+  assert(RevealFailureMessage({RevealBackend::kPortal, RevealBackend::kFileManager, RevealBackend::kOpenFolder}) ==
+         "The desktop portal, the file manager and the folder app couldn't show this file");
+  assert(RevealFailureMessage({RevealBackend::kFileManager}) == "The file manager couldn't show this file");
+  assert(RevealFailureMessage({RevealBackend::kPortal, RevealBackend::kOpenFolder}) ==
+         "The desktop portal and the folder app couldn't show this file");
+  assert(RevealFailureMessage({}) == "No desktop portal, file manager or folder application can show this file");
+}
+
+void RevealChain() {
+  using B = RevealBackend;
+  using A = RevealAnswer;
+  RevealOutcome outcome;
+  LinuxRevealChain none({});
+  assert(!none.Begin(&outcome) && outcome.done && !outcome.ok && outcome.code == "ERR_REVEAL_UNAVAILABLE");
+
+  LinuxRevealChain chain({B::kPortal, B::kFileManager, B::kOpenFolder});
+  outcome = {};
+  assert(chain.Begin(&outcome) == B::kPortal && !outcome.done);
+  assert(chain.Answer(B::kPortal, A::kTimedOut, &outcome) == B::kFileManager && !outcome.done);
+  assert(!chain.Answer(B::kPortal, A::kShown, &outcome) && !outcome.done);
+  assert(chain.Answer(B::kFileManager, A::kUnavailable, &outcome) == B::kOpenFolder && !outcome.done);
+  assert(!chain.Answer(B::kOpenFolder, A::kFailed, &outcome) && outcome.done && !outcome.ok);
+  assert(outcome.code == "ERR_REVEAL_FAILED" && outcome.message == "The desktop portal and the folder app couldn't show this file");
+  assert(!chain.Answer(B::kOpenFolder, A::kShown, &outcome));
+
+  LinuxRevealChain cancelled({B::kPortal, B::kOpenFolder});
+  outcome = {};
+  cancelled.Begin(&outcome);
+  assert(!cancelled.Answer(B::kPortal, A::kCancelled, &outcome) && outcome.done && outcome.ok);
+  LinuxRevealChain shown({B::kFileManager});
+  outcome = {};
+  shown.Begin(&outcome);
+  assert(!shown.Answer(B::kFileManager, A::kShown, &outcome) && outcome.done && outcome.ok);
+  LinuxRevealChain skipped({B::kFileManager});
+  outcome = {};
+  skipped.Begin(&outcome);
+  assert(!skipped.Answer(B::kFileManager, A::kUnavailable, &outcome) && outcome.done && outcome.code == "ERR_REVEAL_UNAVAILABLE");
+}
+
+void RevealTarget(const std::string& scratch) {
+  const std::string file = scratch + "/reveal.bin";
+  Touch(file, "r");
+  int fd = OpenRevealTarget(file);
+  assert(fd >= 0);
+  close(fd);
+  const std::string fifo = scratch + "/reveal.fifo";
+  assert(mkfifo(fifo.c_str(), 0600) == 0);
+  assert(OpenRevealTarget(fifo) < 0);
+  const std::string link = scratch + "/reveal.link";
+  assert(symlink(file.c_str(), link.c_str()) == 0);
+  assert(OpenRevealTarget(link) < 0);
+  assert(OpenRevealTarget(scratch) < 0);
+  assert(OpenRevealTarget(scratch + "/missing") < 0);
+  unlink(fifo.c_str());
+  unlink(link.c_str());
+  unlink(file.c_str());
 }
 
 void Trash(const std::string& scratch) {
@@ -352,6 +417,57 @@ void VolumeTrash(const std::string& scratch) {
   assert(via_alias.ok);
   assert(Read(std::string(real_shared) + "/.Trash/" + user + "/info/aliased.mp4.trashinfo").find("Path=media/aliased.mp4\n") != std::string::npos);
 
+  const std::string open_top = scratch + "/open-top";
+  mkdir(open_top.c_str(), 0777);
+  chmod(open_top.c_str(), 0777);
+  const std::string own_trash = open_top + "/.Trash-" + user;
+  Touch(open_top + "/c.bin", "c");
+  auto raced = MoveToTopdirTrash(open_top + "/c.bin", open_top, uid, when, [&](TrashStage stage) {
+    if (stage != TrashStage::kBeforeRecord) return;
+    assert(rename(own_trash.c_str(), (open_top + "/stolen").c_str()) == 0);
+    mkdir(own_trash.c_str(), 0700);
+    assert(symlink(elsewhere.c_str(), (own_trash + "/files").c_str()) == 0);
+    mkdir((own_trash + "/info").c_str(), 0700);
+  });
+  assert(raced.ok);
+  assert(Read(open_top + "/stolen/files/c.bin") == "c");
+  assert(Exists(open_top + "/stolen/info/c.bin.trashinfo"));
+  assert(!Exists(own_trash + "/info/c.bin.trashinfo") && !Exists(elsewhere + "/c.bin"));
+  assert(raced.trashed == open_top + "/stolen/files/c.bin");
+  assert(!Exists(open_top + "/c.bin"));
+  assert(unlink((own_trash + "/files").c_str()) == 0 && rmdir((own_trash + "/info").c_str()) == 0 &&
+         rmdir(own_trash.c_str()) == 0);
+
+  Touch(open_top + "/d.bin", "d");
+  auto changed = MoveToTopdirTrash(open_top + "/d.bin", open_top, uid, when, [&](TrashStage stage) {
+    if (stage != TrashStage::kBeforeRecord) return;
+    assert(rename((open_top + "/d.bin").c_str(), (open_top + "/d.kept").c_str()) == 0);
+    Touch(open_top + "/d.bin", "planted");
+  });
+  assert(!changed.ok && changed.code == "ERR_FILE_CHANGED");
+  assert(Read(open_top + "/d.bin") == "planted" && Read(open_top + "/d.kept") == "d");
+  assert(!Exists(own_trash + "/files/d.bin") && !Exists(own_trash + "/info/d.bin.trashinfo"));
+
+  Touch(open_top + "/f.bin", "f");
+  auto late = MoveToTopdirTrash(open_top + "/f.bin", open_top, uid, when, [&](TrashStage stage) {
+    if (stage != TrashStage::kBeforeRemove) return;
+    assert(rename((open_top + "/f.bin").c_str(), (open_top + "/f.kept").c_str()) == 0);
+    Touch(open_top + "/f.bin", "planted");
+  });
+  assert(!late.ok && late.code == "ERR_FILE_CHANGED");
+  assert(Read(open_top + "/f.bin") == "planted" && Read(open_top + "/f.kept") == "f");
+  assert(!Exists(own_trash + "/files/f.bin") && !Exists(own_trash + "/info/f.bin.trashinfo"));
+
+  const std::string home_trash = scratch + "/home-trash";
+  Touch(scratch + "/e.bin", "e");
+  auto home = MoveToTrash(scratch + "/e.bin", home_trash, when, [&](TrashStage stage) {
+    if (stage != TrashStage::kBeforeRecord) return;
+    assert(rename(home_trash.c_str(), (scratch + "/home-trash-moved").c_str()) == 0);
+    assert(symlink(elsewhere.c_str(), home_trash.c_str()) == 0);
+  });
+  assert(home.ok && home.trashed == scratch + "/home-trash-moved/files/e.bin");
+  assert(Read(scratch + "/home-trash-moved/files/e.bin") == "e" && !Exists(elsewhere + "/files"));
+
   Touch(scratch + "/root-file", "r");
   assert(MoveToTopdirTrash(scratch + "/root-file", scratch + "/shared", uid, when).code == "ERR_FILE_PATH");
   assert(MountTop(shared + "/media") == MountTop(scratch));
@@ -459,6 +575,8 @@ int main(int argc, char** argv) {
   Paths();
   Requests();
   Reveal();
+  RevealChain();
+  RevealTarget(argv[1]);
   Snapshots();
   Routes();
   Clears();

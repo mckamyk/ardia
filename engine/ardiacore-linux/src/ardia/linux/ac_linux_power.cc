@@ -4,12 +4,15 @@
 #include <tuple>
 #include <utility>
 
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/system/sys_info.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/single_thread_task_runner_thread_mode.h"
 #include "base/task/thread_pool.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "base/time/time.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
@@ -20,7 +23,6 @@
 namespace ardiacore {
 namespace {
 
-constexpr base::TimeDelta kMemoryInterval = base::Seconds(30);
 constexpr base::TimeDelta kAnswerDeadline = base::Seconds(2);
 constexpr char kUPower[] = "org.freedesktop.UPower";
 constexpr char kUPowerPath[] = "/org/freedesktop/UPower";
@@ -36,9 +38,48 @@ scoped_refptr<dbus::Bus> PrivateSystemBus() {
   return base::MakeRefCounted<dbus::Bus>(std::move(options));
 }
 
-std::pair<uint64_t, uint64_t> ReadMemory() {
-  return {base::SysInfo::AmountOfTotalPhysicalMemory().InBytes(),
-          base::SysInfo::AmountOfAvailablePhysicalMemory().InBytes()};
+constexpr int kMeminfoWaitMs = 30000;
+
+struct MemoryWatch {
+  std::optional<LinuxMemoryPressureWatch> watch;
+  std::string last_level;
+  uint64_t last_available = 0;
+  bool reported = false;
+};
+
+LinuxMemoryPressureWatch OpenMemoryWatch() {
+  std::string cgroup;
+  base::ReadFileToStringWithMaxSize(base::FilePath("/proc/self/cgroup"), &cgroup, 64 * 1024);
+  return LinuxMemoryPressureWatch::Open(LinuxMemoryPressureFiles("/sys/fs/cgroup", "/proc", cgroup));
+}
+
+LinuxMemorySample ReadMemory(MemoryWatch& memory) {
+  LinuxMemorySample sample;
+  sample.physical = base::SysInfo::AmountOfTotalPhysicalMemory().InBytes();
+  sample.available = base::SysInfo::AmountOfAvailablePhysicalMemory().InBytes();
+  if (memory.watch->available()) sample.level = LinuxMemoryLevelName(memory.watch->Sample(LinuxMonotonicMicroseconds()));
+  sample.signal = memory.watch->signal();
+  return sample;
+}
+
+void WatchMemoryOn(MemoryWatch* memory, scoped_refptr<base::SingleThreadTaskRunner> self,
+                   scoped_refptr<base::SequencedTaskRunner> reply,
+                   base::RepeatingCallback<void(LinuxMemorySample)> sampled) {
+  base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::WILL_BLOCK);
+  if (!memory->watch) {
+    memory->watch = OpenMemoryWatch();
+  } else {
+    LinuxMemoryPressureWatch* watch = &*memory->watch;
+    watch->Wait(watch->available() ? watch->NextWaitMs() : kMeminfoWaitMs);
+  }
+  LinuxMemorySample sample = ReadMemory(*memory);
+  const bool changed = !memory->reported || sample.level != memory->last_level ||
+                       (sample.level.empty() && sample.available != memory->last_available);
+  memory->reported = true;
+  memory->last_level = sample.level;
+  memory->last_available = sample.available;
+  if (changed) reply->PostTask(FROM_HERE, base::BindOnce(sampled, std::move(sample)));
+  self->PostTask(FROM_HERE, base::BindOnce(&WatchMemoryOn, memory, self, std::move(reply), std::move(sampled)));
 }
 
 }
@@ -96,9 +137,10 @@ LinuxPowerMonitor& LinuxPowerMonitor::Get() {
 }
 
 LinuxPowerMonitor::LinuxPowerMonitor()
-    : runner_(base::ThreadPool::CreateSequencedTaskRunner(
+    : memory_runner_(base::ThreadPool::CreateSingleThreadTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
-           base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})) {}
+           base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
+          base::SingleThreadTaskRunnerThreadMode::DEDICATED)) {}
 
 LinuxPowerMonitor::~LinuxPowerMonitor() = default;
 
@@ -115,14 +157,12 @@ base::CallbackListSubscription LinuxPowerMonitor::Subscribe(Listener listener) {
 
 void LinuxPowerMonitor::Start() {
   if (std::exchange(started_, true)) return;
-  memory_timer_.Start(FROM_HERE, kMemoryInterval,
-                      base::BindRepeating(&LinuxPowerMonitor::SampleMemory, weak_factory_.GetWeakPtr()));
   answer_deadline_.Start(FROM_HERE, kAnswerDeadline, base::BindOnce([](base::WeakPtr<LinuxPowerMonitor> monitor) {
     if (!monitor) return;
     monitor->tracker_.PowerAnswered();
     monitor->Publish();
   }, weak_factory_.GetWeakPtr()));
-  SampleMemory();
+  WatchMemory();
   Watch();
 }
 
@@ -144,16 +184,15 @@ void LinuxPowerMonitor::Watch() {
   }
 }
 
-void LinuxPowerMonitor::SampleMemory() {
-  if (std::exchange(sampling_, true)) return;
-  runner_->PostTaskAndReplyWithResult(
-      FROM_HERE, base::BindOnce(&ReadMemory),
-      base::BindOnce(&LinuxPowerMonitor::MemorySampled, weak_factory_.GetWeakPtr()));
+void LinuxPowerMonitor::WatchMemory() {
+  memory_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&WatchMemoryOn, new MemoryWatch(), memory_runner_,
+                                base::SequencedTaskRunner::GetCurrentDefault(),
+                                base::BindRepeating(&LinuxPowerMonitor::MemorySampled, weak_factory_.GetWeakPtr())));
 }
 
-void LinuxPowerMonitor::MemorySampled(std::pair<uint64_t, uint64_t> memory) {
-  sampling_ = false;
-  tracker_.SetMemory(memory.first, memory.second);
+void LinuxPowerMonitor::MemorySampled(LinuxMemorySample sample) {
+  tracker_.SetMemory(sample.physical, sample.available, std::move(sample.level), std::move(sample.signal));
   Publish();
 }
 

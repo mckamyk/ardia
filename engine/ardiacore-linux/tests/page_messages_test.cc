@@ -24,7 +24,7 @@ void Kinds() {
   Expect(LinuxPageMessageKindOf("peek") == LinuxPageMessageKind::kPeek, "peek kind");
   Expect(LinuxPageMessageKindOf("scroll") == LinuxPageMessageKind::kScroll, "scroll kind");
   Expect(LinuxPageMessageKindOf("linkDrop") == LinuxPageMessageKind::kLinkDrop, "link drop kind");
-  for (const char* refused : {"notification", "displayMedia", "nowPlaying", "result", "LinkDrop", "evaluate", "config", "", "Peek"})
+  for (const char* refused : {"notification", "notificationClose", "displayMedia", "nowPlaying", "pipTrace", "result", "LinkDrop", "evaluate", "config", "", "Peek"})
     Expect(!LinuxPageMessageKindOf(refused), refused);
   Expect(LinuxPageMessageEnvelopeFits("scroll", std::string(64 * 1024, 'x')), "64 KiB fits");
   Expect(!LinuxPageMessageEnvelopeFits("scroll", std::string(64 * 1024 + 1, 'x')), "oversized json refused");
@@ -140,6 +140,10 @@ void Options() {
   auto main = options.PageConfig(true);
   auto child = options.PageConfig(false);
   Expect(main.FindBool("selectionPopover") && !child.Find("selectionPopover"), "selection popover only for the main frame");
+  Expect(!main.Find("blockAutoplay") && !child.Find("blockAutoplay"), "autoplay allowed by default");
+  Expect(options.PageConfig(true, true).FindBool("blockAutoplay") == true, "blocked autoplay reaches the main frame");
+  Expect(options.PageConfig(false, true).FindBool("blockAutoplay") == true, "blocked autoplay reaches subframes");
+  Expect(!options.PageConfig(true, true).Find("displayMediaPicker"), "Chromium's own capture picker stays");
 }
 
 LinuxLinkRequest Request(uintptr_t surface, const char* key, double now) {

@@ -97,7 +97,10 @@ base::DictValue LinuxSystemState(const LinuxPowerSample& sample) {
       .Set("onBattery", sample.upower && sample.on_battery.value_or(false))
       .Set("batteryLevel", std::move(level))
       .Set("lowPowerMode", sample.power_profile.value_or("") == "power-saver")
-      .Set("memoryPressure", LinuxMemoryPressure(sample.physical_memory, sample.available_memory))
+      .Set("memoryPressure", sample.memory_level.empty()
+                                 ? std::string(LinuxMemoryPressure(sample.physical_memory, sample.available_memory))
+                                 : sample.memory_level)
+      .Set("memorySignal", sample.memory_signal.empty() ? std::string("meminfo") : sample.memory_signal)
       .Set("physicalMemory", static_cast<double>(sample.physical_memory))
       .Set("power", sample.upower ? "upower" : "unavailable")
       .Set("battery", !sample.upower ? "unavailable" : battery ? "present" : "absent");
@@ -106,14 +109,20 @@ base::DictValue LinuxSystemState(const LinuxPowerSample& sample) {
 void LinuxPowerTracker::SetPower(const LinuxPowerSample& power) {
   const uint64_t physical = sample_.physical_memory;
   const uint64_t available = sample_.available_memory;
+  std::string level = std::move(sample_.memory_level);
+  std::string signal = std::move(sample_.memory_signal);
   sample_ = power;
   sample_.physical_memory = physical;
   sample_.available_memory = available;
+  sample_.memory_level = std::move(level);
+  sample_.memory_signal = std::move(signal);
 }
 
-void LinuxPowerTracker::SetMemory(uint64_t physical, uint64_t available) {
+void LinuxPowerTracker::SetMemory(uint64_t physical, uint64_t available, std::string level, std::string signal) {
   sample_.physical_memory = physical;
   sample_.available_memory = available;
+  sample_.memory_level = std::move(level);
+  sample_.memory_signal = std::move(signal);
   memory_ready_ = true;
 }
 

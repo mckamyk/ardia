@@ -93,6 +93,7 @@ export const w79 = {
   deadline: 120000,
   manual: [
     { name: "Ctrl+N then immediate typing", steps: ["On Hyprland and on an X11 session, focus an Ardia window.", "Press Ctrl+N and type 'github.com' and Enter at once, without waiting.", "The new window's new tab navigates to github.com; nothing typed is lost or lands in the old window."], reason: "the held keys come from the native window's input handler, which CDP key events don't reach" },
+    { name: "Ctrl+N then composed input (#154)", steps: ["With ibus or fcitx5 (X11) and with fcitx5 through text-input on Hyprland, enable a Japanese input method and focus an Ardia window.", "Press Ctrl+N and immediately type 'nihon', Space and Enter; repeat with a compose sequence (Compose, ', e) and a dead key (dead acute, e).", "The new tab's field holds the converted text, é and é exactly once each, nothing is doubled or garbled, and no IME candidate window opened before the field was ready. On Wayland with a compositor-side input method, keys typed before the field was ready arrive as the typed characters, not converted."], reason: "needs a real input method and keyboard" },
     { name: "Typing at launch", steps: ["Launch Ardia and start typing an address immediately.", "The text appears in the new tab's field once the window is ready, in order."], reason: "needs real keyboard input through the compositor" },
   ],
   async run(t) {

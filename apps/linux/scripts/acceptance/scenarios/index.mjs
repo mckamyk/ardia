@@ -34,9 +34,9 @@ import s108 from "./s108-isolated-blocker.mjs";
 import privateServices from "./private-services.mjs";
 import privateFollowups from "./private-followups.mjs";
 import { w70, w77, w79, w92, w114 } from "./r-window-followups.mjs";
-import { w74, w75, w76, w137 } from "./r-downloads-followups.mjs";
+import { w74, w75, w76, w137, w156 } from "./r-downloads-followups.mjs";
 
-export const SCENARIOS = [f01, f02, f03, f06, f23, f07, f08, f09, f20, f10, f11, f12, f13, f14, f22, f26, f27, f17, w78, f24, f15, f18, f16, f25, s102, s104, s105, s106, s107, s108, ...privateServices, ...privateFollowups, w92, w77, w79, w70, w114, w74, w75, w76, w137, i109, i110, i111, e97, e98, e100, q221];
+export const SCENARIOS = [f01, f02, f03, f06, f23, f07, f08, f09, f20, f10, f11, f12, f13, f14, f22, f26, f27, f17, w78, f24, f15, f18, f16, f25, s102, s104, s105, s106, s107, s108, ...privateServices, ...privateFollowups, w92, w77, w79, w70, w114, w74, w75, w156, w76, w137, i109, i110, i111, e97, e98, e100, q221];
 
 export function selectScenarios(only, scenarios = SCENARIOS) {
   if (!only?.length) return scenarios;

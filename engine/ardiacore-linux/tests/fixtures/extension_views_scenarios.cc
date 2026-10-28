@@ -110,8 +110,8 @@ void OpenPlaceRelease() {
   assert(f.Invoke("extensionView.viewport", viewport.Clone()).ok);
   assert(f.Invoke("extensionView.command", base::DictValue().Set("id", id).Set("command", "focus")).ok);
   assert(host->host_contents()->focuses == 1 && view->focus_requests == 1);
-  auto evaluated = f.Invoke("extensionView.command", base::DictValue().Set("id", id).Set("command", "evaluate"));
-  assert(evaluated.ok && evaluated.value.is_none());
+  assert(f.Invoke("extensionView.command", base::DictValue().Set("id", id).Set("command", "evaluate")).code() ==
+         "ERR_PAGE_EVALUATION_REFUSED");
   assert(f.Invoke("extensionView.command", base::DictValue().Set("id", id).Set("command", "loadUrl")).code() == "ERR_UNKNOWN_COMMAND");
   assert(f.Invoke("extensionView.release", base::DictValue().Set("id", id)).ok);
   assert(extensions::LiveHosts() == 0 && f.parent.children().size() == 1 && f.Count("windowClose", id) == 0);

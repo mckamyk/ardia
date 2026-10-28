@@ -1,0 +1,157 @@
+#include <cassert>
+#include <cstdio>
+#include <memory>
+
+#include "typeahead_input_support.h"
+#include "ardia/linux/ac_linux_typeahead_input.h"
+
+using ardia::linux_window::TypeaheadInput;
+
+namespace {
+
+class Client : public ui::TextInputClient {
+ public:
+  base::WeakPtr<ui::TextInputClient> AsWeakPtr() override { return weak_.GetWeakPtr(); }
+  void SetCompositionText(const ui::CompositionText&) override {}
+  size_t ConfirmCompositionText(bool) override { return 0; }
+  void ClearCompositionText() override {}
+  void InsertText(const std::u16string&, InsertTextCursorBehavior) override {}
+  void InsertChar(const ui::KeyEvent&) override {}
+  ui::TextInputType GetTextInputType() const override { return ui::TEXT_INPUT_TYPE_TEXT; }
+  ui::TextInputMode GetTextInputMode() const override { return ui::TEXT_INPUT_MODE_TEXT; }
+  base::i18n::TextDirection GetTextDirection() const override { return base::i18n::LEFT_TO_RIGHT; }
+  int GetTextInputFlags() const override { return 0; }
+  bool CanComposeInline() const override { return true; }
+  gfx::Rect GetCaretBounds() const override { return {}; }
+  gfx::Rect GetSelectionBoundingBox() const override { return {}; }
+  bool GetCompositionCharacterBounds(size_t, gfx::Rect*) const override { return false; }
+  bool HasCompositionText() const override { return false; }
+  FocusReason GetFocusReason() const override { return FOCUS_REASON_MOUSE; }
+  bool GetTextRange(gfx::Range*) const override { return false; }
+  bool GetCompositionTextRange(gfx::Range*) const override { return false; }
+  bool GetEditableSelectionRange(gfx::Range*) const override { return false; }
+  bool SetEditableSelectionRange(const gfx::Range&) override { return false; }
+  bool GetTextFromRange(const gfx::Range&, std::u16string*) const override { return false; }
+  void OnInputMethodChanged() override {}
+  bool ChangeTextDirectionAndLayoutAlignment(base::i18n::TextDirection) override { return false; }
+  void ExtendSelectionAndDelete(size_t, size_t) override {}
+  void EnsureCaretNotInRect(const gfx::Rect&) override {}
+  bool IsTextEditCommandEnabled(ui::TextEditCommand) const override { return false; }
+  void SetTextEditCommandForNextKeyEvent(ui::TextEditCommand) override {}
+  ukm::SourceId GetClientSourceForMetrics() const override { return 0; }
+  bool ShouldDoLearning() override { return false; }
+  bool SetCompositionFromExistingText(const gfx::Range&, const std::vector<ui::ImeTextSpan>&) override { return false; }
+  void GetActiveTextInputControlLayoutBounds(std::optional<gfx::Rect>*, std::optional<gfx::Rect>*) override {}
+
+ private:
+  base::WeakPtrFactory<ui::TextInputClient> weak_{this};
+};
+
+struct Window {
+  aura::WindowTreeHost host;
+  aura::client::FocusClient focus;
+  ui::InputMethod input;
+  aura::Window shell;
+  aura::Window dialog;
+  Client shell_client;
+  Client dialog_client;
+  Window() {
+    aura::client::FocusClients()[host.window()] = &focus;
+    focus.focused = &shell;
+    input.SetFocusedTextInputClient(&shell_client);
+  }
+  ~Window() { aura::client::FocusClients().erase(host.window()); }
+  std::unique_ptr<TypeaheadInput> Typeahead() {
+    return std::make_unique<TypeaheadInput>(&host, &input, base::RepeatingCallback<bool(aura::Window*)>(
+        [this](aura::Window* target) { return target != &dialog; }));
+  }
+};
+
+ui::KeyEvent Press(char key) { return ui::KeyEvent(ui::EventType::kKeyPressed, key); }
+ui::KeyEvent Up(char key) { return ui::KeyEvent(ui::EventType::kKeyReleased, key); }
+
+void HoldsRawKeysWithTheImeDisengaged() {
+  Window w;
+  auto typeahead = w.Typeahead();
+  typeahead->Start();
+  assert(typeahead->capturing() && w.host.rewriters.size() == 1);
+  assert(w.input.GetTextInputClient() == typeahead.get());
+  assert(typeahead->GetTextInputType() == ui::TEXT_INPUT_TYPE_NONE);
+  assert(!w.host.Send(Press('a')) && !w.host.Send(Up('a')));
+  assert(w.host.Send(ui::Event(ui::EventType::kMousePressed)));
+  w.input.SetFocusedTextInputClient(&w.shell_client);
+  assert(w.input.GetTextInputClient() == typeahead.get());
+  assert(!w.host.Send(Press('b')));
+  auto held = typeahead->Release();
+  assert(held.size() == 3 && held[0].key == 'a' && held[0].type() == ui::EventType::kKeyPressed);
+  assert(held[1].type() == ui::EventType::kKeyReleased && held[2].key == 'b');
+  assert(w.input.GetTextInputClient() == &w.shell_client);
+  assert(w.host.rewriters.empty() && w.input.observers.empty() && !typeahead->capturing());
+  assert(w.host.Send(Press('c')));
+}
+
+void LeavesAnotherWidgetsTypingAlone() {
+  Window w;
+  auto typeahead = w.Typeahead();
+  typeahead->Start();
+  w.focus.focused = &w.dialog;
+  w.input.SetFocusedTextInputClient(&w.dialog_client);
+  assert(w.input.GetTextInputClient() == &w.dialog_client);
+  assert(w.host.Send(Press('x')) && w.host.Send(Up('x')));
+  w.focus.focused = &w.shell;
+  w.input.SetFocusedTextInputClient(&w.shell_client);
+  assert(w.input.GetTextInputClient() == typeahead.get());
+  assert(!w.host.Send(Press('y')));
+  auto held = typeahead->Release();
+  assert(held.size() == 1 && held[0].key == 'y');
+  assert(w.input.GetTextInputClient() == &w.shell_client);
+}
+
+void ReleaseWithAnotherWidgetFocusedRestoresNothing() {
+  Window w;
+  auto typeahead = w.Typeahead();
+  typeahead->Start();
+  w.focus.focused = &w.dialog;
+  w.input.SetFocusedTextInputClient(&w.dialog_client);
+  std::ignore = typeahead->Release();
+  assert(w.input.GetTextInputClient() == &w.dialog_client);
+}
+
+void OverflowDiscardsEverything() {
+  Window w;
+  auto typeahead = w.Typeahead();
+  typeahead->Start();
+  for (size_t i = 0; i <= ardia::linux_window::Typeahead<ui::KeyEvent>::kMaxEvents; ++i) assert(!w.host.Send(Press('k')));
+  assert(!w.host.Send(Press('k')));
+  assert(typeahead->Release().empty());
+}
+
+void DestroyedWhileHoldingDetaches() {
+  Window w;
+  auto typeahead = w.Typeahead();
+  typeahead->Start();
+  typeahead.reset();
+  assert(w.host.rewriters.empty() && w.input.observers.empty() && !w.input.GetTextInputClient());
+  assert(w.host.Send(Press('z')));
+}
+
+void StartsOnlyOnce() {
+  Window w;
+  auto typeahead = w.Typeahead();
+  typeahead->Start();
+  std::ignore = typeahead->Release();
+  typeahead->Start();
+  assert(!typeahead->capturing() && w.host.rewriters.empty() && w.input.GetTextInputClient() == &w.shell_client);
+}
+
+}
+
+int main() {
+  HoldsRawKeysWithTheImeDisengaged();
+  LeavesAnotherWidgetsTypingAlone();
+  ReleaseWithAnotherWidgetFocusedRestoresNothing();
+  OverflowDiscardsEverything();
+  DestroyedWhileHoldingDetaches();
+  StartsOnlyOnce();
+  std::puts("typeahead input scenarios passed");
+}
