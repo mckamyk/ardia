@@ -30,6 +30,9 @@
     ["ArdiaSync.copyRecoveryPhrase", 180000],
     ["ArdiaSync.chooseFolder", 900000],
     ["ArdiaSync.saveRecoveryKit", 900000],
+    ["ArdiaLive.request", 180000],
+    ["ArdiaLive.connect", 180000],
+    ["ArdiaLive.disconnect", 180000],
   ]);
 
   const request = (method, args, deadline = 30000) => {

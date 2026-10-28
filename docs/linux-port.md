@@ -102,6 +102,10 @@ The content blocker is the same uBlock Origin component macOS loads. Each regula
 
   Hosts installed for Chrome or Chromium (1Password, Bitwarden, KeePassXC) are found without changes. The host's `allowed_origins` must list the extension, which holds for Web Store installs.
 
+## Live folder services
+
+Live folders reach GitHub, Bitbucket, Notion, Confluence and Google Drive through `ac_linux_live*.cc` in the browser process, not through renderer `fetch`; the shell keeps `connect-src 'none'`. The Linux UI replaces the shared `state/live/sources.ts` and `net.ts` with `apps/linux/src/liveSources.ts` and `liveNet.ts`, which ask for fixed provider operations (`ArdiaLive.request`, `connect`, `cancel`, `disconnect`). Native code builds each URL, adds the credential and sends it only to that provider's host over HTTPS, without cookies or redirects. Tokens stay native: they are verified on connect, kept in the Secret Service as "Ardia Live Folder Token" items (a 0600 file store for background test instances, as with sync), renewed natively for Google Drive, and never returned to a renderer. Private windows are refused. Contract, limits and tests are in `docs/linux-parity/f11-live-services-handoff.md`.
+
 ## Architecture and boundaries
 
 `ChromeBrowserMainParts::PostBrowserStart()` starts `ardia::StartLinuxHost()`. The Linux host serves the bundled UI at `chrome://ardia/`. Assets are loaded from `ardia-ui` beside the Chromium executable, or an explicit `--ardia-ui-dir` for development.

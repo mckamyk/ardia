@@ -28,8 +28,19 @@ inline constexpr char kSecretLabel[] = "Ardia Sync Key";
 inline constexpr char kSecretLibrary[] = "libsecret-1.so.0";
 inline constexpr char kProbeAccount[] = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-std::unique_ptr<KeyStore> MakeFileKeyStore(std::string directory);
-std::unique_ptr<KeyStore> MakeSecretServiceKeyStore(std::string library = kSecretLibrary);
+struct KeySchema {
+  const char* name;
+  const char* label;
+  const char* file_prefix;
+  bool (*valid_account)(std::string_view account);
+  size_t max_bytes;
+};
+
+const KeySchema& SyncKeySchema();
+
+std::unique_ptr<KeyStore> MakeFileKeyStore(std::string directory, const KeySchema& schema = SyncKeySchema());
+std::unique_ptr<KeyStore> MakeSecretServiceKeyStore(std::string library = kSecretLibrary,
+                                                    const KeySchema& schema = SyncKeySchema());
 
 KeyStatus ClassifySecretError(std::string_view domain, int code);
 bool UseFileKeyStore(bool background, bool explicit_user_data_dir, std::string_view user_data_dir,
