@@ -42,8 +42,47 @@ class PrivateLinkTests(unittest.TestCase):
         self.assertNotIn('adoptId', opened)
         start = host[host.index('g_ardia_linux_off_the_record_navigation = [](content::WebContents* contents, const GURL& url) {'):]
         start = start[:start.index('\n  };\n')]
-        self.assertIn('if (host->OpenPrivateLink(contents, url)) return true;', start)
+        self.assertIn('if (source && host->OpenPrivateLink(source, url)) return true;', start)
         self.assertIn('return false;', start)
+
+
+class PrivateLinkSurfaceTests(unittest.TestCase):
+    def setUp(self):
+        self.host = HOST.read_text()
+        self.hook = self.host[self.host.index('g_ardia_linux_off_the_record_navigation = [](content::WebContents* contents, const GURL& url) {'):]
+        self.hook = self.hook[:self.hook.index('\n  };\n')]
+
+    def test_extension_surfaces_answer_whether_they_host_a_contents(self):
+        header = (ROOT / 'src/ardia/linux/ac_linux_extension_views.h').read_text()
+        self.assertIn('bool HostsContents(const content::WebContents* contents) const;', header)
+        views = (ROOT / 'src/ardia/linux/ac_linux_extension_views.cc').read_text()
+        hosts = method(views, 'bool LinuxExtensionSurfaces::HostsContents(const content::WebContents* contents) const {')
+        self.assertIn('surface->contents() == contents', hosts)
+        self.assertIn('if (!contents) return false;', hosts)
+
+    def test_devtools_links_count_as_their_inspected_tab(self):
+        source = method(self.host, 'content::WebContents* PrivateLinkSource(content::WebContents* contents) {')
+        self.assertIn('DevToolsWindow::AsDevToolsWindow(contents)', source)
+        self.assertIn('->GetInspectedWebContents()', source)
+        self.assertRegex(source, r'for \(int depth = 0; depth < \d+ && contents; \+\+depth\)')
+        self.assertLess(self.hook.index('PrivateLinkSource(contents)'), self.hook.index('host->OpenPrivateLink('))
+
+    def test_extension_popups_and_side_panels_open_through_their_window(self):
+        surface = method(self.host, '  bool OpenSurfacePrivateLink(content::WebContents* contents, const GURL& url) {')
+        self.assertIn('extension_surfaces_->HostsContents(contents)', surface)
+        self.assertIn('PrivateLinkBinding()', surface)
+        self.assertIn('ardiacore::LinuxProfileName(page->GetOriginalProfile())', surface)
+        self.assertIn('.Set("disposition", "incognito")', surface)
+        chosen = method(self.host, '  TabBinding* PrivateLinkBinding() {')
+        self.assertIn('binding->page()', chosen)
+        self.assertIn('binding->presented', chosen)
+        self.assertLess(self.hook.index('host->OpenPrivateLink('), self.hook.index('host->OpenSurfacePrivateLink(source, url)'))
+
+    def test_sources_ardia_does_not_host_are_refused_instead_of_opening_a_chrome_window(self):
+        tail = self.hook[self.hook.index('host->OpenSurfacePrivateLink(source, url)'):]
+        self.assertIn('LOG(WARNING) << "[ardia] off-the-record link refused:', tail)
+        self.assertTrue(tail.rstrip().endswith('return true;'))
+        self.assertIn('if (!contents || !url.is_valid()) return false;', self.hook)
 
 
 if __name__ == '__main__':

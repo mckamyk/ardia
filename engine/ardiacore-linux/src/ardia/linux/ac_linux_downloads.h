@@ -36,6 +36,8 @@ struct DownloadRoute {
 
 DownloadRoute RouteDownloads(ardiacore::linux_profiles::ProfileKind requested, bool page_private,
                              bool page_ending, bool hosts_requested);
+bool DeliversRemoval(bool private_removal, bool page_private, std::string_view page_original_path,
+                     std::string_view removal_path);
 bool IsDownloadControl(std::string_view name);
 std::string_view DownloadControlService(std::string_view name);
 std::vector<std::string> KeptIds(const base::DictValue& input);

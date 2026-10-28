@@ -36,7 +36,7 @@ import { applyHostPageTheme, resetHostPage } from "./hostPageLifecycle";
 import { setHostOverlayCheck } from "./hostViewport";
 import { MenuHost } from "./menus";
 import { startLinuxShortcuts } from "./shortcutsRuntime";
-import { TrafficLights } from "./TrafficLights";
+import { linuxWindowMenu, TrafficLights } from "./TrafficLights";
 import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setSessionDeparture, setSessionFlush } from "./session";
 import { startUtility } from "./utility";
 import { installProfileWindows } from "./hostWindowProfiles";
@@ -44,7 +44,7 @@ import { focus } from "../../browser/src/state/browser/actions";
 import { announceTypeaheadReady } from "./typeahead";
 import { linuxSyncHooks, startLinuxSync } from "./syncEngine";
 
-Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle, sleepTab }, sync: linuxSyncHooks, toolbar: useToolbarAutoHide, selection: { state: usePageSelection, jump: jumpToSelection, copyQuoteLink: copyLinkToSelection, replaceInField } } });
+Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle, sleepTab }, sync: linuxSyncHooks, toolbar: useToolbarAutoHide, windowMenu: linuxWindowMenu, selection: { state: usePageSelection, jump: jumpToSelection, copyQuoteLink: copyLinkToSelection, replaceInField } } });
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme });
 setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
 
