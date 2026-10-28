@@ -149,3 +149,26 @@ test("native Find results reach the shared FindBar callback of only the exact pa
   f.find(b.identity.browserId, { count: 1, active: 1, final: true });
   assert.equal(right.length, 2);
 });
+
+test("a slow favicon download never holds back the tab's viewport or Find", async () => {
+  const sent = [];
+  const favicons = [];
+  const host = {
+    bootstrap: { windowId: "slow-favicon", profileId: "default" },
+    onEvent: () => () => {},
+    invoke(method, args) {
+      sent.push(args.command ?? method);
+      if (method === "tab.create") return Promise.resolve({ browserId: 9, chromeTabId: 9 });
+      if (args.command === "downloadFavicon") return new Promise((resolve) => favicons.push(resolve));
+      return Promise.resolve(null);
+    },
+  };
+  const tab = new HostTab(host, { key: "slow-favicon" }, () => {});
+  const favicon = tab.command("downloadFavicon", ["https://icons.test/favicon.ico"]);
+  await tab.command("find", ["needle", true, false]);
+  assert.deepEqual(sent, ["tab.create", "downloadFavicon", "find"]);
+  favicons[0]("data:image/png;base64,");
+  assert.equal(await favicon, "data:image/png;base64,");
+  await tab.command("stopFinding", ["clear"]);
+  assert.deepEqual(sent.slice(3), ["stopFinding"]);
+});
