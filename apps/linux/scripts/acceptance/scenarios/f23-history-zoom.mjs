@@ -1,6 +1,6 @@
 import { evaluate } from "../lib/cdp.mjs";
 import { percentText, zoomAgreement } from "../lib/assertions.mjs";
-import { navigateTab, restartBrowser, startBrowser } from "../lib/flows.mjs";
+import { navigateTab, restartBrowser, startBrowser, waitCommitted } from "../lib/flows.mjs";
 import { chooseHistoryEntry, clickLabel, revealToolbar, visibleByLabel } from "../lib/ui.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
 
@@ -50,8 +50,9 @@ export default {
     const pages = [1, 2, 3, 4].map((n) => url.page(n, run));
     const tabId = await state.shell.newTab(pages[0]);
     await state.shell.waitTabUrl(tabId, (u) => u === pages[0]);
+    await waitCommitted(state.shell, tabId, (u) => u === pages[0], { label: pages[0] });
     await t.check("four pages build back history", async () => {
-      for (const page of pages.slice(1)) await navigateTab(state.shell, tabId, page);
+      for (const page of pages.slice(1)) await navigateTab(state.shell, tabId, page, { committed: true });
       return until(() => state.shell.state(`const l = s.live[${js(tabId)}]; return l?.canGoBack && !l.canGoForward ? l : false;`), { timeout: 8000, label: "back available" });
     }, { critical: true });
     await t.check("history menu jumps back two pages", async () => {
@@ -73,7 +74,7 @@ export default {
     const zoomUrl = url.zoom("zoom.ardia.test") + `?run=${run}`;
     let base;
     await t.check("zoom in agrees across page scale, percentage and indicator", async () => {
-      await navigateTab(state.shell, tabId, zoomUrl);
+      await navigateTab(state.shell, tabId, zoomUrl, { committed: true });
       base = await pageRatio(state.app, zoomUrl);
       await state.shell.command("zoomIn");
       const zoom = await waitZoom(state.shell, tabId, 1.1);
@@ -111,7 +112,7 @@ export default {
 
     const persistUrl = url.zoom("persist.ardia.test") + `?run=${run}`;
     await t.check("per-site zoom is saved for the site", async () => {
-      await navigateTab(state.shell, tabId, persistUrl);
+      await navigateTab(state.shell, tabId, persistUrl, { committed: true });
       await state.shell.command("zoomIn");
       await waitZoom(state.shell, tabId, 1.1);
       await state.shell.command("zoomIn");
