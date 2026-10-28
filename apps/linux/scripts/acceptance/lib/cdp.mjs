@@ -110,8 +110,8 @@ export async function connectCdp(url, { timeout = 5000, commandTimeout = 10000, 
   };
 }
 
-export async function evaluate(session, expression, { timeout = 10000, awaitPromise = true } = {}) {
-  const result = await session.send("Runtime.evaluate", { expression, awaitPromise, returnByValue: true, userGesture: true }, { timeout });
+export async function evaluate(session, expression, { timeout = 10000, awaitPromise = true, userGesture = true } = {}) {
+  const result = await session.send("Runtime.evaluate", { expression, awaitPromise, returnByValue: true, userGesture }, { timeout });
   if (result.exceptionDetails) {
     const details = result.exceptionDetails;
     throw new Error(`Evaluation failed: ${details.exception?.description ?? details.text ?? JSON.stringify(details)}`);

@@ -49,6 +49,7 @@ async function findOnPane(shell, tabId, expected) {
   if (!verdict.ok) throw new Error(verdict.problem);
   const steps = [];
   for (const forward of [true, true, false]) {
+    await focusPane(shell, tabId);
     const before = (await findState(shell, tabId)).active;
     await shell.command(forward ? "findNext" : "findPrevious");
     const want = nextActive(before, expected, forward);
@@ -62,8 +63,12 @@ async function findOnPane(shell, tabId, expected) {
 }
 
 async function dismissFind(shell, tabId) {
-  await shell.state(`s.activate(${js(tabId)}); s.setFind(${js(tabId)}, { open: true, focusRequest: Date.now() }); return true;`);
-  await shell.waitFor(`document.activeElement?.getAttribute('placeholder') === 'Find on Page'`, { timeout: 5000, label: "find field focus" });
+  const focusedInPane = `(() => { const field = document.activeElement; const pane = document.querySelector(${js(`[data-ardia-native-tab="${tabId}"]`)}); if (field?.getAttribute('placeholder') !== 'Find on Page' || !pane) return false; const f = field.getBoundingClientRect(), p = pane.getBoundingClientRect(); const x = f.left + f.width / 2; return x >= p.left && x <= p.right; })()`;
+  await until(async () => {
+    await shell.state(`s.activate(${js(tabId)}); s.setFind(${js(tabId)}, { open: true, focusRequest: Date.now() }); return true;`);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    return shell.eval(focusedInPane);
+  }, { timeout: 8000, label: `pane ${tabId}'s find field focus` });
   await shell.key("Escape", { code: "Escape", keyCode: 27 });
   return until(async () => {
     const f = await findState(shell, tabId);
