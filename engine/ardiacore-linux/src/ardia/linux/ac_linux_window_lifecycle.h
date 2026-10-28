@@ -14,6 +14,8 @@ struct OpenIntent {
   bool focus = true;
   bool behind = false;
   bool utility = false;
+  int behind_window = 0;
+  bool hand_back = false;
 };
 
 enum class Presentation { kActivate, kInactive };
@@ -21,14 +23,23 @@ enum class Activation { kNone, kShowInactive, kActivate };
 
 class FocusLedger {
  public:
+  static constexpr int64_t kHandBackAfterFrameMs = 300;
+  static constexpr int64_t kHandBackLimitMs = 3000;
+
   explicit FocusLedger(bool may_activate) : may_activate_(may_activate) {}
 
-  Presentation Create(int window, const OpenIntent& intent);
+  Presentation Create(int window, const OpenIntent& intent, int64_t now_ms = 0);
   Activation Reuse(int window, const OpenIntent& intent, bool own_renderer);
   Activation Focus(int window);
+  Activation HandBack(int window);
   Activation Ready(int window);
   bool Observe(int window, bool active);
-  void PointerPressed() { ++epoch_; }
+  void Presented(int window, int64_t now_ms);
+  std::optional<int> Unrequested(int window, int64_t now_ms);
+  void PointerPressed() {
+    ++epoch_;
+    ++presses_;
+  }
   void Forget(int window);
 
   bool pending(int window) const { return pending_.contains(window); }
@@ -39,10 +50,19 @@ class FocusLedger {
   bool Wants(const OpenIntent& intent) const;
   void Request(int window) { pending_[window] = epoch_; }
 
+  struct Kept {
+    int window = 0;
+    uint64_t presses = 0;
+    int64_t created_ms = 0;
+    std::optional<int64_t> presented_ms = std::nullopt;
+  };
+
   bool may_activate_;
   uint64_t epoch_ = 0;
   int active_ = 0;
+  uint64_t presses_ = 0;
   std::map<int, uint64_t> pending_;
+  std::map<int, Kept> kept_;
 };
 
 struct Rect {
