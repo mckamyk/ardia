@@ -128,6 +128,7 @@
 #include "components/search_engines/template_url.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/prefs/pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/sessions/core/session_id.h"
@@ -369,6 +370,8 @@ base::Value SharedFrameValue(const gfx::Rect& bounds) {
   for (const int value : linux_window::SharedFrame(LifecycleRect(bounds), PrimaryScreenRect())) frame.Append(value);
   return base::Value(std::move(frame));
 }
+
+constexpr char kWindowOutputs[] = "ArdiaLinuxWindowOutputs";
 
 void ShowNativeWindow(BrowserWindowInterface* browser, linux_window::Presentation presentation) {
   if (presentation == linux_window::Presentation::kInactive) return browser->GetWindow()->ShowInactive();
@@ -1019,6 +1022,10 @@ class ShellHostView : public views::View,
     ardiacore::FetchLinuxFavicon(page_profile(), url, std::move(reply));
   }
   bool WindowFullScreen() const;
+  PrefService* WindowOutputPrefs() const;
+  void RememberWindowOutput();
+  void ForgetWindowOutput();
+  std::optional<int64_t> SavedWindowOutput() const;
   bool AutoPictureInPictureCancelled(content::WebContents* contents) const {
     for (const auto& [id, binding] : bindings_) {
       if (binding->contents() == contents) {
@@ -2491,6 +2498,7 @@ void ShellHostView::CommitWindowDeparture(const std::string& close_generation) {
   if (!close_departure_ || close_departure_->first != close_generation || !profile()) return;
   auto departure = std::move(close_departure_->second);
   close_departure_.reset();
+  ForgetWindowOutput();
   PersistWindowDeparture(profile(), window_id_, std::move(departure));
 }
 
@@ -2729,6 +2737,7 @@ void ShellHostView::AcknowledgeWindowClose(
 }
 
 void ShellHostView::OnWidgetClosing(views::Widget*) {
+  RememberWindowOutput();
   auto replies = std::move(close_replies_);
   const bool sealed = close_.CanClose();
   for (auto& reply : replies)
@@ -2788,7 +2797,9 @@ void ShellHostView::RestoreFullScreenNow() {
   if (!manager) return;
   FullscreenController* fullscreen = manager->fullscreen_controller();
   if (FullScreenRestorer().Enter(window_id_, fullscreen->IsFullscreenForBrowser())) {
+    const std::optional<int64_t> output = SavedWindowOutput();
     fullscreen->ToggleBrowserFullscreenMode(false);
+    if (output) widget->SetFullscreen(true, *output);
   }
   FinishFullScreenRestore();
 }
@@ -2828,6 +2839,45 @@ void ShellHostView::ReportWindowGeometry() {
     for (const int value : *frame) values.Append(value);
     BroadcastWindowEvent(base::DictValue().Set("type", "frame").Set("id", window_id_).Set("frame", std::move(values)));
   }
+  RememberWindowOutput();
+}
+
+PrefService* ShellHostView::WindowOutputPrefs() const {
+  Profile* app = profile();
+  if (GlobalScreenCoordinates() || is_utility() || window_id_.empty() || private_window() || !app) return nullptr;
+  return app->GetPrefs();
+}
+
+void ShellHostView::RememberWindowOutput() {
+  PrefService* prefs = WindowOutputPrefs();
+  if (!prefs || !browser_ || !WindowFullScreen() || FullScreenRestorer().active()) return;
+  const std::string label =
+      display::Screen::Get()->GetDisplayNearestWindow(browser_->GetWindow()->GetNativeWindow()).label();
+  const base::DictValue* saved = chrome::GetWindowPlacementDictionaryReadOnly(kWindowOutputs, prefs);
+  const std::string* known = saved ? saved->FindString(window_id_) : nullptr;
+  if (label.empty() || (known && *known == label)) return;
+  std::unique_ptr<ScopedDictPrefUpdate> update;
+  chrome::GetWindowPlacementDictionaryReadWrite(kWindowOutputs, prefs, update).Set(window_id_, label);
+}
+
+void ShellHostView::ForgetWindowOutput() {
+  PrefService* prefs = WindowOutputPrefs();
+  const base::DictValue* saved = prefs ? chrome::GetWindowPlacementDictionaryReadOnly(kWindowOutputs, prefs) : nullptr;
+  if (!saved || !saved->FindString(window_id_)) return;
+  std::unique_ptr<ScopedDictPrefUpdate> update;
+  chrome::GetWindowPlacementDictionaryReadWrite(kWindowOutputs, prefs, update).Remove(window_id_);
+}
+
+std::optional<int64_t> ShellHostView::SavedWindowOutput() const {
+  PrefService* prefs = WindowOutputPrefs();
+  const base::DictValue* saved = prefs ? chrome::GetWindowPlacementDictionaryReadOnly(kWindowOutputs, prefs) : nullptr;
+  const std::string* label = saved ? saved->FindString(window_id_) : nullptr;
+  if (!label) return std::nullopt;
+  std::vector<linux_window::Output> outputs;
+  for (const display::Display& display : display::Screen::Get()->GetAllDisplays()) {
+    outputs.push_back({display.id(), display.label()});
+  }
+  return linux_window::OutputLabelled(outputs, *label);
 }
 
 std::vector<base::DictValue> ShellHostView::WindowState() const {
