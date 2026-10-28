@@ -46,7 +46,7 @@ LinuxPageMedia::LinuxPageMedia(content::WebContents* contents, LinuxMediaReporte
   reporter_.SetAccess(Access());
   if (InPictureInPicture())
     reporter_.SetPictureInPicture({contents->HasPictureInPictureDocument() ? "document" : "video", true});
-  for (const auto& [id, playing] : content::ArdiaLinuxPictureInPictureCandidates(contents)) {
+  for (const auto& [id, playing] : content::ArdiaLinuxPlayedVideoPlayers(contents)) {
     videos_.Started(id, true);
     if (!playing) videos_.Stopped(id);
   }

@@ -10,6 +10,7 @@ namespace content {
 class WebContents;
 
 std::vector<std::pair<MediaPlayerId, bool>> ArdiaLinuxPictureInPictureCandidates(WebContents* contents);
+std::vector<std::pair<MediaPlayerId, bool>> ArdiaLinuxPlayedVideoPlayers(WebContents* contents);
 bool ArdiaLinuxRequestPictureInPicture(WebContents* contents, const MediaPlayerId& id);
 }
 

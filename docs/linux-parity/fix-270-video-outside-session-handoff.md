@@ -44,7 +44,10 @@ macOS's page script keeps reporting a video that has played even while it is pau
 
 - `LinuxPageVideos<Id>` (`ac_linux_media.h`) keeps the main-frame players that have started, with their `has_video` and whether the browser last saw them playing. Players leave only when they are destroyed (`MediaDestroyed`) or belong to a page that is no longer primary (`PrimaryPageChanged`). A stop only marks a player paused.
 - `LinuxNowPlayingFromSession` reports a page video with no session as `playing` or `paused` (from the tracker) with `hasVideo: true` and `controllable: false`.
-- A `LinuxPageMedia` created after the page's players exist, as for the native launch tab adopted by the shell or a tab rebound to another window, seeds the tracker from `ArdiaLinuxPictureInPictureCandidates` (main-frame players with video and PiP available, with their playing state).
+- A `LinuxPageMedia` created after the page's players exist, as for the native launch tab adopted by the shell or a tab rebound to another window, seeds the tracker from `ArdiaLinuxPlayedVideoPlayers`: the main-frame players with video that have played at least once, with their playing state.
+  - `chromium-linux-media-player-pip.patch` adds a Linux-only `has_played_` bit to `MediaWebContentsObserver::PlayerInfo`, set the first time `SetIsPlaying` runs.
+  - The PiP candidates are not a usable seed. A player gets its `player_info_map_` entry at metadata (`media_web_contents_observer.cc:605-616`) and reports PiP availability at `loadeddata` (`html_video_element.cc:704`). So the candidates include every main-frame video with a first frame, and an unplayed inline video would have shown a PiP control and kept a pinned tab awake (`tabKeepAlive.ts:43`). macOS's `pickMedia` returns nothing when nothing has played.
+  - Seeding only currently playing candidates would miss an adopted launch tab whose muted autoplay video Blink has already paused for visibility, which is the F15D case.
 - The PiP press is unchanged. The element route already takes the browser's playing flag first and then the largest video. With every player reported paused, `big` (480×270) wins over `small`; `skipped` has `disablepictureinpicture` and is not a candidate.
 
 | Command | Result |
@@ -54,3 +57,17 @@ macOS's page script keeps reporting a video that has played even while it is pau
 | `test_auto_pip`, `test_auto_pip_profiles`, `test_contract` | OK |
 
 Needs the next build: F15D's outside-session check.
+
+## Known gaps (follow-up #336)
+
+- A played video removed from the DOM keeps its entry until its player is destroyed. Removal only pauses the element (`html_media_element.cc:5065-5076`), and `MediaDestroyed` waits for garbage collection.
+- A page restored from the back/forward cache loses the control. `PrimaryPageChanged` dropped its players, and their resume sends no new start.
+- In the F15D sequence the entry reads `paused` while Blink has resumed the video, because the browser gets no `OnMediaPlaying` for that resume.
+
+## Tests for the seed
+
+| Command | Result |
+| --- | --- |
+| `python3 -m unittest test_element_picture_in_picture` | 5 passed. The patch tests now apply the patch to clean `HEAD` sources (`git show`) rather than the reference tree's working copy, which already carries it. New: the patch sets `has_played_` in `SetIsPlaying` and `ArdiaLinuxPlayedVideoPlayers` lists only played main-frame videos; `LinuxPageMedia` seeds from it. Both fail on the previous commit |
+| clang `-fsyntax-only` of clean `media_web_contents_observer.cc` plus the patch, with `obj/content/browser/browser.ninja`'s flags | passes |
+| `bash scripts/linux/syntax-check-156.sh ac_linux_page_media` | 1 of 1 passes |
