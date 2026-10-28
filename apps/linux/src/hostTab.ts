@@ -17,6 +17,7 @@ export type HostPageFactory = (claim: string, nativeId: () => number | undefined
 export type TabViewport = { rect: { x: number; y: number; width: number; height: number }; visible: boolean };
 
 const claims = new WeakMap<ArdiaHost, Map<string, HostTab>>();
+const UNORDERED_COMMANDS = new Set(["downloadFavicon"]);
 
 export class HostTab {
   host: ArdiaHost;
@@ -92,10 +93,11 @@ export class HostTab {
 
   async command<T = unknown>(command: string, args: unknown[] = []): Promise<T> {
     await this.ready;
-    return enqueueTab(this.host, this.key, async () => {
+    const send = async () => {
       if (this.disposed || !this.identity || claims.get(this.host)?.get(this.key) !== this) throw new Error(`Ardia tab released: ${this.key}`);
       return invokeHost<T>("tab.command", { id: this.identity.browserId, claim: this.claim, command, args }, this.host);
-    });
+    };
+    return UNORDERED_COMMANDS.has(command) ? send() : enqueueTab(this.host, this.key, send);
   }
 
   async pageResult<T = unknown>(command: string, args: unknown[] = []): Promise<T | null> {
