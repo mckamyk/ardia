@@ -45,6 +45,9 @@ void LinuxDownloadsCall(Profile* profile, const std::string& name, const base::D
 void LinuxPickFolder(gfx::NativeWindow window, const base::ListValue& values,
                      base::OnceCallback<void(bool, base::Value)> done);
 
+void LinuxPickFiles(gfx::NativeWindow window, const base::ListValue& values,
+                    base::OnceCallback<void(bool, base::Value)> done);
+
 bool LinuxFilesHandles(std::string_view method);
 void LinuxFilesInvoke(Profile* profile, LinuxShellWebView* shell, const std::string& method,
                       const base::ListValue& values,

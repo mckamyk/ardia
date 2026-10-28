@@ -7,11 +7,7 @@ import { credentialModuleMethod } from "./hostCredentials.ts";
 import { syncModuleMethod } from "./hostSync.ts";
 import { linuxSystemMethod } from "./hostFiles.ts";
 import { linuxModuleMethod } from "./hostSystem.ts";
-
-const optionalMethods: Record<string, string[]> = {
-  ArdiaShell: ["setDragEscapeCapture", "saveKeyResponder", "restoreKeyResponder", "discardKeyResponder", "switcherPointerMoved", "pickFolder", "fetchBangList", "animateWindowClose", "restoreFullScreen", "watchLeftEdge", "dragPreviewBegin", "dragPreviewPage", "dragPreviewUpdate", "dragPreviewCancel", "raiseView", "dragPreviewPlaceholder", "windowFrame", "dragPreviewEnd"],
-  ArdiaApp: ["devLeftEdgePointer", "devLeftEdgeStats"],
-};
+import { linuxShellMethod } from "./shellMethods.ts";
 
 const synchronousDefaults: Record<string, Record<string, unknown>> = {
   ArdiaApp: { apiVersion: 0 },
@@ -23,8 +19,15 @@ const synchronousMethods: Record<string, Record<string, unknown>> = {
   ArdiaGlassEffect: { isLiquidGlass: false },
 };
 
+const nativeFallthroughs = new WeakSet<object>();
+export const reachesNativeHostUnchecked = (resolved: unknown) => typeof resolved === "function" && nativeFallthroughs.has(resolved);
+
 export function resolveHostModule(host: ArdiaHost, name: string, method: string): unknown {
   if (name === "ArdiaApp" && method === "launchConfig") return () => hostLaunchConfig(host);
+  if (name === "ArdiaShell" && !hostSupports(`${name}.${method}`, host)) {
+    const local = linuxShellMethod(method);
+    if (local) return local;
+  }
   if (name === "ArdiaSystem") {
     const local = linuxSystemMethod(host, method);
     if (local !== undefined) return local;
@@ -57,6 +60,7 @@ export function resolveHostModule(host: ArdiaHost, name: string, method: string)
   if (constants && method in constants) return constants[method];
   const defaults = synchronousDefaults[name];
   if (defaults && method in defaults) return defaults[method];
-  if (optionalMethods[name]?.includes(method) && !hostSupports(`${name}.${method}`, host)) return undefined;
-  return hostModuleMethod(name, method, host);
+  const fallthrough = hostModuleMethod(name, method, host);
+  nativeFallthroughs.add(fallthrough);
+  return fallthrough;
 }
