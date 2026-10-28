@@ -19,6 +19,8 @@ class KeyboardInputTests(unittest.TestCase):
             depth += (source[end] == '{') - (source[end] == '}')
             end += 1
         method = source[start:end]
+        accelerator_start = source.index('ui::Accelerator ShellHostView::KeyAccelerator(const ui::KeyEvent& event) {')
+        method += source[accelerator_start:source.index('\n}\n', accelerator_start) + 3]
         focus_start = source.index('void ShellHostView::FocusShell()')
         focus_end = source.index('\n}\n', focus_start) + 3
         method += source[focus_start:focus_end]
@@ -101,6 +103,7 @@ struct ShellHostView {
     return extension_consumes && !reserved_by_ardia;
   }
   void OnKeyEvent(ui::KeyEvent* event);
+  static ui::Accelerator KeyAccelerator(const ui::KeyEvent& event);
 };
 '''
         checks = r'''

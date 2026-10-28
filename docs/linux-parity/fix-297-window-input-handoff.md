@@ -70,3 +70,7 @@ Native, not compiled into a package yet:
 - the restore's final focus (#247: W77D "the window that had focus has it again").
 
 These are verified only by unit tests and `scripts/linux/syntax-check-156.sh`. The UI change is verified on `0f5d71dc`.
+
+## Shortcuts pressed while keys are held
+
+A new window holds every key from attach until its UI calls `typeaheadReady`, which can take several seconds under swiftshader. Until then the typeahead rewriter swallows keys before `OnKeyEvent`. `ReplayTypeahead` used to feed held keys only to a focused shell text field, so a shortcut pressed in that window was lost. In F02-150D, Ctrl+Shift+I typed 1–4 s after Ctrl+Shift+N never reached `OnKeyEvent` (`--ardia-keyboard-diagnostics`), and opened no DevTools in 7 of 16 runs on the cand-980e7f14 package. Releasing the hold before the key made 4 of 4 pass. Now each held key press that is a registered Ardia shortcut runs through `AcceleratorPressed` when the window is ready, in order with the replayed text, whether or not a field holds focus. It goes through the same gates as `OnKeyEvent`: accelerators enabled, not recording a shortcut, shortcut handling not suspended. Other held keys still reach only the shell's own text field. The 10 s discard still drops everything, shortcuts included.
