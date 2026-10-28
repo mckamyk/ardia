@@ -52,11 +52,14 @@ The native fixed strings (viewer query, Notion body and version, Confluence CQL,
 | `ERR_LIVE_NOT_CONNECTED` | `signedOut` if Live has the account, otherwise `notConfigured` (as macOS's missing keychain item) |
 | `ERR_LIVE_SIGNED_OUT` (401, 403 without rate-limit headers, Google `invalid_grant`) | `signedOut` |
 | `ERR_LIVE_SSO` (403 with `x-github-sso`) | `sso` |
-| `ERR_LIVE_RATE_LIMITED` (429, 403 with `x-ratelimit-remaining: 0`) | `rateLimited` |
+| `ERR_LIVE_RATE_LIMITED` (429; 403 with `x-ratelimit-remaining: 0`, a `retry-after` header, GitHub's "secondary rate limit" message or a Google `usageLimits` error) | `rateLimited` |
 | `ERR_LIVE_NETWORK` (no response, timeout, refused redirect) | `network` |
 | `ERR_LIVE_KEYRING_LOCKED`, `ERR_LIVE_KEYRING_UNAVAILABLE`, `ERR_LIVE_CANCELLED`, `ERR_LIVE_ARGUMENT`, `ERR_LIVE_BUSY`, `ERR_LIVE_SERVICE`, `ERR_PRIVATE_SERVICE` | `other`, with the native message |
 
-One deliberate difference from macOS: a revoked Google refresh token (`invalid_grant`) reads as signed out ("Sign back in to Google Drive") instead of a generic 400.
+Two deliberate differences from macOS:
+
+- A revoked Google refresh token (`invalid_grant`) reads as signed out ("Sign back in to Google Drive") instead of a generic 400.
+- GitHub's secondary rate limit (403 with `retry-after`, or its "secondary rate limit" message) and Google Drive's documented usage-limit 403s (`userRateLimitExceeded`, `rateLimitExceeded`, `dailyLimitExceeded`) read as rate limited. The shared macOS mapping (`state/live/net.ts`) still reads them as signed out (#241's contract tests found it).
 
 ## Tokens
 
@@ -100,3 +103,23 @@ One deliberate difference from macOS: a revoked Google refresh token (`invalid_g
 - A real desktop keyring: the item in Seahorse/KWallet, and the locked-keyring prompt.
 - The shared Google OAuth flow's weaknesses (Math.random state and verifier, plain PKCE, the code on a loopback URL that every window sees) are tracked in #233. They're shared with macOS and unchanged here.
 - Google sign-in still opens the consent page in an Ardia tab and watches for the loopback redirect, as macOS does. From the Settings utility window that tab is created in the browser window, so the redirect has to come back through session sync. The acceptance scenario drives it from a browser window.
+
+## Provider contract tests (#241)
+
+`engine/ardiacore-linux/tests/live_provider_contract.test.mjs`, run by `test_live.py`, drives the real `liveSources.ts`, `hostLive.ts` and native `LiveCore` against replies shaped like each provider's documented API. The fixtures are in `tests/fixtures/live-contract/<provider>.json`, from these docs:
+
+| Fixture | Documentation |
+| --- | --- |
+| `github.json` | GraphQL rate limits: https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api · device flow: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow · SAML SSO and errors: https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api |
+| `bitbucket.json` | pull requests and statuses: https://developer.atlassian.com/cloud/bitbucket/rest/api-group-pullrequests/ · pagination: https://developer.atlassian.com/cloud/bitbucket/rest/intro/#pagination · API tokens: https://support.atlassian.com/bitbucket-cloud/docs/using-api-tokens/ · limits: https://support.atlassian.com/bitbucket-cloud/docs/api-request-limits/ |
+| `notion.json` | search: https://developers.notion.com/reference/post-search · users: https://developers.notion.com/reference/get-users · errors: https://developers.notion.com/reference/status-codes · limits: https://developers.notion.com/reference/request-limits |
+| `confluence.json` | CQL content search: https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-content/#api-wiki-rest-api-content-search-get · current user: https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-users/#api-wiki-rest-api-user-current-get · rate limiting: https://developer.atlassian.com/cloud/confluence/rate-limiting/ |
+| `google.json` | OAuth for installed apps: https://developers.google.com/identity/protocols/oauth2/native-app · Drive errors: https://developers.google.com/workspace/drive/api/guides/handle-errors · files.list: https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list |
+
+What it pins, per provider:
+
+- **GitHub:** the viewer and pull-request shapes; the documented 5 s device-flow interval; `authorization_pending`, `slow_down` (new interval 10), `expired_token`, `access_denied` and `device_flow_disabled`; the form body of each device-flow request; 401, the primary rate limit (200 with `RATE_LIMITED`), the secondary rate limit with and without `retry-after`, and SAML enforcement.
+- **Bitbucket:** Basic auth with the Atlassian account email and an API token; the paginated list (only its first page of 50 is read, as on macOS); build statuses; a merged pull request; 401, 429, and a 403 for missing scopes (signed out).
+- **Notion:** the bot user's workspace name; pages and databases, trashed ones skipped; `has_more` is not followed (30 newest, as on macOS); 401, 429, 403 `restricted_resource` (signed out) and 529.
+- **Confluence:** the account id; a page with expanded space and history, its URL from `_links.base`; `_links.next` is not followed; 401, 429 and 403.
+- **Google Drive:** the code exchange with `refresh_token_expires_in`; a renewal reply without `refresh_token` keeps the stored one; an `authError` on an unexpired token renews once and retries; usage-limit 403s and 429 are rate limits, a missing scope is signed out; `invalid_grant` on renewal is signed out.

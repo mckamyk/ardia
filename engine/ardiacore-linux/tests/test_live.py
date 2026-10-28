@@ -104,6 +104,21 @@ class LiveServiceTests(unittest.TestCase):
             self.assertIn('# fail 0', output)
             self.assertNotIn('AddressSanitizer', output)
 
+    def test_core_against_documented_provider_replies(self):
+        if shutil.which('node') is None:
+            self.skipTest('node is unavailable')
+        if not (REPO / 'node_modules').exists():
+            self.skipTest('workspace dependencies are not installed')
+        with tempfile.TemporaryDirectory(prefix='ardia-live-contract-') as directory:
+            tool = build(self, directory)
+            output = run(self, ['node', '--experimental-strip-types', '--import',
+                                REPO / 'apps/linux/scripts/host-test-loader.mjs', '--test', '--test-reporter=tap',
+                                ROOT / 'tests/live_provider_contract.test.mjs'],
+                         env={'LIVE_HOST_TOOL': str(tool)}, timeout=300)
+            self.assertIn('# pass 14', output)
+            self.assertIn('# fail 0', output)
+            self.assertNotIn('AddressSanitizer', output)
+
     def test_native_fixed_requests_match_the_shared_provider_contract(self):
         if shutil.which('node') is None:
             self.skipTest('node is unavailable')
