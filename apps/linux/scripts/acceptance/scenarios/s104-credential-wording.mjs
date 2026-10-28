@@ -17,7 +17,7 @@ export default {
   title: "Passwords and Autofill describe Linux storage and system authentication, never macOS",
   deadline: 180000,
   manual: [
-    { name: "Wording reads naturally on the desktop", steps: ["Open Settings › Passwords and Settings › Autofill in a desktop session.", "The notice and 'Storage on this computer' rows sit above the panes and name the keyring in use; Unlock asks for your system password."], reason: "layout needs a visible desktop" },
+    { name: "Wording reads naturally on the desktop", steps: ["Open Settings › Passwords and Settings › Autofill in a desktop session.", "The notice and 'Storage on this computer' rows sit above the panes and name the keyring in use; Unlock asks for your system password."], reason: "automated in S104D" },
   ],
   async run(t) {
     const { app, shell } = await startBrowser(t, { name: "wording" });

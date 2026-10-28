@@ -25,7 +25,7 @@ export default {
   title: "Packages install the polkit policy where polkit reads it, and its absence fails closed",
   deadline: 180000,
   manual: [
-    { name: "The installed package registers the action", steps: ["Install Ardia from its package (scripts/linux/arch/PKGBUILD with makepkg -si, or sudo ./install.sh from the extracted tarball).", `pkaction --action-id ${ACTION} --verbose lists the action with implicit active auth_self and implicit any/inactive no.`, "The F07 manual prompt checks pass with the desktop's polkit agent."], reason: "needs a root install and a polkit agent" },
+    { name: "The installed package registers the action", steps: ["Install Ardia from its package (scripts/linux/arch/PKGBUILD with makepkg -si, or sudo ./install.sh from the extracted tarball).", `pkaction --action-id ${ACTION} --verbose lists the action with implicit active auth_self and implicit any/inactive no.`, "The F07 manual prompt checks pass with the desktop's polkit agent."], reason: "automated in S105P with makepkg and a private polkitd; a root install with the desktop's agent needs a person" },
   ],
   async run(t) {
     await t.check("the package's installer puts the policy under DESTDIR/usr/share/polkit-1/actions for any prefix", async () => {

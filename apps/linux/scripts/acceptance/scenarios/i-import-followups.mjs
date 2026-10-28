@@ -50,7 +50,7 @@ export const i111 = {
   title: "Import open tabs, cookies, addresses and cards from Linux Chromium and Firefox profiles",
   deadline: 300000,
   manual: [
-    { name: "Import window click-through with tabs, cookies and autofill", steps: ["With a real Chrome profile copied into a scratch HOME, open File › Import from Another Browser.", "Choose Tabs, Cookies and Autofill: the Done step shows the counts, the tabs open in an Imported group, a site from the cookies is still signed in, and Settings › Autofill lists the address and card."], reason: "needs a desktop session and a real profile" },
+    { name: "Import window click-through with tabs, cookies and autofill", steps: ["With a real Chrome profile copied into a scratch HOME, open File › Import from Another Browser.", "Choose Tabs, Cookies and Autofill: the Done step shows the counts, the tabs open in an Imported group, a site from the cookies is still signed in, and Settings › Autofill lists the address and card."], reason: "automated in I111W with fixture profiles; a real Chrome profile needs a person" },
   ],
   async run(t) {
     const { scratch, home, tmp, fixtures } = await prepare(t, "import-followups");
@@ -186,7 +186,7 @@ export const i109 = {
   title: "Import keyring-protected (v11) Chromium passwords through Secret Service with consent",
   deadline: 300000,
   manual: [
-    { name: "GNOME Keyring and KWallet", steps: ["Import passwords from a Chrome profile that uses gnome-libsecret, then one that uses KWallet.", "The import window asks to unlock; the system unlock prompt appears; allowing it imports the passwords, cancelling it imports none and shows the locked note."], reason: "needs the desktop keyring daemons and their prompts" },
+    { name: "GNOME Keyring and KWallet", steps: ["Import passwords from a Chrome profile that uses gnome-libsecret, then one that uses KWallet.", "The import window asks to unlock; the system unlock prompt appears; allowing it imports the passwords, cancelling it imports none and shows the locked note."], reason: "GNOME Keyring is automated in I109K; KWallet's first wallet needs its own first-use wizard" },
   ],
   async run(t) {
     if (!(await available("/usr/bin/dbus-daemon"))) {

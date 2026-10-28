@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { closeSync, constants, openSync } from "node:fs";
-import { access, chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { until } from "./util.mjs";
@@ -182,10 +183,19 @@ export function flattenTree(node, output = null, workspace = null, out = []) {
   return out;
 }
 
-async function startSway(dir, { tools, env, outputs }) {
-  const runtime = join(dir, "runtime");
+export const SOCKET_PATH_MAX = 107;
+
+export async function privateRuntime(dir) {
+  const inside = join(dir, "runtime");
+  const longest = join(inside, "sway-ipc.4294967295.4294967295.sock");
+  const runtime = longest.length <= SOCKET_PATH_MAX ? inside : await mkdtemp(join(tmpdir(), "ardia-rt-"));
   await mkdir(runtime, { recursive: true });
   await chmod(runtime, 0o700);
+  return { runtime, temporary: runtime !== inside };
+}
+
+async function startSway(dir, { tools, env, outputs }) {
+  const { runtime, temporary } = await privateRuntime(dir);
   const config = join(dir, "sway.conf");
   await writeFile(config, swayConfig({ outputs: 1 }));
   const swayEnv = { ...env, XDG_RUNTIME_DIR: runtime, WLR_BACKENDS: "headless", WLR_LIBINPUT_NO_DEVICES: "1", WLR_RENDERER: "pixman", WLR_HEADLESS_OUTPUTS: "1" };
@@ -199,7 +209,7 @@ async function startSway(dir, { tools, env, outputs }) {
     await msg(["create_output"]);
     await msg(["output", `HEADLESS-${index}`, "resolution", "1920x1080", "position", `${(index - 1) * 1920}`, "0"]);
   }
-  return { proc, runtime, display, clientEnv, msg };
+  return { proc, runtime, temporary, display, clientEnv, msg };
 }
 
 async function startXvfb(dir, { tools, env }) {
@@ -259,6 +269,7 @@ export async function startDesktop(dir, { tools, outputs = 1, x11 = false, compo
     } else {
       const sway = await startSway(dir, { tools, env: { ...base, ...busEnv }, outputs });
       stops.push(() => stopGroup(sway.proc));
+      if (sway.temporary) stops.push(() => rm(sway.runtime, { recursive: true, force: true }));
       desktop.sway = sway;
       desktop.runtime = sway.runtime;
       desktop.display = sway.display;

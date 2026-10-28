@@ -127,7 +127,7 @@ export const e100 = {
   title: "Native messaging hosts installed for Chrome and Chromium",
   deadline: 180000,
   manual: [
-    { name: "A password manager's desktop app connects", steps: ["Install 1Password, Bitwarden or KeePassXC with browser integration for Chrome or Chromium.", "Install its extension from the Chrome Web Store in Ardia.", "The extension reports the desktop app as connected and fills a login."], reason: "needs a third-party desktop app and its signed extension" },
+    { name: "A password manager's desktop app connects", steps: ["Install 1Password, Bitwarden or KeePassXC with browser integration for Chrome or Chromium.", "Install its extension from the Chrome Web Store in Ardia.", "The extension reports the desktop app as connected and fills a login."], reason: "automated in E100D with a fake desktop app; a real password manager and its Web Store extension need a person" },
   ],
   async run(t) {
     const { app, scratch, ext, worker } = await loaded(t, "native-messaging");
