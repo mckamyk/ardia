@@ -57,6 +57,7 @@ class SyncHelperTests(unittest.TestCase):
             self.assertIn('cross-format reference files opened and Linux files written', output)
             self.assertIn('sealed logins: 3 sealed, partial and locked reads refused', output)
             self.assertIn('held key: a second window unlocks from memory, the save waits for an open default collection', output)
+            self.assertIn("held key: another device's key is never saved under the held device", output)
             self.assertRegex(output, r'large local state: \d{8} sealed bytes round trip')
             verified = run(self, ['node', ROOT / 'tests/sync_reference.mjs', 'verify', root / 'linux'])
             self.assertIn('reference verified 2 Linux files and 1 passwords', verified)

@@ -458,6 +458,39 @@ void HeldKeyAcrossWindows(const std::string& scratch) {
   std::printf("held key: a second window unlocks from memory, the save waits for an open default collection\n");
 }
 
+void HeldKeyStaysWithItsDevice(const std::string& scratch) {
+  const std::string folder = scratch + "/held-key-a";
+  const std::string folder_b = scratch + "/held-key-b";
+  const std::string device = NewFileId();
+  const std::string other = NewFileId();
+  DesktopKeyring keyring;
+  std::string phrase;
+  {
+    SyncCore first(std::make_unique<DesktopKeyStore>(&keyring), {folder, "First"});
+    CHECK(first.Dispatch("ArdiaSync.createPhrase", {S(device)}, 0).value.flag);
+    CHECK(first.Dispatch("ArdiaSync.createChain", {S(folder)}, 0).ok);
+    for (const auto& word : first.Dispatch("ArdiaSync.recoveryWords", {}, 0).value.items)
+      phrase += (phrase.empty() ? "" : " ") + word.text;
+    CHECK(first.Dispatch("ArdiaSync.createPhrase", {S(other)}, 0).value.flag);
+    CHECK(first.Dispatch("ArdiaSync.createChain", {S(folder_b)}, 0).ok);
+  }
+  const Bytes stored = keyring.items[device];
+  const Bytes stored_other = keyring.items[other];
+  CHECK(stored != stored_other);
+  keyring.locked = true;
+  SyncCore core(std::make_unique<DesktopKeyStore>(&keyring), {folder, "Locked"});
+  int64_t now = 1000;
+  CHECK(!core.Dispatch("ArdiaSync.unlock", {S(device)}, now).value.flag);
+  CHECK(core.Dispatch("ArdiaSync.enterPhrase", {S(device), S(phrase), S(folder)}, now).value.Find("ok"));
+  CHECK(core.Dispatch("ArdiaSync.status", {}, now + 1).ok);
+  keyring.locked = false;
+  CHECK(core.Dispatch("ArdiaSync.unlock", {S(other)}, now + 5).value.flag);
+  for (int64_t later = now + 40; later <= now + 200; later += 40) CHECK(core.Dispatch("ArdiaSync.status", {}, later).ok);
+  CHECK(keyring.items[device] == stored);
+  CHECK(keyring.items[other] == stored_other);
+  std::printf("held key: another device's key is never saved under the held device\n");
+}
+
 void SecretServiceWithoutBus(const std::string& library) {
   auto secret_service = MakeSecretServiceKeyStore(library);
   const std::string account = NewFileId();
@@ -960,6 +993,7 @@ int main(int argc, char** argv) {
     KeyStores(scratch);
     Core(scratch);
     HeldKeyAcrossWindows(scratch);
+    HeldKeyStaysWithItsDevice(scratch);
     SealedLogins(scratch);
     LargeLocalState(scratch);
     Lease();

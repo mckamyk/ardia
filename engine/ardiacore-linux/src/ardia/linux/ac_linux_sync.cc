@@ -235,6 +235,10 @@ bool SyncCore::HoldsKeyFor(const std::string& account) const {
 
 void SyncCore::SaveHeldKey(int64_t now_seconds) {
   if (unsaved_account_.empty() || !keys_ || now_seconds < next_held_key_save_) return;
+  if (unsaved_account_ != key_account_) {
+    unsaved_account_.clear();
+    return;
+  }
   next_held_key_save_ = now_seconds + kHeldKeyRetrySeconds;
   if (!store_->WritesWithoutPrompt()) return;
   last_key_status_ = store_->Save(unsaved_account_, entropy_);
