@@ -150,7 +150,7 @@ class FullScreenRestoreHostTests(unittest.TestCase):
         self.assertIn('FinishFullScreenRestore();', changed)
         finish = extract(HOST, 'void FinishFullScreenRestore()')
         self.assertIn('FullScreenRestorer().Finish()', finish)
-        self.assertIn('WindowFocus().Focus(', finish)
+        self.assertIn('WindowFocus().HandBack(', finish)
 
     def test_expired_windows_report_windowed_so_the_store_forgets_the_stamp(self):
         expire = extract(HOST, 'void ExpireFullScreenRestore()')

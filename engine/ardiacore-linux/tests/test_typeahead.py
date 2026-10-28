@@ -112,6 +112,152 @@ class TypeaheadInputTests(unittest.TestCase):
             self.assertIn('typeahead input scenarios passed', ran.stdout)
 
 
+REPLAY_FAKES = r'''#include <cstdio>
+#include <memory>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+namespace gfx {
+struct Rect {
+  int x = 0, y = 0, width = 0, height = 0;
+};
+}
+
+namespace ui {
+class EventTarget {
+ public:
+  virtual ~EventTarget() = default;
+};
+enum class EventType { kKeyPressed, kKeyReleased };
+class Event {
+ public:
+  class DispatcherApi {
+   public:
+    explicit DispatcherApi(Event* event) : event_(event) {}
+    void set_target(EventTarget* target) { event_->target_ = target; }
+
+   private:
+    Event* event_;
+  };
+  explicit Event(EventType type) : type_(type) {}
+  Event(const Event& copy) : type_(copy.type_) {}
+  Event& operator=(const Event& rhs) {
+    type_ = rhs.type_;
+    return *this;
+  }
+  EventType type() const { return type_; }
+  EventTarget* target() const { return target_; }
+
+ private:
+  EventType type_;
+  EventTarget* target_ = nullptr;
+};
+class KeyEvent : public Event {
+ public:
+  KeyEvent(EventType type, char key) : Event(type), key(key) {}
+  char key;
+};
+}
+
+namespace aura {
+class Window : public ui::EventTarget {
+ public:
+  gfx::Rect bounds{10, 20, 800, 600};
+  gfx::Rect GetBoundsInScreen() const { return bounds; }
+};
+}
+
+namespace ui {
+struct EventDispatchDetails {};
+struct InputMethod {
+  std::vector<char> keys;
+  std::vector<aura::Window*> targets;
+  EventDispatchDetails DispatchKeyEvent(KeyEvent* event) {
+    auto* window = static_cast<aura::Window*>(event->target());
+    const gfx::Rect bounds = window->GetBoundsInScreen();
+    std::ignore = bounds;
+    keys.push_back(event->key);
+    targets.push_back(window);
+    return {};
+  }
+};
+}
+
+namespace base {
+template <typename T> struct WeakPtr {
+  T* value = nullptr;
+  explicit operator bool() const { return value != nullptr; }
+};
+struct OneShotTimer {
+  void Stop() {}
+};
+}
+
+struct Typeahead {
+  std::vector<ui::KeyEvent> held;
+  std::vector<ui::KeyEvent> Release() { return std::exchange(held, {}); }
+};
+namespace linux_window {
+using TypeaheadInput = Typeahead;
+}
+struct Widget {
+  ui::InputMethod input;
+  aura::Window native;
+  ui::InputMethod* GetInputMethod() { return &input; }
+  aura::Window* GetNativeWindow() { return &native; }
+};
+struct ShellHostView {
+  base::OneShotTimer typeahead_timer_;
+  std::unique_ptr<linux_window::TypeaheadInput> typeahead_ = std::make_unique<linux_window::TypeaheadInput>();
+  Widget widget;
+  bool holds = true;
+  bool ShellHoldsTextField() { return holds; }
+  Widget* GetWidget() { return &widget; }
+  base::WeakPtr<ShellHostView> GetWeakPtr() { return {this}; }
+  void ReplayTypeahead(bool field);
+};
+'''
+
+REPLAY_SCENARIO = r'''
+int main() {
+  ShellHostView host;
+  aura::Window source;
+  for (const char key : {'a', 'b'}) {
+    ui::KeyEvent live(ui::EventType::kKeyPressed, key);
+    ui::Event::DispatcherApi(&live).set_target(&source);
+    host.typeahead_->held.push_back(live);
+  }
+  if (host.typeahead_->held[0].target()) return 3;
+  host.ReplayTypeahead(true);
+  if ((host.widget.input.keys != std::vector<char>{'a', 'b'})) return 4;
+  for (aura::Window* target : host.widget.input.targets) {
+    if (target != &host.widget.native) return 5;
+  }
+  std::puts("replay scenarios passed");
+}
+'''
+
+
+class TypeaheadReplayTests(unittest.TestCase):
+    def test_replayed_keys_carry_a_target_the_gtk_input_method_can_dereference(self):
+        compiler = shutil.which('clang++') or shutil.which('c++')
+        if compiler is None:
+            self.skipTest('C++ compiler is unavailable')
+        replay = extract(HOST, 'void ShellHostView::ReplayTypeahead(bool field)')
+        with tempfile.TemporaryDirectory(prefix='ardia-typeahead-replay-') as scratch:
+            root = pathlib.Path(scratch)
+            (root / 'replay.cc').write_text(REPLAY_FAKES + replay + REPLAY_SCENARIO)
+            binary = root / 'replay'
+            built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-g', '-fsanitize=address,undefined',
+                                    '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', str(root / 'replay.cc'), '-o', str(binary)],
+                                   capture_output=True, text=True, timeout=180)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+            self.assertIn('replay scenarios passed', ran.stdout)
+
+
 class TypeaheadHostTests(unittest.TestCase):
     def test_regular_windows_hold_keys_from_attach_with_a_deadline_that_discards(self):
         initialize = extract(HOST, 'void ShellHostView::Initialize()')

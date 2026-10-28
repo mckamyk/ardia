@@ -16,6 +16,7 @@ import { startMemoryTrim } from "../../browser/src/state/tabs/memoryTrim";
 import { setNewTabPrewarm } from "../../browser/src/platform/preload";
 import { setStoreBatching, useBrowser, type HydrateData } from "../../browser/src/state/browser/store";
 import { usePages } from "../../browser/src/state/tabs/pageState";
+import { useOnboarding } from "../../browser/src/state/onboarding/onboarding";
 import { adoptParkedPins } from "../../browser/src/state/pins/parkedPins";
 import { decideLastTabClose, decideWindowClose } from "../../browser/src/state/windows/windowClose";
 import { firstWindowCommitted } from "../../browser/src/lib/afterFirstWindow";
@@ -43,7 +44,7 @@ import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setS
 import { startUtility } from "./utility";
 import { installProfileWindows } from "./hostWindowProfiles";
 import { focus } from "../../browser/src/state/browser/actions";
-import { announceTypeaheadReady } from "./typeahead";
+import { announceTypeaheadReady, windowExpectsField } from "./typeahead";
 import { linuxSyncHooks, startLinuxSync } from "./syncEngine";
 import { linuxLiveHooks } from "./liveHooks";
 import { connectCalendar, refreshCalendar, setCalendarHidden, useCalendar } from "../../browser/src/state/live/calendar";
@@ -56,7 +57,7 @@ setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLa
 function FirstWindowCommitted({ typeahead }: { typeahead: boolean }) {
   useEffect(() => {
     firstWindowCommitted();
-    if (typeahead && ardiaHost) announceTypeaheadReady(ardiaHost);
+    if (typeahead && ardiaHost) announceTypeaheadReady(ardiaHost, { expectsField: () => windowExpectsField(useBrowser.getState(), ardiaHost!.bootstrap.windowId, useOnboarding.getState().windowId) });
   }, [typeahead]);
   return null;
 }
