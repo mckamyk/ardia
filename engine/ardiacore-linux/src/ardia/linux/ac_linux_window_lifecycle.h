@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace ardia::linux_window {
@@ -55,6 +56,13 @@ struct Requested {
   Rect bounds;
   bool positioned = false;
 };
+
+struct Output {
+  int64_t id = 0;
+  std::string label;
+};
+
+std::optional<int64_t> OutputLabelled(const std::vector<Output>& outputs, const std::string& label);
 
 std::array<int, 4> SharedFrame(const Rect& bounds, const Rect& primary);
 std::optional<Requested> RequestedFrame(const std::vector<double>& frame,
