@@ -9,6 +9,7 @@
 #include <cstring>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <sstream>
 #include <optional>
 #include <string>
@@ -104,6 +105,41 @@ class FailingStore final : public KeyStore {
   KeyStatus Save(std::string_view, const Bytes&) override { return KeyStatus::kLocked; }
   KeyStatus Delete(std::string_view) override { return KeyStatus::kLocked; }
   KeyStatus Probe() override { return KeyStatus::kLocked; }
+  bool WritesWithoutPrompt() override { return false; }
+};
+
+struct DesktopKeyring {
+  bool locked = false;
+  bool default_collection_seen = true;
+  int saves = 0;
+  std::map<std::string, Bytes> items;
+};
+
+class DesktopKeyStore final : public KeyStore {
+ public:
+  explicit DesktopKeyStore(DesktopKeyring* keyring) : keyring_(keyring) {}
+  std::string_view kind() const override { return "secretService"; }
+  KeyStatus Load(std::string_view account, Bytes* secret) override {
+    const auto found = keyring_->items.find(std::string(account));
+    if (found == keyring_->items.end()) return KeyStatus::kNotFound;
+    if (keyring_->locked) return KeyStatus::kLocked;
+    *secret = found->second;
+    return KeyStatus::kOk;
+  }
+  KeyStatus Save(std::string_view account, const Bytes& secret) override {
+    ++keyring_->saves;
+    if (keyring_->locked) return KeyStatus::kLocked;
+    keyring_->items[std::string(account)] = secret;
+    return KeyStatus::kOk;
+  }
+  KeyStatus Delete(std::string_view account) override {
+    return keyring_->items.erase(std::string(account)) ? KeyStatus::kOk : KeyStatus::kNotFound;
+  }
+  KeyStatus Probe() override { return keyring_->locked ? KeyStatus::kLocked : KeyStatus::kOk; }
+  bool WritesWithoutPrompt() override { return !keyring_->locked && keyring_->default_collection_seen; }
+
+ private:
+  DesktopKeyring* keyring_;
 };
 
 void Wordlist() {
@@ -381,6 +417,45 @@ void LegacyPasswords() {
   CHECK(!ParseJson("{\"a\":\"\x01\"}"));
   CHECK(!ParseJson("{\"a\":\"\xff\"}"));
   CHECK(WriteJson(*ParseJson("{\"a\":[1,-2.5e-3,true,null,\"\\n\\u0001/\"]}")) == "{\"a\":[1,-2.5e-3,true,null,\"\\n\\u0001/\"]}");
+}
+
+JsonValue S(std::string text);
+
+void HeldKeyAcrossWindows(const std::string& scratch) {
+  const std::string folder = scratch + "/held-key-folder";
+  const std::string device = NewFileId();
+  const std::string other = NewFileId();
+  DesktopKeyring keyring;
+  std::string phrase;
+  {
+    SyncCore first(std::make_unique<DesktopKeyStore>(&keyring), {folder, "First"});
+    CHECK(first.Dispatch("ArdiaSync.createPhrase", {S(device)}, 0).value.flag);
+    CHECK(first.Dispatch("ArdiaSync.createChain", {S(folder)}, 0).ok);
+    for (const auto& word : first.Dispatch("ArdiaSync.recoveryWords", {}, 0).value.items)
+      phrase += (phrase.empty() ? "" : " ") + word.text;
+  }
+  const Bytes stored = keyring.items[device];
+  keyring.locked = true;
+  SyncCore core(std::make_unique<DesktopKeyStore>(&keyring), {folder, "Locked"});
+  int64_t now = 1000;
+  CHECK(!core.Dispatch("ArdiaSync.unlock", {S(device)}, now).value.flag);
+  CHECK(core.Dispatch("ArdiaSync.enterPhrase", {S(device), S(phrase), S(folder)}, now).value.Find("ok"));
+  const int saves = keyring.saves;
+  CHECK(core.Dispatch("ArdiaSync.unlock", {S(device)}, now + 5).value.flag);
+  CHECK(!core.Dispatch("ArdiaSync.unlock", {S(other)}, now + 5).value.flag);
+  CHECK(core.Dispatch("ArdiaSync.enterPhrase", {S(device), S(""), S(folder)}, now + 5).value.Find("ok"));
+  CHECK(core.Dispatch("ArdiaSync.enterPhrase", {S(other), S(""), S(folder)}, now + 5).value.Find("error"));
+  CHECK(core.unlocked());
+  keyring.locked = false;
+  keyring.default_collection_seen = false;
+  CHECK(core.Dispatch("ArdiaSync.status", {}, now + 40).value.Find("unlocked")->flag);
+  CHECK(keyring.saves == saves);
+  keyring.default_collection_seen = true;
+  auto status = core.Dispatch("ArdiaSync.status", {}, now + 80);
+  CHECK(keyring.saves == saves + 1 && status.value.Find("lastKeyStatus")->text == "ok");
+  CHECK(keyring.items[device] == stored);
+  CHECK(core.Dispatch("ArdiaSync.status", {}, now + 200).ok && keyring.saves == saves + 1);
+  std::printf("held key: a second window unlocks from memory, the save waits for an open default collection\n");
 }
 
 void SecretServiceWithoutBus(const std::string& library) {
@@ -884,6 +959,7 @@ int main(int argc, char** argv) {
     LegacyPasswords();
     KeyStores(scratch);
     Core(scratch);
+    HeldKeyAcrossWindows(scratch);
     SealedLogins(scratch);
     LargeLocalState(scratch);
     Lease();

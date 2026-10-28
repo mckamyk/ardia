@@ -51,19 +51,21 @@ Renderer side:
 | --- | --- | --- |
 | `unreadable_account_` | `unlock(account)` failed with `kLocked` or `kUnavailable` | this device's key exists somewhere Ardia can't reach yet |
 | keys in memory, `unsaved_account_` set | `enterPhrase(account, words)` for `unreadable_account_` matched the folder's chain but the save failed (locked or unavailable) | sync runs; the key is in process memory only |
-| `unsaved_account_` cleared | a later call, at most every 30 s, finds `Probe() == ok` and the save succeeds | the keyring holds the key again |
+| `unsaved_account_` cleared | a later call, at most every 30 s, finds `WritesWithoutPrompt()` and the save succeeds | the keyring holds the key again |
+| `key_account_` | any key is in memory (created, entered, unlocked or resumed) | `unlock(key_account_)` and `enterPhrase(key_account_, "")` answer from memory, never touching the keyring |
 
 - `enterPhrase` for any other device id still refuses with `keychain` when the key can't be saved, so Turn On Sync and joining from another device still write nothing (F13K's refusal checks).
-- The deferred save only runs after `Probe` says the collection is open, so it never prompts. Nothing is written outside the keyring. The file key store is only used for background test instances with an explicit data dir, as before.
-- `enterPhrase(account, "", folder)` means "resume from the keyring". It only works for `unreadable_account_`, re-reads the key, checks it opens the folder's chain, and then behaves like an entered phrase. It never accepts a new key.
-- Renderer: the sync authority polls `ArdiaSync.status` every 3 s while sync is on and locked (`keyringResumer`). Each reply refreshes the pane's keyring message. Once `keyStoreStatus` is `ok` and `lastKeyStatus` is still `locked` or `unavailable`, it calls the shared engine's `enterRecoveryPhrase(folder, "")`, which runs its normal locked-resume path (load state, publish, sync). If the key turns out to be missing, `lastKeyStatus` becomes `notFound` and polling stops trying. The pane then shows the plain recovery-phrase line.
+- The deferred save only runs when `WritesWithoutPrompt()` saw an unlocked `default` collection. A missing alias, a locked collection or an older libsecret without the collection calls all mean "don't try", because a save into those would prompt. That is stricter than `Probe`, which reports `ok` when it can't tell. Nothing is written outside the keyring. The file key store is only used for background test instances with an explicit data dir, as before.
+- `enterPhrase(account, "", folder)` means "resume from the keyring". For `key_account_` it checks that the key in memory opens the folder's chain. For `unreadable_account_` it re-reads the key, checks the chain, and then behaves like an entered phrase. It never accepts a new key.
+- Failover: the window running sync can close after the phrase was entered while the keyring is still locked. The next window's `startSync` calls `unlock(device)`, and that returns `true` from memory, so it never shows "locked".
+- Renderer: `watchLockedSync` runs a 3 s `ArdiaSync.status` poll (`keyringResumer`) only while sync is on and locked, in the window running sync. It is torn down when that window loses the role or unloads. Each reply refreshes the pane's keyring message. Once `keyStoreStatus` is `ok` and `lastKeyStatus` is still `locked` or `unavailable`, it calls the shared engine's `enterRecoveryPhrase(folder, "")`, which runs its normal locked-resume path (load state, publish, sync). If the key turns out to be missing, `lastKeyStatus` becomes `notFound` and polling stops trying. The pane then shows the plain recovery-phrase line. It also resumes once whenever `status.unlocked` is true while the pane is locked, because the core already holds the key. That covers a held key saved by the 30 s retry before the poll saw the keyring open.
 
 ## Tests
 
 | Command | Result |
 | --- | --- |
 | `python3 -m unittest test_keyring_locked` | 1 test (2 node cases): a private dbus-daemon whose only service dir registers `gcr-prompter`, a private Xvfb for its dialog (answered with xdotool), and a private gnome-keyring. Live: connect, lock, launch; dismiss the prompt (`keyringLocked`, no request, token still stored), then unlock through the prompt (Refresh works), then dismiss again and unlock from outside (Refresh works with no prompt); the stored token is byte-identical. Sync: the locked launch is named, the phrase resumes with the key in memory, an outside unlock saves it, `""` resumes after an outside unlock, unlocking through the prompt at launch or at the phrase works, and other device ids are refused. Both cases fail on `linux` (`signedOut`; `keyStoreStatus` `ok`). |
-| `python3 -m unittest test_sync test_live` | 3 + 6 pass |
+| `python3 -m unittest test_sync test_live` | 3 + 6 pass. `sync_scenarios` "held key" (from the #293 review's repro): a second window's `unlock` answers from memory, and the deferred save waits for a confirmed-open default collection. It fails before the review fixes. |
 | `pnpm --filter @ardia/linux typecheck`, `test:host`, `build` | ok, 534 pass, ok |
 | `bash scripts/linux/syntax-check-156.sh ac_linux_sync_keystore.cc ac_linux_sync.cc ac_linux_sync_service.cc ac_linux_live.cc ac_linux_live_service.cc` | 5 of 5 |
 

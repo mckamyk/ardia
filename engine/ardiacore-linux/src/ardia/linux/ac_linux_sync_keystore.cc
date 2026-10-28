@@ -142,6 +142,7 @@ class FileKeyStore final : public KeyStore {
   }
 
   KeyStatus Probe() override { return KeyStatus::kOk; }
+  bool WritesWithoutPrompt() override { return true; }
 
  private:
   std::string PathOf(std::string_view account) const {
@@ -224,9 +225,26 @@ class SecretServiceKeyStore final : public KeyStore {
       return Classify(error);
     }
     if (!service) return KeyStatus::kUnavailable;
-    const KeyStatus status = DefaultCollection(service);
+    bool open = false;
+    const KeyStatus status = DefaultCollection(service, &open);
     unref_(service);
     return status;
+  }
+
+  [[clang::no_sanitize("cfi-icall")]] bool WritesWithoutPrompt() override {
+    if (!Loaded()) return false;
+    GError* error = nullptr;
+    void* service = service_(0, nullptr, &error);
+    if (error) {
+      if (service) unref_(service);
+      error_free_(error);
+      return false;
+    }
+    if (!service) return false;
+    bool open = false;
+    const KeyStatus status = DefaultCollection(service, &open);
+    unref_(service);
+    return status == KeyStatus::kOk && open;
   }
 
  private:
@@ -247,7 +265,7 @@ class SecretServiceKeyStore final : public KeyStore {
     return KeyStatus::kLocked;
   }
 
-  [[clang::no_sanitize("cfi-icall")]] KeyStatus DefaultCollection(void* service) {
+  [[clang::no_sanitize("cfi-icall")]] KeyStatus DefaultCollection(void* service, bool* open) {
     if (!collection_for_alias_ || !collection_locked_) return KeyStatus::kOk;
     GError* error = nullptr;
     void* collection = collection_for_alias_(service, kDefaultCollection, 0, nullptr, &error);
@@ -258,6 +276,7 @@ class SecretServiceKeyStore final : public KeyStore {
     if (!collection) return KeyStatus::kOk;
     const bool locked = collection_locked_(collection);
     unref_(collection);
+    *open = !locked;
     return locked ? KeyStatus::kLocked : KeyStatus::kOk;
   }
 

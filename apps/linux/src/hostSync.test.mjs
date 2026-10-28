@@ -12,6 +12,7 @@ import {
   base32,
   keyringMessage,
   keyringResumer,
+  watchLockedSync,
   loadSyncDeviceName,
   newSyncDeviceId,
   presentSyncState,
@@ -425,7 +426,58 @@ test("a keyring locked at launch is named in the Sync pane, and opening it resum
   const watch = engine.slice(engine.indexOf("function resumeWhenKeyringOpens"), engine.indexOf("function dropDeletedProfiles"));
   assert.match(watch, /authority\?\.isAuthority\(\) && state\.enabled && state\.status === "locked"/);
   assert.match(watch, /resume: \(\) => engine\.enterRecoveryPhrase\(engine\.useSync\.getState\(\)\.folder \?\? "", ""\)/);
-  assert.match(watch, /setInterval\(\(\) => void tick\(\), KEYRING_RETRY_MS\)/);
+  assert.match(watch, /watchLockedSync\(engine\.useSync, tick, KEYRING_RETRY_MS\)/);
+  const start = engine.slice(engine.indexOf("export function startLinuxSync"), engine.indexOf("export const linuxSyncHooks"));
+  assert.match(start, /onRole: \(role\) => \{\n\s+if \(role !== "authority"\) \{\n\s+dropHeldLogins\(\);\n\s+stopKeyringWatch\(\);/);
+  assert.match(start, /addEventListener\("pagehide", \(\) => \{\n\s+stopKeyringWatch\(\);\n\s+started\.stop\(\);/);
+});
+
+test("a window holding the sync key in memory resumes even when the held key was saved before the poll saw it", async () => {
+  const secret = (keyStoreStatus, lastKeyStatus, unlocked) => ({ keyStore: "secretService", keyStoreStatus, lastKeyStatus, unlocked, unreadable: false, passwords: false });
+  const replies = [secret("locked", "locked", true), secret("ok", "ok", true), secret("ok", "ok", false), secret("ok", "ok", true)];
+  let resumed = 0;
+  const tickOnce = keyringResumer({ locked: () => true, status: async () => replies.shift(), seen: () => {}, resume: async () => void resumed++ });
+  assert.equal(await tickOnce(), true);
+  assert.equal(await tickOnce(), false);
+  assert.equal(await tickOnce(), false);
+  assert.equal(await tickOnce(), true);
+  assert.equal(resumed, 2);
+});
+
+test("the keyring poll runs only while sync is on and locked, and stops for good when the window stops running sync", () => {
+  let state = { enabled: true, status: "starting" };
+  const listeners = new Set();
+  const store = { getState: () => state, subscribe: (listener) => (listeners.add(listener), () => listeners.delete(listener)) };
+  const set = (next) => {
+    state = { ...state, ...next };
+    for (const listener of [...listeners]) listener(state);
+  };
+  const timers = new Map();
+  let ids = 0;
+  const clock = { set: (run, ms) => (timers.set(++ids, { run, ms }), ids), clear: (id) => timers.delete(id) };
+  let ticks = 0;
+  const stop = watchLockedSync(store, () => void ticks++, 3000, clock);
+  assert.equal(timers.size, 0);
+  set({ status: "locked" });
+  assert.equal(timers.size, 1);
+  assert.equal([...timers.values()][0].ms, 3000);
+  [...timers.values()][0].run();
+  assert.equal(ticks, 1);
+  set({ status: "locked", error: "x" });
+  assert.equal(timers.size, 1);
+  set({ status: "updated" });
+  assert.equal(timers.size, 0);
+  set({ status: "locked" });
+  assert.equal(timers.size, 1);
+  set({ enabled: false, status: "off" });
+  assert.equal(timers.size, 0);
+  set({ enabled: true, status: "locked" });
+  assert.equal(timers.size, 1);
+  stop();
+  assert.equal(timers.size, 0);
+  assert.equal(listeners.size, 0);
+  set({ status: "locked" });
+  assert.equal(timers.size, 0);
 });
 
 test("one renderer runs sync, the others mirror it and forward their actions, and it fails over when that window closes", async () => {
@@ -621,7 +673,7 @@ test("the sync authority owns the held-logins store only while it holds the leas
   assert.match(adopt, /configureHeldLogins\(heldLogins\)/);
   assert.match(engine.slice(engine.indexOf("function dropHeldLogins")), /^function dropHeldLogins\(\) \{\n  heldLogins = null;\n  configureHeldLogins\(null\);/);
   const start = engine.slice(engine.indexOf("export function startLinuxSync"), engine.indexOf("export const linuxSyncHooks"));
-  assert.match(start, /onRole: \(role\) => \{\n\s+if \(role !== "authority"\) dropHeldLogins\(\);/);
+  assert.match(start, /onRole: \(role\) => \{\n\s+if \(role !== "authority"\) \{\n\s+dropHeldLogins\(\);/);
   assert.match(start, /claim: async \(\) => \{\n\s+const claim = await claimSyncAuthority\(host\);\n\s+if \(!claim\.granted\) dropHeldLogins\(\);/);
   const remote = engine.slice(engine.indexOf("function remoteFor"), engine.indexOf("async function becomeAuthority"));
   assert.match(remote, /whileResettingHeldLogins\(\s*\(\) => engine\.turnOnSync\(folder\),\s*\(result\) => !\("error" in result\),\s*\(\) => engine\.stopSync\(\{ deleteData: true \}\),?\s*\)/);

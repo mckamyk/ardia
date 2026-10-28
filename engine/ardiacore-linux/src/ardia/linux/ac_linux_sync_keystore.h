@@ -21,6 +21,7 @@ class KeyStore {
   virtual KeyStatus Save(std::string_view account, const Bytes& secret) = 0;
   virtual KeyStatus Delete(std::string_view account) = 0;
   virtual KeyStatus Probe() = 0;
+  virtual bool WritesWithoutPrompt() = 0;
 };
 
 inline constexpr char kSecretSchema[] = "dev.ardia.linux.SyncKey";

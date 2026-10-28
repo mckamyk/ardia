@@ -180,6 +180,8 @@ test("a sync key in a keyring locked at launch is named, the recovery phrase res
   assert.equal(held.unlocked, true);
   assert.equal(held.lastKeyStatus, "locked");
   assert.equal(await second.call("chainStatus", folder), "ok");
+  assert.equal(await second.call("unlock", device), true);
+  assert.deepEqual(await second.call("enterPhrase", device, "", folder), { ok: true });
   assert.deepEqual(files(scratch).filter((path) => !path.startsWith(folder)), []);
   assert.equal(keyring("items", "dev.ardia.linux.SyncKey").length, 1);
   unlock();

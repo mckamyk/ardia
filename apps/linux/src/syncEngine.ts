@@ -15,6 +15,7 @@ import {
   KEYRING_RETRY_MS,
   keyringMessage,
   keyringResumer,
+  watchLockedSync,
   loadSyncDeviceName,
   presentSyncState,
   refreshSyncDocuments,
@@ -57,10 +58,15 @@ function adoptHeldLogins() {
 }
 
 let watchingProfiles = false;
-let keyringWatch: ReturnType<typeof setInterval> | null = null;
+let keyringWatch: (() => void) | null = null;
+
+function stopKeyringWatch() {
+  keyringWatch?.();
+  keyringWatch = null;
+}
 
 function resumeWhenKeyringOpens(host: ArdiaHost) {
-  if (keyringWatch) return;
+  stopKeyringWatch();
   const tick = keyringResumer({
     locked: () => {
       const state = engine.useSync.getState();
@@ -74,7 +80,7 @@ function resumeWhenKeyringOpens(host: ArdiaHost) {
     },
     resume: () => engine.enterRecoveryPhrase(engine.useSync.getState().folder ?? "", ""),
   });
-  keyringWatch = setInterval(() => void tick(), KEYRING_RETRY_MS);
+  keyringWatch = watchLockedSync(engine.useSync, tick, KEYRING_RETRY_MS);
 }
 
 function dropDeletedProfiles() {
@@ -175,14 +181,21 @@ export function startLinuxSync(options: { host?: ArdiaHost; candidate: boolean; 
       return claim;
     },
     onRole: (role) => {
-      if (role !== "authority") dropHeldLogins();
+      if (role !== "authority") {
+        dropHeldLogins();
+        stopKeyringWatch();
+      }
     },
     release: () => releaseSyncAuthority(host),
     become: () => becomeAuthority(host),
     present: (state) => presentSyncState(state, keyStore),
   });
   authority = started;
-  if (typeof addEventListener === "function") addEventListener("pagehide", () => started.stop(), { once: true });
+  if (typeof addEventListener === "function")
+    addEventListener("pagehide", () => {
+      stopKeyringWatch();
+      started.stop();
+    }, { once: true });
   return started;
 }
 
