@@ -115,25 +115,25 @@ class Variant {
 
   explicit operator bool() const { return value_ != nullptr; }
   GVariant* get() const { return value_; }
-  Variant Child(size_t index) const {
+  [[clang::no_sanitize("cfi-icall")]] Variant Child(size_t index) const {
     const Gio& gio = Library();
     return value_ && index < gio.n_children(value_) ? Variant(gio.child(value_, index)) : Variant();
   }
   size_t Size() const { return value_ ? Library().n_children(value_) : 0; }
-  std::string String() const {
+  [[clang::no_sanitize("cfi-icall")]] std::string String() const {
     if (!value_) return std::string();
     const char* type = Library().type_string(value_);
     if (!type || (std::strcmp(type, "s") != 0 && std::strcmp(type, "o") != 0)) return std::string();
     const char* text = Library().get_string(value_, nullptr);
     return text ? std::string(text) : std::string();
   }
-  bool Is(const char* type) const {
+  [[clang::no_sanitize("cfi-icall")]] bool Is(const char* type) const {
     const char* actual = value_ ? Library().type_string(value_) : nullptr;
     return actual && std::strcmp(actual, type) == 0;
   }
 
  private:
-  void Reset() {
+  [[clang::no_sanitize("cfi-icall")]] void Reset() {
     if (value_) Library().variant_unref(value_);
     value_ = nullptr;
   }
@@ -148,7 +148,7 @@ struct CallError {
 
 class Bus {
  public:
-  Bus() {
+  [[clang::no_sanitize("cfi-icall")]] Bus() {
     const Gio& gio = Library();
     if (!gio.loaded) return;
     GError* error = nullptr;
@@ -157,14 +157,14 @@ class Bus {
   }
   Bus(const Bus&) = delete;
   Bus& operator=(const Bus&) = delete;
-  ~Bus() {
+  [[clang::no_sanitize("cfi-icall")]] ~Bus() {
     if (connection_) Library().object_unref(connection_);
   }
 
   bool ok() const { return connection_ != nullptr; }
   GDBusConnection* get() const { return connection_; }
 
-  Variant Call(const char* name, const char* path, const char* interface, const char* method, GVariant* arguments,
+  [[clang::no_sanitize("cfi-icall")]] Variant Call(const char* name, const char* path, const char* interface, const char* method, GVariant* arguments,
                int timeout_ms, bool auto_start, CallError* error_out = nullptr) {
     const Gio& gio = Library();
     GError* error = nullptr;
@@ -182,7 +182,7 @@ class Bus {
     return Variant(reply);
   }
 
-  bool Start(const char* name) {
+  [[clang::no_sanitize("cfi-icall")]] bool Start(const char* name) {
     Variant reply = Call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "StartServiceByName",
                          Library().variant_new_parsed("(%s, %u)", name, uint32_t{0}), kActivationTimeoutMs, false);
     return static_cast<bool>(reply);
@@ -192,7 +192,7 @@ class Bus {
     return HasOwner(name, timeout_ms) || (start && Start(name));
   }
 
-  bool HasOwner(const char* name, int timeout_ms) {
+  [[clang::no_sanitize("cfi-icall")]] bool HasOwner(const char* name, int timeout_ms) {
     Variant reply = Call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
                          Library().variant_new_parsed("(%s,)", name), timeout_ms, false);
     Variant owned = reply.Child(0);
@@ -214,7 +214,7 @@ struct PromptWait {
   bool dismissed = false;
 };
 
-void PromptCompleted(GDBusConnection*, const char*, const char*, const char*, const char*, GVariant* parameters,
+[[clang::no_sanitize("cfi-icall")]] void PromptCompleted(GDBusConnection*, const char*, const char*, const char*, const char*, GVariant* parameters,
                      void* data) {
   auto* wait = static_cast<PromptWait*>(data);
   wait->completed = true;
@@ -235,7 +235,7 @@ class SecretService {
 
   bool Available() { return bus_.ok() && bus_.Reachable(kSecrets, timeout_ms_, start_); }
 
-  KeyringStatus Search(const SafeStorageItem& item, std::vector<std::string>* unlocked, std::vector<std::string>* locked) {
+  [[clang::no_sanitize("cfi-icall")]] KeyringStatus Search(const SafeStorageItem& item, std::vector<std::string>* unlocked, std::vector<std::string>* locked) {
     const std::string schemas[] = {std::string(kSecretSchemaV2), std::string(kSecretSchemaV1), std::string()};
     for (const std::string& schema : schemas) {
       GVariant* arguments =
@@ -258,7 +258,7 @@ class SecretService {
     return KeyringStatus::kMissing;
   }
 
-  KeyringStatus Unlock(const std::string& item, int prompt_timeout_ms) {
+  [[clang::no_sanitize("cfi-icall")]] KeyringStatus Unlock(const std::string& item, int prompt_timeout_ms) {
     Variant reply = bus_.Call(kSecrets, kSecretsPath, kService, "Unlock",
                               Library().variant_new_parsed("([%o],)", item.c_str()), timeout_ms_, false);
     if (!reply || reply.Size() < 2) return KeyringStatus::kUnavailable;
@@ -296,7 +296,7 @@ class SecretService {
     return wait.dismissed ? KeyringStatus::kDenied : KeyringStatus::kOk;
   }
 
-  KeyringStatus Secret(const std::string& item, SecretBytes* secret) {
+  [[clang::no_sanitize("cfi-icall")]] KeyringStatus Secret(const std::string& item, SecretBytes* secret) {
     if (!OpenSession()) return KeyringStatus::kUnavailable;
     CallError error;
     Variant reply = bus_.Call(kSecrets, kSecretsPath, kService, "GetSecrets",
@@ -320,7 +320,7 @@ class SecretService {
   }
 
  private:
-  bool OpenSession() {
+  [[clang::no_sanitize("cfi-icall")]] bool OpenSession() {
     if (!session_.empty()) return true;
     Variant reply = bus_.Call(kSecrets, kSecretsPath, kService, "OpenSession",
                               Library().variant_new_parsed("('plain', <''>)"), timeout_ms_, false);
@@ -360,7 +360,7 @@ class KWallet {
     }
   }
 
-  bool Available() {
+  [[clang::no_sanitize("cfi-icall")]] bool Available() {
     if (!service_) return false;
     Variant enabled = Call("isEnabled", nullptr, timeout_ms_).Child(0);
     if (!enabled || !enabled.Is("b") || !Library().get_boolean(enabled.get())) return false;
@@ -368,7 +368,7 @@ class KWallet {
     return !wallet_.empty();
   }
 
-  KeyringStatus Exists(const SafeStorageItem& item) {
+  [[clang::no_sanitize("cfi-icall")]] KeyringStatus Exists(const SafeStorageItem& item) {
     Variant missing = Call("keyDoesNotExist",
                            Library().variant_new_parsed("(%s, %s, %s)", wallet_.c_str(), item.kwallet_folder.c_str(),
                                                         item.kwallet_key.c_str()),
@@ -378,7 +378,7 @@ class KWallet {
     return Library().get_boolean(missing.get()) ? KeyringStatus::kMissing : KeyringStatus::kOk;
   }
 
-  KeyringStatus Read(const SafeStorageItem& item, int prompt_timeout_ms, SecretBytes* secret) {
+  [[clang::no_sanitize("cfi-icall")]] KeyringStatus Read(const SafeStorageItem& item, int prompt_timeout_ms, SecretBytes* secret) {
     const std::string app(kKWalletAppId);
     CallError error;
     Variant opened = Call("open", Library().variant_new_parsed("(%s, %x, %s)", wallet_.c_str(), int64_t{0}, app.c_str()),
