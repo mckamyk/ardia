@@ -109,7 +109,7 @@ export const w156 = {
   title: "Downloads: a failed reveal is reported and volume trash survives a writable top directory",
   deadline: 240000,
   manual: [
-    { name: "Trash on a writable removable drive", steps: ["Mount a drive whose top folder is writable by everyone and not sticky (for example vfat with umask=000) and download a file to it.", "Move to Trash puts it in that drive's .Trash-<uid>/files with a .trashinfo record, and a .Trash-<uid> another user created there is refused instead of used."], reason: "needs a second user and a removable drive" },
+    { name: "Trash on a writable removable drive", steps: ["Mount a drive whose top folder is writable by everyone and not sticky (for example vfat with umask=000) and download a file to it.", "Move to Trash puts it in that drive's .Trash-<uid>/files with a .trashinfo record, and a .Trash-<uid> another user created there is refused instead of used."], reason: "automated in W156R with a tmpfs drive in a user namespace; a physical drive needs a person" },
   ],
   async run(t) {
     const scratch = await t.scratch("reveal");
