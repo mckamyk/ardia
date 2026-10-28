@@ -350,8 +350,25 @@ PbeResult DecryptFirefoxPbe(std::string_view der, std::string_view global_salt, 
   return PbeResult::kUnsupported;
 }
 
-FirefoxKey FirefoxMasterKey(std::string_view global_salt, std::string_view password_check,
-                            const std::vector<FirefoxKeyRow>& rows, std::string_view primary_password, SecretBytes* key) {
+FirefoxKeys::FirefoxKeys() = default;
+FirefoxKeys::~FirefoxKeys() = default;
+FirefoxKeys::FirefoxKeys(FirefoxKeys&&) = default;
+FirefoxKeys& FirefoxKeys::operator=(FirefoxKeys&&) = default;
+
+void FirefoxKeys::Add(std::string id, SecretBytes key, bool preferred) {
+  if (preferred || keys_.empty()) preferred_ = keys_.size();
+  keys_.emplace_back(std::move(id), std::move(key));
+}
+
+const SecretBytes* FirefoxKeys::For(std::string_view id) const {
+  for (const auto& [key_id, key] : keys_) {
+    if (key_id == id) return &key;
+  }
+  return keys_.empty() ? nullptr : &keys_[preferred_].second;
+}
+
+FirefoxKey FirefoxMasterKeys(std::string_view global_salt, std::string_view password_check,
+                             const std::vector<FirefoxKeyRow>& rows, std::string_view primary_password, FirefoxKeys* keys) {
   SecretBytes check;
   const PbeResult checked = DecryptFirefoxPbe(password_check, global_salt, primary_password, &check);
   if (checked == PbeResult::kUnsupported) return FirefoxKey::kUnsupported;
@@ -360,19 +377,20 @@ FirefoxKey FirefoxMasterKey(std::string_view global_salt, std::string_view passw
     return FirefoxKey::kLocked;
   }
   const std::string_view cka_id(reinterpret_cast<const char*>(kCkaId), sizeof(kCkaId));
-  const FirefoxKeyRow* chosen = nullptr;
+  bool unsupported = false;
+  bool candidates = false;
   for (const FirefoxKeyRow& row : rows) {
     if (row.a11.empty() || row.a3 == kLoginsDatabaseLabel) continue;
-    if (!chosen || row.a102 == cka_id) chosen = &row;
-    if (row.a102 == cka_id) break;
+    candidates = true;
+    SecretBytes decrypted;
+    const PbeResult result = DecryptFirefoxPbe(row.a11, global_salt, primary_password, &decrypted);
+    if (result == PbeResult::kUnsupported) unsupported = true;
+    if (result != PbeResult::kOk || decrypted.value().size() < 24) continue;
+    keys->Add(row.a102, std::move(decrypted), row.a102 == cka_id);
   }
-  if (!chosen) return FirefoxKey::kMissing;
-  SecretBytes decrypted;
-  const PbeResult result = DecryptFirefoxPbe(chosen->a11, global_salt, primary_password, &decrypted);
-  if (result == PbeResult::kUnsupported) return FirefoxKey::kUnsupported;
-  if (result != PbeResult::kOk || decrypted.value().size() < 24) return FirefoxKey::kMalformed;
-  *key = std::move(decrypted);
-  return FirefoxKey::kOk;
+  if (!keys->empty()) return FirefoxKey::kOk;
+  if (!candidates) return FirefoxKey::kMissing;
+  return unsupported ? FirefoxKey::kUnsupported : FirefoxKey::kMalformed;
 }
 
 bool Base64Decode(std::string_view text, std::string* out) {
@@ -399,7 +417,7 @@ bool Base64Decode(std::string_view text, std::string* out) {
   return padding <= 2 && bits < 6;
 }
 
-bool DecryptFirefoxField(std::string_view base64, const SecretBytes& key, std::string* plain) {
+bool DecryptFirefoxField(std::string_view base64, const FirefoxKeys& keys, std::string* plain) {
   plain->clear();
   std::string raw;
   if (!Base64Decode(base64, &raw)) return false;
@@ -408,7 +426,9 @@ bool DecryptFirefoxField(std::string_view base64, const SecretBytes& key, std::s
   const std::string oid = node->children[1].children[0].Oid();
   const std::string_view iv = node->children[1].children[1].content;
   const std::string_view cipher = node->children[2].content;
-  const std::string& material = key.value();
+  const SecretBytes* key = keys.For(node->children[0].content);
+  if (!key) return false;
+  const std::string& material = key->value();
   bool ok = false;
   if (oid == kOid3DesCbc && material.size() >= 24) {
     ok = Cipher(EVP_des_ede3_cbc(), std::string_view(material).substr(0, 24), iv, cipher, true, plain);

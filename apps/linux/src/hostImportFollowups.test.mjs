@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { IMPORT_IDLE_MS, UNLOCK_DEADLINE_MS, createHostImport } from "./hostImport.ts";
+import { IMPORT_IDLE_MS, UNLOCK_DEADLINE_MS, UNLOCK_LIFETIME_MS, createHostImport } from "./hostImport.ts";
 
 class ImportError extends Error {
   constructor(code, message) {
@@ -29,7 +29,9 @@ function fixture(replies = {}) {
       return () => listeners.delete(listener);
     },
   };
+  let now = 1_000_000;
   const clock = {
+    now: () => now,
     schedule: (run, ms) => {
       const timer = { run, ms, live: true };
       timers.push(timer);
@@ -44,7 +46,8 @@ function fixture(replies = {}) {
       timer.run();
     }
   };
-  return { api: createHostImport(host, ImportError, clock), calls, emit, fire, listeners };
+  const advance = (ms) => { now += ms; };
+  return { api: createHostImport(host, ImportError, clock), calls, emit, fire, listeners, advance };
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -163,4 +166,19 @@ test("an import result keeps a well-formed vault token and the native counts", a
   const bad = await second;
   assert.equal(bad.vaultToken, undefined);
   assert.equal(bad.cookieCount, 0);
+});
+
+test("an unlock expires with the native key's ten-minute lifetime", async () => {
+  const { api, calls, emit, advance } = fixture({ "ArdiaImport.listBrowsers": SOURCES });
+  await api.listBrowsers();
+  const unlocking = api.unlockBrowser("chrome");
+  await settle();
+  emit({ jobId: calls.at(-1).args[0], type: "unlocked" });
+  await unlocking;
+  assert.equal(UNLOCK_LIFETIME_MS, 10 * 60_000);
+  advance(UNLOCK_LIFETIME_MS - 1000);
+  assert.equal(api.isBrowserUnlocked("chrome"), true);
+  advance(1000);
+  assert.equal(api.isBrowserUnlocked("chrome"), false);
+  assert.equal(api.isBrowserUnlocked("brave"), true);
 });

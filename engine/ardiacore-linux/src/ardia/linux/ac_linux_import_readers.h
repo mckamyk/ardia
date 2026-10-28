@@ -80,6 +80,7 @@ struct ImportedCard;
 
 struct ImportOutcome {
   bool cancelled = false;
+  bool withheld = false;
   std::string error_code;
   std::string error;
   base::DictValue result;

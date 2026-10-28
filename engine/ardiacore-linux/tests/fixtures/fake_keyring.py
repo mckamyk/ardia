@@ -82,11 +82,15 @@ class Keyring:
 
     def prompt(self, connection, sender, path, interface, method, parameters, invocation):
         self.calls.append(method)
-        invocation.return_value(None)
         if method != 'Prompt':
+            invocation.return_value(None)
             return
         queued = self.config.get('prompts')
         answer = queued.pop(0) if queued else self.config.get('prompt', 'accept')
+        if answer == 'fail':
+            invocation.return_dbus_error('org.freedesktop.DBus.Error.Failed', 'prompt failed')
+            return
+        invocation.return_value(None)
         if answer == 'never':
             return
         dismissed = answer != 'accept'
@@ -125,7 +129,7 @@ class Keyring:
 
 
 def main():
-    config = json.loads(sys.argv[1])
+    config = json.loads(open(sys.argv[1][1:]).read() if sys.argv[1].startswith('@') else sys.argv[1])
     command = sys.argv[2:]
     loop = GLib.MainLoop()
     connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)

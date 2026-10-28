@@ -78,6 +78,7 @@ base::ListValue CookieRows(const std::vector<ImportedCookie>& cookies) {
     row.Set("sameSite", cookie.same_site);
     row.Set("priority", cookie.priority);
     row.Set("partition", cookie.partitioned ? cookie.partition_site : std::string());
+    row.Set("crossSite", cookie.partition_cross_site);
     row.Set("sourceScheme", cookie.source_scheme);
     row.Set("sourcePort", cookie.source_port);
     rows.Append(std::move(row));
@@ -154,10 +155,22 @@ void SecretUnits() {
   assert(!ReplyLeaksImported(base::Value(std::move(clean)), taken->cookies, taken->cards));
   base::DictValue cookie;
   cookie.Set("note", "has cookie-secret-value inside");
-  assert(ReplyLeaksImported(base::Value(std::move(cookie)), taken->cookies, taken->cards));
+  assert(!ReplyLeaksImported(base::Value(std::move(cookie)), taken->cookies, taken->cards));
+  base::DictValue whole;
+  whole.Set("title", "cookie-secret-value");
+  assert(ReplyLeaksImported(base::Value(std::move(whole)), taken->cookies, taken->cards));
+  std::vector<ImportedCookie> common(1);
+  common[0].value = SecretBytes("en-US");
+  base::DictValue ordinary;
+  ordinary.Set("url", "https://example.com/en-US/page");
+  ordinary.Set("title", "en-US");
+  assert(!ReplyLeaksImported(base::Value(std::move(ordinary)), common, taken->cards));
   base::DictValue card;
   card.Set("note", "4111-1111-1111-1111");
   assert(ReplyLeaksImported(base::Value(std::move(card)), taken->cookies, taken->cards));
+  base::DictValue embedded;
+  embedded.Set("url", "https://shop.example/?order=4111111111111111x");
+  assert(!ReplyLeaksImported(base::Value(std::move(embedded)), taken->cookies, taken->cards));
   assert(vault.Put("w1", token, ImportedData{}, 0));
   assert(!vault.Take("w1", token, kVaultLifetimeMs));
   for (int i = 0; i < 10; ++i) {
@@ -190,10 +203,15 @@ void SecretUnits() {
   assert(!CardDigits("4111x", &digits) && digits.empty());
   assert(!CardDigits("123", &digits));
   std::string site;
-  assert(FirefoxPartitionSite("(https,Example.com)", &site) && site == "https://example.com");
-  assert(FirefoxPartitionSite("(http,a.example,8080)", &site) && site == "http://a.example");
-  assert(!FirefoxPartitionSite("(ftp,a.example)", &site) && !FirefoxPartitionSite("(https,a b)", &site) &&
-         !FirefoxPartitionSite("(https,a.example,0)", &site) && !FirefoxPartitionSite("https,a", &site));
+  bool cross = true;
+  assert(FirefoxPartitionSite("(https,Example.com)", &site, &cross) && site == "https://example.com" && !cross);
+  assert(FirefoxPartitionSite("(http,a.example,8080)", &site, &cross) && site == "http://a.example" && !cross);
+  assert(FirefoxPartitionSite("(https,example.com,f)", &site, &cross) && site == "https://example.com" && cross);
+  assert(FirefoxPartitionSite("(https,example.com,8443,f)", &site, &cross) && site == "https://example.com" && cross);
+  assert(!FirefoxPartitionSite("(ftp,a.example)", &site, &cross) && !FirefoxPartitionSite("(https,a b)", &site, &cross) &&
+         !FirefoxPartitionSite("(https,a.example,0)", &site, &cross) && !FirefoxPartitionSite("https,a", &site, &cross) &&
+         !FirefoxPartitionSite("(https,a.example,8443,x)", &site, &cross) &&
+         !FirefoxPartitionSite("(https,a.example,f,f)", &site, &cross));
   std::string json;
   AppendJsonString("a\"b\\c\n\x01", &json);
   assert(json == "\"a\\\"b\\\\c\\u000a\\u0001\"");
@@ -505,7 +523,8 @@ int main(int argc, char** argv) {
     return 0;
   }
   if (command == "firefoxfield" && argc > 3) {
-    SecretBytes key(Unhex(argv[3]));
+    FirefoxKeys key;
+    key.Add(std::string("\xf8\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x01", 16), SecretBytes(Unhex(argv[3])), true);
     std::string plain;
     std::cout << (DecryptFirefoxField(argv[2], key, &plain) ? "ok " + plain : std::string("failed")) << "\n";
     return 0;
@@ -561,6 +580,7 @@ int main(int argc, char** argv) {
     out.Set("error", outcome.error_code);
     out.Set("result", std::move(outcome.result));
     out.Set("credentials", Rows(outcome.credentials));
+    out.Set("withheld", OutcomeLeaks(outcome));
     out.Set("cookies", CookieRows(outcome.cookies));
     out.Set("addresses", AddressRows(outcome.addresses));
     out.Set("cards", CardRows(outcome.cards));

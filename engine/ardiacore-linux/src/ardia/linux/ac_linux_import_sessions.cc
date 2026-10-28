@@ -318,7 +318,9 @@ struct SessionState {
         const size_t at = tab->Closest(tab->current);
         const Navigation& navigation = at < tab->navigations.size() ? tab->navigations[at] : tab->navigations.back();
         const int index = position++;
-        if (navigation.url.empty() || out->count >= static_cast<int>(kMaxImportedTabs)) continue;
+        if (navigation.url.empty() || !ValidUtf8(navigation.url) || out->count >= static_cast<int>(kMaxImportedTabs)) {
+          continue;
+        }
         base::DictValue entry;
         entry.Set("url", WithoutContainerPrefix(navigation.url));
         entry.Set("title", ValidUtf8(navigation.title) ? navigation.title : std::string());

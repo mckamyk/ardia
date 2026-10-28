@@ -33,6 +33,7 @@ constexpr const char* kService = "org.freedesktop.Secret.Service";
 constexpr const char* kPromptInterface = "org.freedesktop.Secret.Prompt";
 constexpr const char* kSessionInterface = "org.freedesktop.Secret.Session";
 constexpr const char* kKWallet = "org.kde.KWallet";
+constexpr int kActivationTimeoutMs = 25000;
 
 struct Gio {
   bool loaded = false;
@@ -181,6 +182,16 @@ class Bus {
     return Variant(reply);
   }
 
+  bool Start(const char* name) {
+    Variant reply = Call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "StartServiceByName",
+                         Library().variant_new_parsed("(%s, %u)", name, uint32_t{0}), kActivationTimeoutMs, false);
+    return static_cast<bool>(reply);
+  }
+
+  bool Reachable(const char* name, int timeout_ms, bool start) {
+    return HasOwner(name, timeout_ms) || (start && Start(name));
+  }
+
   bool HasOwner(const char* name, int timeout_ms) {
     Variant reply = Call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
                          Library().variant_new_parsed("(%s,)", name), timeout_ms, false);
@@ -219,10 +230,10 @@ void PromptCompleted(GDBusConnection*, const char*, const char*, const char*, co
 
 class SecretService {
  public:
-  SecretService(Bus& bus, int timeout_ms) : bus_(bus), timeout_ms_(timeout_ms) {}
+  SecretService(Bus& bus, int timeout_ms, bool start) : bus_(bus), timeout_ms_(timeout_ms), start_(start) {}
   ~SecretService() { CloseSession(); }
 
-  bool Available() { return bus_.ok() && bus_.HasOwner(kSecrets, timeout_ms_); }
+  bool Available() { return bus_.ok() && bus_.Reachable(kSecrets, timeout_ms_, start_); }
 
   KeyringStatus Search(const SafeStorageItem& item, std::vector<std::string>* unlocked, std::vector<std::string>* locked) {
     const std::string schemas[] = {std::string(kSecretSchemaV2), std::string(kSecretSchemaV1), std::string()};
@@ -277,6 +288,7 @@ class SecretService {
     }
     gio.context_pop(context);
     gio.context_unref(context);
+    if (!started) return KeyringStatus::kUnavailable;
     if (!wait.completed) {
       bus_.Call(kSecrets, prompt.c_str(), kPromptInterface, "Dismiss", nullptr, timeout_ms_, false);
       return KeyringStatus::kDenied;
@@ -323,6 +335,7 @@ class SecretService {
 
   Bus& bus_;
   int timeout_ms_;
+  bool start_;
   std::string session_;
 };
 
@@ -337,10 +350,10 @@ constexpr WalletService kWallets[] = {{"org.kde.kwalletd6", "/modules/kwalletd6"
 
 class KWallet {
  public:
-  KWallet(Bus& bus, int timeout_ms) : bus_(bus), timeout_ms_(timeout_ms) {
+  KWallet(Bus& bus, int timeout_ms, bool start) : bus_(bus), timeout_ms_(timeout_ms) {
     if (!bus_.ok()) return;
     for (const WalletService& wallet : kWallets) {
-      if (bus_.HasOwner(wallet.name, timeout_ms_)) {
+      if (bus_.Reachable(wallet.name, timeout_ms_, start)) {
         service_ = &wallet;
         break;
       }
@@ -410,14 +423,14 @@ class SystemKeyringImpl : public Keyring {
     Bus bus;
     if (!bus.ok()) return KeyringStatus::kUnavailable;
     KeyringStatus status = KeyringStatus::kUnavailable;
-    SecretService secrets(bus, timeout_ms);
+    SecretService secrets(bus, timeout_ms, false);
     if (secrets.Available()) {
       std::vector<std::string> unlocked;
       std::vector<std::string> locked;
       status = secrets.Search(item, &unlocked, &locked);
       if (status == KeyringStatus::kOk) return status;
     }
-    KWallet wallet(bus, timeout_ms);
+    KWallet wallet(bus, timeout_ms, false);
     if (wallet.Available()) {
       const KeyringStatus found = wallet.Exists(item);
       if (found == KeyringStatus::kOk || status == KeyringStatus::kUnavailable) status = found;
@@ -429,7 +442,7 @@ class SystemKeyringImpl : public Keyring {
     KeyringLookup lookup;
     Bus bus;
     if (!bus.ok()) return lookup;
-    SecretService secrets(bus, kKeyringProbeTimeoutMs);
+    SecretService secrets(bus, kKeyringProbeTimeoutMs, true);
     if (secrets.Available()) {
       std::vector<std::string> unlocked;
       std::vector<std::string> locked;
@@ -442,7 +455,7 @@ class SystemKeyringImpl : public Keyring {
         return lookup;
       }
     }
-    KWallet wallet(bus, kKeyringProbeTimeoutMs);
+    KWallet wallet(bus, kKeyringProbeTimeoutMs, true);
     if (wallet.Available()) {
       const KeyringStatus found = wallet.Exists(item);
       if (found == KeyringStatus::kOk) {

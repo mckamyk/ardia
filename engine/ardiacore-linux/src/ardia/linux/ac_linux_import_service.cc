@@ -169,7 +169,9 @@ li::ImportOutcome RunImport(li::Environment environment, std::string browser, st
                             scoped_refptr<base::SequencedTaskRunner> ui, Emit emit, std::string job) {
   li::RemoveStaleScratch(environment.temp_root, static_cast<int64_t>(base::Time::Now().ToTimeT()), li::kStaleScratchSeconds);
   JobObserver observer(std::move(cancelled), std::move(ui), std::move(emit), std::move(job));
-  return li::ReadBrowserProfile(environment, browser, profile, kinds, options, observer);
+  li::ImportOutcome outcome = li::ReadBrowserProfile(environment, browser, profile, kinds, options, observer);
+  outcome.withheld = outcome.error_code.empty() && !outcome.cancelled && li::OutcomeLeaks(outcome);
+  return outcome;
 }
 
 base::Value ReadBookmarksFile(std::string path) {
@@ -416,10 +418,8 @@ class ImportedWriter {
     if (!reply || reply->Find("error")) {
       if (cookies) {
         cookies_failed_ = true;
-        cookies_ = false;
       } else {
         autofill_failed_ = true;
-        autofill_ = false;
       }
       return Next();
     }
@@ -819,8 +819,7 @@ class ImportService {
       event.Set("code", outcome.error_code);
       event.Set("message", outcome.error);
     } else {
-      const base::Value reply(outcome.result.Clone());
-      if (li::ReplyLeaksImported(reply, outcome.cookies, outcome.cards) || li::ReplyLeaksSecret(base::Value(outcome.result.Clone()), outcome.credentials)) {
+      if (outcome.withheld) {
         event.Set("type", "failed");
         event.Set("code", "ERR_SECRET_IN_REPLY");
         event.Set("message", "The import result was withheld because it contained a password");

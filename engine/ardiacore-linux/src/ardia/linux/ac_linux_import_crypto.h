@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ardia::linux_import {
@@ -72,12 +73,28 @@ struct FirefoxKeyRow {
   std::string a3;
 };
 
+class FirefoxKeys {
+ public:
+  FirefoxKeys();
+  ~FirefoxKeys();
+  FirefoxKeys(FirefoxKeys&&);
+  FirefoxKeys& operator=(FirefoxKeys&&);
+
+  void Add(std::string id, SecretBytes key, bool preferred);
+  const SecretBytes* For(std::string_view id) const;
+  bool empty() const { return keys_.empty(); }
+
+ private:
+  std::vector<std::pair<std::string, SecretBytes>> keys_;
+  size_t preferred_ = 0;
+};
+
 enum class FirefoxKey { kOk, kLocked, kUnsupported, kMalformed, kMissing };
-FirefoxKey FirefoxMasterKey(std::string_view global_salt, std::string_view password_check,
-                            const std::vector<FirefoxKeyRow>& rows, std::string_view primary_password, SecretBytes* key);
+FirefoxKey FirefoxMasterKeys(std::string_view global_salt, std::string_view password_check,
+                             const std::vector<FirefoxKeyRow>& rows, std::string_view primary_password, FirefoxKeys* keys);
 
 bool Base64Decode(std::string_view text, std::string* out);
-bool DecryptFirefoxField(std::string_view base64, const SecretBytes& key, std::string* plain);
+bool DecryptFirefoxField(std::string_view base64, const FirefoxKeys& keys, std::string* plain);
 
 bool DecompressMozLz4(std::string_view data, std::string* out);
 bool DecompressLz4Block(std::string_view source, size_t expected, std::string* out);

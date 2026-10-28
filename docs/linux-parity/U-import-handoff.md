@@ -18,19 +18,19 @@ Nothing here ran inside Ardia: this lane can't build Chromium 156. The new nativ
     - A DER reader capped at depth 16.
     - NSS PBE: PBES2 with PBKDF2-HMAC-SHA256 and AES-256-CBC, including NSS's 14-byte IV, and the legacy SHA1-and-3DES scheme.
     - The password hash is SHA-1(salt + password), or **SHA-384 when the global salt is 48 bytes**. NSS 3.13x writes a 48-byte salt for primary-password databases; this came from `sftkpwd.c`.
-    - The `password-check` test, choosing the key row (CKA_ID, skipping `as-logins-key`), and SDR field decryption (3DES or AES-256).
+    - The `password-check` test, then every key row except `as-logins-key` is decrypted. Each SDR field (3DES or AES-256) uses the row whose `a102` matches its key ID, falling back to CKA_ID, so profiles mixing 3DES and AES decrypt.
   - **mozLz4.** The LZ4 block decoder rejects bad offsets, overruns and size mismatches.
 - **`ac_linux_import_keyring.{h,cc}`.** Secret Service and KWallet over GDBus, loaded with `dlopen("libgio-2.0.so.0")`, so there are no new link deps.
   - **Item names.** `SafeStorageFor` maps each browser id to its libsecret `application` attribute and its KWallet folder and key: "chrome" with "Chrome Keys"/"Chrome Safe Storage", and likewise chromium, brave, microsoft-edge, vivaldi, opera and helium.
   - **`Exists`, without consent.** It runs `SearchItems` (schema v2, then v1, then `application` alone) and KWallet `keyDoesNotExist`. It never unlocks, never opens a wallet and never reads a secret. Every call is `NO_AUTO_START` with a 3 s timeout.
-  - **`Read`, after consent.**
+  - **`Read`, after consent.** It may start an activatable service (`StartServiceByName`, as 156's `CheckForServiceAndStart` does), which the probe never does. A prompt that fails to start is `unavailable`, not `denied`.
     - The Secret Service path is `OpenSession("plain")`, then `Unlock` with the prompt's `Completed` signal awaited on a private main context (120 s deadline; past it, the prompt is dismissed and the result is `denied`), then `GetSecrets` and `Close`. The GVariant secret bytes are zeroed after copying.
     - The KWallet path is `open`, `readPassword` and `close`; a negative handle means `denied`.
   - **Outcomes:** `ok`, `missing` (`notFound`), `locked`, `denied`, `unavailable`.
 - **`ac_linux_import_secrets.{h,cc}`.**
   - **Readers.**
     - Chromium `Cookies` (`Network/Cookies` first). It counts expired cookies and keyring, portal and undecryptable values, and keeps partition keys.
-    - Firefox `cookies.sqlite`. Container and private cookies are skipped and counted; `partitionKey` is parsed, as on macOS.
+    - Firefox `cookies.sqlite`. Container and private cookies are skipped and counted. `partitionKey` is parsed, including the `,f` ancestor flag, which sets `crossSite`.
     - Chromium `Web Data` addresses: the `addresses`, `local_addresses` and `contact_info` token tables and the legacy `autofill_profiles`, de-duplicated.
     - Chromium `Web Data` cards: `v10`/`v11`; locked cards are counted.
     - Firefox `logins.json` with `key4.db`, which reports `locked` without the right primary password.
@@ -38,7 +38,7 @@ Nothing here ran inside Ardia: this lane can't build Chromium 156. The new nativ
   - **Stores.**
     - `ImportedVault` is owner-bound, single use, lasts 10 minutes and holds 8 entries per window.
     - `UnlockedKeys` holds per-window, per-browser keys or primary passwords for 10 minutes.
-  - **Leak gate.** `ReplyLeaksImported` rejects any reply string that contains a cookie value or a card's digits.
+  - **Leak gate.** `ReplyLeaksImported` rejects a reply string equal to a cookie value of 6 or more bytes, or a number-only string whose digits equal a card's. Values inside URLs or titles are allowed, so common values (`en-US`, `true`) can't withhold an ordinary import. The gate runs in the pool job (`OutcomeLeaks`), not on the UI thread.
 - **`ac_linux_import_sessions.{h,cc}`.**
   - Chromium SNSS, ported from macOS `ChromiumSessions`: versions 1 and 3, and version 5 (encrypted, which needs the key). It handles navigation pruning, pinned tabs, groups, last-active times and closed tabs and windows, and keeps normal windows only.
   - Firefox `recovery.jsonlz4`/`sessionstore.jsonlz4`/`previous.jsonlz4`, whichever is newest.

@@ -15,11 +15,12 @@ export const IMPORT_EVENT = "onImportEvent";
 export const IMPORT_IDLE_MS = 120_000;
 export const CHOOSER_DEADLINE_MS = 30 * 60_000;
 export const UNLOCK_DEADLINE_MS = 150_000;
+export const UNLOCK_LIFETIME_MS = 10 * 60_000;
 const HISTORY_CHUNK = 500;
 const TOKEN = /^[0-9a-f]{32}$/;
 
-type Clock = { schedule(run: () => void, ms: number): unknown; cancel(handle: unknown): void };
-const realClock: Clock = { schedule: (run, ms) => setTimeout(run, ms), cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
+type Clock = { schedule(run: () => void, ms: number): unknown; cancel(handle: unknown): void; now?(): number };
+const realClock: Clock = { schedule: (run, ms) => setTimeout(run, ms), cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>), now: () => Date.now() };
 
 const count = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0);
 
@@ -74,7 +75,15 @@ export type HostImport = Pick<
 export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass, clock: Clock = realClock): HostImport {
   const families = new Map<string, string>();
   const keychains = new Set<string>();
-  const unlocked = new Set<string>();
+  const unlocked = new Map<string, number>();
+  const now = () => clock.now?.() ?? Date.now();
+  const stillUnlocked = (browserId: string) => {
+    const at = unlocked.get(browserId);
+    if (at === undefined) return false;
+    if (now() - at < UNLOCK_LIFETIME_MS) return true;
+    unlocked.delete(browserId);
+    return false;
+  };
   let sequence = 0;
   const failure = (code: string, message: string) => new ImportError(code, message);
   const unsupported = (what: string) => Promise.reject(failure("unsupported", `${what} isn't available on Linux`));
@@ -262,9 +271,9 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
       const primaryPassword = family === "firefox" && typeof options.primaryPassword === "string" ? options.primaryPassword : null;
       await finishByEvent("unlockBrowser", [browserId, primaryPassword], "unlock", "unlocked", () => undefined, UNLOCK_DEADLINE_MS,
         "The system keyring didn't answer");
-      unlocked.add(browserId);
+      unlocked.set(browserId, now());
     },
-    isBrowserUnlocked: (browserId) => unlocked.has(browserId) || (families.get(browserId) === "chromium" && !keychains.has(browserId)),
+    isBrowserUnlocked: (browserId) => stillUnlocked(browserId) || (families.get(browserId) === "chromium" && !keychains.has(browserId)),
     forgetUnlockedKeys() {
       unlocked.clear();
       void invoke("forgetUnlockedKeys", []).catch(reportHostError);

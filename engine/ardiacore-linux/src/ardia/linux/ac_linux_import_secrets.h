@@ -154,7 +154,9 @@ class UnlockedKeys {
 bool ReplyLeaksImported(const base::Value& reply, const std::vector<ImportedCookie>& cookies,
                         const std::vector<ImportedCard>& cards);
 
-bool FirefoxPartitionSite(std::string_view key, std::string* site);
+bool OutcomeLeaks(const ImportOutcome& outcome);
+
+bool FirefoxPartitionSite(std::string_view key, std::string* site, bool* cross_site);
 bool CardDigits(std::string_view number, std::string* digits);
 
 void AppendJsonString(std::string_view text, std::string* out);

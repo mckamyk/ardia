@@ -153,12 +153,23 @@ def legacy_pbe(global_salt, password, entry_salt, plain):
     return der(0x30, algorithm + der(0x04, cipher))
 
 
-def sdr_3des(key, text):
+CKA_ID = b'\xf8' + b'\0' * 14 + b'\x01'
+
+
+def sdr_3des(key, text, key_id=CKA_ID):
     iv = b'\x01\x02\x03\x04\x05\x06\x07\x08'
     cipher = aes_cbc(key[:24], text.encode(), b'', 'des-ede3-cbc', iv.hex())
     import base64
-    return base64.b64encode(der(0x30, der(0x04, b'\xf8' + b'\0' * 14 + b'\x01') +
+    return base64.b64encode(der(0x30, der(0x04, key_id) +
                                 der(0x30, oid('1.2.840.113549.3.7') + der(0x04, iv)) + der(0x04, cipher))).decode()
+
+
+def sdr_aes(key, text, key_id):
+    iv = bytes(range(16))
+    cipher = aes_cbc(key[:32], text.encode(), b'', 'aes-256-cbc', iv.hex())
+    import base64
+    return base64.b64encode(der(0x30, der(0x04, key_id) +
+                                der(0x30, oid('2.16.840.1.101.3.4.1.42') + der(0x04, iv)) + der(0x04, cipher))).decode()
 
 
 class SecretStoreTests(ImportFixture):
@@ -303,6 +314,121 @@ class FirefoxLoginTests(ImportFixture):
         self.assertEqual([w['code'] for w in out['result']['warnings']], ['undecryptable'])
         self.assertEqual(self.run_binary('firefoxfield', sdr_3des(master, 'direct'), master.hex()).strip(), 'ok direct')
         self.assertEqual(self.run_binary('firefoxfield', sdr_3des(master, 'direct'), bytes(24).hex()).strip(), 'failed')
+
+
+class ReviewFixTests(ImportFixture):
+    def test_common_cookie_values_inside_history_and_titles_do_not_withhold_the_import(self):
+        default = self.chrome_profile('Default')
+        db = sqlite3.connect(default / 'Cookies')
+        db.execute('CREATE TABLE cookies(creation_utc INTEGER, host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB, path TEXT, expires_utc INTEGER, is_secure INTEGER, is_httponly INTEGER, last_access_utc INTEGER, has_expires INTEGER, is_persistent INTEGER, priority INTEGER, samesite INTEGER)')
+        db.executemany('INSERT INTO cookies VALUES (0, ?, ?, ?, ?, "/", 0, 0, 0, 0, 0, 0, 1, -1)', [
+            ('lang.example', 'lang', 'en-US', b''), ('theme.example', 'theme', 'dark', b''), ('flag.example', 'ok', 'true', b''),
+            ('long.example', 'pref', 'settings-v2', b'')])
+        db.commit()
+        db.close()
+        history = sqlite3.connect(default / 'History')
+        history.execute('CREATE TABLE urls(id INTEGER PRIMARY KEY, url LONGVARCHAR, title LONGVARCHAR, visit_count INTEGER DEFAULT 0 NOT NULL, typed_count INTEGER DEFAULT 0 NOT NULL, last_visit_time INTEGER NOT NULL, hidden INTEGER DEFAULT 0 NOT NULL)')
+        history.executemany('INSERT INTO urls(url, title, visit_count, typed_count, last_visit_time, hidden) VALUES (?,?,1,0,?,0)', [
+            ('https://docs.example/en-US/dark/true', 'true', webkit(1700000000000)),
+            ('https://app.example/settings-v2/page', 'dark', webkit(1700000000001))])
+        history.commit()
+        history.close()
+        out = self.json('read', *self.env_args(), 'chrome', 'Default', 'history,cookies', 0, 0, 0, '-', '-', NOW_MS)
+        self.assertEqual(len(out['cookies']), 4)
+        self.assertEqual(out['result']['historyCount'], 2)
+        self.assertFalse(out['withheld'])
+
+    def test_firefox_cross_site_partition_keys_are_kept_not_skipped(self):
+        profile = self.home / '.mozilla' / 'firefox' / 'p.default'
+        profile.mkdir(parents=True)
+        (profile.parent / 'profiles.ini').write_text('[Profile0]\nName=p\nIsRelative=1\nPath=p.default\n')
+        db = sqlite3.connect(profile / 'cookies.sqlite')
+        db.execute("CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, originAttributes TEXT NOT NULL DEFAULT '', name TEXT, value TEXT, host TEXT, path TEXT, expiry INTEGER, lastAccessed INTEGER, creationTime INTEGER, isSecure INTEGER, isHttpOnly INTEGER, sameSite INTEGER DEFAULT 0, rawSameSite INTEGER DEFAULT 0, schemeMap INTEGER DEFAULT 0)")
+        db.executemany("INSERT INTO moz_cookies (originAttributes, name, value, host, path, expiry, lastAccessed, creationTime, isSecure, isHttpOnly) VALUES (?, ?, 'v', 'embed.example', '/', 0, 0, 0, 1, 0)", [
+            ('^partitionKey=%28https%2Ctop.example%2Cf%29', 'cross'),
+            ('^partitionKey=%28https%2Ctop.example%2C8443%2Cf%29', 'cross-port'),
+            ('^partitionKey=%28https%2Ctop.example%29', 'same')])
+        db.commit()
+        db.close()
+        out = self.json('read', *self.env_args(), 'firefox', 'p.default', 'cookies', 0, 0, 0, '-', '-', NOW_MS)
+        cookies = {c['name']: (c['partition'], c['crossSite']) for c in out['cookies']}
+        self.assertEqual(cookies, {'cross': ('https://top.example', True), 'cross-port': ('https://top.example', True),
+                                   'same': ('https://top.example', False)})
+        self.assertEqual(out['result']['warnings'], [])
+
+    def test_each_firefox_field_uses_the_key_its_key_id_names(self):
+        profile = self.home / '.mozilla' / 'firefox' / 'mixed.default'
+        profile.mkdir(parents=True)
+        (profile.parent / 'profiles.ini').write_text('[Profile0]\nName=mixed\nIsRelative=1\nPath=mixed.default\n')
+        global_salt = bytes(range(20))
+        legacy_key = bytes(range(100, 124))
+        aes_key = bytes(range(200, 232))
+        legacy_id = b'\x01' * 16
+        db = sqlite3.connect(profile / 'key4.db')
+        db.execute('CREATE TABLE metaData (id PRIMARY KEY UNIQUE ON CONFLICT REPLACE, item1, item2)')
+        db.execute('CREATE TABLE nssPrivate (id PRIMARY KEY UNIQUE ON CONFLICT ABORT, a11, a102, a3)')
+        db.execute('INSERT INTO metaData VALUES (?,?,?)', ('password', global_salt, legacy_pbe(global_salt, b'', b'e' * 20, b'password-check')))
+        db.execute('INSERT INTO nssPrivate VALUES (?,?,?,?)', (1, legacy_pbe(global_salt, b'', b'k' * 20, legacy_key), legacy_id, b''))
+        db.execute('INSERT INTO nssPrivate VALUES (?,?,?,?)', (2, legacy_pbe(global_salt, b'', b'm' * 20, aes_key), CKA_ID, b''))
+        db.commit()
+        db.close()
+        (profile / 'logins.json').write_text(json.dumps({'logins': [
+            {'hostname': 'https://old.example', 'encryptedUsername': sdr_3des(legacy_key, 'old user', legacy_id),
+             'encryptedPassword': sdr_3des(legacy_key, 'old pass', legacy_id)},
+            {'hostname': 'https://new.example', 'encryptedUsername': sdr_aes(aes_key, 'new user', CKA_ID),
+             'encryptedPassword': sdr_aes(aes_key, 'new pass', CKA_ID)},
+        ]}))
+        out = self.json('read', *self.env_args(), 'firefox', 'mixed.default', 'passwords', 0, 0, 0, '-', '-')
+        self.assertEqual(sorted((c['username'], c['password']) for c in out['credentials']), [('new user', 'new pass'), ('old user', 'old pass')])
+        self.assertEqual(out['result']['warnings'], [])
+
+    def test_sessions_skip_urls_that_are_not_utf8(self):
+        default = self.chrome_profile('Default')
+        (default / 'Sessions').mkdir()
+        header = b'SNSS' + struct.pack('<I', 3)
+        commands = [(9, struct.pack('<ii', 1, 0)), (0, struct.pack('<ii', 1, 1)),
+                    (6, pickle(struct.pack('<ii', 1, 0), struct.pack('<i', 5) + b'ht\xfftp' + b'\0' * 3, p_string16('Bad'))),
+                    (0, struct.pack('<ii', 1, 2)), (2, struct.pack('<ii', 2, 1)),
+                    (6, pickle(struct.pack('<ii', 2, 0), p_string('https://good.example/'), p_string16('Good'))), (255, b'')]
+        data = header + b''.join(struct.pack('<H', 1 + len(p)) + bytes([c]) + p for c, p in commands)
+        (default / 'Sessions' / 'Session_13300000000000000').write_bytes(data)
+        self.assertEqual([t['url'] for t in self.read('chrome', 'Default', ['tabs'])['result']['tabs']], ['https://good.example/'])
+
+
+class ActivationTests(ImportFixture):
+    def run_activated(self, config, *args):
+        if not shutil.which('dbus-run-session'):
+            self.skipTest('dbus-run-session is unavailable')
+        scratch = self.root / 'bus'
+        services = scratch / 'services'
+        services.mkdir(parents=True, exist_ok=True)
+        (scratch / 'config.json').write_text(json.dumps(config))
+        log = scratch / 'calls.log'
+        (services / 'org.freedesktop.secrets.service').write_text(
+            f'[D-BUS Service]\nName=org.freedesktop.secrets\nExec={sys.executable} -I {FIXTURES / "fake_keyring.py"} @{scratch / "config.json"} --serve\n')
+        (scratch / 'session.conf').write_text(f'''<busconfig><type>session</type><listen>unix:tmpdir={scratch}</listen>
+<servicedir>{services}</servicedir><policy context="default"><allow send_destination="*" eavesdrop="true"/><allow eavesdrop="true"/><allow own="*"/></policy></busconfig>''')
+        result = subprocess.run(['dbus-run-session', f'--config-file={scratch / "session.conf"}', '--', str(self.binary), *[str(a) for a in args]],
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout.strip().splitlines()[-1])
+
+    def test_the_consented_read_starts_an_activatable_keyring_but_the_probe_never_does(self):
+        try:
+            import gi
+            gi.require_version('Gio', '2.0')
+        except (ImportError, ValueError):
+            self.skipTest('PyGObject is unavailable')
+        item = {'attributes': {'application': 'chrome'}, 'secret': CHROME_SECRET}
+        self.assertEqual(self.run_activated({'items': [item]}, 'keyring', 'chrome', 'exists', 5000)['status'], 'unavailable')
+        read = self.run_activated({'items': [item]}, 'keyring', 'chrome', 'read', 10000)
+        self.assertEqual((read['status'], read['key']), ('ok', keyring_key().hex()))
+
+    def test_a_prompt_that_fails_to_start_is_unavailable_not_denied(self):
+        item = {'attributes': {'application': 'chrome'}, 'secret': CHROME_SECRET}
+        reply, calls = run_keyring(self, {'locked': True, 'prompt': 'fail', 'items': [item]}, self.binary, 'keyring', 'chrome', 'read', 5000)
+        self.assertEqual(reply['status'], 'unavailable')
+        self.assertNotIn('Dismiss', calls)
 
 
 class TabTests(ImportFixture):
@@ -525,7 +651,19 @@ class ImportFollowupSourceRules(unittest.TestCase):
             self.assertIn(f'"ArdiaImport.{method}"', service)
         self.assertRegex(service, r'kKeyring = \{[^}]*CONTINUE_ON_SHUTDOWN')
         self.assertIn('kKeyring, base::BindOnce(&ReadSafeStorageKey', service)
-        self.assertIn('ReplyLeaksImported(reply, outcome.cookies, outcome.cards)', service)
+        run = service[service.index('li::ImportOutcome RunImport('):]
+        run = run[:run.index('\n}\n')]
+        self.assertIn('li::OutcomeLeaks(outcome)', run)
+        self.assertIn('if (outcome.withheld) {', service)
+        self.assertNotIn('ReplyLeaksImported(', service)
+        answer = service[service.index('  void Answer(bool cookies'):]
+        answer = answer[:answer.index('\n  }\n')]
+        self.assertNotIn('cookies_ = false', answer)
+        self.assertNotIn('autofill_ = false', answer)
+        keyring = (LINUX / 'ac_linux_import_keyring.cc').read_text()
+        self.assertIn('SecretService secrets(bus, timeout_ms, false);', keyring)
+        self.assertIn('KWallet wallet(bus, timeout_ms, false);', keyring)
+        self.assertIn('SecretService secrets(bus, kKeyringProbeTimeoutMs, true);', keyring)
         self.assertIn('"ac_cookies_import"', service)
         self.assertIn('"ac_autofill_import"', service)
         closed = service[service.index('void WindowClosed('):]

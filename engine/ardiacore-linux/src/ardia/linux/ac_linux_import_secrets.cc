@@ -125,6 +125,7 @@ bool PercentDecode(std::string_view text, std::string* out) {
 struct OriginAttributes {
   bool isolated = false;
   bool partitioned = false;
+  bool cross_site = false;
   std::string site;
 };
 
@@ -149,7 +150,7 @@ OriginAttributes ParseOriginAttributes(std::string_view suffix) {
     } else if (key == "firstPartyDomain" || key == "geckoViewSessionContextId") {
       if (!value.empty()) attributes.isolated = true;
     } else if (key == "partitionKey") {
-      if (!FirefoxPartitionSite(value, &attributes.site)) {
+      if (!FirefoxPartitionSite(value, &attributes.site, &attributes.cross_site)) {
         attributes.isolated = true;
       } else {
         attributes.partitioned = true;
@@ -286,37 +287,40 @@ void UnlockedKeys::Clear() {
 
 namespace {
 
-bool StringLeaks(std::string_view text, const std::vector<ImportedCookie>& cookies, const std::vector<ImportedCard>& cards) {
-  for (const ImportedCookie& cookie : cookies) {
-    const std::string& value = cookie.value.value();
-    if (value.size() >= 4 && text.find(value) != std::string_view::npos) return true;
-  }
-  for (const ImportedCard& card : cards) {
-    std::string digits;
-    if (!CardDigits(card.number.value(), &digits)) continue;
-    std::string compact;
-    for (const char c : text) {
-      if (c >= '0' && c <= '9') compact.push_back(c);
+constexpr size_t kExactCookieBytes = 6;
+
+struct LeakSet {
+  std::set<std::string_view> values;
+  std::set<std::string> cards;
+  ~LeakSet() {
+    while (!cards.empty()) {
+      auto node = cards.extract(cards.begin());
+      Wipe(node.value());
     }
-    const bool found = compact.find(digits) != std::string::npos;
-    Wipe(digits);
-    if (found) return true;
   }
-  return false;
+};
+
+bool StringLeaks(std::string_view text, const LeakSet& leaks) {
+  if (leaks.values.contains(text)) return true;
+  if (leaks.cards.empty() || text.size() < 12 || text.size() > 64) return false;
+  std::string digits;
+  if (!CardDigits(text, &digits)) return false;
+  const bool found = leaks.cards.contains(digits);
+  Wipe(digits);
+  return found;
 }
 
-bool ValueLeaks(const base::Value& value, const std::vector<ImportedCookie>& cookies,
-                const std::vector<ImportedCard>& cards, int depth) {
+bool ValueLeaks(const base::Value& value, const LeakSet& leaks, int depth) {
   if (depth > 64) return true;
-  if (value.is_string()) return StringLeaks(value.GetString(), cookies, cards);
+  if (value.is_string()) return StringLeaks(value.GetString(), leaks);
   if (value.is_list()) {
     for (const base::Value& item : value.GetList()) {
-      if (ValueLeaks(item, cookies, cards, depth + 1)) return true;
+      if (ValueLeaks(item, leaks, depth + 1)) return true;
     }
   }
   if (value.is_dict()) {
     for (const auto [key, item] : value.GetDict()) {
-      if (StringLeaks(key, cookies, cards) || ValueLeaks(item, cookies, cards, depth + 1)) return true;
+      if (StringLeaks(key, leaks) || ValueLeaks(item, leaks, depth + 1)) return true;
     }
   }
   return false;
@@ -326,7 +330,21 @@ bool ValueLeaks(const base::Value& value, const std::vector<ImportedCookie>& coo
 
 bool ReplyLeaksImported(const base::Value& reply, const std::vector<ImportedCookie>& cookies,
                         const std::vector<ImportedCard>& cards) {
-  return ValueLeaks(reply, cookies, cards, 0);
+  LeakSet leaks;
+  for (const ImportedCookie& cookie : cookies) {
+    if (cookie.value.value().size() >= kExactCookieBytes) leaks.values.insert(cookie.value.value());
+  }
+  for (const ImportedCard& card : cards) {
+    std::string digits;
+    if (CardDigits(card.number.value(), &digits)) leaks.cards.insert(std::move(digits));
+  }
+  if (leaks.values.empty() && leaks.cards.empty()) return false;
+  return ValueLeaks(reply, leaks, 0);
+}
+
+bool OutcomeLeaks(const ImportOutcome& outcome) {
+  const base::Value reply(outcome.result.Clone());
+  return ReplyLeaksImported(reply, outcome.cookies, outcome.cards) || ReplyLeaksSecret(reply, outcome.credentials);
 }
 
 bool ImportedAddress::Empty() const {
@@ -334,8 +352,9 @@ bool ImportedAddress::Empty() const {
          postal_code.empty() && country.empty() && phone.empty() && email.empty();
 }
 
-bool FirefoxPartitionSite(std::string_view key, std::string* site) {
+bool FirefoxPartitionSite(std::string_view key, std::string* site, bool* cross_site) {
   site->clear();
+  *cross_site = false;
   if (key.size() < 2 || key.front() != '(' || key.back() != ')') return false;
   std::vector<std::string> fields;
   std::string_view inner = key.substr(1, key.size() - 2);
@@ -344,6 +363,11 @@ bool FirefoxPartitionSite(std::string_view key, std::string* site) {
     fields.emplace_back(inner.substr(0, comma));
     if (comma == std::string_view::npos) break;
     inner.remove_prefix(comma + 1);
+  }
+  bool ancestor = false;
+  if (fields.size() >= 3 && fields.back() == "f") {
+    ancestor = true;
+    fields.pop_back();
   }
   if ((fields.size() != 2 && fields.size() != 3) || (fields[0] != "https" && fields[0] != "http")) return false;
   if (fields.size() == 3) {
@@ -358,6 +382,7 @@ bool FirefoxPartitionSite(std::string_view key, std::string* site) {
   }
   if (host.empty() || host.front() == '.' || host.back() == '.') return false;
   *site = fields[0] + "://" + host;
+  *cross_site = ancestor;
   return true;
 }
 
@@ -401,8 +426,16 @@ void AppendJsonString(std::string_view text, std::string* out) {
 }
 
 SecretBytes CookiesPayload(const std::vector<ImportedCookie>& cookies, size_t begin, size_t end, int* dropped) {
+  size_t bound = 64;
+  for (size_t i = begin; i < end && i < cookies.size(); ++i) {
+    const ImportedCookie& cookie = cookies[i];
+    bound += 6 * (cookie.name.size() + cookie.value.value().size() + cookie.domain.size() + cookie.path.size() +
+                  cookie.same_site.size() + cookie.priority.size() + cookie.partition_site.size() +
+                  cookie.source_scheme.size()) +
+             400;
+  }
   std::string out;
-  out.reserve(64 * 1024);
+  out.reserve(bound);
   out.append("{\"cookies\":[");
   bool first = true;
   for (size_t i = begin; i < end && i < cookies.size(); ++i) {
@@ -448,7 +481,18 @@ SecretBytes CookiesPayload(const std::vector<ImportedCookie>& cookies, size_t be
 
 SecretBytes AutofillPayload(const std::vector<ImportedAddress>& addresses, const std::vector<ImportedCard>& cards,
                             size_t begin, size_t end) {
+  size_t bound = 64;
+  for (size_t i = begin; i < end && i < addresses.size(); ++i) {
+    const ImportedAddress& a = addresses[i];
+    bound += 6 * (a.name.size() + a.organization.size() + a.street.size() + a.city.size() + a.state.size() +
+                  a.postal_code.size() + a.country.size() + a.phone.size() + a.email.size()) +
+             200;
+  }
+  for (size_t i = begin; i < end && i < cards.size(); ++i) {
+    bound += 6 * (cards[i].name.size() + cards[i].number.value().size() + cards[i].nickname.size()) + 200;
+  }
   std::string out;
+  out.reserve(bound);
   out.append("{\"addresses\":[");
   bool first_address = true;
   for (size_t i = begin; i < end && i < addresses.size(); ++i) {
@@ -665,6 +709,7 @@ std::optional<Failure> ReadFirefoxCookies(const std::string& directory, ScratchD
     if (origin.partitioned) {
       cookie.partitioned = true;
       cookie.partition_site = origin.site;
+      cookie.partition_cross_site = origin.cross_site;
     }
     out->cookies.push_back(std::move(cookie));
   }
@@ -848,8 +893,8 @@ std::optional<Failure> ReadFirefoxLogins(const std::string& directory, ScratchDi
     while (keys.Step()) rows.push_back(FirefoxKeyRow{keys.Blob(a11), keys.Blob(a102), keys.Blob(a3)});
   }
   db.reset();
-  SecretBytes key;
-  switch (FirefoxMasterKey(global_salt, check, rows, primary_password, &key)) {
+  FirefoxKeys key;
+  switch (FirefoxMasterKeys(global_salt, check, rows, primary_password, &key)) {
     case FirefoxKey::kOk:
       break;
     case FirefoxKey::kLocked:
