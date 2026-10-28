@@ -165,7 +165,63 @@ test("the Linux build routes tabLifecycle's toasts and battery saver through the
   assert.ok(vite.includes('[`${here("../browser/src/state/splits/actions.ts")}\\0${tabLifecycle}`, here("./src/policyToasts.ts")]'));
   assert.ok(vite.includes('[`${here("../browser/src/platform/performance.ts")}\\0${tabLifecycle}`, here("./src/policyPerformance.ts")]'));
   const main = source("./main.tsx");
-  for (const seam of ["windowId, locks: navigator.locks", "new BroadcastChannel(TAB_POLICY_CHANNEL)", "watchHostInputActivity(requireNativeModule(\"ArdiaEngine\"), listener)"]) {
+  for (const seam of ["windowId, locks: navigator.locks", "new BroadcastChannel(TAB_POLICY_CHANNEL)", "privateWindow: !!ardiaHost.bootstrap.privateWindow", "watchHostInputActivity(requireNativeModule(\"ArdiaEngine\"), listener)"]) {
     assert.ok(main.includes(seam), seam);
   }
+});
+
+test("a timed-out Battery Saver request never overwrites a newer one", async () => {
+  const make = broadcast();
+  const ownerChannel = make();
+  const otherChannel = make();
+  resetLinuxTabPoliciesForTests();
+  startLinuxTabPolicies(deps({ channel: otherChannel, locks: pendingLock() }).value);
+  const applied = [];
+  const apply = (mode) => async () => { applied.push(mode); return { state: mode === "on" ? 3 : 0, active: mode === "on" }; };
+  const stale = sharedBatterySaver("on", apply("on"), 20);
+  ownerChannel.postMessage({ mode: "off", reply: { state: 0, active: false } });
+  assert.deepEqual(await sharedBatterySaver("off", apply("off"), 20), { state: 0, active: false });
+  await stale;
+  assert.deepEqual(applied, [], "the stale 'on' fallback must not apply after a newer 'off'");
+  assert.deepEqual(await sharedBatterySaver("on", apply("on"), 5), { state: 3, active: true });
+  assert.deepEqual(applied, ["on"], "the latest request still applies itself when no owner answers");
+});
+
+test("private windows never take the tab-policy lock or trim, and apply Battery Saver themselves", async () => {
+  resetLinuxTabPoliciesForTests();
+  const locks = pendingLock();
+  const channel = broadcast()();
+  const setup = deps({ locks, channel, privateWindow: true });
+  startLinuxTabPolicies(setup.value);
+  assert.equal(locks.requests.length, 0);
+  assert.equal(setup.counts.trims, 0);
+  assert.equal(setup.counts.lifecycles, 1);
+  assert.equal(isTabPolicyOwner(), false);
+  let applied = 0;
+  assert.deepEqual(await sharedBatterySaver("on", async () => { ++applied; return { state: 3 }; }, 1000), { state: 3 });
+  assert.equal(applied, 1);
+  assert.deepEqual(channel.sent, []);
+});
+
+test("stop releases the tab-policy lock and closes the channel", async () => {
+  resetLinuxTabPoliciesForTests();
+  const locks = pendingLock();
+  let closed = 0;
+  const channel = { ...broadcast()(), close: () => { ++closed; } };
+  const setup = deps({ locks, channel });
+  const stop = startLinuxTabPolicies(setup.value);
+  const held = locks.grant();
+  assert.equal(isTabPolicyOwner(), true);
+  stop();
+  assert.equal(await Promise.race([held.then(() => "released"), new Promise((resolve) => setTimeout(() => resolve("held"), 20))]), "released");
+  assert.equal(closed, 1);
+  assert.equal(isTabPolicyOwner(), false);
+
+  resetLinuxTabPoliciesForTests();
+  const late = pendingLock();
+  const lateSetup = deps({ locks: late });
+  startLinuxTabPolicies(lateSetup.value)();
+  await late.grant();
+  assert.equal(lateSetup.counts.trims, 0, "a lock granted after stop is handed back at once");
+  assert.notEqual(startLinuxTabPolicies(deps().value), undefined);
 });

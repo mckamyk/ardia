@@ -40,6 +40,7 @@ export type LinuxPolicyDeps = {
   activity?: (listener: () => void) => () => void;
   locks?: PolicyLocks;
   channel?: PolicyChannel;
+  privateWindow?: boolean;
 };
 
 type SaverReply = { mode: string; reply: unknown };
@@ -49,6 +50,8 @@ let owner = false;
 let ownWindow: string | undefined;
 let channel: PolicyChannel | null = null;
 let ownerReply: SaverReply | null = null;
+let saverGeneration = 0;
+let latestSaver: Promise<unknown> | null = null;
 const replyWaiters = new Set<(reply: SaverReply) => void>();
 
 export const isTabPolicyOwner = () => owner;
@@ -59,35 +62,45 @@ export function startLinuxTabPolicies(deps: LinuxPolicyDeps): () => void {
   const unprovide = deps.provide((name, method) => name === "ArdiaEngine" && method === "inputIdleSeconds" ? () => idle.seconds() : undefined);
   const unwatch = deps.activity?.(idle.note) ?? (() => {});
   ownWindow = deps.windowId;
-  channel = deps.channel ?? null;
-  channel?.addEventListener("message", ({ data }) => {
-    if (owner || !isSaverReply(data)) return;
+  const shared = deps.privateWindow ? null : deps.channel ?? null;
+  channel = shared;
+  shared?.addEventListener("message", ({ data }) => {
+    if (owner || channel !== shared || !isSaverReply(data)) return;
     ownerReply = data;
     for (const resolve of [...replyWaiters]) resolve(data);
   });
   deps.startLifecycle();
   let stopped = false;
+  let release: (() => void) | null = null;
   const becomeOwner = () => {
     if (stopped || owner) return;
     owner = true;
     deps.startTrim();
   };
-  if (deps.locks) {
+  const takeLock = () => {
+    if (!deps.locks) return becomeOwner();
     deps.locks.request(TAB_POLICY_LOCK, () => {
+      if (stopped) return Promise.resolve();
       becomeOwner();
-      return new Promise<void>(() => {});
+      return new Promise<void>((resolve) => { release = resolve; });
     }).catch((error: unknown) => {
       console.warn("[ardia linux] tab policy lock", error);
       becomeOwner();
     });
-  } else {
-    becomeOwner();
-  }
+  };
+  if (!deps.privateWindow) takeLock();
   const stop = () => {
+    if (stopped) return;
     stopped = true;
     idle.stop();
     unprovide();
     unwatch();
+    release?.();
+    release = null;
+    owner = false;
+    if (channel === shared) channel = null;
+    shared?.close();
+    if (running === stop) running = null;
   };
   running = stop;
   return stop;
@@ -100,7 +113,13 @@ export function policyToastTarget(windowId: string): string | null {
   return !ownWindow || windowId === ownWindow ? windowId : null;
 }
 
-export async function sharedBatterySaver<T>(mode: string, apply: () => Promise<T>, waitMs = BATTERY_SAVER_WAIT_MS): Promise<T> {
+export function sharedBatterySaver<T>(mode: string, apply: () => Promise<T>, waitMs = BATTERY_SAVER_WAIT_MS): Promise<T> {
+  const request = requestBatterySaver(mode, apply, waitMs, ++saverGeneration);
+  latestSaver = request;
+  return request;
+}
+
+async function requestBatterySaver<T>(mode: string, apply: () => Promise<T>, waitMs: number, generation: number): Promise<T> {
   if (owner || !channel) {
     const reply = await apply();
     if (owner) channel?.postMessage({ mode, reply });
@@ -117,7 +136,9 @@ export async function sharedBatterySaver<T>(mode: string, apply: () => Promise<T
     };
     replyWaiters.add(done);
   });
-  return shared ? shared.reply as T : apply();
+  if (shared) return shared.reply as T;
+  if (generation !== saverGeneration && latestSaver) return latestSaver as Promise<T>;
+  return apply();
 }
 
 export function resetLinuxTabPoliciesForTests() {
@@ -126,5 +147,7 @@ export function resetLinuxTabPoliciesForTests() {
   ownWindow = undefined;
   channel = null;
   ownerReply = null;
+  saverGeneration = 0;
+  latestSaver = null;
   replyWaiters.clear();
 }
