@@ -4,6 +4,7 @@ import { AUDIO_TOOLS, startAudio } from "../lib/desktopAudio.mjs";
 import { ardiaWindow, clickBlankPage, clickInPage, clickMenuItem, menuItems, paneRect, clickRowToggle, clickSidebarTab, focusPageByClick, hasFfmpeg, labelled, missingCommands, openSettingsRow, openSiteControls, pageFixtures, pageSession, screenPoint, shot, titledSeed , closeSettingsWindow } from "../lib/desktopPages.mjs";
 import { colorDistance, meanColor, toHex } from "../lib/desktopPixels.mjs";
 import { clickLabelIn, clickTextIn, currentRect, desktopUnavailable, newWindow, openDesktop, pointAt, startDesktopBrowser } from "../lib/desktopSession.mjs";
+import { playByClickWith, videoPlaying, videoStateScript } from "../lib/desktopMedia.mjs";
 import { nonce } from "../lib/util.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { js, until } from "../lib/util.mjs";
@@ -11,7 +12,8 @@ import { js, until } from "../lib/util.mjs";
 const PIP_TITLE = "Picture in picture";
 const pipWindows = async (desktop) => (await desktop.windows()).filter((w) => w.title === PIP_TITLE);
 const pipOpen = (shell) => shell.eval("JSON.stringify(ardiaLinux.media.getState().pipOpen)").then(JSON.parse);
-const playing = (session, id = "video") => evaluate(session, `(() => { const v = document.getElementById(${js(id)}); return !!v && !v.paused && v.currentTime > 0.2; })()`, { userGesture: false });
+const videoState = (session, id = "video") => evaluate(session, videoStateScript(id), { userGesture: false });
+const playing = async (session, id = "video") => videoPlaying(await videoState(session, id));
 
 async function waitPip(desktop, { timeout = 10000 } = {}) {
   return until(async () => (await pipWindows(desktop))[0] ?? false, { timeout, label: "a Picture in picture window in the compositor" });
@@ -22,9 +24,15 @@ async function waitNoPip(desktop, { timeout = 10000 } = {}) {
 }
 
 async function playByClick(desktop, window, shell, session, tabId, id = "video") {
-  if (await playing(session, id)) return true;
-  await clickInPage(desktop, window, shell, session, tabId, `document.getElementById(${js(id)})`);
-  return until(() => playing(session, id), { timeout: 10000, label: `the ${id} element to play after a click` });
+  let before = null;
+  let clicked = null;
+  return playByClickWith({
+    read: async () => (before = await videoState(session, id)),
+    click: async () => { clicked = await clickInPage(desktop, window, shell, session, tabId, `document.getElementById(${js(id)})`); },
+    wait: () => until(() => playing(session, id), { timeout: 10000, label: `the ${id} element to play${clicked ? " after a click" : ""}` }).catch(async (error) => {
+      throw new Error(`${error.message}; before ${JSON.stringify(before)}, clicked at ${JSON.stringify(clicked)}, now ${JSON.stringify(await videoState(session, id).catch(() => null))}`);
+    }),
+  });
 }
 
 async function tabIdFor(shell, url) {
