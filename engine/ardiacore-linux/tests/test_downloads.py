@@ -83,7 +83,7 @@ class DownloadWiringTests(unittest.TestCase):
         self.assertIn('base::UTF8ToUTF16(prompt)', pick)
         self.assertIn('u"Choose a Download Folder"', pick)
         finish = method(files, '  void Finish() {')
-        self.assertIn('FolderPickerOpen() = false;', finish)
+        self.assertIn('FolderPickers().Release(window_, this);', finish)
 
     def test_reveal_runs_the_tested_route_chain_with_a_portal_deadline(self):
         from test_renderer_contract import method
