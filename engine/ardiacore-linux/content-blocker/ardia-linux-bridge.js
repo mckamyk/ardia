@@ -5,16 +5,36 @@
   const requestAttribute = "data-ardia-request";
   const replyAttribute = "data-ardia-reply";
 
+  const contextLost = () => {
+    try {
+      return !chrome.runtime || !chrome.runtime.id;
+    } catch {
+      return true;
+    }
+  };
+
   const withDeadline = (promise, what, left) =>
     new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`${what}: timed out`)), Math.max(0, left()));
+      const stop = () => {
+        clearTimeout(timer);
+        clearInterval(watch);
+      };
+      const timer = setTimeout(() => {
+        stop();
+        reject(new Error(`${what}: timed out`));
+      }, Math.max(0, left()));
+      const watch = setInterval(() => {
+        if (!contextLost()) return;
+        stop();
+        reject(new Error("Extension context invalidated."));
+      }, 50);
       promise.then(
         (value) => {
-          clearTimeout(timer);
+          stop();
           resolve(value);
         },
         (error) => {
-          clearTimeout(timer);
+          stop();
           reject(error);
         },
       );
@@ -29,11 +49,15 @@
     const ready = () =>
       new Promise((resolve, reject) => {
         const look = () => {
-          const background = chrome.extension.getBackgroundPage && chrome.extension.getBackgroundPage();
-          const ublock = background && background["µBlock"];
-          if (ublock && ublock.isReadyPromise) return ublock.isReadyPromise.then(resolve, reject);
-          if (expired()) return reject(new Error("uBlock Origin never started"));
-          setTimeout(look, 10);
+          try {
+            const background = chrome.extension.getBackgroundPage && chrome.extension.getBackgroundPage();
+            const ublock = background && background["µBlock"];
+            if (ublock && ublock.isReadyPromise) return ublock.isReadyPromise.then(resolve, reject);
+            if (expired()) return reject(new Error("uBlock Origin never started"));
+            setTimeout(look, 10);
+          } catch (error) {
+            reject(error);
+          }
         };
         look();
       });
@@ -198,6 +222,7 @@
     if (request && typeof request === "object") run(request);
   };
 
+  if (navigator.locks) navigator.locks.request("ardia-linux-bridge", { mode: "shared" }, () => new Promise(() => {}));
   new MutationObserver(take).observe(root, { attributes: true, attributeFilter: [requestAttribute] });
   root.setAttribute("data-ardia-bridge", "ready");
 })();
