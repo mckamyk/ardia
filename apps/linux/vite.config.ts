@@ -5,6 +5,7 @@ import { inputAdapters, rawBookmarkAdapter, resolveInputAdapter } from "./inputA
 import { credentialWording } from "./credentialWording";
 import { linuxWording } from "./linuxWording";
 import { calendarWording } from "./calendarWording";
+import { syncWording } from "./syncWording";
 
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const replacements = new Map([
@@ -64,7 +65,7 @@ function linuxComponents(): Plugin {
 }
 
 export default webShellConfig({
-  plugins: [linuxComponents(), credentialWording(), linuxWording(), calendarWording()],
+  plugins: [linuxComponents(), credentialWording(), linuxWording(), calendarWording(), syncWording()],
   aliases: [
     { find: /^@ardia\/shell$/, replacement: here("./src/shims/shell.tsx") },
     { find: /^@ardia\/ardiacore$/, replacement: here("./src/shims/ardiacore.tsx") },
