@@ -2,6 +2,7 @@ import { evaluate } from "../lib/cdp.mjs";
 import { MEDIA_TITLE } from "../lib/fixtures.mjs";
 import { navigateTab, startBrowser } from "../lib/flows.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
+import { call } from "./f06-site-controls.mjs";
 
 export const AUTOPLAY_ARGS = ["--autoplay-policy=no-user-gesture-required"];
 export const PIP_PROBE = 'post("result", JSON.stringify(!!document.pictureInPictureElement || !!window.documentPictureInPicture?.window))';
@@ -120,6 +121,25 @@ export default {
       await until(async () => (await session(shell, tabId)) === null, { timeout: 10000, label: "the session to clear" });
       await until(async () => !(await audible(shell, tabId)), { timeout: 10000, label: "the audio badge to clear" });
       return true;
+    });
+    await t.check("a site with autoplay blocked plays only after the user interacts", async () => {
+      const origin = new URL(url).origin;
+      await call(shell, "sites.setSetting", { origin, type: "autoplay", value: "block", engine: "chromium" });
+      try {
+        const blockedUrl = t.fixtures.url.media(`${run}-blocked`);
+        await navigateTab(shell, tabId, blockedUrl);
+        const blocked = await mediaPage(state, blockedUrl);
+        await evaluate(blocked, "startTone().catch(() => false)", { userGesture: false });
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        if (!(await evaluate(blocked, "document.getElementById('tone').paused", { userGesture: false }))) throw new Error("the tone played without user activation");
+        await startTone(blocked);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (await evaluate(blocked, "document.getElementById('tone').paused")) throw new Error("the tone stopped after the user played it");
+        await evaluate(blocked, "document.getElementById('tone').pause()");
+        return { origin };
+      } finally {
+        await call(shell, "sites.setSetting", { origin, type: "autoplay", value: "default", engine: "chromium" });
+      }
     });
   },
 };

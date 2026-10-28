@@ -19,6 +19,7 @@
 #include "ardia/linux/ac_linux_policy.h"
 #include "ardia/linux/ac_linux_contract.h"
 #include "ardia/linux/ac_linux_auto_pip_service.h"
+#include "ardia/linux/ac_linux_autoplay.h"
 #include "ardia/linux/ac_linux_background_dialogs.h"
 #include "ardia/linux/ac_linux_calendar_service.h"
 #include "ardia/linux/ac_linux_close.h"
@@ -5371,6 +5372,7 @@ void StartLinuxHost() {
     LOG(WARNING) << "[ardia] off-the-record link refused: its source is not an Ardia tab, extension view or DevTools window";
     return true;
   };
+  ardiacore::InstallLinuxAutoplayPolicy();
   g_ardia_linux_drag_ended = [](BrowserWindowInterface* browser) {
     if (!browser) return;
     const auto found = Hosts().find(browser->GetSessionID().id());

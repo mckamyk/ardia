@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "ardia/linux/ac_linux_autoplay.h"
 #include "ardia/linux/ac_linux_page_evaluation.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
@@ -206,8 +207,10 @@ void LinuxPageChannel::PictureInPictureDocumentAnswered(content::WeakDocumentPtr
 }
 
 void LinuxPageChannel::Greet(content::RenderFrameHost& frame) {
+  const bool block_autoplay =
+      LinuxAutoplayBlocked(frame.GetOutermostMainFrame()->GetLastCommittedURL(), frame.GetBrowserContext());
   Call(&frame, "peekConfig", Json(base::Value(Options().PeekConfig())));
-  Call(&frame, "config", Json(base::Value(Options().PageConfig(frame.IsInPrimaryMainFrame()))));
+  Call(&frame, "config", Json(base::Value(Options().PageConfig(frame.IsInPrimaryMainFrame(), block_autoplay))));
 }
 
 void LinuxPageChannel::PushOptions() {

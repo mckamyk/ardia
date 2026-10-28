@@ -223,11 +223,12 @@ base::DictValue LinuxPageOptions::PeekConfig() const {
   return base::DictValue().Set("modifier", peek).Set("split", EffectiveSplit()).Set("trace", false);
 }
 
-base::DictValue LinuxPageOptions::PageConfig(bool main) const {
+base::DictValue LinuxPageOptions::PageConfig(bool main, bool block_autoplay) const {
   base::DictValue config;
   config.Set("peek", peek);
   config.Set("split", EffectiveSplit());
   if (main) config.Set("selectionPopover", selection_popover);
+  if (block_autoplay) config.Set("blockAutoplay", true);
   return config;
 }
 
