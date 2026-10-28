@@ -16,6 +16,7 @@ export type ArdiaHost = {
     launchConfig?: LaunchConfig;
     pageProfile?: string;
     privateWindow?: { window: BrowserWindow; tabs: Record<string, Tab> };
+    typeaheadMs?: number;
   };
   call(name: string, profile: string, args: string | null): Promise<string>;
   invoke(method: string, args: Record<string, unknown>): Promise<unknown>;
