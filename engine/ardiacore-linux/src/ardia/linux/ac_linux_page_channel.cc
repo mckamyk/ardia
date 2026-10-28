@@ -23,6 +23,8 @@
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "ui/aura/client/drag_drop_client.h"
+#include "ui/aura/window.h"
 #include "ui/display/screen.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -34,6 +36,13 @@ namespace {
 LinuxPageOptions& Options() {
   static base::NoDestructor<LinuxPageOptions> options;
   return *options;
+}
+
+bool DragInProgress(content::WebContents& contents) {
+  aura::Window* view = contents.GetNativeView();
+  aura::Window* root = view ? view->GetRootWindow() : nullptr;
+  aura::client::DragDropClient* client = root ? aura::client::GetDragDropClient(root) : nullptr;
+  return client && client->IsDragDropInProgress();
 }
 
 LinuxLinkGestureGate& Gate() {
@@ -347,7 +356,7 @@ void LinuxPageChannel::OnInputEvent(const content::RenderWidgetHost& widget, con
   content::RenderFrameHost* main = GetWebContents().GetPrimaryMainFrame();
   if (main && main->GetRenderWidgetHost() == &widget)
     point = LinuxLinkPoint{mouse.PositionInWidget().x(), mouse.PositionInWidget().y()};
-  Gate().NoteRelease(surface_, LinkFlags(mouse.GetModifiers()), Now(), point);
+  Gate().NoteRelease(surface_, LinkFlags(mouse.GetModifiers()), Now(), point, DragInProgress(GetWebContents()));
 }
 
 void LinuxPageChannel::RenderWidgetHostDestroyed(content::RenderWidgetHost* widget) {

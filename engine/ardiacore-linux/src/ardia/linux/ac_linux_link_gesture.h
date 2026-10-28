@@ -55,7 +55,8 @@ class LinuxLinkGestureGate {
   static constexpr double kFallbackLifetime = 60;
   static constexpr double kDropLifetime = 2;
   void NotePress(uintptr_t surface);
-  void NoteRelease(uintptr_t surface, int flags, double now, std::optional<LinuxLinkPoint> point);
+  void NoteRelease(uintptr_t surface, int flags, double now, std::optional<LinuxLinkPoint> point,
+                   bool ends_drag = false);
   void Forget(uintptr_t surface);
   LinuxLinkDecision Decide(const LinuxLinkRequest& request, const LinuxPageOptions& options);
   uintptr_t DragSource() const { return press_open_ ? press_surface_ : 0; }
