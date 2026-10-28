@@ -190,7 +190,7 @@ source_set("ardia") {
   if (is_linux) {
     deps += [
       "//chrome/browser:shell_integration",
-      "//components/dbus/thread_linux",
+      "//components/dbus",
       "//dbus",
       "//ui/aura",
       "//ui/compositor",

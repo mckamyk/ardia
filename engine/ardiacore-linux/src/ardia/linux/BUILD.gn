@@ -30,7 +30,6 @@ action("page_script") {
 
 mojom("page_mojom") {
   sources = [ "mojom/page.mojom" ]
-  disable_variants = true
 }
 
 source_set("page_agent") {
@@ -260,7 +259,7 @@ source_set("linux") {
     "//components/blocked_content",
     "//components/content_settings/core/browser",
     "//components/dbus",
-    "//components/download/public/common",
+    "//components/download/public/common:public",
     "//components/find_in_page",
     "//components/image_fetcher/core",
     "//components/keyed_service/core",
