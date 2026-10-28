@@ -119,7 +119,7 @@ class Variant {
     const Gio& gio = Library();
     return value_ && index < gio.n_children(value_) ? Variant(gio.child(value_, index)) : Variant();
   }
-  size_t Size() const { return value_ ? Library().n_children(value_) : 0; }
+  [[clang::no_sanitize("cfi-icall")]] size_t Size() const { return value_ ? Library().n_children(value_) : 0; }
   [[clang::no_sanitize("cfi-icall")]] std::string String() const {
     if (!value_) return std::string();
     const char* type = Library().type_string(value_);
