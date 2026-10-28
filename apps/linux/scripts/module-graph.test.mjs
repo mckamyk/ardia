@@ -68,6 +68,11 @@ test("production graph uses current Linux adapters and one canonical shared stat
     assert.ok(graph.get(id).importedIds.includes(original));
   }
 
+  const dock = graph.get(`${browser}components/window/SidebarDock.tsx`);
+  assert.ok(dock.importedIds.includes(`${linux}SidebarPeekMark.tsx`), "the docked sidebar marks a peek for the page viewport");
+  assert.ok(!dock.importedIds.includes(`${browser}components/sidebar/Sidebar.tsx`));
+  assert.ok(graph.get(`${linux}SidebarPeekMark.tsx`).importedIds.includes(`${browser}components/sidebar/Sidebar.tsx`));
+
   for (const shared of ["state/live/sources.ts", "state/live/net.ts"]) assert.ok(!graph.has(`${browser}${shared}`), `${shared} and its renderer fetch stay out of the Linux bundle`);
   const liveImporters = [
     [`${browser}state/live/engine.ts`, `${linux}liveSources.ts`],
