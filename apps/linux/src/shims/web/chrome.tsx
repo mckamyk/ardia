@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { View, type ViewProps, type ViewStyle } from "react-native";
 import { useBrowser } from "../../../../browser/src/state/browser/store";
+import { ardiaHost, hostModuleMethod, reportHostError } from "../../host";
+import { watchWindowDrag } from "../../windowDrag";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, SHADE_OUTSET, shadeMask, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
 
 type Style = ViewStyle & Record<string, unknown>;
@@ -242,14 +244,24 @@ export function OutsidePressArea({ onOutsidePress, ...props }: ViewProps & { onO
 }
 
 export function WindowDragRegion({
-  titleBarDoubleClick: _double,
-  clickable: _clickable,
+  titleBarDoubleClick = true,
+  clickable = false,
   onRegionClick,
   onRegionDoubleClick,
   ...props
 }: ViewProps & { titleBarDoubleClick?: boolean; clickable?: boolean; onRegionClick?: () => void; onRegionDoubleClick?: () => void }) {
-  const Region = View as unknown as React.ComponentType<ViewProps & { onClick?: () => void; onDoubleClick?: () => void }>;
-  return <Region {...props} onClick={onRegionClick} onDoubleClick={onRegionDoubleClick} />;
+  const node = useRef<HTMLElement | null>(null);
+  const latest = useRef({ titleBarDoubleClick, clickable, onRegionClick, onRegionDoubleClick });
+  latest.current = { titleBarDoubleClick, clickable, onRegionClick, onRegionDoubleClick };
+  useEffect(() => {
+    const element = node.current;
+    if (!element || !ardiaHost) return;
+    return watchWindowDrag(element, () => latest.current, {
+      move: () => hostModuleMethod("ArdiaShell", "startWindowMove")(),
+      doubleClick: () => hostModuleMethod("ArdiaShell", "captionDoubleClick")(),
+    }, reportHostError);
+  }, []);
+  return <View {...props} ref={(view) => void (node.current = view as unknown as HTMLElement | null)} />;
 }
 
 export type DockSelectionProps = ViewProps & { fill?: string; stroke?: string; cornerRadius?: number; strokeWidth?: number; dark: boolean };
