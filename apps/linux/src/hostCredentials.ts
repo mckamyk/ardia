@@ -1,6 +1,6 @@
 import type { ArdiaHost } from "./host";
 import { callHost, hostProfile, invokeHost } from "./host.ts";
-import { releaseHeldLogin } from "./hostSync.ts";
+import { releaseHeldLogin, releaseHeldLoginIfGone } from "./hostSync.ts";
 
 export const CREDENTIAL_CAPABILITIES = [
   "ArdiaPasswords.status",
@@ -102,7 +102,7 @@ async function domainCall(host: ArdiaHost, domain: "passwords" | "autofill", ver
     try {
       reply = shape(name, await callHost(name, profile, typeof args === "string" ? args : "{}", host));
     } catch (error) {
-      if (await releaseHeldLogin(profile, input.origin, input.username)) return JSON.stringify({ ok: true });
+      if (await releaseHeldLoginIfGone(host, profile, input.origin, input.username)) return JSON.stringify({ ok: true });
       throw error;
     }
     await releaseHeldLogin(profile, input.origin, input.username);

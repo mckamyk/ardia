@@ -252,7 +252,7 @@ class PasswordDevice extends Device {
             save: (...args) => syncModuleMethod(this.host, "ArdiaSync", "savePassword")(...args),
           }
         : {
-            read: () => this.tool.call("test.sealLogins", true),
+            read: () => this.tool.call("test.sealLoginsAnyway"),
             save: (_profile, origin, username, sealed) => this.tool.call("test.saveLoginAnyway", origin, username, sealed),
           };
     this.passwords = passwordsAdapter("default", () => true, logins);
@@ -345,6 +345,24 @@ test("saved passwords sync between a Mac and Linux through the production adapte
   await both(3);
   assert.equal(await linux.reported("https://site.example", longUsername), null);
   assert.equal(await mac.hasLogin("https://site.example", longUsername, "pw-long-username"), false);
+
+  const nativeUsername = "n".repeat(2000);
+  await linux.addLogin("https://native.example/", nativeUsername, "pw-native-long-username");
+  await both(2, [linux, mac]);
+  assert.equal(await mac.hasLogin("https://native.example", nativeUsername, "pw-native-long-username"), false);
+  fakeNow += 60_000;
+  await mac.addLogin("https://native.example/", nativeUsername, "pw-mac-edit-long-username");
+  await both(3);
+  assert.notEqual(await linux.reported("https://native.example", nativeUsername), null);
+  fakeNow += 60_000;
+  await mac.tool.call("test.removeLoginAnyway", "https://native.example", nativeUsername);
+  await both(3);
+  await both(2, [linux, mac]);
+  assert.equal(await linux.reported("https://native.example", nativeUsername), null);
+  assert.equal(await linux.hasLogin("https://native.example", nativeUsername, "pw-native-long-username"), true);
+  assert.equal(await mac.hasLogin("https://native.example", nativeUsername, "pw-native-long-username"), false);
+  assert.equal(await mac.hasLogin("https://native.example", nativeUsername, "pw-mac-edit-long-username"), false);
+  assert.deepEqual(linux.held.status(), { held: 2, refused: 0 });
 
   fakeNow += 60_000;
   await linux.addLogin("https://bank.example/", "alice@example.com", "pw-edited-on-linux");

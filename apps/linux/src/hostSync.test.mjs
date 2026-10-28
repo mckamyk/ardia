@@ -15,6 +15,7 @@ import {
   newSyncDeviceId,
   presentSyncState,
   refreshSyncDocuments,
+  HeldLoginsResetError,
   enterPhraseBegins,
   releaseHeldLogin,
   whileResettingHeldLogins,
@@ -218,12 +219,50 @@ test("the held store is capped by count and bytes, refuses past the cap without 
   const held = createHeldLogins(heldIo(), { maxLogins: 2, maxBytes: 1_000_000 });
   for (const name of ["a", "b"]) assert.equal(await held.hold("", { origin: `https://${name}.example`, username: name, sealed: "S", replaced: null }), true);
   assert.equal(await held.hold("", { origin: "https://c.example", username: "c", sealed: "S", replaced: null }), false);
+  assert.equal(await held.hold("", { origin: "https://c.example", username: "c", sealed: "S", replaced: null }), false);
+  assert.equal(await held.hold("work", { origin: "https://c.example", username: "c", sealed: "S", replaced: null }), false);
   assert.equal(await held.hold("", { origin: "https://a.example", username: "a", sealed: "S2", replaced: null }), true);
+  assert.deepEqual(held.status(), { held: 2, refused: 2 });
+  assert.equal(await held.release("", "https://b.example", "b"), true);
+  assert.equal(await held.hold("", { origin: "https://c.example", username: "c", sealed: "S", replaced: null }), true);
   assert.deepEqual(held.status(), { held: 2, refused: 1 });
   const small = createHeldLogins(heldIo(), { maxLogins: 100, maxBytes: 300 });
   assert.equal(await small.hold("", { origin: "https://a.example", username: "a", sealed: "S".repeat(100), replaced: null }), true);
   assert.equal(await small.hold("", { origin: "https://b.example", username: "b", sealed: "S".repeat(200), replaced: null }), false);
   assert.deepEqual(small.status(), { held: 1, refused: 1 });
+});
+
+test("held logins of a deleted profile are dropped, and other profiles keep theirs", async () => {
+  const io = heldIo();
+  const held = createHeldLogins(io);
+  for (const profile of ["", "work", "gone"]) await held.hold(profile, { origin: "https://a.example", username: profile, sealed: "S", replaced: null });
+  await held.dropProfiles([]);
+  assert.equal(held.status().held, 3);
+  await held.dropProfiles(["gone", "never-held"]);
+  assert.equal(held.status().held, 2);
+  assert.deepEqual(await createHeldLogins(io).merge("gone", []), []);
+  assert.equal((await createHeldLogins(io).merge("work", [])).length, 1);
+});
+
+test("a failed native remove releases a held login only when a fresh native read no longer has it", async () => {
+  let native = [{ origin: "https://bank.example", username: "alice", sealed: "V1", created: 5 }];
+  const host = fakeHost((method) => (method === "ArdiaSync.readPasswords" ? native : method === "ArdiaSync.savePassword" ? "skipped" : null));
+  host.call = async () => {
+    throw Object.assign(new Error("The password store is unavailable"), { code: "ERR_PASSWORDS_UNAVAILABLE" });
+  };
+  const save = syncModuleMethod(host, "ArdiaSync", "savePassword");
+  const read = syncModuleMethod(host, "ArdiaSync", "readPasswords");
+  const remove = (origin, username) => credentialModuleMethod(host, "ArdiaPasswords", "call")("remove", "", JSON.stringify({ origin, username }));
+  await withHeld(createHeldLogins(heldIo()), async () => {
+    assert.equal(await save("", "https://bank.example", "alice", "LONG", true), true);
+    await assert.rejects(remove("https://bank.example", "alice"), /unavailable/);
+    assert.deepEqual(await read(""), [{ origin: "https://bank.example", username: "alice", sealed: "LONG", created: 0 }]);
+    native = null;
+    await assert.rejects(remove("https://bank.example", "alice"), /unavailable/);
+    native = [];
+    assert.deepEqual(JSON.parse(await remove("https://bank.example", "alice")), { ok: true });
+    assert.deepEqual(await read(""), []);
+  });
 });
 
 test("the sync adapter holds a login the native save skipped with the local value it replaced, and a delete releases it even when the native remove refuses", async () => {
@@ -276,6 +315,20 @@ test("a key reset suspends the held store while it runs and clears it only when 
     await whileResettingHeldLogins(async () => ({ ok: true }), (result) => "ok" in result);
     assert.deepEqual(await read(""), []);
     assert.equal(io.docs.has(HELD_LOGINS_DOCUMENT), false);
+  });
+  const stuck = heldIo();
+  stuck.remove = async () => {
+    throw new Error("disk full");
+  };
+  const stuckStore = createHeldLogins(stuck);
+  let rolledBack = 0;
+  await withHeld(stuckStore, async () => {
+    await assert.rejects(
+      whileResettingHeldLogins(async () => ({ ok: true }), () => true, async () => void rolledBack++),
+      (error) => error instanceof HeldLoginsResetError,
+    );
+    assert.equal(rolledBack, 1);
+    assert.deepEqual(await read(""), []);
   });
   assert.equal(enterPhraseBegins({ enabled: true, status: "locked" }), false);
   for (const status of ["updated", "stalled", "starting", "offline"]) assert.equal(enterPhraseBegins({ enabled: true, status }), true);
@@ -523,7 +576,11 @@ test("the sync authority owns the held-logins store only while it holds the leas
   assert.match(start, /onRole: \(role\) => \{\n\s+if \(role !== "authority"\) dropHeldLogins\(\);/);
   assert.match(start, /claim: async \(\) => \{\n\s+const claim = await claimSyncAuthority\(host\);\n\s+if \(!claim\.granted\) dropHeldLogins\(\);/);
   const remote = engine.slice(engine.indexOf("function remoteFor"), engine.indexOf("async function becomeAuthority"));
-  assert.match(remote, /whileResettingHeldLogins\(\(\) => engine\.turnOnSync\(folder\), \(result\) => !\("error" in result\)\)/);
-  assert.match(remote, /const begins = enterPhraseBegins\(engine\.useSync\.getState\(\)\);\n\s+return whileResettingHeldLogins\(\(\) => engine\.enterRecoveryPhrase\(folder, text\), \(result\) => begins && "ok" in result\)/);
+  assert.match(remote, /whileResettingHeldLogins\(\s*\(\) => engine\.turnOnSync\(folder\),\s*\(result\) => !\("error" in result\),\s*\(\) => engine\.stopSync\(\{ deleteData: true \}\),?\s*\)/);
+  assert.match(remote, /error instanceof HeldLoginsResetError/);
+  assert.match(engine, /useBrowser\.subscribe\(/);
+  assert.match(engine, /dropProfiles\(\[\.\.\.seen\]\.filter\(\(profile\) => !live\.has\(profile\)\)\)/);
+  assert.match(remote, /const begins = enterPhraseBegins\(engine\.useSync\.getState\(\)\);/);
+  assert.match(remote, /whileResettingHeldLogins\(\s*\(\) => engine\.enterRecoveryPhrase\(folder, text\),\s*\(result\) => begins && "ok" in result,\s*\(\) => engine\.stopSync\(\),?\s*\)/);
   assert.doesNotMatch(remote, /clearHeldLogins|\.clear\(\)/);
 });

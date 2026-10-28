@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "ardia/linux/ac_linux_credentials.h"
+#include "ardia/linux/ac_linux_sync_crypto.h"
 #include "ardia/linux/ac_linux_sync.h"
 #include "ardia/linux/ac_linux_sync_json.h"
 #include "ardia/linux/ac_linux_sync_keystore.h"
@@ -84,6 +85,25 @@ std::optional<Outcome> LoginStore(std::map<LoginKey, StoredLogin>& logins, std::
     if (!opened) return Outcome::Value(JsonValue::Bool(false));
     logins.insert_or_assign({*origin, *username}, std::move(*opened));
     return Outcome::Value(JsonValue::Bool(true));
+  }
+  if (method == "ArdiaSync.test.sealLoginsAnyway") {
+    Outcome words = core.Dispatch("ArdiaSync.recoveryWords", {}, NowSeconds());
+    if (!words.ok) return words;
+    std::string phrase;
+    for (const auto& word : words.value.items) phrase += word.text + " ";
+    Bytes entropy;
+    if (EntropyFromPhrase(phrase, &entropy).kind != PhraseProblem::Kind::kNone) return Outcome::Error("ERR_TOOL", "phrase");
+    const SyncKeys keys(entropy);
+    JsonValue list = JsonValue::Array();
+    for (const auto& [key, login] : logins) {
+      auto sealed = keys.SealPassword(login.password, key.first, login.username);
+      if (!sealed) return Outcome::Error("ERR_TOOL", "seal");
+      list.Append(JsonValue::Object({{"origin", JsonValue::String(key.first)},
+                                     {"username", JsonValue::String(login.username)},
+                                     {"sealed", JsonValue::String(*sealed)},
+                                     {"created", JsonValue::Number(login.created_ms)}}));
+    }
+    return Outcome::Value(std::move(list));
   }
   if (method == "ArdiaSync.test.saveAttempts") {
     const std::string* origin = Text(args, 0);

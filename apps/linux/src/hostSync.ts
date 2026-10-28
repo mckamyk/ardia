@@ -159,7 +159,7 @@ export function createHeldLogins(io: HeldLoginsIo, limits: { maxLogins?: number;
   const maxBytes = limits.maxBytes ?? HELD_LOGINS_MAX_BYTES;
   let held: HeldByProfile | null = null;
   let suspended = 0;
-  let refused = 0;
+  const refused = new Set<string>();
   const load = async (): Promise<HeldByProfile | null> => {
     if (held) return held;
     const stored = io.read(HELD_LOGINS_DOCUMENT);
@@ -179,7 +179,9 @@ export function createHeldLogins(io: HeldLoginsIo, limits: { maxLogins?: number;
     }
     held = next;
   };
+  const refusal = (profile: string, origin: string, username: string) => `${profile}\n${loginKey(origin, username)}`;
   const release = async (profile: string, origin: string, username: string) => {
+    refused.delete(refusal(profile, origin, username));
     const current = await load();
     if (!current?.[profile]?.[loginKey(origin, username)]) return false;
     const next = structuredClone(current);
@@ -214,7 +216,7 @@ export function createHeldLogins(io: HeldLoginsIo, limits: { maxLogins?: number;
       const next = structuredClone(current);
       next[profile] = { ...next[profile], [loginKey(login.origin, login.username)]: { ...login } };
       if (heldCount(next) > maxLogins || JSON.stringify(next).length > maxBytes) {
-        refused++;
+        refused.add(refusal(profile, login.origin, login.username));
         return false;
       }
       try {
@@ -222,9 +224,23 @@ export function createHeldLogins(io: HeldLoginsIo, limits: { maxLogins?: number;
       } catch {
         return false;
       }
+      refused.delete(refusal(profile, login.origin, login.username));
       return true;
     },
     release,
+    async holds(profile: string, origin: string, username: string) {
+      return !!(await load())?.[profile]?.[loginKey(origin, username)];
+    },
+    async dropProfiles(profiles: string[]) {
+      if (!profiles.length) return;
+      const gone = new Set(profiles);
+      for (const key of [...refused]) if (gone.has(key.slice(0, key.indexOf("\n")))) refused.delete(key);
+      const current = await load();
+      if (!current || !Object.keys(current).some((profile) => gone.has(profile))) return;
+      const next = structuredClone(current);
+      for (const profile of gone) delete next[profile];
+      await store(next);
+    },
     async clear() {
       await io.remove(HELD_LOGINS_DOCUMENT);
       held = {};
@@ -236,7 +252,7 @@ export function createHeldLogins(io: HeldLoginsIo, limits: { maxLogins?: number;
       suspended = Math.max(0, suspended - 1);
     },
     status() {
-      return { held: held ? heldCount(held) : 0, refused };
+      return { held: held ? heldCount(held) : 0, refused: refused.size };
     },
   };
 }
@@ -254,14 +270,35 @@ export async function releaseHeldLogin(profile: string, origin: unknown, usernam
   return !!heldLogins && isText(origin) && isText(username) && (await heldLogins.release(profile, origin, username));
 }
 
+export async function releaseHeldLoginIfGone(host: ArdiaHost, profile: string, origin: unknown, username: unknown): Promise<boolean> {
+  const store = heldLogins;
+  if (!store || !isText(origin) || !isText(username) || !(await store.holds(profile, origin, username))) return false;
+  const native = (await invoke(host, "readPasswords")(hostProfile(profile, host))) as SealedLoginEntry[] | null;
+  if (!native || native.some((login) => login.origin === origin && login.username === username)) return false;
+  return store.release(profile, origin, username);
+}
+
+export class HeldLoginsResetError extends Error {
+  constructor() {
+    super("Ardia couldn’t reset the passwords sync was holding, so it undid the change. Try again.");
+  }
+}
+
 export const enterPhraseBegins = (ui: { enabled: boolean; status: string }) => !(ui.enabled && ui.status === "locked");
 
-export async function whileResettingHeldLogins<T>(run: () => Promise<T>, began: (result: T) => boolean): Promise<T> {
+export async function whileResettingHeldLogins<T>(run: () => Promise<T>, began: (result: T) => boolean, rollback?: () => Promise<unknown>): Promise<T> {
   const store = heldLogins;
   store?.suspend();
   try {
     const result = await run();
-    if (began(result)) await store?.clear();
+    if (began(result)) {
+      try {
+        await store?.clear();
+      } catch {
+        await rollback?.().catch(() => {});
+        throw new HeldLoginsResetError();
+      }
+    }
     return result;
   } finally {
     store?.resume();

@@ -481,7 +481,7 @@ Outcome SyncCore::SealLogins(LoginRead read) {
   std::set<std::pair<std::string, std::string>> seen;
   for (StoredLogin& login : read.logins) {
     auto origin = login.password.empty() || login.password.size() > kMaxLoginPasswordBytes ||
-                          login.username.size() > kMaxSyncedFieldBytes
+                          login.username.size() > kMaxLoginUsernameBytes
                       ? std::nullopt
                       : LoginOrigin(login.realm);
     if (!origin || !seen.emplace(*origin, login.username).second) continue;

@@ -855,8 +855,9 @@ void SealedLogins(const std::string& scratch) {
   CHECK(long_sealed.ok && long_sealed.value.items.size() == 1 && long_sealed.value.items[0].Find("sealed")->text.size() > 16384);
   Outcome long_usernames = core.SealLogins(Logins(true, {{"https://site.example/", std::string(2000, 'u'), "pw", 0},
                                                          {"https://site.example/", std::string(kMaxSyncedFieldBytes + 1, 'v'), "pw", 0}}));
-  CHECK(long_usernames.ok && long_usernames.value.items.size() == 1 &&
-        long_usernames.value.items[0].Find("username")->text.size() == 2000);
+  CHECK(long_usernames.ok && long_usernames.value.items.empty());
+  Outcome kib_username = core.SealLogins(Logins(true, {{"https://site.example/", std::string(kMaxLoginUsernameBytes, 'u'), "pw", 0}}));
+  CHECK(kib_username.ok && kib_username.value.items.size() == 1);
   auto long_save = ParsePasswordSave({S("default"), S("https://long.example"), S("lee"), S(long_sealed.value.items[0].Find("sealed")->text),
                                       JsonValue::Bool(false)});
   CHECK(long_save && long_save->holdable);
