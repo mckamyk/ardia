@@ -55,6 +55,7 @@
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/linux/ac_linux_site_controls_service.h"
+#include "ardia/linux/ac_linux_window_caption.h"
 #include "ardia/linux/ac_linux_window_lifecycle.h"
 #include "ardia/linux/ac_linux_favicons.h"
 #include "ardia/linux/ac_linux_page_status.h"
@@ -4831,6 +4832,11 @@ void ShellHostView::Invoke(
       if (Reaches(host)) ids.Append(host->window_id());
     }
     return std::move(done).Run(true, base::Value(std::move(ids)));
+  }
+  if (method == "ArdiaShell.startWindowMove" || method == "ArdiaShell.captionDoubleClick") {
+    const bool handled = method == "ArdiaShell.startWindowMove" ? linux_window::StartCaptionMove(GetWidget())
+                                                                : linux_window::CaptionDoubleClick(GetWidget());
+    return std::move(done).Run(true, base::Value(handled));
   }
   if (method == "ArdiaShell.windowFrame" || method == "ArdiaShell.closeWindow" ||
       method == "ArdiaShell.minimizeWindow" ||
