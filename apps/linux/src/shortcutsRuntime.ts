@@ -2,7 +2,7 @@ import type { ShortcutModifier } from "@ardia-real/shell";
 import { useBrowser } from "../../browser/src/state/browser/store";
 import { emitNativeEvent, provideNativeModuleProvider } from "./shims/expo-modules-core";
 import { ardiaHost, reportHostError, type ArdiaHost } from "./host";
-import { keyboardCombo, linuxBindings, linuxNativeBindings, type Binding } from "./shortcuts";
+import { keyboardCombo, linuxBindings, linuxNativeBindings, recordableShortcut, type Binding } from "./shortcuts";
 
 let capturing = false;
 let holding = 0;
@@ -84,7 +84,7 @@ export async function startLinuxShortcuts(host: ArdiaHost) {
       event.preventDefault();
       event.stopImmediatePropagation();
       if (event.key === "Escape") return void cancelShortcutRecording();
-      if (!combo.key || !event.ctrlKey && !event.metaKey && !/^F\d+$/.test(event.code)) return;
+      if (!recordableShortcut(event)) return;
       const current = recording;
       recording = null;
       void host.invoke("ArdiaShell.setShortcutRecording", { args: [false] }).then(() => current.resolve({ key: combo.key, modifiers: combo.modifiers }), (error) => { reportHostError(error); current.resolve(null); });
