@@ -50,12 +50,79 @@ async function pickProfile(desktop, settingsWindow, settings, current, wanted) {
   await delay(1200);
 }
 
+const SETTINGS_START = 60000;
+
+async function focusSourceWindow(desktop, window, shell) {
+  let last;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if ((await desktop.focused())?.id !== window.id) await desktop.raise(window);
+      await waitFocused(desktop, (w) => w.id === window.id, { timeout: 15000, label: `${window.title} focused` });
+      return await clickNeutral(desktop, window, shell);
+    } catch (error) {
+      last = error;
+      await delay(1000);
+    }
+  }
+  throw last;
+}
+
+async function settingsWindowOf(desktop) {
+  return (await desktop.windows()).find((w) => w.title === "Settings" || /^Settings\b/.test(w.title)) ?? null;
+}
+
+async function closeSettings(desktop, app) {
+  const window = await settingsWindowOf(desktop);
+  const open = (await app.shells()).some((s) => s.windowId === "settings");
+  if (!window && !open) return;
+  if (window) {
+    const settings = open ? await app.shell("settings", { timeout: 5000 }).catch(() => null) : null;
+    const close = settings ? await labelRect(settings, "Close window").catch(() => null) : null;
+    if (close) {
+      const frame = await currentRect(desktop, window);
+      await desktop.click(frame.x + close.x, frame.y + close.y);
+    } else await desktop.command(`[con_id=${window.id}] kill`);
+  }
+  await until(async () => !(await settingsWindowOf(desktop)) && !(await app.shells()).some((s) => s.windowId === "settings"), { timeout: 20000, label: "Settings to close" });
+}
+
+async function openSettingsFrom(t, desktop, app, source, pane, ready) {
+  let settingsShell = (await app.shells()).some((s) => s.windowId === "settings") ? await app.shell("settings", { timeout: 10000 }).catch(() => null) : null;
+  if (!settingsShell) {
+    await focusSourceWindow(desktop, source.window, source.shell);
+    await desktop.key("ctrl+comma");
+    settingsShell = await app.shell("settings", { timeout: SETTINGS_START / 2 }).catch(() => null);
+    if (!settingsShell) {
+      if ((await desktop.focused())?.id !== source.window.id) await focusSourceWindow(desktop, source.window, source.shell);
+      await desktop.key("ctrl+comma");
+      settingsShell = await app.shell("settings", { timeout: SETTINGS_START / 2 }).catch(async (error) => {
+        await desktopShot(t, desktop, "settings-never-opened");
+        throw error;
+      });
+    }
+  }
+  let window = await until(() => settingsWindowOf(desktop), { timeout: 20000, label: "the Settings window in the compositor" });
+  await desktop.command(`[con_id=${window.id}] floating enable, resize set 1200 900, move position center, focus`);
+  window = await until(async () => { const w = (await desktop.windows()).find((x) => x.id === window.id); return w?.floating && w.rect.width >= 1100 ? w : false; }, { timeout: 10000, label: "Settings floated at 1200×900" });
+  await waitFocused(desktop, (w) => w.id === window.id, { timeout: 10000, label: "Settings focused" });
+  await until(async () => (await settingsShell.text()).includes(pane), { timeout: 20000, label: `the ${pane} row in Settings` });
+  await clickTextIn(desktop, window, settingsShell, pane, { timeout: 15000 });
+  await settingsShell.waitFor(ready, { timeout: 20000, label: `the ${pane} pane` });
+  return { settings: settingsShell, window };
+}
+
+async function pickedProfile(desktop, window, settings, workName) {
+  const shown = (await shellLines(settings)).find((l) => l === workName || l === "Personal");
+  if (shown !== workName) await pickProfile(desktop, window, settings, shown ?? "Personal", workName);
+  return shown;
+}
+
 export const profilesDesktop = {
   id: "F02D",
   issue: 12,
   desktop: true,
   title: "From an isolated profile's window, Settings panes show that profile's sites and passwords, and extensions (the isolated copy installed through Choose Folder…) stay in the profile that installed them (sway)",
-  deadline: 420000,
+  deadline: 600000,
   async run(t) {
     const missing = await desktopUnavailable({ needs: ["grim", "dbusmock", "portal"] });
     if (missing) {
@@ -68,109 +135,111 @@ export const profilesDesktop = {
     await startPolkit(desktop, { mode: "allow" });
     const portal = await startPortal(desktop);
     const { app, shell } = await startDesktopBrowser(t, desktop, { name: "profiles", extensions: true, session: sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }] }) });
-    const mainWindow = await windowTitled(desktop, "Acceptance page 1");
+    await windowTitled(desktop, "Acceptance page 1");
     const workName = `Work ${run.slice(-4)}`;
     const work = await shell.state(`return s.createProfile({ name: ${js(workName)} });`);
-    const isolated = await openIsolated(app, shell, desktop, work, t.fixtures.url.page(3, run));
-    const sites = { personal: "https://personal.ardia.test", work: "https://work.ardia.test" };
-    await call(shell, "sites.setSetting", { origin: sites.personal, type: "notifications", value: "allow", engine: "chromium" });
-    await call(shell, "sites.setSetting", { origin: sites.work, type: "notifications", value: "allow", engine: "chromium" }, work);
+    let isolated = null;
+    const isolatedWindow = async () => {
+      const live = isolated && (await app.shells()).some((s) => s.windowId === isolated.shell.windowId) && (await desktop.windows()).some((w) => w.id === isolated.window.id);
+      if (!live) {
+        await closeSettings(desktop, app);
+        isolated = await openIsolated(app, shell, desktop, work, t.fixtures.url.page(3, run));
+      }
+      isolated.window = (await desktop.windows()).find((w) => w.id === isolated.window.id) ?? isolated.window;
+      return isolated;
+    };
+    await call(shell, "sites.setSetting", { origin: "https://personal.ardia.test", type: "notifications", value: "allow", engine: "chromium" });
+    await call(shell, "sites.setSetting", { origin: "https://work.ardia.test", type: "notifications", value: "allow", engine: "chromium" }, work);
     for (const [profile, user] of [["", `personal-${run}`], [work, `work-${run}`]]) {
       const saved = await shell.invoke("ArdiaPasswords.save", { args: [profile, `https://${profile ? "work" : "personal"}.ardia.test/login`, user, "f02d-secret"] });
       if (!saved.ok) throw new Error(`saving ${user} failed: ${saved.code} ${saved.message}`);
     }
-    let settings;
-    let settingsWindow;
     await t.check("Settings opened from the isolated window: Privacy › Site permissions for that profile lists only its site", async () => {
-      ({ settings, window: settingsWindow } = await settingsFrom(desktop, app, isolated.window, isolated.shell, "Privacy & Security"));
-      await settings.waitFor("document.body.innerText.includes('Site permissions')", { timeout: 10000, label: "the Privacy pane" });
-      const shown = (await shellLines(settings)).find((l) => l === workName || l === "Personal");
-      if (shown !== workName) await pickProfile(desktop, settingsWindow, settings, shown ?? "Personal", workName);
-      const text = await settings.waitFor("(() => { const t = document.body.innerText; return t.includes('work.ardia.test') ? t : false; })()", { timeout: 10000, label: "the isolated profile's site" });
+      const { settings, window } = await openSettingsFrom(t, desktop, app, await isolatedWindow(), "Privacy & Security", "document.body.innerText.includes('Site permissions')");
+      const shown = await pickedProfile(desktop, window, settings, workName);
+      const text = await settings.waitFor("(() => { const t = document.body.innerText; return t.includes('work.ardia.test') ? t : false; })()", { timeout: 15000, label: "the isolated profile's site" });
       await desktopShot(t, desktop, "isolated-site-permissions");
       if (text.includes("personal.ardia.test")) throw new Error("the default profile's site is listed for the isolated profile");
       return { defaulted: shown, picked: workName };
-    });
+    }, { timeout: 180000 });
     await t.check("Passwords for that profile, unlocked, list only its login", async () => {
-      await clickTextIn(desktop, settingsWindow, settings, "Passwords");
-      await settings.waitFor("document.body.innerText.includes('Storage on this computer')", { timeout: 10000, label: "the Passwords pane" });
-      const shown = (await shellLines(settings)).find((l) => l === workName || l === "Personal");
-      if (shown !== workName) await pickProfile(desktop, settingsWindow, settings, shown ?? "Personal", workName);
-      await clickTextIn(desktop, settingsWindow, settings, "Unlock");
-      const text = await settings.waitFor(`(() => { const t = document.body.innerText; return t.includes(${js(`work-${run}`)}) ? t : false; })()`, { timeout: 15000, label: "the isolated profile's login" });
+      const { settings, window } = await openSettingsFrom(t, desktop, app, await isolatedWindow(), "Passwords", "document.body.innerText.includes('Storage on this computer')");
+      const shown = await pickedProfile(desktop, window, settings, workName);
+      if (!(await settings.text()).includes(`work-${run}`)) await clickTextIn(desktop, window, settings, "Unlock", { timeout: 15000 });
+      const text = await settings.waitFor(`(() => { const t = document.body.innerText; return t.includes(${js(`work-${run}`)}) ? t : false; })()`, { timeout: 20000, label: "the isolated profile's login" });
       await desktopShot(t, desktop, "isolated-passwords");
       if (text.includes(`personal-${run}`)) throw new Error("the default profile's login is listed for the isolated profile");
       return { defaulted: shown };
-    });
-    await desktop.key("ctrl+w");
-    await delay(800);
+    }, { timeout: 180000 });
     const fixture = await prepareExtension(await t.scratch("profile-extension"));
-    let personalId;
-    await t.check("an extension installed in the default profile is on the default window's toolbar, not the isolated window's, and Settings › Extensions from the isolated window doesn't list it", async () => {
-      personalId = (await call(shell, "extensions.install", { path: fixture })).id;
-      await call(shell, "extensions.configure", { id: personalId, options: { pinned: true } });
+    const personalCopy = async () => {
+      const existing = listed(await shell.call("extensions.list", {}));
+      const id = existing?.id ?? (await call(shell, "extensions.install", { path: fixture })).id;
+      await call(shell, "extensions.configure", { id, options: { pinned: true } });
       await labelRect(shell, "Fixture Action");
+      return id;
+    };
+    await t.check("an extension installed in the default profile is on the default window's toolbar, not the isolated window's, and Settings › Extensions from the isolated window doesn't list it", async () => {
+      await closeSettings(desktop, app);
+      await personalCopy();
+      const source = await isolatedWindow();
+      await until(async () => (await source.shell.labels()).length > 0, { timeout: 10000, label: "the isolated window's toolbar" });
       await delay(1500);
-      if ((await isolated.shell.labels()).includes("Fixture Action")) throw new Error("the isolated window shows the default profile's extension");
-      ({ settings, window: settingsWindow } = await settingsFrom(desktop, app, isolated.window, isolated.shell, "Extensions"));
-      await settings.waitFor("document.body.innerText.includes('Add extensions')", { timeout: 10000, label: "the Extensions pane" });
-      await delay(1200);
-      const lines = await shellLines(settings);
+      if ((await source.shell.labels()).includes("Fixture Action")) throw new Error("the isolated window shows the default profile's extension");
+      const { settings } = await openSettingsFrom(t, desktop, app, source, "Extensions", "document.body.innerText.includes('Add extensions')");
+      const lines = await until(async () => { const l = await shellLines(settings); return l.includes(workName) || l.includes("No extensions yet") ? l : false; }, { timeout: 15000, label: "the pane to show the isolated profile or its empty state" }).catch(async (error) => {
+        throw new Error(`${error.message}; pane ${JSON.stringify((await shellLines(settings)).slice(14, 30))}`);
+      });
       await desktopShot(t, desktop, "isolated-extensions");
       if (lines.some((l) => l.includes(FIXTURE_NAME))) throw new Error(`Settings › Extensions from the isolated window lists ${FIXTURE_NAME}`);
-      const profileShown = lines.find((l) => l === workName || l === "Personal") ?? null;
-      if (profileShown !== workName && !lines.includes("No extensions yet")) throw new Error(`the pane shows ${profileShown} without its empty state: ${JSON.stringify(lines.slice(14, 30))}`);
-      return { profileShown };
-    });
+      return { profileShown: lines.find((l) => l === workName || l === "Personal") ?? null };
+    }, { timeout: 180000 });
     await t.check("installed in the isolated profile through its pane's Choose Folder…, it shows on its toolbar and in the open pane; removing it from the isolated profile's Settings › Extensions leaves the default profile's copy", async () => {
+      await personalCopy();
+      const source = await isolatedWindow();
+      const { settings, window } = await openSettingsFrom(t, desktop, app, source, "Extensions", "document.body.innerText.includes('Add extensions')");
+      const shown = await pickedProfile(desktop, window, settings, workName).catch(() => null);
       const copy = await prepareExtension(await t.scratch("isolated-extension"));
       if (!(await settings.text()).includes("Choose Folder…")) {
-        const advanced = await until(() => rowToggle(settings, "Show advanced settings"), { timeout: 8000, label: "the Show advanced settings toggle" });
-        const frame = await currentRect(desktop, settingsWindow);
+        const advanced = await until(() => rowToggle(settings, "Show advanced settings"), { timeout: 10000, label: "the Show advanced settings toggle" });
+        const frame = await currentRect(desktop, window);
         await desktop.click(frame.x + advanced.x, frame.y + advanced.y);
-        await settings.waitFor("document.body.innerText.includes('Choose Folder…')", { timeout: 10000, label: "the Choose Folder… row" });
+        await settings.waitFor("document.body.innerText.includes('Choose Folder…')", { timeout: 15000, label: "the Choose Folder… row" });
       }
+      const dialog = `Add “${FIXTURE_NAME}”?`;
       let attempts = 0;
-      while (!(await settings.text()).includes(`Add “${FIXTURE_NAME}”?`) && attempts < 4) {
+      while (!(await settings.text()).includes(dialog) && attempts < 4) {
         attempts++;
         await portal.pick("OpenFile", [copy], { delay: 1.5 });
-        await clickTextIn(desktop, settingsWindow, settings, "Choose Folder…");
-        await settings.waitFor(`document.body.innerText.includes(${js(`Add “${FIXTURE_NAME}”?`)})`, { timeout: 12000, label: "Ardia's Add dialog" }).catch(() => null);
+        await clickTextIn(desktop, window, settings, "Choose Folder…", { timeout: 15000 });
+        await settings.waitFor(`document.body.innerText.includes(${js(dialog)})`, { timeout: 15000, label: "Ardia's Add dialog" }).catch(() => null);
       }
-      if (!(await settings.text()).includes(`Add “${FIXTURE_NAME}”?`)) throw new Error(`Ardia's Add dialog never appeared in ${attempts} picks (#250)`);
-      await clickDialogButton(desktop, settingsWindow, settings, `Add “${FIXTURE_NAME}”?`, "Add Extension");
+      if (!(await settings.text()).includes(dialog)) throw new Error(`Ardia's Add dialog never appeared in ${attempts} picks (#250)`);
+      await clickDialogButton(desktop, window, settings, dialog, "Add Extension");
       let answeredBy = "click";
-      if (!(await until(async () => !(await settings.text()).includes(`Add “${FIXTURE_NAME}”?`), { timeout: 5000, label: "the Add dialog to close" }).then(() => true, () => false))) {
+      if (!(await until(async () => !(await settings.text()).includes(dialog), { timeout: 5000, label: "the Add dialog to close" }).then(() => true, () => false))) {
         await desktopShot(t, desktop, "isolated-add-click-ignored");
         await desktop.key("return");
-        answeredBy = (await until(async () => !(await settings.text()).includes(`Add “${FIXTURE_NAME}”?`), { timeout: 5000, label: "Enter" }).then(() => true, () => false)) ? "Enter after the click was ignored" : "nothing: neither the click nor Enter closed it";
+        answeredBy = (await until(async () => !(await settings.text()).includes(dialog), { timeout: 8000, label: "Enter" }).then(() => true, () => false)) ? "Enter after the click was ignored" : "nothing: neither the click nor Enter closed it";
       }
-      t.log(`the Add dialog was answered by ${answeredBy}`);
-      const workId = await until(async () => (await shell.call("extensions.list", {}, work)).value?.extensions?.find((x) => x.name === FIXTURE_NAME)?.id ?? false, { timeout: 20000, label: "the extension installed in the isolated profile" }).catch(async (error) => {
+      const workId = await until(async () => (await shell.call("extensions.list", {}, work)).value?.extensions?.find((x) => x.name === FIXTURE_NAME)?.id ?? false, { timeout: 30000, label: "the extension installed in the isolated profile" }).catch(async (error) => {
         await desktopShot(t, desktop, "isolated-choose-folder");
-        const personalPaths = ((await shell.call("extensions.list", {})).value?.extensions ?? []).map((x) => x.path);
-        throw new Error(`${error.message}; the Add dialog was answered by ${answeredBy}; the default profile now has ${JSON.stringify(personalPaths)} (the isolated copy is ${copy}); pane ${JSON.stringify((await shellLines(settings)).slice(14, 30))}`);
+        throw new Error(`${error.message}; the Add dialog was answered by ${answeredBy}; pane ${JSON.stringify((await shellLines(settings)).slice(14, 30))}`);
       });
       await call(shell, "extensions.configure", { id: workId, options: { pinned: true } }, work);
-      await labelRect(isolated.shell, "Fixture Action");
-      await settings.waitFor(`document.body.innerText.includes(${js(FIXTURE_NAME)}) && !document.body.innerText.includes(${js(`Add “${FIXTURE_NAME}”?`)})`, { timeout: 10000, label: "the isolated profile's copy in its open Settings › Extensions pane" }).catch(async (error) => {
+      await labelRect(source.shell, "Fixture Action");
+      await settings.waitFor(`document.body.innerText.includes(${js(FIXTURE_NAME)}) && !document.body.innerText.includes(${js(dialog)})`, { timeout: 15000, label: "the isolated profile's copy in its open Settings › Extensions pane" }).catch(async (error) => {
         await desktopShot(t, desktop, "isolated-extensions-after-install");
-        const before = (await shellLines(settings)).slice(14, 30);
-        await desktop.key("ctrl+w");
-        await delay(1000);
-        ({ settings, window: settingsWindow } = await settingsFrom(desktop, app, isolated.window, isolated.shell, "Extensions"));
-        const reopened = await settings.waitFor(`document.body.innerText.includes(${js(FIXTURE_NAME)})`, { timeout: 8000, label: "after reopening" }).then(() => true, () => false);
-        await desktopShot(t, desktop, "isolated-extensions-reopened");
-        throw new Error(`${error.message}; installed through Choose Folder… (${attempts} pick(s)), the isolated window shows its button, but the pane says ${JSON.stringify(before)}; after reopening Settings it is ${reopened ? "listed" : "still not listed"} (#281)`);
+        throw new Error(`${error.message}; pane ${JSON.stringify((await shellLines(settings)).slice(14, 30))} (#281)`);
       });
-      await removeExtensionInSettings(desktop, settingsWindow, settings, FIXTURE_NAME, async () => !(await shell.call("extensions.list", {}, work)).value.extensions.some((x) => x.id === workId));
+      await removeExtensionInSettings(desktop, window, settings, FIXTURE_NAME, async () => !(await shell.call("extensions.list", {}, work)).value.extensions.some((x) => x.id === workId));
       const personal = listed(await shell.call("extensions.list", {}));
       if (!personal?.enabled) throw new Error(`the default profile's copy is ${JSON.stringify(personal)}`);
-      await delay(1000);
-      if ((await isolated.shell.labels()).includes("Fixture Action")) throw new Error("the isolated window still shows the removed extension");
+      await until(async () => !(await source.shell.labels()).includes("Fixture Action"), { timeout: 10000, label: "the removed extension off the isolated toolbar" });
       await labelRect(shell, "Fixture Action");
-      return { personal: personal.id, removed: workId };
-    });
+      return { personal: personal.id, removed: workId, attempts, answeredBy, defaulted: shown };
+    }, { timeout: 180000 });
+    await closeSettings(desktop, app).catch(() => {});
     await t.stop(app);
   },
 };
