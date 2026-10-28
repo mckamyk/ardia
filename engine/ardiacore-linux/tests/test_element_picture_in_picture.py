@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import unittest
 
 LINUX = Path(__file__).resolve().parents[1] / 'src/ardia/linux'
@@ -25,9 +26,10 @@ class ElementPictureInPictureTests(unittest.TestCase):
         self.assertIn('EnterPictureInPictureForUser(string document) => (bool opened);', self.mojom)
 
     def test_candidates_are_shown_usable_videos_with_the_playing_and_largest_first(self):
-        self.assertIn("v.readyState > 0 && !v.disablePictureInPicture && v.clientWidth * v.clientHeight > 0", self.agent)
-        self.assertIn("(b.paused ? 0 : 1) - (a.paused ? 0 : 1) || b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight", self.agent)
-        self.assertIn("document.pictureInPictureElement === videos[0]", self.agent)
+        scripts = re.sub(r'"\s*\n\s*"', '', self.agent)
+        self.assertIn("v.readyState > 0 && !v.disablePictureInPicture && v.clientWidth * v.clientHeight > 0", scripts)
+        self.assertIn("(b.paused ? 0 : 1) - (a.paused ? 0 : 1) || b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight", scripts)
+        self.assertIn("document.pictureInPictureElement === videos[0]", scripts)
 
     def test_the_document_answer_comes_only_from_a_main_frame_with_a_candidate(self):
         answer = body(self.agent, '  void PictureInPictureDocument(PictureInPictureDocumentCallback callback) override {')
