@@ -3,6 +3,7 @@ import type { Plugin } from "vite";
 import { webShellConfig } from "./vite.shared";
 import { inputAdapters, rawBookmarkAdapter, resolveInputAdapter } from "./inputAdapters";
 import { credentialWording } from "./credentialWording";
+import { linuxWording } from "./linuxWording";
 
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const replacements = new Map([
@@ -22,6 +23,7 @@ const replacements = new Map([
   [here("../browser/src/components/settings/panes/Passwords.tsx"), here("./src/LinuxPasswordsPane.tsx")],
   [here("../browser/src/components/settings/panes/Autofill.tsx"), here("./src/LinuxAutofillPane.tsx")],
   [here("../browser/src/state/import/apply.ts"), here("./src/importApply.ts")],
+  [here("../browser/src/components/import/steps/UnlockStep.tsx"), here("./src/LinuxUnlockStep.tsx")],
   [here("../browser/src/state/tabs/tabKeepAlive.ts"), here("./src/tabKeepAlive.ts")],
   [here("../browser/src/state/sync/engine.ts"), here("./src/syncEngine.ts")],
   [here("../browser/src/state/extensions/store.ts"), here("./src/extensionsStore.ts")],
@@ -61,7 +63,7 @@ function linuxComponents(): Plugin {
 }
 
 export default webShellConfig({
-  plugins: [linuxComponents(), credentialWording()],
+  plugins: [linuxComponents(), credentialWording(), linuxWording()],
   aliases: [
     { find: /^@ardia\/shell$/, replacement: here("./src/shims/shell.tsx") },
     { find: /^@ardia\/ardiacore$/, replacement: here("./src/shims/ardiacore.tsx") },

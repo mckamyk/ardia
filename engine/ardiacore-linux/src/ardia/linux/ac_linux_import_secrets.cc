@@ -865,47 +865,49 @@ std::optional<Failure> ReadChromiumAutofill(const std::string& directory, Scratc
   return std::nullopt;
 }
 
-std::optional<Failure> ReadFirefoxLogins(const std::string& directory, ScratchDirectory& scratch,
-                                         ImportObserver& observer, std::string_view primary_password,
-                                         FirefoxLoginsRead* out, bool* cancelled) {
-  const std::string logins = Join(directory, "logins.json");
+namespace {
+
+std::optional<Failure> ReadFirefoxKeyDatabase(const std::string& directory, ScratchDirectory& scratch,
+                                              const ImportObserver& observer, FirefoxKeyDatabase* out) {
   const std::string key4 = Join(directory, "key4.db");
-  if (!IsFile(logins)) return Failure{"empty", "No saved logins in this profile"};
   if (!IsFile(key4)) return Failure{"unsupported", "This profile has no key4.db"};
   FileRead status = FileRead::kOk;
   std::unique_ptr<Database> db = Database::Snapshot(key4, scratch, observer, &status);
   if (!db) return SnapshotFailure(status, "key4.db");
   if (!db->HasTable("metaData") || !db->HasTable("nssPrivate")) return Failure{"unsupported", "key4.db has an unexpected layout"};
-  std::string global_salt;
-  std::string check;
   {
     Statement meta(db->get(), "SELECT item1, item2 FROM metaData WHERE id = 'password'");
     if (!meta.Step()) return Failure{"unreadable", "key4.db has no password entry"};
-    global_salt = meta.Blob(0);
-    check = meta.Blob(1);
+    out->global_salt = meta.Blob(0);
+    out->check = meta.Blob(1);
   }
-  std::vector<FirefoxKeyRow> rows;
-  {
-    Statement keys(db->get(), "SELECT * FROM nssPrivate");
-    const int a11 = keys.Column("a11");
-    const int a102 = keys.Column("a102");
-    const int a3 = keys.Column("a3");
-    while (keys.Step()) rows.push_back(FirefoxKeyRow{keys.Blob(a11), keys.Blob(a102), keys.Blob(a3)});
-  }
-  db.reset();
-  FirefoxKeys key;
-  switch (FirefoxMasterKeys(global_salt, check, rows, primary_password, &key)) {
-    case FirefoxKey::kOk:
-      break;
+  Statement keys(db->get(), "SELECT * FROM nssPrivate");
+  const int a11 = keys.Column("a11");
+  const int a102 = keys.Column("a102");
+  const int a3 = keys.Column("a3");
+  while (keys.Step()) out->rows.push_back(FirefoxKeyRow{keys.Blob(a11), keys.Blob(a102), keys.Blob(a3)});
+  return std::nullopt;
+}
+
+Failure FirefoxKeyFailure(FirefoxKey status, std::string_view what) {
+  switch (status) {
     case FirefoxKey::kLocked:
-      return Failure{"locked", "A Firefox primary password protects these passwords"};
+      return Failure{"locked", "A Firefox primary password protects " + std::string(what)};
     case FirefoxKey::kUnsupported:
       return Failure{"unsupported", "key4.db uses an encryption Ardia can't read"};
     case FirefoxKey::kMissing:
-      return Failure{"unreadable", "key4.db holds no login key"};
+      return Failure{"unreadable", "key4.db holds no key for " + std::string(what)};
     case FirefoxKey::kMalformed:
-      return Failure{"unreadable", "key4.db is malformed"};
+    case FirefoxKey::kOk:
+      break;
   }
+  return Failure{"unreadable", "key4.db is malformed"};
+}
+
+std::optional<Failure> ReadFirefoxLoginsJson(const std::string& directory, const FirefoxKeyDatabase& database,
+                                             ImportObserver& observer, std::string_view primary_password,
+                                             FirefoxLoginsRead* out, bool* cancelled) {
+  const std::string logins = Join(directory, "logins.json");
   std::string text;
   const FileRead read = ReadFileLimited(logins, kMaxLoginsJsonBytes, &text);
   if (read != FileRead::kOk) return Failure{read == FileRead::kTooLarge ? "tooLarge" : "unreadable", "Couldn't read logins.json"};
@@ -913,6 +915,11 @@ std::optional<Failure> ReadFirefoxLogins(const std::string& directory, ScratchDi
   Wipe(text);
   const base::ListValue* list = top ? top->FindList("logins") : nullptr;
   if (!list) return Failure{"unreadable", "logins.json is malformed"};
+  if (list->empty()) return std::nullopt;
+  FirefoxKeys key;
+  const FirefoxKey opened = FirefoxMasterKeys(database.global_salt, database.check, database.rows, primary_password, &key);
+  if (opened != FirefoxKey::kOk) return FirefoxKeyFailure(opened, "these passwords");
+  size_t added = 0;
   int seen = 0;
   for (const base::Value& entry : *list) {
     if (++seen % kCancelRows == 0 && observer.Cancelled()) {
@@ -940,10 +947,330 @@ std::optional<Failure> ReadFirefoxLogins(const std::string& directory, ScratchDi
     if (std::optional<double> value = row.FindDouble("timeCreated")) credential.created = *value;
     if (std::optional<double> value = row.FindDouble("timeLastUsed")) credential.last_used = *value;
     if (std::optional<int> value = row.FindInt("timesUsed")) credential.times_used = std::max(0, *value);
-    if (out->credentials.size() >= kMaxCredentials) break;
+    if (added++ >= kMaxCredentials) break;
     out->credentials.push_back(std::move(credential));
   }
+  return std::nullopt;
+}
+
+std::optional<Failure> ReadFirefoxLoginsDatabase(const std::string& directory, const FirefoxKeyDatabase& database,
+                                                 ScratchDirectory& scratch, ImportObserver& observer,
+                                                 std::string_view primary_password, FirefoxLoginsRead* out,
+                                                 bool* cancelled) {
+  SecretBytes key;
+  const FirefoxKey opened = FirefoxNamedKey(database.global_salt, database.check, database.rows, primary_password,
+                                            kFirefoxLoginsKeyLabel, &key);
+  if (opened != FirefoxKey::kOk) return FirefoxKeyFailure(opened, "logins.db");
+  FileRead status = FileRead::kOk;
+  std::unique_ptr<Database> db = Database::Snapshot(Join(directory, "logins.db"), scratch, observer, &status);
+  if (!db) return SnapshotFailure(status, "logins.db");
+  const bool local = db->HasTable("loginsL");
+  const bool mirror = db->HasTable("loginsM");
+  if (!local && !mirror) return Failure{"unsupported", "logins.db has an unexpected layout"};
+  const std::string columns = "origin, httpRealm, formActionOrigin, secFields, timeCreated, timeLastUsed, timesUsed";
+  std::string sql;
+  if (local) sql = "SELECT " + columns + " FROM loginsL WHERE is_deleted = 0";
+  if (mirror) {
+    if (!sql.empty()) sql += " UNION ALL ";
+    sql += "SELECT " + columns + " FROM loginsM WHERE is_overridden = 0";
+    if (local) sql += " AND guid NOT IN (SELECT guid FROM loginsL)";
+  }
+  Statement rows(db->get(), sql);
+  if (!rows.ok()) return Failure{"unsupported", "logins.db has an unexpected layout"};
+  size_t added = 0;
+  int seen = 0;
+  while (rows.Step()) {
+    if (++seen % kCancelRows == 0 && observer.Cancelled()) {
+      *cancelled = true;
+      out->credentials.clear();
+      return std::nullopt;
+    }
+    const std::string origin = rows.Text(0);
+    if (origin.empty() || origin.rfind("chrome://", 0) == 0) continue;
+    std::string sealed = rows.Text(3);
+    std::string plain;
+    const bool opened_fields = DecryptFirefoxJwe(sealed, key, &plain);
+    Wipe(sealed);
+    std::optional<base::DictValue> fields =
+        opened_fields ? base::JSONReader::ReadDict(plain, base::JSON_PARSE_RFC) : std::nullopt;
+    Wipe(plain);
+    const std::string* user = fields ? fields->FindString("u") : nullptr;
+    std::string* pass = fields ? fields->FindString("p") : nullptr;
+    if (!user || !pass) {
+      ++out->undecryptable;
+      continue;
+    }
+    Credential credential;
+    credential.username = *user;
+    credential.password = *pass;
+    Wipe(*pass);
+    if (credential.password.empty()) continue;
+    const std::string form = rows.Text(2);
+    credential.url = !form.empty() ? form : origin;
+    const std::string realm = rows.Text(1);
+    credential.realm = !realm.empty() ? realm : origin;
+    credential.created = static_cast<double>(std::max<int64_t>(0, rows.Int(4)));
+    credential.last_used = static_cast<double>(std::max<int64_t>(0, rows.Int(5)));
+    credential.times_used = static_cast<int>(std::clamp<int64_t>(rows.Int(6), 0, 1 << 30));
+    if (added++ >= kMaxCredentials) break;
+    out->credentials.push_back(std::move(credential));
+  }
+  if (rows.failed()) return Failure{"unreadable", "Couldn't read logins.db"};
+  return std::nullopt;
+}
+
+std::string JsonText(const base::DictValue& record, std::string_view key) {
+  const std::string* value = record.FindString(key);
+  return value ? Trimmed(*value) : std::string();
+}
+
+int JsonInt(const base::DictValue& record, std::string_view key) {
+  if (std::optional<int> value = record.FindInt(key)) return *value;
+  if (std::optional<double> value = record.FindDouble(key)) {
+    return std::isfinite(*value) && *value >= 0 && *value <= 9999 ? static_cast<int>(*value) : 0;
+  }
+  const std::string* text = record.FindString(key);
+  if (!text || text->empty() || text->size() > 4) return 0;
+  int out = 0;
+  for (const char c : *text) {
+    if (c < '0' || c > '9') return 0;
+    out = out * 10 + (c - '0');
+  }
+  return out;
+}
+
+void SetExpiry(ImportedCard& card, int64_t month, int64_t year) {
+  card.exp_month = month >= 1 && month <= 12 ? static_cast<int>(month) : 0;
+  card.exp_year = year > 0 && year < 100 ? static_cast<int>(2000 + year) : year >= 1900 && year <= 2199 ? static_cast<int>(year) : 0;
+}
+
+bool KeepCard(AutofillRead* out, ImportedCard card) {
+  std::string digits;
+  if (!CardDigits(card.number.value(), &digits)) {
+    ++out->undecryptable;
+    return false;
+  }
+  for (const ImportedCard& existing : out->cards) {
+    std::string other;
+    const bool same = CardDigits(existing.number.value(), &other) && other == digits && existing.exp_month == card.exp_month &&
+                      existing.exp_year == card.exp_year;
+    Wipe(other);
+    if (same) {
+      Wipe(digits);
+      return false;
+    }
+  }
+  Wipe(digits);
+  if (out->cards.size() >= kMaxAutofillItems) return false;
+  out->cards.push_back(std::move(card));
+  return true;
+}
+
+void KeepAddress(AutofillRead* out, ImportedAddress address) {
+  if (address.Empty() || out->addresses.size() >= kMaxAutofillItems) return;
+  if (std::find(out->addresses.begin(), out->addresses.end(), address) != out->addresses.end()) return;
+  out->addresses.push_back(std::move(address));
+}
+
+std::optional<base::DictValue> ReadFirefoxAutofillJson(const std::string& directory) {
+  std::string text;
+  if (ReadFileLimited(Join(directory, "autofill-profiles.json"), kMaxLoginsJsonBytes, &text) != FileRead::kOk) return std::nullopt;
+  std::optional<base::DictValue> top = base::JSONReader::ReadDict(text, base::JSON_PARSE_RFC);
+  Wipe(text);
+  return top;
+}
+
+bool LiveRecord(const base::Value& entry) {
+  return entry.is_dict() && entry.GetDict().FindBool("deleted") != true;
+}
+
+int EncryptedJsonCards(const base::DictValue& top) {
+  const base::ListValue* cards = top.FindList("creditCards");
+  int count = 0;
+  if (!cards) return 0;
+  for (const base::Value& entry : *cards) {
+    if (LiveRecord(entry) && !JsonText(entry.GetDict(), "cc-number-encrypted").empty()) ++count;
+  }
+  return count;
+}
+
+int DatabaseCards(const std::string& directory, ScratchDirectory& scratch, const ImportObserver& observer) {
+  if (!IsFile(Join(directory, "autofill.db"))) return 0;
+  FileRead status = FileRead::kOk;
+  std::unique_ptr<Database> db = Database::Snapshot(Join(directory, "autofill.db"), scratch, observer, &status);
+  if (!db || !db->HasTable("credit_cards_data")) return 0;
+  Statement count(db->get(), "SELECT COUNT(*) FROM credit_cards_data WHERE cc_number_enc != ''");
+  return count.Step() ? static_cast<int>(count.Int(0)) : 0;
+}
+
+}
+
+FirefoxLock FirefoxProfileLock(const std::string& directory, ScratchDirectory& scratch, const ImportObserver& observer,
+                               std::string_view primary_password) {
+  FirefoxKeyDatabase keys;
+  if (ReadFirefoxKeyDatabase(directory, scratch, observer, &keys)) return FirefoxLock::kNone;
+  const FirefoxKey opened = FirefoxPasswordState(keys.global_salt, keys.check, primary_password);
+  if (opened == FirefoxKey::kOk) return primary_password.empty() ? FirefoxLock::kNone : FirefoxLock::kOpened;
+  if (opened != FirefoxKey::kLocked) return FirefoxLock::kNone;
+  return FirefoxLock::kPrimaryPassword;
+}
+
+std::optional<Failure> ReadFirefoxLogins(const std::string& directory, ScratchDirectory& scratch,
+                                         ImportObserver& observer, std::string_view primary_password,
+                                         FirefoxLoginsRead* out, bool* cancelled) {
+  const bool json = IsFile(Join(directory, "logins.json"));
+  const bool database = IsFile(Join(directory, "logins.db"));
+  if (!json && !database) return Failure{"empty", "No saved logins in this profile"};
+  FirefoxKeyDatabase keys;
+  if (std::optional<Failure> failure = ReadFirefoxKeyDatabase(directory, scratch, observer, &keys)) return failure;
+  const FirefoxKey opened = FirefoxPasswordState(keys.global_salt, keys.check, primary_password);
+  if (opened != FirefoxKey::kOk) return FirefoxKeyFailure(opened, "these passwords");
+  std::optional<Failure> json_failure;
+  std::optional<Failure> database_failure;
+  if (json) json_failure = ReadFirefoxLoginsJson(directory, keys, observer, primary_password, out, cancelled);
+  if (*cancelled) return std::nullopt;
+  if (database) {
+    database_failure = ReadFirefoxLoginsDatabase(directory, keys, scratch, observer, primary_password, out, cancelled);
+  }
+  if (*cancelled) return std::nullopt;
+  if ((!json || json_failure) && (!database || database_failure)) return json_failure ? json_failure : database_failure;
+  if (json_failure) out->notes.push_back("logins.json couldn't be read: " + json_failure->message);
+  if (database_failure) out->notes.push_back("logins.db couldn't be read: " + database_failure->message);
+  std::stable_sort(out->credentials.begin(), out->credentials.end(), [](const Credential& a, const Credential& b) {
+    return std::max(a.last_used, a.created) > std::max(b.last_used, b.created);
+  });
   RemoveDuplicateCredentials(out->credentials, false);
+  while (out->credentials.size() > kMaxCredentials) out->credentials.pop_back();
+  return std::nullopt;
+}
+
+bool FirefoxCardsNeedKeyring(const std::string& directory, ScratchDirectory& scratch, const ImportObserver& observer) {
+  std::optional<base::DictValue> top = ReadFirefoxAutofillJson(directory);
+  return top && EncryptedJsonCards(*top) > 0 && DatabaseCards(directory, scratch, observer) == 0;
+}
+
+std::optional<Failure> ReadFirefoxAutofill(const std::string& directory, ScratchDirectory& scratch,
+                                           ImportObserver& observer, std::string_view primary_password,
+                                           const SecretBytes* card_key, AutofillRead* out, bool* cancelled) {
+  const bool database = IsFile(Join(directory, "autofill.db"));
+  std::optional<base::DictValue> json = ReadFirefoxAutofillJson(directory);
+  if (!database && !json) {
+    if (IsFile(Join(directory, "autofill-profiles.json"))) return Failure{"unreadable", "autofill-profiles.json is malformed"};
+    return Failure{"empty", "No saved addresses or cards in this profile"};
+  }
+  int database_cards = 0;
+  if (database) {
+    FileRead status = FileRead::kOk;
+    std::unique_ptr<Database> db = Database::Snapshot(Join(directory, "autofill.db"), scratch, observer, &status);
+    if (!db && !json) return SnapshotFailure(status, "autofill.db");
+    if (!db) out->notes.push_back("autofill.db couldn't be read: " + SnapshotFailure(status, "autofill.db").message);
+    if (db && db->HasTable("addresses_data")) {
+      Statement rows(db->get(),
+                     "SELECT name, organization, street_address, address_level2, address_level1, postal_code, country, "
+                     "tel, email FROM addresses_data ORDER BY time_created");
+      while (rows.Step()) {
+        ImportedAddress address;
+        address.name = Trimmed(rows.Text(0));
+        address.organization = Trimmed(rows.Text(1));
+        address.street = Trimmed(rows.Text(2));
+        address.city = Trimmed(rows.Text(3));
+        address.state = Trimmed(rows.Text(4));
+        address.postal_code = Trimmed(rows.Text(5));
+        address.country = Upper(Trimmed(rows.Text(6)));
+        address.phone = Trimmed(rows.Text(7));
+        address.email = Trimmed(rows.Text(8));
+        KeepAddress(out, std::move(address));
+      }
+    }
+    if (db && db->HasTable("credit_cards_data")) {
+      Statement rows(db->get(),
+                     "SELECT cc_name, cc_number_enc, cc_exp_month, cc_exp_year FROM credit_cards_data "
+                     "WHERE cc_number_enc != '' ORDER BY time_created");
+      std::optional<SecretBytes> key;
+      std::optional<FirefoxKey> opened;
+      int seen = 0;
+      while (rows.Step()) {
+        if (++seen % kCancelRows == 0 && observer.Cancelled()) {
+          *cancelled = true;
+          return std::nullopt;
+        }
+        ++database_cards;
+        if (!opened) {
+          FirefoxKeyDatabase keys;
+          SecretBytes named;
+          opened = ReadFirefoxKeyDatabase(directory, scratch, observer, &keys)
+                       ? FirefoxKey::kMissing
+                       : FirefoxNamedKey(keys.global_salt, keys.check, keys.rows, primary_password,
+                                         kFirefoxAutofillKeyLabel, &named);
+          if (*opened == FirefoxKey::kOk) key = std::move(named);
+        }
+        if (*opened == FirefoxKey::kLocked) {
+          ++out->locked_cards;
+          continue;
+        }
+        std::string sealed = rows.Text(1);
+        std::string plain;
+        const bool ok = key && DecryptFirefoxJwe(sealed, *key, &plain);
+        Wipe(sealed);
+        if (!ok) {
+          ++out->undecryptable;
+          continue;
+        }
+        ImportedCard card;
+        card.name = Trimmed(rows.Text(0));
+        card.number = SecretBytes(std::move(plain));
+        SetExpiry(card, rows.Int(2), rows.Int(3));
+        KeepCard(out, std::move(card));
+      }
+    }
+  }
+  if (json) {
+    if (const base::ListValue* addresses = json->FindList("addresses")) {
+      for (const base::Value& entry : *addresses) {
+        if (!LiveRecord(entry)) continue;
+        const base::DictValue& record = entry.GetDict();
+        ImportedAddress address;
+        address.name = JsonText(record, "name");
+        if (address.name.empty()) {
+          address.name = JoinParts({JsonText(record, "given-name"), JsonText(record, "additional-name"),
+                                    JsonText(record, "family-name")},
+                                   " ");
+        }
+        address.organization = JsonText(record, "organization");
+        address.street = JsonText(record, "street-address");
+        address.city = JsonText(record, "address-level2");
+        address.state = JsonText(record, "address-level1");
+        address.postal_code = JsonText(record, "postal-code");
+        address.country = Upper(JsonText(record, "country"));
+        address.phone = JsonText(record, "tel");
+        address.email = JsonText(record, "email");
+        KeepAddress(out, std::move(address));
+      }
+    }
+    const base::ListValue* cards = json->FindList("creditCards");
+    if (cards && database_cards == 0) {
+      for (const base::Value& entry : *cards) {
+        if (!LiveRecord(entry)) continue;
+        const base::DictValue& record = entry.GetDict();
+        const std::string* sealed = record.FindString("cc-number-encrypted");
+        if (!sealed || sealed->empty()) continue;
+        if (!card_key) {
+          ++out->keyring_cards;
+          continue;
+        }
+        std::string plain;
+        if (!DecryptFirefoxOsKeyStore(*sealed, *card_key, &plain)) {
+          ++out->undecryptable;
+          continue;
+        }
+        ImportedCard card;
+        card.name = JsonText(record, "cc-name");
+        card.number = SecretBytes(std::move(plain));
+        SetExpiry(card, JsonInt(record, "cc-exp-month"), JsonInt(record, "cc-exp-year"));
+        KeepCard(out, std::move(card));
+      }
+    }
+  }
   return std::nullopt;
 }
 

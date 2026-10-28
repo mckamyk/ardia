@@ -49,6 +49,8 @@ function writtenPasswords(reply: unknown): WrittenPasswords {
   return { added: count(value.added), existing: count(value.existing), conflicts: count(value.conflicts), invalid: count(value.invalid) };
 }
 
+export type UnlockOptions = { primaryPassword?: string; profiles?: readonly string[]; kinds?: readonly string[] };
+
 export type HostImport = Pick<
   Api,
   | "listBrowsers"
@@ -264,14 +266,17 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
       return sources;
     },
     importData,
-    async unlockBrowser(browserId, options = {}) {
+    async unlockBrowser(browserId, options: UnlockOptions = {}) {
       const family = families.get(browserId);
       if (family === "chromium" && !keychains.has(browserId)) return;
       if (family !== "chromium" && family !== "firefox") throw failure("unsupported", "This browser can't be unlocked on Linux");
       const primaryPassword = family === "firefox" && typeof options.primaryPassword === "string" ? options.primaryPassword : null;
-      await finishByEvent("unlockBrowser", [browserId, primaryPassword], "unlock", "unlocked", () => undefined, UNLOCK_DEADLINE_MS,
-        "The system keyring didn't answer");
-      unlocked.set(browserId, now());
+      const strings = (list: unknown) => (Array.isArray(list) ? list.filter((item): item is string => typeof item === "string") : []);
+      const args = family === "firefox" ? [browserId, primaryPassword, strings(options.profiles), strings(options.kinds)] : [browserId, primaryPassword];
+      const cardsLocked = await finishByEvent("unlockBrowser", args, "unlock", "unlocked", (event) => event.cardsLocked === true,
+        UNLOCK_DEADLINE_MS, "The system keyring didn't answer");
+      if (cardsLocked) unlocked.delete(browserId);
+      else unlocked.set(browserId, now());
     },
     isBrowserUnlocked: (browserId) => stillUnlocked(browserId) || (families.get(browserId) === "chromium" && !keychains.has(browserId)),
     forgetUnlockedKeys() {
@@ -339,6 +344,15 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
   };
 }
 
+const WEB_PAGE = /^https?:\/\//;
+const PNG_BASE64 = /^iVBORw0KGgo[A-Za-z0-9+/]*={0,2}$/;
+
+function isFavicon(value: unknown): value is ImportApi.ImportedFavicon {
+  const icon = value as Partial<ImportApi.ImportedFavicon> | null;
+  return !!icon && typeof icon.page === "string" && WEB_PAGE.test(icon.page) && typeof icon.icon === "string" &&
+    typeof icon.png === "string" && PNG_BASE64.test(icon.png);
+}
+
 function normalizeResult(value: unknown, browserId: string, profileId: string): ImportApi.ImportResult {
   const result = (value && typeof value === "object" ? value : {}) as Partial<ImportApi.ImportResult> & Record<string, unknown>;
   const list = <T,>(item: unknown) => (Array.isArray(item) ? (item as T[]) : []);
@@ -357,7 +371,7 @@ function normalizeResult(value: unknown, browserId: string, profileId: string): 
     vaultToken: typeof result.vaultToken === "string" && TOKEN.test(result.vaultToken) ? result.vaultToken : undefined,
     spaces: list(result.spaces),
     favorites: list(result.favorites),
-    favicons: list(result.favicons),
+    favicons: list<ImportApi.ImportedFavicon>(result.favicons).filter(isFavicon),
     failed: list(result.failed),
     warnings: list(result.warnings),
   };

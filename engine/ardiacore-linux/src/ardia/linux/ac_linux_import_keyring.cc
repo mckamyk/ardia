@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <utility>
 
 #include "ardia/linux/ac_linux_import_formats.h"
@@ -236,13 +237,18 @@ class SecretService {
   bool Available() { return bus_.ok() && bus_.Reachable(kSecrets, timeout_ms_, start_); }
 
   [[clang::no_sanitize("cfi-icall")]] KeyringStatus Search(const SafeStorageItem& item, std::vector<std::string>* unlocked, std::vector<std::string>* locked) {
-    const std::string schemas[] = {std::string(kSecretSchemaV2), std::string(kSecretSchemaV1), std::string()};
-    for (const std::string& schema : schemas) {
+    const bool labelled = !item.secret_label.empty();
+    const std::string schemas[] = {labelled ? item.secret_schema : std::string(kSecretSchemaV2),
+                                   labelled ? std::string() : std::string(kSecretSchemaV1), std::string()};
+    for (size_t pass = 0; pass < std::size(schemas); ++pass) {
+      const std::string& schema = schemas[pass];
+      if (labelled && pass > 0) continue;
+      const std::string& key = labelled ? item.secret_label : item.application;
+      const char* attribute = labelled ? "string" : "application";
       GVariant* arguments =
           schema.empty()
-              ? Library().variant_new_parsed("({'application': %s},)", item.application.c_str())
-              : Library().variant_new_parsed("({'application': %s, 'xdg:schema': %s},)", item.application.c_str(),
-                                             schema.c_str());
+              ? Library().variant_new_parsed("({%s: %s},)", attribute, key.c_str())
+              : Library().variant_new_parsed("({%s: %s, 'xdg:schema': %s},)", attribute, key.c_str(), schema.c_str());
       CallError error;
       Variant reply = bus_.Call(kSecrets, kSecretsPath, kService, "SearchItems", arguments, timeout_ms_, false, &error);
       if (!reply || reply.Size() < 2) return KeyringStatus::kUnavailable;
@@ -431,7 +437,7 @@ class SystemKeyringImpl : public Keyring {
       if (status == KeyringStatus::kOk) return status;
     }
     KWallet wallet(bus, timeout_ms, false);
-    if (wallet.Available()) {
+    if (!item.kwallet_key.empty() && wallet.Available()) {
       const KeyringStatus found = wallet.Exists(item);
       if (found == KeyringStatus::kOk || status == KeyringStatus::kUnavailable) status = found;
     }
@@ -456,7 +462,7 @@ class SystemKeyringImpl : public Keyring {
       }
     }
     KWallet wallet(bus, kKeyringProbeTimeoutMs, true);
-    if (wallet.Available()) {
+    if (!item.kwallet_key.empty() && wallet.Available()) {
       const KeyringStatus found = wallet.Exists(item);
       if (found == KeyringStatus::kOk) {
         lookup.backend = "kwallet";
@@ -483,8 +489,27 @@ std::optional<SafeStorageItem> SafeStorageFor(std::string_view browser_id) {
                                 {"helium", "helium", "Helium"}};
   for (const Entry& entry : kEntries) {
     if (browser_id.substr(0, entry.prefix.size()) != entry.prefix) continue;
-    return SafeStorageItem{entry.application, std::string(entry.product) + " Keys",
-                           std::string(entry.product) + " Safe Storage"};
+    SafeStorageItem item;
+    item.application = entry.application;
+    item.kwallet_folder = std::string(entry.product) + " Keys";
+    item.kwallet_key = std::string(entry.product) + " Safe Storage";
+    return item;
+  }
+  return std::nullopt;
+}
+
+std::optional<SafeStorageItem> FirefoxStorageFor(std::string_view browser_id) {
+  struct Entry {
+    std::string_view id;
+    const char* product;
+  };
+  constexpr Entry kEntries[] = {{"firefox", "Firefox"}, {"firefoxSnap", "Firefox"}, {"librewolf", "LibreWolf"}, {"zen", "Zen"}};
+  for (const Entry& entry : kEntries) {
+    if (browser_id != entry.id) continue;
+    SafeStorageItem item;
+    item.secret_schema = std::string(kFirefoxSecretSchema);
+    item.secret_label = std::string(entry.product) + " Encrypted Storage";
+    return item;
   }
   return std::nullopt;
 }
