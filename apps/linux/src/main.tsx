@@ -45,7 +45,7 @@ import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setS
 import { startUtility } from "./utility";
 import { installProfileWindows } from "./hostWindowProfiles";
 import { focus } from "../../browser/src/state/browser/actions";
-import { announceTypeaheadReady, windowExpectsField } from "./typeahead";
+import { announceCommandsReady, announceTypeaheadReady, windowExpectsField } from "./typeahead";
 import { linuxSyncHooks, startLinuxSync } from "./syncEngine";
 import { linuxLiveHooks } from "./liveHooks";
 import { connectCalendar, refreshCalendar, setCalendarHidden, useCalendar } from "../../browser/src/state/live/calendar";
@@ -58,7 +58,10 @@ setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLa
 function FirstWindowCommitted({ typeahead }: { typeahead: boolean }) {
   useEffect(() => {
     firstWindowCommitted();
-    if (typeahead && ardiaHost) announceTypeaheadReady(ardiaHost, { expectsField: () => windowExpectsField(useBrowser.getState(), ardiaHost!.bootstrap.windowId, useOnboarding.getState().windowId) });
+    if (typeahead && ardiaHost) {
+      announceCommandsReady(ardiaHost);
+      announceTypeaheadReady(ardiaHost, { expectsField: () => windowExpectsField(useBrowser.getState(), ardiaHost!.bootstrap.windowId, useOnboarding.getState().windowId) });
+    }
   }, [typeahead]);
   return null;
 }

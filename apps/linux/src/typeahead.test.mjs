@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { announceTypeaheadReady, windowExpectsField } from "./typeahead.ts";
+import { announceCommandsReady, announceTypeaheadReady, windowExpectsField } from "./typeahead.ts";
 
 function fakeHost(capabilities = ["ArdiaShell.typeaheadReady"]) {
   const calls = [];
@@ -169,4 +169,60 @@ test("a window that onboarding owns shows no command bar, so it expects no field
   assert.equal(windowExpectsField(state, "w", "w"), false);
   assert.equal(windowExpectsField(state, "w", "other"), true);
   assert.equal(windowExpectsField(state, "w", null), true);
+});
+
+test("the window tells its host once its command listener exists, so held shortcuts can pass live", async () => {
+  const host = fakeHost(["ArdiaShell.typeaheadReady", "ArdiaShell.commandsReady"]);
+  announceCommandsReady(host);
+  await tick();
+  assert.deepEqual(host.calls, [["ArdiaShell.commandsReady", { args: [] }]]);
+  const old = fakeHost();
+  announceCommandsReady(old);
+  await tick();
+  assert.deepEqual(old.calls, []);
+});
+
+test("the wait for a field ends before the host's hold runs out", async () => {
+  const host = fakeHost();
+  const clock = frames();
+  announceTypeaheadReady(host, { frame: clock.frame, now: clock.now, active: () => null, idle: idles().idle, expectsField: () => true, deadline: 3000 });
+  for (let i = 0; i < 1000 && clock.pending(); i++) clock.step(16);
+  await tick();
+  assert.deepEqual(host.calls, [["ArdiaShell.typeaheadReady", { args: [false] }]]);
+  assert.ok(clock.now() < 3000, String(clock.now()));
+});
+
+test("the idle wait after a field focuses is capped at the time the host has left", async () => {
+  const host = fakeHost();
+  const clock = frames();
+  const timeouts = [];
+  const queue = [];
+  announceTypeaheadReady(host, { frame: clock.frame, now: clock.now, active: () => ({ tagName: "INPUT", type: "text" }), idle: (callback, timeout) => { timeouts.push(timeout); queue.push(callback); }, expectsField: () => true, deadline: 1000 });
+  clock.step(16);
+  assert.equal(timeouts.length, 1);
+  assert.ok(timeouts[0] > 0 && timeouts[0] <= 1000 - 16, String(timeouts[0]));
+  queue.splice(0).forEach((callback) => callback());
+  await tick();
+  assert.deepEqual(host.calls, [["ArdiaShell.typeaheadReady", { args: [true] }]]);
+});
+
+test("a field that focuses after the host's deadline is announced at once, without waiting for idle", async () => {
+  const host = fakeHost();
+  const clock = frames();
+  let idled = 0;
+  announceTypeaheadReady(host, { frame: clock.frame, now: clock.now, active: () => ({ tagName: "INPUT", type: "text" }), idle: () => { idled++; }, expectsField: () => true, deadline: 100 });
+  clock.step(200);
+  await tick();
+  assert.equal(idled, 0);
+  assert.deepEqual(host.calls, [["ArdiaShell.typeaheadReady", { args: [true] }]]);
+});
+
+test("commands are announced from the first window commit, after the window's tree and webviews mount, before typeahead readiness", async () => {
+  const { readFileSync } = await import("node:fs");
+  const main = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+  const committed = main.slice(main.indexOf("function FirstWindowCommitted("), main.indexOf("async function start()"));
+  assert.match(committed, /useEffect\(\(\) => \{[\s\S]*if \(typeahead && ardiaHost\) \{\s*announceCommandsReady\(ardiaHost\);\s*announceTypeaheadReady\(/);
+  const start = main.slice(main.indexOf("async function start()"));
+  assert.ok(!start.includes("announceCommandsReady("));
+  assert.ok(start.indexOf("<WindowRoot") < start.indexOf("<FirstWindowCommitted"));
 });

@@ -31,6 +31,7 @@ template <class R, class... A> class RepeatingCallback<R(A...)> {
     requires std::is_invocable_r_v<R, const F&, A...>
   RepeatingCallback(F f) : f_(std::move(f)) {}
   R Run(A... args) const { return f_(std::forward<A>(args)...); }
+  explicit operator bool() const { return static_cast<bool>(f_); }
 
  private:
   std::function<R(A...)> f_;
@@ -78,6 +79,30 @@ struct Range {};
 namespace ui {
 
 enum class EventType { kKeyPressed, kKeyReleased, kMousePressed };
+enum KeyboardCode {
+  VKEY_UNKNOWN = 0,
+  VKEY_TAB = 0x09,
+  VKEY_SHIFT = 0x10,
+  VKEY_CONTROL = 0x11,
+  VKEY_MENU = 0x12,
+  VKEY_L = 0x4C,
+  VKEY_LWIN = 0x5B,
+  VKEY_RWIN = 0x5C,
+  VKEY_LSHIFT = 0xA0,
+  VKEY_RSHIFT = 0xA1,
+  VKEY_LCONTROL = 0xA2,
+  VKEY_RCONTROL = 0xA3,
+  VKEY_LMENU = 0xA4,
+  VKEY_RMENU = 0xA5,
+};
+enum class DomCode : uint32_t {};
+enum EventFlags {
+  EF_NONE = 0,
+  EF_SHIFT_DOWN = 1 << 1,
+  EF_CONTROL_DOWN = 1 << 2,
+  EF_ALT_DOWN = 1 << 3,
+  EF_COMMAND_DOWN = 1 << 4,
+};
 enum TextInputType { TEXT_INPUT_TYPE_NONE, TEXT_INPUT_TYPE_TEXT };
 enum TextInputMode { TEXT_INPUT_MODE_NONE, TEXT_INPUT_MODE_TEXT };
 enum class TextEditCommand { kNone };
@@ -99,9 +124,18 @@ class Event {
 
 class KeyEvent : public Event {
  public:
-  KeyEvent(EventType type, char key) : Event(type), key(key) {}
+  KeyEvent(EventType type, char key)
+      : Event(type), key(key), key_code_(static_cast<KeyboardCode>(key >= 'a' && key <= 'z' ? key - 'a' + 'A' : key)) {}
+  KeyEvent(EventType type, KeyboardCode key_code, int flags) : Event(type), key(0), key_code_(key_code), flags_(flags) {}
   KeyEvent(const KeyEvent&) = default;
+  KeyboardCode key_code() const { return key_code_; }
+  DomCode code() const { return static_cast<DomCode>(key_code_); }
+  int flags() const { return flags_; }
   char key;
+
+ private:
+  KeyboardCode key_code_;
+  int flags_ = EF_NONE;
 };
 inline const KeyEvent* Event::AsKeyEvent() const { return static_cast<const KeyEvent*>(this); }
 
