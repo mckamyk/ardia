@@ -3,6 +3,7 @@ import https from "node:https";
 import { once } from "node:events";
 import { createSecureContext } from "node:tls";
 import { TRUSTED_HOSTS, UNTRUSTED_HOSTS } from "./tls.mjs";
+import { createLiveServices, LIVE_HOSTS } from "./liveServices.mjs";
 
 export const PIXEL_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 export const SUGGEST_HOST = "suggestqueries.google.com";
@@ -57,6 +58,7 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
   const requests = [];
   const gates = new Map();
   const streams = new Set();
+  const live = createLiveServices();
   const ports = {};
   let links;
   const hostOf = (request) => String(request.headers.host ?? "").replace(/:\d+$/, "").toLowerCase();
@@ -77,6 +79,12 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
       response.end(body);
     };
     const html = (title, body, head) => send(200, "text/html; charset=utf-8", page(title, body, head));
+    if (secure && LIVE_HOSTS.includes(host)) {
+      const chunks = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => void live.handle(request, response, Buffer.concat(chunks).toString("utf8")).catch(() => response.destroy()));
+      return;
+    }
     if (host === SUGGEST_HOST && url.pathname === "/complete/search") {
       const query = url.searchParams.get("q") ?? "";
       return send(200, "application/json; charset=UTF-8", JSON.stringify([query, suggestionsFor(query)]));
@@ -218,7 +226,7 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
   };
   links = url;
   const chromiumArgs = [
-    `--host-resolver-rules=MAP *.ardia.test 127.0.0.1, MAP *.ardia-keep.test 127.0.0.1, MAP ${SUGGEST_HOST} 127.0.0.1:${ports.https}, MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1`,
+    `--host-resolver-rules=MAP *.ardia.test 127.0.0.1, MAP *.ardia-keep.test 127.0.0.1, MAP ${SUGGEST_HOST} 127.0.0.1:${ports.https}, ${LIVE_HOSTS.map((host) => `MAP ${host} 127.0.0.1:${ports.https}`).join(", ")}, MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1`,
     ...tls.chromiumArgs,
   ];
   return {
@@ -227,6 +235,7 @@ export async function startFixtures({ tls, slowChunk = 16384, slowInterval = 100
     requests,
     chromiumArgs,
     suggestRequests: () => requests.filter((r) => r.host === SUGGEST_HOST),
+    live,
     release(name) {
       const g = gate(name);
       g.released = true;

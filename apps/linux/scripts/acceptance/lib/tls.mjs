@@ -3,10 +3,11 @@ import { createHash, createPublicKey } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { LIVE_HOSTS } from "./liveServices.mjs";
 
 const run = promisify(execFile);
 
-export const TRUSTED_HOSTS = ["secure.ardia.test", "mixed.ardia.test", "suggestqueries.google.com"];
+export const TRUSTED_HOSTS = ["secure.ardia.test", "mixed.ardia.test", "suggestqueries.google.com", ...LIVE_HOSTS];
 export const UNTRUSTED_HOSTS = ["badcert.ardia.test"];
 
 const openssl = (dir, args) => run("openssl", args, { cwd: dir, timeout: 30000 });

@@ -51,34 +51,31 @@ constexpr int kSecretErrorIsLocked = 2;
 constexpr int kIoErrorCancelled = 19;
 constexpr char kDefaultCollection[] = "default";
 
-const SecretSchema& Schema() {
-  static const SecretSchema schema = [] {
-    SecretSchema s{};
-    s.name = kSecretSchema;
-    s.flags = 0;
-    s.attributes[0] = {"account", 0};
-    s.attributes[1] = {nullptr, 0};
-    return s;
-  }();
-  return schema;
+SecretSchema MakeSecretSchema(const KeySchema& key_schema) {
+  SecretSchema s{};
+  s.name = key_schema.name;
+  s.flags = 0;
+  s.attributes[0] = {"account", 0};
+  s.attributes[1] = {nullptr, 0};
+  return s;
 }
 
-bool ValidAccount(std::string_view account) {
+bool ValidSyncAccount(std::string_view account) {
   return IsTag(account);
 }
 
 class FileKeyStore final : public KeyStore {
  public:
-  explicit FileKeyStore(std::string directory) : directory_(std::move(directory)) {}
+  FileKeyStore(std::string directory, const KeySchema& schema) : directory_(std::move(directory)), schema_(schema) {}
 
   std::string_view kind() const override { return "file"; }
 
   KeyStatus Load(std::string_view account, Bytes* secret) override {
-    if (!ValidAccount(account)) return KeyStatus::kNotFound;
+    if (!schema_.valid_account(account)) return KeyStatus::kNotFound;
     const int fd = open(PathOf(account).c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) return errno == ENOENT ? KeyStatus::kNotFound : KeyStatus::kUnavailable;
     struct stat info;
-    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size > 1024 || info.st_uid != geteuid() ||
+    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || static_cast<size_t>(info.st_size) > schema_.max_bytes || info.st_uid != geteuid() ||
         (info.st_mode & 077) != 0) {
       close(fd);
       return KeyStatus::kUnavailable;
@@ -101,7 +98,7 @@ class FileKeyStore final : public KeyStore {
   }
 
   KeyStatus Save(std::string_view account, const Bytes& secret) override {
-    if (!ValidAccount(account)) return KeyStatus::kUnavailable;
+    if (!schema_.valid_account(account) || secret.size() > schema_.max_bytes) return KeyStatus::kUnavailable;
     if (mkdir(directory_.c_str(), 0700) != 0 && errno != EEXIST) return KeyStatus::kUnavailable;
     struct stat info;
     if (lstat(directory_.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) return KeyStatus::kUnavailable;
@@ -134,7 +131,7 @@ class FileKeyStore final : public KeyStore {
   }
 
   KeyStatus Delete(std::string_view account) override {
-    if (!ValidAccount(account)) return KeyStatus::kNotFound;
+    if (!schema_.valid_account(account)) return KeyStatus::kNotFound;
     if (unlink(PathOf(account).c_str()) == 0) return KeyStatus::kOk;
     return errno == ENOENT ? KeyStatus::kNotFound : KeyStatus::kUnavailable;
   }
@@ -143,15 +140,17 @@ class FileKeyStore final : public KeyStore {
 
  private:
   std::string PathOf(std::string_view account) const {
-    return directory_ + "/sync-key-" + std::string(account);
+    return directory_ + "/" + schema_.file_prefix + std::string(account);
   }
 
   std::string directory_;
+  const KeySchema& schema_;
 };
 
 class SecretServiceKeyStore final : public KeyStore {
  public:
-  explicit SecretServiceKeyStore(std::string library) {
+  SecretServiceKeyStore(std::string library, const KeySchema& schema)
+      : key_schema_(schema), schema_(MakeSecretSchema(schema)) {
     handle_ = dlopen(library.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!handle_) return;
     store_ = reinterpret_cast<StoreFn>(dlsym(handle_, "secret_password_store_sync"));
@@ -168,10 +167,10 @@ class SecretServiceKeyStore final : public KeyStore {
 
   [[clang::no_sanitize("cfi-icall")]] KeyStatus Load(std::string_view account, Bytes* secret) override {
     if (!Loaded()) return KeyStatus::kUnavailable;
-    if (!ValidAccount(account)) return KeyStatus::kNotFound;
+    if (!key_schema_.valid_account(account)) return KeyStatus::kNotFound;
     const std::string name(account);
     GError* error = nullptr;
-    char* found = lookup_(&Schema(), nullptr, &error, "account", name.c_str(), nullptr);
+    char* found = lookup_(&schema_, nullptr, &error, "account", name.c_str(), nullptr);
     if (error) return Classify(error);
     if (!found) return KeyStatus::kNotFound;
     std::string hex(found);
@@ -185,12 +184,13 @@ class SecretServiceKeyStore final : public KeyStore {
   }
 
   [[clang::no_sanitize("cfi-icall")]] KeyStatus Save(std::string_view account, const Bytes& secret) override {
-    if (!Loaded() || !ValidAccount(account)) return KeyStatus::kUnavailable;
+    if (!Loaded() || !key_schema_.valid_account(account) || secret.size() > key_schema_.max_bytes)
+      return KeyStatus::kUnavailable;
     const std::string name(account);
     std::string hex = HexEncode(secret);
     GError* error = nullptr;
     const int stored =
-        store_(&Schema(), kDefaultCollection, kSecretLabel, hex.c_str(), nullptr, &error, "account", name.c_str(), nullptr);
+        store_(&schema_, kDefaultCollection, key_schema_.label, hex.c_str(), nullptr, &error, "account", name.c_str(), nullptr);
     Wipe(hex);
     if (error) return Classify(error);
     return stored ? KeyStatus::kOk : KeyStatus::kUnavailable;
@@ -198,10 +198,10 @@ class SecretServiceKeyStore final : public KeyStore {
 
   [[clang::no_sanitize("cfi-icall")]] KeyStatus Delete(std::string_view account) override {
     if (!Loaded()) return KeyStatus::kUnavailable;
-    if (!ValidAccount(account)) return KeyStatus::kNotFound;
+    if (!key_schema_.valid_account(account)) return KeyStatus::kNotFound;
     const std::string name(account);
     GError* error = nullptr;
-    const int cleared = clear_(&Schema(), nullptr, &error, "account", name.c_str(), nullptr);
+    const int cleared = clear_(&schema_, nullptr, &error, "account", name.c_str(), nullptr);
     if (error) return Classify(error);
     return cleared ? KeyStatus::kOk : KeyStatus::kNotFound;
   }
@@ -231,6 +231,8 @@ class SecretServiceKeyStore final : public KeyStore {
     return status;
   }
 
+  const KeySchema& key_schema_;
+  const SecretSchema schema_;
   void* handle_ = nullptr;
   StoreFn store_ = nullptr;
   LookupFn lookup_ = nullptr;
@@ -270,12 +272,17 @@ bool UseFileKeyStore(bool background, bool explicit_user_data_dir, std::string_v
          trimmed(user_data_dir) != trimmed(default_user_data_dir);
 }
 
-std::unique_ptr<KeyStore> MakeFileKeyStore(std::string directory) {
-  return std::make_unique<FileKeyStore>(std::move(directory));
+const KeySchema& SyncKeySchema() {
+  static const KeySchema schema{kSecretSchema, kSecretLabel, "sync-key-", &ValidSyncAccount, 1024};
+  return schema;
 }
 
-std::unique_ptr<KeyStore> MakeSecretServiceKeyStore(std::string library) {
-  return std::make_unique<SecretServiceKeyStore>(std::move(library));
+std::unique_ptr<KeyStore> MakeFileKeyStore(std::string directory, const KeySchema& schema) {
+  return std::make_unique<FileKeyStore>(std::move(directory), schema);
+}
+
+std::unique_ptr<KeyStore> MakeSecretServiceKeyStore(std::string library, const KeySchema& schema) {
+  return std::make_unique<SecretServiceKeyStore>(std::move(library), schema);
 }
 
 std::string HexEncode(const Bytes& data) {

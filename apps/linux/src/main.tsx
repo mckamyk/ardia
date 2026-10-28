@@ -43,8 +43,9 @@ import { installProfileWindows } from "./hostWindowProfiles";
 import { focus } from "../../browser/src/state/browser/actions";
 import { announceTypeaheadReady } from "./typeahead";
 import { linuxSyncHooks, startLinuxSync } from "./syncEngine";
+import { linuxLiveHooks } from "./liveHooks";
 
-Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle, sleepTab }, sync: linuxSyncHooks, toolbar: useToolbarAutoHide, windowMenu: linuxWindowMenu, selection: { state: usePageSelection, jump: jumpToSelection, copyQuoteLink: copyLinkToSelection, replaceInField } } });
+Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle, sleepTab }, sync: linuxSyncHooks, live: linuxLiveHooks, toolbar: useToolbarAutoHide, windowMenu: linuxWindowMenu, selection: { state: usePageSelection, jump: jumpToSelection, copyQuoteLink: copyLinkToSelection, replaceInField } } });
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme });
 setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
 

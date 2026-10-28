@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { after, before, describe, it } from "node:test";
 import { MEDIA_TITLE, PIXEL_PNG, startFixtures, SUGGEST_HOST, suggestionsFor, toneWav } from "../lib/fixtures.mjs";
 import { generateTls } from "../lib/tls.mjs";
+import { LIVE_HOSTS } from "../lib/liveServices.mjs";
 
 const run = promisify(execFile);
 
@@ -146,6 +147,19 @@ describe("fixture servers and certificates", () => {
     fixtures.release(name);
     const reply = await pending;
     assert.equal(reply.body.length, 65536);
+  });
+
+  it("serves the Live provider hosts over the trusted certificate and can go offline", async () => {
+    const rules = fixtures.chromiumArgs.find((arg) => arg.startsWith("--host-resolver-rules="));
+    for (const host of LIVE_HOSTS) assert.ok(rules.includes(`MAP ${host} 127.0.0.1:${fixtures.ports.https},`), host);
+    assert.ok(rules.indexOf("MAP api.github.com") < rules.indexOf("MAP * ~NOTFOUND"));
+    const url = `https://api.notion.com:${fixtures.ports.https}/v1/users/me`;
+    const denied = await get(url, { ca: tls.ca, host: "api.notion.com" });
+    assert.equal(denied.status, 401);
+    assert.equal(fixtures.live.requests("api.notion.com").length, 1);
+    fixtures.live.state.offline = true;
+    await assert.rejects(get(url, { ca: tls.ca, host: "api.notion.com" }));
+    fixtures.live.state.offline = false;
   });
 
   it("maps the test hosts and the suggestion host and blocks everything else", () => {
