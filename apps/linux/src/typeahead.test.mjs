@@ -163,3 +163,10 @@ test("a window expects a field while it has no active tab or its active tab is a
   assert.equal(windowExpectsField(state({ t: { id: "t", windowId: "w", url: "https://ardia.test/" } }, "t"), "w"), false);
   assert.equal(windowExpectsField({ windows: {}, tabs: {} }, "w"), true);
 });
+
+test("a window that onboarding owns shows no command bar, so it expects no field", () => {
+  const state = { windows: { w: { id: "w", profileId: "p", activeTabIds: { p: "t" } } }, tabs: { t: { id: "t", windowId: "w", url: "" } } };
+  assert.equal(windowExpectsField(state, "w", "w"), false);
+  assert.equal(windowExpectsField(state, "w", "other"), true);
+  assert.equal(windowExpectsField(state, "w", null), true);
+});

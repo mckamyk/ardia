@@ -16,7 +16,8 @@ const typingTarget = (element: Focused) => {
   return tag === "TEXTAREA" || (tag === "INPUT" && TEXT_INPUTS.has((element.type ?? "").toLowerCase()));
 };
 
-export function windowExpectsField(s: Pick<BrowserState, "windows" | "tabs">, windowId: string) {
+export function windowExpectsField(s: Pick<BrowserState, "windows" | "tabs">, windowId: string, onboardingWindowId: string | null = null) {
+  if (onboardingWindowId === windowId) return false;
   const tabId = activeTabId(s as BrowserState, windowId);
   return !tabId || !s.tabs[tabId]?.url;
 }
