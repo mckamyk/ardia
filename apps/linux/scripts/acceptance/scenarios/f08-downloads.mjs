@@ -60,6 +60,10 @@ export default {
       return { path: smallDownload.path, size };
     }, { critical: true });
     await t.check("Ctrl+J shows the finished download", async () => {
+      if (await state.shell.state("return s.windowUi[windowId]?.downloadsOpen === true;")) {
+        await state.shell.command("downloads");
+        await state.shell.waitState("return s.windowUi[windowId]?.downloadsOpen === false;", { timeout: 5000, label: "the auto-opened downloads popover to close" });
+      }
       await state.shell.command("downloads");
       await state.shell.waitState("return s.windowUi[windowId]?.downloadsOpen === true;", { timeout: 5000, label: "downloads popover" });
       await until(async () => (await state.shell.text()).includes(small), { timeout: 5000, label: `${small} in the downloads list` });

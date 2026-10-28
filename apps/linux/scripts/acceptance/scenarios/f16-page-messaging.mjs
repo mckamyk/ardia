@@ -98,7 +98,7 @@ export default {
     });
 
     await t.check("selecting words reports the selection and Escape in the page clears it", async () => {
-      await clickAt(page.session, await centerOf(page.session, "document.getElementById('words')"), 0, 2);
+      await clickAt(page.session, await centerOf(page.session, "(() => { const text = document.getElementById('words').firstChild; const r = document.createRange(); r.setStart(text, 6); r.setEnd(text, 13); return r; })()"), 0, 2);
       const selected = await until(async () => { const s = await selectionOf(shell, page.tabId); return s?.text ? s : false; }, { timeout: 8000, label: "the selection" });
       await t.screenshot(shell, "selection-popover");
       await page.session.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });

@@ -54,7 +54,7 @@ export function launchEnvironment({ scratch, background = true, base = process.e
   return result;
 }
 
-export async function launchArdia({ executable, uiDir, scratch, background = true, ozone = "headless", extensions = false, extraArgs = [], env = {}, label = "ardia", startTimeout = 45000, spawnImpl = spawn }) {
+export async function launchArdia({ executable, uiDir, scratch, background = true, ozone = "headless", extensions = false, extraArgs = [], env = {}, label = "ardia", startTimeout = 45000, coreDumps = true, spawnImpl = spawn }) {
   await rm(join(scratch, "DevToolsActivePort"), { force: true });
   await mkdir(join(scratch, "home"), { recursive: true });
   const logPath = join(scratch, `${label}-${Date.now()}.log`);
@@ -62,7 +62,8 @@ export async function launchArdia({ executable, uiDir, scratch, background = tru
   const environment = launchEnvironment({ scratch, background, env });
   await writeFile(join(scratch, `${label}-command.json`), JSON.stringify({ executable, args, env: Object.fromEntries(Object.entries(env)) }, null, 2));
   const log = openSync(logPath, "w");
-  const child = spawnImpl(executable, args, { stdio: ["ignore", log, log], env: environment, detached: true });
+  const [command, commandArgs] = coreDumps ? [executable, args] : ["/bin/sh", ["-c", 'ulimit -c 0; exec "$0" "$@"', executable, ...args]];
+  const child = spawnImpl(command, commandArgs, { stdio: ["ignore", log, log], env: environment, detached: true });
   closeSync(log);
   const app = new ArdiaApp({ child, scratch, logPath, label });
   running.add(app);
@@ -139,6 +140,12 @@ export class ArdiaApp {
     return session;
   }
 
+  async disconnect(target) {
+    const session = this.connections.get(target.id);
+    this.connections.delete(target.id);
+    await session?.close().catch(() => {});
+  }
+
   async shells() {
     const targets = (await this.targets()).filter((t) => t.url.startsWith(SHELL_PREFIX) && t.type === "page");
     const shells = [];
@@ -172,6 +179,22 @@ export class ArdiaApp {
 
   async pageTarget(predicate, { timeout = 15000, label = "page target" } = {}) {
     return until(async () => (await this.targets()).find((t) => !t.url.startsWith(SHELL_PREFIX) && predicate(t)), { timeout, label, abort: () => this.exitReason() });
+  }
+
+  async pageLoaded(url, { timeout = 20000, prefix = false } = {}) {
+    const matches = (candidate) => (prefix ? candidate.startsWith(url) : candidate === url);
+    return until(async () => {
+      const target = (await this.targets()).find((t) => t.type === "page" && matches(t.url));
+      const session = target ? await connectCdp(target.webSocketDebuggerUrl).catch(() => null) : null;
+      if (!session) return false;
+      try {
+        const href = prefix ? `location.href.startsWith(${js(url)})` : `location.href === ${js(url)}`;
+        const loaded = await evaluate(session, `${href} && document.readyState === "complete"`, { timeout: 2000 }).catch(() => false);
+        return loaded ? target : false;
+      } finally {
+        await session.close().catch(() => {});
+      }
+    }, { timeout, label: `page ${url} to load`, abort: () => this.exitReason() });
   }
 
   async pageSession(predicate, options) {
@@ -245,8 +268,8 @@ export class Shell {
     return this.eval(`ardiaLinux.emitCommand(${js({ command, windowId: this.windowId, ...(arg === undefined ? {} : { arg }) })}), true`);
   }
 
-  invoke(method, args) {
-    return this.eval(`__ardiaHost.invoke(${js(method)}, ${js(args)}).then(value => ({ ok: true, value }), error => ({ ok: false, code: error?.code ?? null, message: String(error?.message ?? error) }))`);
+  invoke(method, args, options) {
+    return this.eval(`__ardiaHost.invoke(${js(method)}, ${js(args)}).then(value => ({ ok: true, value }), error => ({ ok: false, code: error?.code ?? null, message: String(error?.message ?? error) }))`, options);
   }
 
   call(name, args = {}, profile = "") {
@@ -255,6 +278,18 @@ export class Shell {
 
   windowIds() {
     return this.eval("__ardiaHost.invoke('ArdiaShell.windowIds', { args: [] })");
+  }
+
+  async nativeWindowId({ timeout = 15000 } = {}) {
+    return until(async () => {
+      const urls = await this.state("const w = s.windows[windowId]; return (w?.tabIds ?? []).map((id) => s.tabs[id]?.url).filter(Boolean);");
+      for (const target of await this.app.targets()) {
+        if (target.type !== "page" || !urls.includes(target.url)) continue;
+        const reply = await this.app.browser.send("Browser.getWindowForTarget", { targetId: target.id }).catch(() => null);
+        if (reply?.windowId) return reply.windowId;
+      }
+      return false;
+    }, { timeout, label: `the native window of ${this.windowId}`, abort: () => this.app.exitReason() });
   }
 
   activeTabId() {

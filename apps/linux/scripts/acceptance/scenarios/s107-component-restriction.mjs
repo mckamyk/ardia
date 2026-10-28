@@ -1,7 +1,7 @@
 import { connectCdp, evaluate } from "../lib/cdp.mjs";
 import { startBrowser } from "../lib/flows.mjs";
 import { until } from "../lib/util.mjs";
-import { BLOCKER_DIR, blockerReady, extraArgs } from "./f06-site-controls.mjs";
+import { blockerAvailable, blockerReady, extraArgs } from "./f06-site-controls.mjs";
 
 const EXTENSION = "fajbdaomknpkicfjcpipdmcpoamdmilh";
 
@@ -12,7 +12,7 @@ export default {
   deadline: 180000,
   manual: [],
   async run(t) {
-    if (!BLOCKER_DIR) {
+    if (!blockerAvailable(t)) {
       await t.check("the content blocker is packaged", () => {
         throw new Error("set ARDIA_ACCEPTANCE_CONTENT_BLOCKER to the uBlock Origin build from scripts/linux/fetch-ubo.sh");
       });
@@ -27,7 +27,7 @@ export default {
 
     await t.check("tabs.executeScript into a chrome:// tab is refused", async () => {
       const tabId = await state.shell.newTab("chrome://version/");
-      await state.shell.waitTabUrl(tabId, (u) => u.startsWith("chrome://version"), { timeout: 15000 });
+      await state.shell.waitTabUrl(tabId, (u) => /^(chrome|ardia):\/\/version/.test(u), { timeout: 15000 });
       const target = (await state.app.targets()).find((x) => x.url === background.detail.url);
       const session = await state.app.connect(target);
       const outcome = await evaluate(session, `new Promise((resolve) => chrome.tabs.query({}, (tabs) => {

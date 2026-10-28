@@ -1,7 +1,7 @@
 import { startBrowser } from "../lib/flows.mjs";
 import { js, nonce } from "../lib/util.mjs";
 import { openProfileWindow } from "./f02-profiles.mjs";
-import { BLOCKER_DIR, blockerReady, call, expectBlocked, extraArgs } from "./f06-site-controls.mjs";
+import { blockerAvailable, blockerReady, call, expectBlocked, extraArgs } from "./f06-site-controls.mjs";
 
 export default {
   id: "S108",
@@ -12,7 +12,7 @@ export default {
     { name: "The site panel acts the same in an isolated window", steps: ["Open an isolated profile's window and the Site Controls panel on an ad-carrying page.", "Turning the blocker off for the site there lists it in Settings › Privacy and the default profile's windows load that site's ads too."], reason: "needs the visible panel" },
   ],
   async run(t) {
-    if (!BLOCKER_DIR) {
+    if (!blockerAvailable(t)) {
       await t.check("the content blocker is packaged", () => {
         throw new Error("set ARDIA_ACCEPTANCE_CONTENT_BLOCKER to the uBlock Origin build from scripts/linux/fetch-ubo.sh");
       });

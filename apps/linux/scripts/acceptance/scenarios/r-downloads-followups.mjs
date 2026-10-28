@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, rmdir, stat, unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, rmdir, stat, symlink, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { startBrowser } from "../lib/flows.mjs";
 import { js, until } from "../lib/util.mjs";
@@ -55,8 +55,9 @@ export const w75 = {
   ],
   async run(t) {
     const scratch = await t.scratch("volume");
-    const bin = join(scratch, "empty-bin");
+    const bin = join(scratch, "launcher-bin");
     await mkdir(bin, { recursive: true });
+    for (const tool of ["/bin/sh", "/usr/bin/dirname"]) await symlink(await realpath(tool), join(bin, tool.split("/").pop()));
     const volume = await separateVolume(scratch);
     const downloads = volume ? await mkdtemp(join(volume, "ardia-acceptance-")) : join(scratch, "downloads");
     await mkdir(downloads, { recursive: true });
@@ -114,9 +115,9 @@ export const w76 = {
   ],
   async run(t) {
     const { app, shell } = await startBrowser(t, { name: "devtools", background: false });
-    await t.check("DevTools requested on a tab created in the same task opens and inspects it", async () => {
+    await t.check("DevTools requested before a new tab's first viewport opens and inspects it", async () => {
       const url = t.fixtures.url.page(3, "w76");
-      await shell.eval(`(() => { const s = ardiaLinux.store.getState(); const id = s.newTab(${js(shell.windowId)}, { url: ${js(url)} }); s.activate(id); ardiaLinux.emitCommand({ command: "devTools", windowId: ${js(shell.windowId)} }); return id; })()`);
+      await shell.eval(`new Promise((resolve) => { const s = ardiaLinux.store.getState(); const id = s.newTab(${js(shell.windowId)}, { url: ${js(url)} }); s.activate(id); const ask = () => { if (!ardiaLinux.webviews.has(id)) return setTimeout(ask, 0); ardiaLinux.emitCommand({ command: "devTools", windowId: ${js(shell.windowId)} }); resolve(id); }; ask(); })`);
       const frontend = await until(async () => (await app.browserTargets()).find(DEVTOOLS) ?? false, { timeout: 20000, label: "the DevTools frontend" });
       const page = await app.pageTarget((target) => target.url === url, { timeout: 20000, label: "the inspected page" });
       const attached = await until(async () => (await app.browserTargets()).find((target) => target.targetId === page.id)?.attached || false, { timeout: 10000, label: "the page to be inspected" });

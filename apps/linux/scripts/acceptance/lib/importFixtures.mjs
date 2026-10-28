@@ -105,11 +105,14 @@ export async function writeImportFixtures(home, { largeHistory = 40000 } = {}) {
   };
 }
 
-export async function digestTree(root) {
+export const ARDIA_OWN_PATHS = [join(".config", "ardia")];
+
+export async function digestTree(root, { skip = ARDIA_OWN_PATHS } = {}) {
   const out = {};
   const walk = async (dir) => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
+      if (skip.includes(relative(root, path))) continue;
       if (entry.isDirectory()) await walk(path);
       else if (entry.isFile()) out[relative(root, path)] = createHash("sha256").update(await readFile(path)).digest("hex");
     }

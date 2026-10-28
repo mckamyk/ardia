@@ -3,7 +3,7 @@ import { js, until } from "./util.mjs";
 
 export async function revealToolbar(shell) {
   const width = await shell.eval("innerWidth");
-  for (const [x, y] of [[width / 2, 8], [width / 2, 30], [width / 2, 60]]) {
+  for (const [x, y] of [[width / 2, 60], [width / 2, 8], [width / 2, 26]]) {
     await shell.session.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
@@ -23,8 +23,15 @@ export async function clickLabel(shell, prefix, options = {}) {
   return r;
 }
 
+export const CONNECTION_CHIPS = ["Connection information unavailable", "Not Fully Secure", "Not Secure", "Secure", "Local Page"];
+
 export async function sitePanelText(shell) {
   await clickLabel(shell, "Site Controls");
+  const chip = await until(async () => {
+    const lines = (await shell.text()).split("\n").map((line) => line.trim());
+    return CONNECTION_CHIPS.find((title) => lines.includes(title)) ?? false;
+  }, { timeout: 8000, label: "site panel connection chip" });
+  await shell.clickText(chip);
   const text = await until(async () => {
     const text = await shell.text();
     return classifySitePanel(text).level ? text : false;

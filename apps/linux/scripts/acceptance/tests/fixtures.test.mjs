@@ -69,7 +69,7 @@ describe("fixture servers and certificates", () => {
     assert.equal(tone.body.toString("ascii", 0, 4), "RIFF");
     assert.equal(tone.body.toString("ascii", 8, 12), "WAVE");
     assert.equal(tone.body.readUInt32LE(24), 8000);
-    assert.equal(tone.body.length, 44 + 8000 * 2);
+    assert.equal(tone.body.length, 44 + 8 * 8000 * 2);
     assert.ok(Math.max(...Array.from({ length: 200 }, (_, i) => Math.abs(tone.body.readInt16LE(44 + i * 2)))) > 10000);
     assert.equal(toneWav({ seconds: 0.5, rate: 4000 }).length, 44 + 2000 * 2);
   });

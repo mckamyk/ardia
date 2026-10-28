@@ -7,7 +7,7 @@ async function windowFullScreen(shell) {
 }
 
 async function setWindowState(app, shell, windowState) {
-  const { windowId } = await app.browser.send("Browser.getWindowForTarget", { targetId: shell.target.id });
+  const windowId = await shell.nativeWindowId();
   await app.browser.send("Browser.setWindowBounds", { windowId, bounds: { windowState } });
 }
 
