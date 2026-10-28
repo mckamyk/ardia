@@ -870,7 +870,7 @@ diff --git a/chrome/browser/ui/unload_controller.cc b/chrome/browser/ui/unload_c
 +              (state_ == State::kBeforeUnloadConfirmed &&
 +               linux_window_close_requested_))) {
 +    auto pending = GetTabsNeedingBeforeUnloadFired();
-+    for (auto* contents : pending) {
++    for (const auto& contents : pending) {
 +      tabs_needing_unload_fired_.erase(contents);
 +    }
 +    tabs_needing_before_unload_fired_.insert(pending.begin(), pending.end());
