@@ -226,7 +226,11 @@ export const privateAutoPipDesktop = {
       await delay(1500);
       await desktop.key("ctrl+t");
       const left = await until(async () => { const active = await windowShell.activeTabId(); return active && active !== tabId ? active : false; }, { timeout: 5000, label: `${label}: Ctrl+T to leave the video tab` });
-      if (await evaluate(session, "document.visibilityState", { userGesture: false }) !== "hidden") throw new Error(`${label}: the video page is still visible after Ctrl+T`);
+      const visibility = await until(async () => { const v = await evaluate(session, "document.visibilityState", { userGesture: false }); return v === "hidden" ? v : false; }, { timeout: 4000, label: "the video page to be hidden" }).catch(async () => evaluate(session, "document.visibilityState", { userGesture: false }));
+      if (visibility !== "hidden") {
+        await shot(t, desktop, `${label.replace(/ /g, "-")}-after-ctrl-t`);
+        throw new Error(`${label}: Ctrl+T made ${left} the active tab, but the video page still reports visibilityState ${visibility}`);
+      }
       return { tabId, session, left };
     }
     const seen = new Set();

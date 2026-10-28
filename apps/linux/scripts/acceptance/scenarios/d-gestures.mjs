@@ -52,7 +52,7 @@ export function popoverBeside(before, after, selection) {
     }
   }
   const found = regions(cells, { gap: 1 });
-  const near = found.filter((r) => r.width >= 40 && r.height >= 16 && r.height <= 80 && r.width <= 640 && Math.abs(r.y + r.height / 2 - (selection.y + selection.height / 2)) < 260 && r.x < selection.x + selection.width + 300 && r.x + r.width > selection.x - 300);
+  const near = found.filter((r) => r.width >= 40 && r.height >= 16 && r.height <= 80 && r.width <= 640 && (Math.abs(r.y + r.height - selection.y) <= 60 || Math.abs(r.y - (selection.y + selection.height)) <= 60) && r.x < selection.x + selection.width + 300 && r.x + r.width > selection.x - 300);
   return { near: near[0] ?? null, all: found.slice(0, 6) };
 }
 
@@ -149,57 +149,85 @@ export const f16Desktop = {
       return { selection: selected.text, popover: near, selectionRect: words.rect };
     });
 
+    const url = `${target}-two`;
+    const windowTabs = (windowShell) => windowShell.state(`const w = s.windows[windowId]; return { profileId: w?.profileId ?? null, active: w ? (w.activeTabIds?.[w.profileId] ?? null) : null, tabs: (w?.tabIds ?? []).map((id) => ({ id, url: s.tabs[id]?.url ?? null, profileId: s.tabs[id]?.profileId ?? null })) };`);
+    const onLink = (state) => state.tabs.filter((tab) => tab.url === url);
+    const logged = () => evaluate(two, "(window.dragLog ?? []).slice()", { userGesture: false });
+    const dragRan = async (before, label) => {
+      const now = (await logged()).slice(before.length);
+      if (!now.includes("dragstart") || !now.includes("dragend")) throw new Error(`${label}: no drag ran (page events ${JSON.stringify(now)})`);
+      return now;
+    };
+    const focusLinks = async () => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if ((await shell.activeTabId()) !== tabTwo) await clickSidebarTab(desktop, window, shell, "Links two");
+        await desktop.raise(window).catch(() => {});
+        await delay(300);
+        const ok = await focusPageByClick(desktop, window, shell, app, urlTwo, tabTwo).then(() => true, (error) => error);
+        if (ok === true) return;
+        if (attempt === 1) {
+          await shot(t, desktop, "links-page-focus");
+          throw new Error(`${ok.message}; compositor focus ${JSON.stringify((await desktop.focused())?.title ?? null)}`);
+        }
+      }
+    };
+
     await t.check("dragging a link onto its own page with no drop target opens one foreground tab on the link", async () => {
-      await focusPageByClick(desktop, window, shell, app, urlTwo, tabTwo);
+      await focusLinks();
       await evaluate(two, "window.dragLog = []; for (const e of ['dragstart', 'dragend', 'drop']) document.addEventListener(e, () => dragLog.push(e), true); true", { userGesture: false });
+      const before = await logged();
       const from = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('link')");
       const pane = await paneRect(shell, tabTwo);
       const frame = await currentRect(desktop, window);
       await desktop.drag({ x: from.x, y: from.y }, { x: frame.x + pane.left + pane.width * 0.7, y: frame.y + pane.top + pane.height * 0.75 }, { steps: 20, hold: 250 });
-      const url = `${target}-two`;
-      const opened = await until(async () => { const ids = await tabsOn(shell, url); return ids.length ? ids : false; }, { timeout: 6000, label: "a tab on the dragged link" }).catch(async (error) => {
-        throw new Error(`${error.message}; page events ${JSON.stringify(await evaluate(two, "dragLog", { userGesture: false }))}`);
-      });
+      const events = await dragRan(before, "own page");
+      const opened = await until(async () => { const tabs = onLink(await windowTabs(shell)); return tabs.length ? tabs : false; }, { timeout: 6000, label: "a tab on the dragged link" }).catch((error) => { throw new Error(`${error.message}; page events ${JSON.stringify(events)}`); });
       await delay(1500);
-      const again = await tabsOn(shell, url);
-      if (again.length !== 1) throw new Error(`${again.length} tabs opened`);
-      if ((await shell.activeTabId()) !== again[0]) throw new Error("the new tab isn't in front");
-      await clickSidebarTab(desktop, window, shell, "Links two");
-      return { opened, log: await evaluate(two, "dragLog", { userGesture: false }) };
+      const state = await windowTabs(shell);
+      if (onLink(state).length !== 1) throw new Error(`${onLink(state).length} tabs opened`);
+      if (state.active !== opened[0].id) throw new Error("the new tab isn't in front");
+      return { opened: opened[0], events };
     });
 
-    await t.check("dragging a link onto a drop target in the page or outside the window opens nothing", async () => {
-      const url = `${target}-two`;
-      const before = (await tabsOn(shell, url)).length;
-      await focusPageByClick(desktop, window, shell, app, urlTwo, tabTwo);
-      const logged = () => evaluate(two, "(window.dragLog ?? []).slice()", { userGesture: false });
-      const dragged = async (before, label) => {
-        const now = (await logged()).slice(before.length);
-        if (!now.includes("dragstart") || !now.includes("dragend")) throw new Error(`${label}: no drag ran (page events ${JSON.stringify(now)})`);
-        return now;
-      };
+    await t.check("dragging a link onto a drop target in its page opens nothing and the target gets the drop", async () => {
+      await focusLinks();
+      const before = await windowTabs(shell);
+      const beforeLog = await logged();
       const from = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('link')");
       const drop = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('target')");
-      const beforeTarget = await logged();
       await desktop.drag({ x: from.x, y: from.y }, { x: drop.x, y: drop.y }, { steps: 20, hold: 250 });
       await until(() => evaluate(two, "drops === 1", { userGesture: false }), { timeout: 5000, label: "the page's drop target to receive the drop" });
-      const targetEvents = await dragged(beforeTarget, "drop target");
-      await desktop.command(`[con_id=${window.id}] floating enable, resize set 1280 860, move position 0 0`);
-      await delay(1000);
-      const moved = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('link')");
-      const beforeOutside = await logged();
-      await desktop.drag({ x: moved.x, y: moved.y }, { x: 1700, y: 1000 }, { steps: 24, hold: 250 });
+      const events = await dragRan(beforeLog, "drop target");
       await delay(2500);
-      const outsideEvents = await dragged(beforeOutside, "outside the window");
-      const after = (await tabsOn(shell, url)).length;
-      await desktop.command(`[con_id=${window.id}] floating disable`);
-      if (after !== before) throw new Error(`${after - before} tabs opened`);
-      return { drops: await evaluate(two, "drops", { userGesture: false }), targetEvents, outsideEvents };
+      const after = await windowTabs(shell);
+      if (after.tabs.length !== before.tabs.length) throw new Error(`${after.tabs.length - before.tabs.length} tabs opened`);
+      return { drops: await evaluate(two, "drops", { userGesture: false }), events };
     });
 
-    await t.check("dragging a link onto a second Ardia window at the same in-window point: where a tab opens, by window and profile", async () => {
-      const url = `${target}-two`;
-      await focusPageByClick(desktop, window, shell, app, urlTwo, tabTwo);
+    await t.check("dragging a link out of the window onto the empty desktop opens nothing", async () => {
+      await focusLinks();
+      const before = await windowTabs(shell);
+      await desktop.command(`[con_id=${window.id}] floating enable, resize set 1280 860, move position 0 0`);
+      try {
+        await delay(1000);
+        const beforeLog = await logged();
+        const from = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('link')");
+        await desktop.drag({ x: from.x, y: from.y }, { x: 1700, y: 1000 }, { steps: 24, hold: 250 });
+        await delay(2500);
+        const events = await dragRan(beforeLog, "outside the window");
+        await shot(t, desktop, "drop-outside-window");
+        const after = await windowTabs(shell);
+        const added = after.tabs.filter((tab) => !before.tabs.some((old) => old.id === tab.id));
+        if (added.length) throw new Error(`${added.length} tab(s) opened: ${JSON.stringify(added)} (page events ${JSON.stringify(events)})`);
+        return { events };
+      } finally {
+        await desktop.command(`[con_id=${window.id}] floating disable`).catch(() => {});
+        await delay(1000);
+      }
+    });
+
+    await t.check("dragging a link onto a second Ardia window opens one foreground tab there in its profile and leaves the first window unchanged", async () => {
+      await focusLinks();
       const known = await desktop.windows();
       await desktop.key("ctrl+n");
       const second = await newWindow(desktop, known, { label: "the second Ardia window" });
@@ -214,22 +242,28 @@ export const f16Desktop = {
       const first = await currentRect(desktop, window);
       const other = await currentRect(desktop, second);
       if (first.x === other.x) throw new Error(`the two windows overlap: ${JSON.stringify({ first, other })}`);
-      const inWindow = (windowShell) => windowShell.state(`return Object.values(s.tabs).filter((t) => t.url === ${js(url)} && t.windowId === windowId).map((t) => ({ id: t.id, profileId: t.profileId, active: (s.windows[windowId]?.activeTabIds?.[t.profileId] ?? null) === t.id }));`);
-      const before = { first: await inWindow(shell), second: await inWindow(secondShell) };
-      await focusPageByClick(desktop, window, shell, app, urlTwo, tabTwo);
-      const beforeLog = await evaluate(two, "(window.dragLog ?? []).slice()", { userGesture: false });
+      await focusLinks();
+      const before = { first: await windowTabs(shell), second: await windowTabs(secondShell) };
+      const beforeLog = await logged();
       const from = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('link')");
       const start = { x: from.rect.x + 24, y: from.y };
       const drop = { x: start.x - first.x + other.x, y: start.y - first.y + other.y };
       await desktop.drag(start, drop, { steps: 24, hold: 250 });
-      await delay(4000);
+      const events = await dragRan(beforeLog, "second window");
+      await delay(3000);
       await shot(t, desktop, "drop-on-second-window");
-      const events = (await evaluate(two, "(window.dragLog ?? []).slice()", { userGesture: false })).slice(beforeLog.length);
-      if (!events.includes("dragstart") || !events.includes("dragend")) throw new Error(`no drag ran (page events ${JSON.stringify(events)})`);
-      const after = { first: await inWindow(shell), second: await inWindow(secondShell) };
-      const opened = Object.fromEntries(Object.entries(after).map(([name, tabs]) => [name, tabs.filter((tab) => !before[name].some((old) => old.id === tab.id))]));
-      const where = Object.entries(opened).flatMap(([name, tabs]) => tabs.map((tab) => ({ window: name === "first" ? `the source window (${shell.windowId})` : `the second window (${secondShell.windowId})`, profile: tab.profileId, active: tab.active })));
-      return { opened: where.length ? where : "none", events, start, drop, secondTabs: await secondShell.state("return Object.values(s.tabs).filter((x) => x.windowId === windowId).map((x) => x.url);") };
+      const after = { first: await windowTabs(shell), second: await windowTabs(secondShell) };
+      const added = (name) => after[name].tabs.filter((tab) => !before[name].tabs.some((old) => old.id === tab.id));
+      const firstAdded = added("first");
+      const secondAdded = added("second");
+      const detail = { first: firstAdded, second: secondAdded, secondProfile: after.second.profileId, secondActive: after.second.active, events };
+      if (firstAdded.length || JSON.stringify(after.first.tabs) !== JSON.stringify(before.first.tabs)) throw new Error(`the first window changed: ${JSON.stringify(detail)}`);
+      if (secondAdded.length !== 1) throw new Error(`${secondAdded.length} tabs opened in the second window: ${JSON.stringify(detail)}`);
+      const [tab] = secondAdded;
+      if (tab.url !== url) throw new Error(`the second window's new tab is on ${tab.url}, not the link: ${JSON.stringify(detail)}`);
+      if (tab.profileId !== after.second.profileId) throw new Error(`the new tab is in profile ${tab.profileId}, not the window's ${after.second.profileId}`);
+      if (after.second.active !== tab.id) throw new Error(`the new tab isn't in front in the second window: ${JSON.stringify(detail)}`);
+      return detail;
     });
     await t.stop(app);
   },
@@ -276,10 +310,10 @@ export const f25Desktop = {
         const url = t.fixtures.url.tint(kind);
         await shell.navigate(tabId, url);
         await shell.waitTabUrl(tabId, (u) => u === url);
-        await delay(1800);
-        const now = await chromeSamples(desktop, window, shell, tabId);
-        await shot(t, desktop, `tint-${kind}`);
         const want = parseHex(color);
+        let now = null;
+        await until(async () => { now = await chromeSamples(desktop, window, shell, tabId); return towards(base.toolbar, want, now.toolbar) >= 0.5; }, { timeout: 6000, interval: 400, label: `the toolbar to take ${color}` }).catch(() => {});
+        await shot(t, desktop, `tint-${kind}`);
         const result = { base: { sidebar: toHex(base.sidebar), toolbar: toHex(base.toolbar) }, now: { sidebar: toHex(now.sidebar), toolbar: toHex(now.toolbar) }, towards: { sidebar: +towards(base.sidebar, want, now.sidebar).toFixed(3), toolbar: +towards(base.toolbar, want, now.toolbar).toFixed(3) } };
         if (result.towards.toolbar < 0.5) throw new Error(`the toolbar didn't take ${color}: ${JSON.stringify(result)}`);
         return result;
@@ -308,8 +342,8 @@ export const f25Desktop = {
       await delay(1800);
       const now = await chromeSamples(desktop, window, shell, tabId);
       await shot(t, desktop, "tint-off");
-      const drift = { sidebar: colorDistance(base.sidebar, now.sidebar), toolbar: colorDistance(base.toolbar, now.toolbar) };
-      if (drift.toolbar > 6) throw new Error(`the toolbar took the page color with the setting off: ${JSON.stringify({ base: [toHex(base.sidebar), toHex(base.toolbar)], now: [toHex(now.sidebar), toHex(now.toolbar)] })}`);
+      const drift = { sidebar: colorDistance(base.sidebar, now.sidebar), toolbar: colorDistance(base.toolbar, now.toolbar), towardPage: +towards(base.toolbar, parseHex("#336699"), now.toolbar).toFixed(3) };
+      if (drift.towardPage > 0.08) throw new Error(`the toolbar took the page color with the setting off: ${JSON.stringify({ base: [toHex(base.sidebar), toHex(base.toolbar)], now: [toHex(now.sidebar), toHex(now.toolbar)] })}`);
       return drift;
     });
 
