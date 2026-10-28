@@ -1,5 +1,6 @@
 #include "ardia/linux/ac_linux_files.h"
 
+#include <fcntl.h>
 #include <sys/stat.h>
 
 #include <algorithm>
@@ -16,12 +17,17 @@
 #include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/nix/xdg_util.h"
+#include "base/posix/eintr_wrapper.h"
+#include "base/process/kill.h"
 #include "base/process/launch.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
@@ -34,7 +40,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/download/public/common/download_item.h"
 #include "components/dbus/thread_linux/dbus_thread_linux.h"
+#include "components/dbus/utils/call_method.h"
 #include "components/dbus/utils/check_for_service_and_start.h"
+#include "components/dbus/xdg/request.h"
 #include "components/download/public/common/download_source.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
@@ -42,6 +50,8 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/drop_data.h"
 #include "dbus/bus.h"
+#include "dbus/object_path.h"
+#include "dbus/object_proxy.h"
 #include "extensions/browser/webstore_installer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/aura/env.h"
@@ -76,7 +86,11 @@ constexpr base::TaskTraits kFileWrites = {base::MayBlock(), base::TaskPriority::
                                           base::TaskShutdownBehavior::BLOCK_SHUTDOWN};
 constexpr size_t kMaxDropName = 255;
 constexpr char kPortalService[] = "org.freedesktop.portal.Desktop";
+constexpr char kPortalPath[] = "/org/freedesktop/portal/desktop";
+constexpr char kPortalOpenUri[] = "org.freedesktop.portal.OpenURI";
 constexpr char kFileManagerService[] = "org.freedesktop.FileManager1";
+constexpr char kFileManagerPath[] = "/org/freedesktop/FileManager1";
+constexpr base::TimeDelta kOpenFolderWait = base::Seconds(5);
 
 void Fail(Done done, std::string_view code, std::string_view message) {
   std::move(done).Run(false, base::Value(base::DictValue().Set("code", code).Set("message", message)));
@@ -191,15 +205,140 @@ void ProbeService(scoped_refptr<dbus::Bus> bus, const char* name, base::OnceCall
       }, std::move(done)));
 }
 
-void FinishReveal(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done,
-                  downloads::RevealProbe probe) {
-  if (!shell || !shell->GetBrowserContext()) return Fail(std::move(done), "ERR_WINDOW_CLOSED", "The window closed");
-  if (downloads::ChooseRevealBackend(probe) == downloads::RevealBackend::kUnavailable) {
-    return Fail(std::move(done), "ERR_REVEAL_UNAVAILABLE",
-                "No desktop portal, file manager or folder application can show this file");
+base::ScopedFD OpenForPortal(const std::string& path) {
+  return base::ScopedFD(HANDLE_EINTR(open(path.c_str(), O_RDONLY | O_CLOEXEC)));
+}
+
+std::optional<int> RunOpenFolder(std::string folder, base::LaunchOptions options) {
+  options.current_directory = base::FilePath(folder);
+  options.allow_new_privs = true;
+  options.environment["MM_NOTTTY"] = "1";
+  base::Process process = base::LaunchProcess(std::vector<std::string>{"xdg-open", "."}, options);
+  if (!process.IsValid()) return 127;
+  int exit_code = 0;
+  if (process.WaitForExitWithTimeout(kOpenFolderWait, &exit_code)) return exit_code;
+  base::EnsureProcessGetsReaped(std::move(process));
+  return std::nullopt;
+}
+
+class RevealRequest {
+ public:
+  static void Start(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done,
+                    scoped_refptr<dbus::Bus> bus, std::vector<downloads::RevealBackend> order) {
+    (new RevealRequest(std::move(shell), std::move(path), std::move(done), std::move(bus), std::move(order)))->Next();
   }
-  platform_util::ShowItemInFolder(Profile::FromBrowserContext(shell->GetBrowserContext()), base::FilePath(path));
-  std::move(done).Run(true, base::Value(true));
+
+ private:
+  RevealRequest(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, scoped_refptr<dbus::Bus> bus,
+                std::vector<downloads::RevealBackend> order)
+      : shell_(std::move(shell)), path_(std::move(path)), done_(std::move(done)), bus_(std::move(bus)),
+        order_(std::move(order)) {}
+
+  void Next() {
+    if (!shell_ || !shell_->GetBrowserContext()) return Finish("ERR_WINDOW_CLOSED", "The window closed");
+    if (next_ == order_.size()) return Finish("ERR_REVEAL_FAILED", downloads::RevealFailureMessage(tried_));
+    switch (order_[next_++]) {
+      case downloads::RevealBackend::kPortal:
+        return Portal();
+      case downloads::RevealBackend::kFileManager:
+        return ProbeService(bus_, kFileManagerService, base::BindOnce(&RevealRequest::FileManager, base::Unretained(this)));
+      case downloads::RevealBackend::kOpenFolder:
+        return OpenFolder();
+      case downloads::RevealBackend::kUnavailable:
+        return Next();
+    }
+  }
+
+  void Portal() {
+    tried_.push_back(downloads::RevealBackend::kPortal);
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, kFileReads, base::BindOnce(&OpenForPortal, path_),
+                                                 base::BindOnce(&RevealRequest::PortalOpened, base::Unretained(this)));
+  }
+
+  void PortalOpened(base::ScopedFD fd) {
+    if (!fd.is_valid() || !bus_) return Next();
+    base::nix::CreateXdgActivationToken(
+        base::BindOnce(&RevealRequest::PortalToken, base::Unretained(this), std::move(fd)));
+  }
+
+  void PortalToken(base::ScopedFD fd, std::string token) {
+    dbus_xdg::Dictionary options;
+    options["activation_token"] = dbus_utils::Variant::Wrap<"s">(token);
+    portal_ = std::make_unique<dbus_xdg::Request>(
+        bus_, bus_->GetObjectProxy(kPortalService, dbus::ObjectPath(kPortalPath)), kPortalOpenUri, "OpenDirectory",
+        std::move(options), base::BindOnce(&RevealRequest::PortalAnswered, base::Unretained(this)), std::string(), fd);
+  }
+
+  void PortalAnswered(dbus_xdg::Results results) {
+    if (results.has_value() || results.error() == dbus_xdg::ResponseError::kRequestCancelledByUser) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&RevealRequest::Succeed, base::Unretained(this)));
+      return;
+    }
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&RevealRequest::Next, base::Unretained(this)));
+  }
+
+  void FileManager(bool available) {
+    if (!available) return Next();
+    tried_.push_back(downloads::RevealBackend::kFileManager);
+    dbus_utils::CallMethod<"ass", "">(
+        bus_->GetObjectProxy(kFileManagerService, dbus::ObjectPath(kFileManagerPath)), kFileManagerService,
+        "ShowItems", base::BindOnce(&RevealRequest::FileManagerAnswered, base::Unretained(this)),
+        std::vector<std::string>{downloads::FileUrl(path_)}, std::string());
+  }
+
+  void FileManagerAnswered(dbus_utils::CallMethodResultSig<""> response) {
+    if (response.has_value()) return Succeed();
+    Next();
+  }
+
+  void OpenFolder() {
+    tried_.push_back(downloads::RevealBackend::kOpenFolder);
+    base::nix::CreateLaunchOptionsWithXdgActivation(
+        base::BindOnce(&RevealRequest::OpenFolderLaunch, base::Unretained(this)));
+  }
+
+  void OpenFolderLaunch(base::LaunchOptions options) {
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::WithBaseSyncPrimitives(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(&RunOpenFolder, base::FilePath(path_).DirName().value(), std::move(options)),
+        base::BindOnce(&RevealRequest::OpenFolderExited, base::Unretained(this)));
+  }
+
+  void OpenFolderExited(std::optional<int> exit_code) {
+    if (downloads::OpenFolderLaunched(exit_code)) return Succeed();
+    Next();
+  }
+
+  void Succeed() {
+    std::move(done_).Run(true, base::Value(true));
+    delete this;
+  }
+
+  void Finish(std::string_view code, std::string_view message) {
+    Fail(std::move(done_), code, message);
+    delete this;
+  }
+
+  base::WeakPtr<LinuxShellWebView> shell_;
+  const std::string path_;
+  Done done_;
+  scoped_refptr<dbus::Bus> bus_;
+  const std::vector<downloads::RevealBackend> order_;
+  size_t next_ = 0;
+  std::vector<downloads::RevealBackend> tried_;
+  std::unique_ptr<dbus_xdg::Request> portal_;
+};
+
+void StartReveal(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, scoped_refptr<dbus::Bus> bus,
+                 downloads::RevealProbe probe) {
+  if (!shell || !shell->GetBrowserContext()) return Fail(std::move(done), "ERR_WINDOW_CLOSED", "The window closed");
+  auto order = downloads::RevealOrder(probe);
+  if (order.empty()) {
+    return Fail(std::move(done), "ERR_REVEAL_UNAVAILABLE", downloads::RevealFailureMessage({}));
+  }
+  RevealRequest::Start(std::move(shell), std::move(path), std::move(done), std::move(bus), std::move(order));
 }
 
 void Reveal(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, RevealCheck check) {
@@ -210,13 +349,14 @@ void Reveal(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done,
       [](scoped_refptr<dbus::Bus> bus, base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done,
          downloads::RevealProbe probe, bool portal) {
         probe.portal = portal;
-        if (portal) return FinishReveal(shell, std::move(path), std::move(done), probe);
+        probe.file_manager = portal;
+        if (portal) return StartReveal(shell, std::move(path), std::move(done), bus, probe);
         ProbeService(bus, kFileManagerService, base::BindOnce(
-            [](base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done,
+            [](scoped_refptr<dbus::Bus> bus, base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done,
                downloads::RevealProbe probe, bool file_manager) {
               probe.file_manager = file_manager;
-              FinishReveal(shell, std::move(path), std::move(done), probe);
-            }, shell, std::move(path), std::move(done), probe));
+              StartReveal(shell, std::move(path), std::move(done), bus, probe);
+            }, bus, shell, std::move(path), std::move(done), probe));
       }, bus, shell, std::move(path), std::move(done), check.probe));
 }
 

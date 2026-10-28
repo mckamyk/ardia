@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <ctime>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -60,6 +61,9 @@ struct RevealProbe {
   bool folder_handler = false;
 };
 RevealBackend ChooseRevealBackend(const RevealProbe& probe);
+std::vector<RevealBackend> RevealOrder(const RevealProbe& probe);
+bool OpenFolderLaunched(std::optional<int> exit_code);
+std::string RevealFailureMessage(const std::vector<RevealBackend>& tried);
 
 bool PathListed(std::string_view path, const std::vector<std::string>& known);
 
@@ -70,9 +74,11 @@ struct TrashOutcome {
   std::string trashed;
 };
 
+using TrashHook = std::function<void()>;
+
 std::string TrashDirectory(const char* xdg_data_home, const char* home);
 TrashOutcome MoveToTrash(const std::string& path, const std::string& trash_directory,
-                         std::time_t now);
+                         std::time_t now, const TrashHook& before_move = {});
 std::string MountTop(const std::string& path);
 std::string ResolvedFile(const std::string& path);
 
@@ -83,7 +89,7 @@ struct FolderCheck {
 };
 FolderCheck CheckDownloadFolder(const std::string& path);
 TrashOutcome MoveToTopdirTrash(const std::string& path, const std::string& topdir, uid_t uid,
-                               std::time_t now);
+                               std::time_t now, const TrashHook& before_move = {});
 
 }
 

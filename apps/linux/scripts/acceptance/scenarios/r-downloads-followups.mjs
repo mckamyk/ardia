@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, realpath, rm, rmdir, stat, symlink, unlink } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, rmdir, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { startBrowser } from "../lib/flows.mjs";
 import { js, until } from "../lib/util.mjs";
@@ -102,6 +102,54 @@ export const w75 = {
         await rm(downloads, { recursive: true, force: true });
       }
     }
+  },
+};
+
+export const w156 = {
+  id: "W156",
+  issue: 156,
+  title: "Downloads: a failed reveal is reported and volume trash survives a writable top directory",
+  deadline: 240000,
+  manual: [
+    { name: "Portal or FileManager1 that fails", steps: ["In a desktop session, stop the file manager behind FileManager1 (or make the portal's OpenURI backend fail) and leave xdg-open without a folder handler.", "Show in Folder shows 'Couldn't Show the File' naming the portal, the file manager and the folder app it tried, instead of doing nothing."], reason: "needs a desktop session bus with a portal or FileManager1" },
+    { name: "Trash on a writable removable drive", steps: ["Mount a drive whose top folder is writable by everyone and not sticky (for example vfat with umask=000) and download a file to it.", "Move to Trash puts it in that drive's .Trash-<uid>/files with a .trashinfo record, and a .Trash-<uid> another user created there is refused instead of used."], reason: "needs a second user and a removable drive" },
+  ],
+  async run(t) {
+    const scratch = await t.scratch("reveal");
+    const bin = join(scratch, "launcher-bin");
+    await mkdir(bin, { recursive: true });
+    for (const tool of ["/bin/sh", "/usr/bin/dirname", "/usr/bin/cat", "/usr/bin/pwd"]) await symlink(await realpath(tool), join(bin, tool.split("/").pop()));
+    const exitFile = join(scratch, "xdg-open.exit");
+    const log = join(scratch, "xdg-open.log");
+    await writeFile(exitFile, "4");
+    await writeFile(join(bin, "xdg-mime"), "#!/bin/sh\necho org.ardia.Files.desktop\n");
+    await writeFile(join(bin, "xdg-open"), `#!/bin/sh\necho "$(pwd) $1" >> ${JSON.stringify(log)}\nexit "$(cat ${JSON.stringify(exitFile)})"\n`);
+    await chmod(join(bin, "xdg-mime"), 0o755);
+    await chmod(join(bin, "xdg-open"), 0o755);
+    const downloads = join(scratch, "downloads");
+    await mkdir(downloads, { recursive: true });
+    const { shell } = await startBrowser(t, {
+      name: "reveal",
+      preferences: { downloads },
+      extraArgs: [`--ardia-downloads-dir=${downloads}`],
+      env: { PATH: bin },
+    });
+    const tabId = await shell.state("const w = s.windows[windowId]; return w.activeTabIds[w.profileId];");
+    await shell.navigate(tabId, t.fixtures.url.download("reveal.bin"));
+    const download = await finishedDownload(shell, "reveal.bin");
+    await t.check("Show in Folder reports a folder app that fails", async () => {
+      const reply = await shell.invoke("ArdiaSystem.revealFile", { args: [download.path] });
+      if (reply.ok || reply.code !== "ERR_REVEAL_FAILED" || !/folder app/.test(reply.message ?? "")) throw new Error(`revealFile answered ${JSON.stringify(reply)}`);
+      const ran = (await readFile(log, "utf8")).trim().split("\n");
+      if (ran.at(-1) !== `${await realpath(downloads)} .`) throw new Error(`xdg-open ran as ${JSON.stringify(ran)}`);
+      return { reply, ran };
+    }, { critical: true });
+    await t.check("Show in Folder succeeds when the folder app opens", async () => {
+      await writeFile(exitFile, "0");
+      const reply = await shell.invoke("ArdiaSystem.revealFile", { args: [download.path] });
+      if (!reply.ok || reply.value !== true) throw new Error(`revealFile answered ${JSON.stringify(reply)}`);
+      return reply;
+    });
   },
 };
 
