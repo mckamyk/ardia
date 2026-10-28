@@ -335,6 +335,8 @@ async function activeChromeTab(worker) {
   return evaluate(worker, "chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => tab?.id ?? null)", { userGesture: false });
 }
 
+const windowShortcuts = (shell) => shell.state("return JSON.stringify(s.settings.shortcuts ?? {});");
+
 async function shortcutField(settings, label) {
   return until(() => settings.eval(`(() => {
     const labels = [...document.querySelectorAll('*')].filter((n) => (n.innerText ?? '').trim() === ${js(label)} && n.children.length === 0 && n.getBoundingClientRect().width > 0);
@@ -424,6 +426,7 @@ export const shortcutsDesktop = {
       await desktop.click(frame.x + field.x, frame.y + field.y);
       await delay(500);
       const firedBefore = (await commandReports(worker)).length;
+      const bindingsBefore = await windowShortcuts(shell);
       await desktop.key(COMMAND_SHORTCUT.toLowerCase());
       const assigned = await until(async () => { const f = await shortcutField(settings, "Duplicate"); return /Alt\+Shift\+U/i.test(f.text) ? f.text : false; }, { timeout: 6000, label: "Duplicate to show Alt+Shift+U" }).catch(async (error) => {
         await desktopShot(t, desktop, "shortcut-assign");
@@ -436,6 +439,7 @@ export const shortcutsDesktop = {
         throw new Error(`${error.message}; the Search actions field holds ${JSON.stringify(searchValue)}; while recording, the extension's command fired ${fired} time(s); the field shows ${JSON.stringify(other)} after an unused Alt+Shift+K`);
       });
       await desktopShot(t, desktop, "shortcut-assigned");
+      const binding = await until(async () => { const now = await windowShortcuts(shell); return now !== bindingsBefore ? now : false; }, { timeout: 8000, label: "the new binding in the browser window's settings" });
       const before = (await commandReports(worker)).length;
       const tabs = await shell.state("return s.windows[windowId].tabIds.length;");
       await focusShell(desktop, window, shell);
@@ -453,10 +457,11 @@ export const shortcutsDesktop = {
         }
       }
       await until(async () => !/Alt\+Shift\+U/i.test((await shortcutField(settings, "Duplicate")).text), { timeout: 8000, label: "Duplicate's shortcut to reset" });
+      await until(async () => (await windowShortcuts(shell)) === bindingsBefore, { timeout: 8000, label: "the reset to reach the browser window's settings" });
       await focusShell(desktop, window, shell);
       await desktop.key(COMMAND_SHORTCUT.toLowerCase());
       await until(async () => (await commandReports(worker)).length === before + 1, { timeout: 5000, label: "the extension's command after the reset" });
-      return { assigned };
+      return { assigned, binding };
     });
     await t.stop(app);
     await t.check("with openPanelOnActionClick, Alt+Shift+Y opens the extension's side panel instead of its popup, and pressing it again closes the panel", async () => {
