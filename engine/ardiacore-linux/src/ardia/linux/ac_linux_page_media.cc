@@ -1,5 +1,7 @@
 #include "ardia/linux/ac_linux_page_media.h"
 
+#include "ardia/linux/ac_linux_page_channel.h"
+
 #include <algorithm>
 
 #include "base/functional/bind.h"
@@ -207,19 +209,34 @@ void LinuxPageMedia::RequestPictureInPicture(const base::ListValue& args, bool a
   if (!ParseLinuxControlPress(args)) {
     return std::move(done).Run(false, base::Value("requestPictureInPicture requires a control press"));
   }
-  switch (RouteLinuxPictureInPicture(InPictureInPicture(), activation, session_.active && session_.has_video)) {
-    case LinuxPictureInPictureRoute::kAlreadyOpen: return std::move(done).Run(true, base::Value(true));
-    case LinuxPictureInPictureRoute::kNoActivation:
-    case LinuxPictureInPictureRoute::kNoVideo: return std::move(done).Run(true, base::Value(false));
-    case LinuxPictureInPictureRoute::kMediaSession: break;
-  }
+  const LinuxPictureInPictureRoute route =
+      RouteLinuxPictureInPicture(InPictureInPicture(), activation, session_.active && session_.has_video);
   content::MediaSession* session = content::MediaSession::GetIfExists(web_contents());
-  if (!session) return std::move(done).Run(true, base::Value(false));
+  LinuxPageChannel* channel = web_contents() ? LinuxPageChannel::FromWebContents(web_contents()) : nullptr;
+  switch (route) {
+    case LinuxPictureInPictureRoute::kAlreadyOpen: return std::move(done).Run(true, base::Value(true));
+    case LinuxPictureInPictureRoute::kNoActivation: return std::move(done).Run(true, base::Value(false));
+    case LinuxPictureInPictureRoute::kMediaSession:
+      if (!session) return std::move(done).Run(true, base::Value(false));
+      break;
+    case LinuxPictureInPictureRoute::kElement:
+      if (!channel) return std::move(done).Run(true, base::Value(false));
+      break;
+  }
   if (pending_picture_in_picture_) std::move(pending_picture_in_picture_).Run(true, base::Value(false));
   pending_picture_in_picture_ = std::move(done);
+  const uint64_t request = ++picture_in_picture_request_;
   picture_in_picture_timer_.Start(FROM_HERE, kPictureInPictureWait,
       base::BindOnce(&LinuxPageMedia::FinishPictureInPicture, weak_factory_.GetWeakPtr()));
-  session->EnterPictureInPicture();
+  if (route == LinuxPictureInPictureRoute::kMediaSession) return session->EnterPictureInPicture();
+  channel->EnterPictureInPictureForUser(
+      base::BindOnce(&LinuxPageMedia::ElementPictureInPictureAnswered, weak_factory_.GetWeakPtr(), request));
+}
+
+void LinuxPageMedia::ElementPictureInPictureAnswered(uint64_t request, bool opened) {
+  if (request != picture_in_picture_request_ || !pending_picture_in_picture_) return;
+  picture_in_picture_timer_.Stop();
+  std::move(pending_picture_in_picture_).Run(true, base::Value(opened || InPictureInPicture()));
 }
 
 void LinuxPageMedia::FinishPictureInPicture() {

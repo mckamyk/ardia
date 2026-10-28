@@ -6,4 +6,6 @@ interface PageHost {
 
 interface PageAgent {
   Call(string kind, string json);
+  PictureInPictureDocument() => (string? document);
+  EnterPictureInPictureForUser(string document) => (bool opened);
 };

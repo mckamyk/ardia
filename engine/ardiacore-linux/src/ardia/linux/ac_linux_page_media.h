@@ -80,6 +80,7 @@ class LinuxPageMedia : public content::WebContentsObserver,
   void MediaCommand(const base::ListValue& args, Done done);
   void RequestPictureInPicture(const base::ListValue& args, bool activation, Done done);
   void FinishPictureInPicture();
+  void ElementPictureInPictureAnswered(uint64_t request, bool opened);
   void ExitPictureInPicture();
 
   LinuxMediaReporter reporter_;
@@ -89,6 +90,7 @@ class LinuxPageMedia : public content::WebContentsObserver,
   mojo::Receiver<media_session::mojom::MediaSessionObserver> receiver_{this};
   Done pending_picture_in_picture_;
   base::OneShotTimer picture_in_picture_timer_;
+  uint64_t picture_in_picture_request_ = 0;
   base::WeakPtrFactory<LinuxPageMedia> weak_factory_{this};
 };
 

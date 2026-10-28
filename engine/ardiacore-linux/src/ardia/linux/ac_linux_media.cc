@@ -238,7 +238,7 @@ std::optional<LinuxControlPress> ParseLinuxControlPress(const base::ListValue& a
 LinuxPictureInPictureRoute RouteLinuxPictureInPicture(bool open, bool activation, bool has_video) {
   if (open) return LinuxPictureInPictureRoute::kAlreadyOpen;
   if (!activation) return LinuxPictureInPictureRoute::kNoActivation;
-  if (!has_video) return LinuxPictureInPictureRoute::kNoVideo;
+  if (!has_video) return LinuxPictureInPictureRoute::kElement;
   return LinuxPictureInPictureRoute::kMediaSession;
 }
 

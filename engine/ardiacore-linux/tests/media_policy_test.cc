@@ -165,7 +165,8 @@ void PictureInPicture() {
   assert(!ParseLinuxControlPress(Args("press")) && !ParseLinuxControlPress(Args(base::DictValue(), base::DictValue())));
   assert(RouteLinuxPictureInPicture(true, false, false) == LinuxPictureInPictureRoute::kAlreadyOpen);
   assert(RouteLinuxPictureInPicture(false, false, true) == LinuxPictureInPictureRoute::kNoActivation);
-  assert(RouteLinuxPictureInPicture(false, true, false) == LinuxPictureInPictureRoute::kNoVideo);
+  assert(RouteLinuxPictureInPicture(false, true, false) == LinuxPictureInPictureRoute::kElement);
+  assert(RouteLinuxPictureInPicture(false, false, false) == LinuxPictureInPictureRoute::kNoActivation);
   assert(RouteLinuxPictureInPicture(false, true, true) == LinuxPictureInPictureRoute::kMediaSession);
 }
 

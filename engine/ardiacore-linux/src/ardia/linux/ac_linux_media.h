@@ -120,7 +120,7 @@ struct LinuxControlPress {
 
 std::optional<LinuxControlPress> ParseLinuxControlPress(const base::ListValue& args);
 
-enum class LinuxPictureInPictureRoute { kAlreadyOpen, kNoActivation, kNoVideo, kMediaSession };
+enum class LinuxPictureInPictureRoute { kAlreadyOpen, kNoActivation, kMediaSession, kElement };
 
 LinuxPictureInPictureRoute RouteLinuxPictureInPicture(bool open, bool activation, bool has_video);
 

@@ -1,16 +1,20 @@
 #include "ardia/linux/renderer/ac_linux_page_agent.h"
 
 #include <map>
+#include <optional>
 #include <string>
 #include <tuple>
 
 #include "ardia/linux/ac_linux_page_messages.h"
 #include "ardia/linux/mojom/page.mojom.h"
 #include "ardia/linux/page_script.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
+#include "base/time/time.h"
+#include "base/values.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_observer.h"
@@ -21,6 +25,8 @@
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+#include "third_party/blink/public/mojom/script/script_evaluation_params.mojom.h"
+#include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "third_party/blink/public/platform/web_isolated_world_info.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
@@ -28,6 +34,7 @@
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_script_execution_callback.h"
 #include "third_party/blink/public/web/web_script_source.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -53,6 +60,27 @@ void ConfigureArdiaPageWorld() {
   info.content_security_policy = blink::WebString::FromUtf8(kArdiaPageWorldPolicy);
   info.human_readable_name = blink::WebString::FromUtf8("Ardia");
   blink::SetIsolatedWorldInfo(ISOLATED_WORLD_ID_ARDIA_PAGE, info);
+}
+
+constexpr char kPictureInPictureCandidates[] =
+    "const videos = [...document.querySelectorAll('video')].filter((v) => "
+    "v.readyState > 0 && !v.disablePictureInPicture && v.clientWidth * v.clientHeight > 0);";
+
+constexpr char kHasPictureInPictureCandidateScript[] = "return videos.length > 0;";
+
+constexpr char kPictureInPictureForUserScript[] =
+    "videos.sort((a, b) => (b.paused ? 0 : 1) - (a.paused ? 0 : 1) || "
+    "b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight);"
+    "if (!videos.length) return false;"
+    "if (document.pictureInPictureElement === videos[0]) return true;"
+    "return videos[0].requestPictureInPicture().then(() => true, () => false);";
+
+std::string PictureInPictureScript(const char* body) {
+  return std::string("(() => {") + kPictureInPictureCandidates + body + "})()";
+}
+
+blink::WebScriptSource PictureInPictureSource(const std::string& script, const char* url) {
+  return blink::WebScriptSource(blink::WebString::FromUtf8(script), blink::WebURL(GURL(url)));
 }
 
 bool FitsUtf8(v8::Isolate* isolate, v8::Local<v8::String> text, size_t limit) {
@@ -105,7 +133,55 @@ class LinuxPageAgent : public content::RenderFrameObserver,
     std::ignore = frame->CallFunctionEvenIfScriptDisabled(receive_.Get(isolate), v8::Undefined(isolate), 2, args);
   }
 
+  void PictureInPictureDocument(PictureInPictureDocumentCallback callback) override {
+    blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
+    base::WeakPtr<LinuxPageAgent> alive = weak_factory_.GetWeakPtr();
+    const std::string document = frame->GetDocument().Token().ToString();
+    if (!frame->IsOutermostMainFrame() || !HasPictureInPictureCandidate(frame) || !alive ||
+        frame->GetDocument().Token().ToString() != document) {
+      std::move(callback).Run(std::nullopt);
+      return;
+    }
+    std::move(callback).Run(document);
+  }
+
+  void EnterPictureInPictureForUser(const std::string& document,
+                                    EnterPictureInPictureForUserCallback callback) override {
+    blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
+    base::WeakPtr<LinuxPageAgent> alive = weak_factory_.GetWeakPtr();
+    if (!frame->IsOutermostMainFrame() || frame->GetDocument().Token().ToString() != document ||
+        !HasPictureInPictureCandidate(frame) || !alive || frame->GetDocument().Token().ToString() != document) {
+      std::move(callback).Run(false);
+      return;
+    }
+    v8::HandleScope handle_scope(frame->GetAgentGroupScheduler()->Isolate());
+    const blink::WebScriptSource source =
+        PictureInPictureSource(PictureInPictureScript(kPictureInPictureForUserScript), "ardia://picture-in-picture-for-user");
+    frame->NotifyUserActivation(blink::mojom::UserActivationNotificationType::kInteraction);
+    frame->RequestExecuteScript(
+        ISOLATED_WORLD_ID_CHROME_INTERNAL, base::span_from_ref(source), blink::mojom::UserActivationOption::kDoNotActivate,
+        blink::mojom::EvaluationTiming::kSynchronous, blink::mojom::LoadEventBlockingOption::kDoNotBlock,
+        base::BindOnce(
+            [](EnterPictureInPictureForUserCallback callback, std::optional<base::Value> result, base::TimeTicks) {
+              std::move(callback).Run(result && result->is_bool() && result->GetBool());
+            },
+            std::move(callback)),
+        blink::BackForwardCacheAware::kAllow, blink::mojom::WantResultOption::kWantResult,
+        blink::mojom::PromiseResultOption::kAwait, blink::WebString());
+    if (alive) frame->ConsumeTransientUserActivation();
+  }
+
  private:
+  bool HasPictureInPictureCandidate(blink::WebLocalFrame* frame) {
+    v8::HandleScope handle_scope(frame->GetAgentGroupScheduler()->Isolate());
+    v8::Local<v8::Value> found = frame->ExecuteScriptInIsolatedWorldAndReturnValue(
+        ISOLATED_WORLD_ID_CHROME_INTERNAL,
+        PictureInPictureSource(PictureInPictureScript(kHasPictureInPictureCandidateScript),
+                               "ardia://picture-in-picture-candidate"),
+        blink::BackForwardCacheAware::kAllow);
+    return !found.IsEmpty() && found->IsTrue();
+  }
+
   static std::map<content::RenderFrame*, LinuxPageAgent*>& Agents() {
     static base::NoDestructor<std::map<content::RenderFrame*, LinuxPageAgent*>> agents;
     return *agents;
