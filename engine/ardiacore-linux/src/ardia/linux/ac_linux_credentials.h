@@ -18,6 +18,8 @@ inline constexpr size_t kMaxFieldBytes = 1024;
 inline constexpr size_t kMaxIdBytes = 128;
 inline constexpr size_t kMaxPathBytes = 4096;
 
+inline constexpr char kPrivateCredentialsMessage[] =
+    "Saved passwords and autofill data aren't available in a private window";
 inline constexpr char kPasswordsEnabledPref[] = "credentials_enable_service";
 inline constexpr char kAddressesEnabledPref[] = "autofill.profile_enabled";
 inline constexpr char kCardsEnabledPref[] = "autofill.credit_card_enabled";
@@ -143,10 +145,12 @@ struct Plan {
 
 bool HandlesCall(std::string_view name);
 bool HandlesInvoke(std::string_view method);
+bool ClaimsInvoke(std::string_view method);
 inline constexpr size_t kMaxProfileBytes = 256;
 
 Plan PlanCall(std::string_view name, const Arg& input);
 Plan PlanInvoke(std::string_view method, const std::vector<Arg>& values);
+Plan PlanWindowInvoke(bool private_window, std::string_view method, const std::vector<Arg>& values);
 Plan PlanExport(std::string_view path);
 
 struct SyncedLoginPlans {

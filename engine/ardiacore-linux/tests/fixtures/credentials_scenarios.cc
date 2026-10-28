@@ -137,6 +137,24 @@ void TypedMethods() {
   ExpectInvalid(PlanInvoke("ArdiaPasswords.unlock", Values({})), "ERR_PROFILE");
   ExpectInvalid(PlanInvoke("ArdiaPasswords.unlock", Values({Arg::String(""), Arg::String("extra")})), "ERR_CREDENTIAL_REQUEST");
   ExpectInvalid(PlanInvoke("ArdiaPasswords.list", Values({Arg::String("")})), "ERR_UNKNOWN_CALL");
+  assert(ClaimsInvoke("ArdiaPasswords.list") && ClaimsInvoke("ArdiaAutofill.addresses") && ClaimsInvoke("ArdiaPasswords.status"));
+  assert(!ClaimsInvoke("ArdiaSync.status") && !ClaimsInvoke("ArdiaPasswordsX.list") && !ClaimsInvoke("passwords.list") &&
+         !ClaimsInvoke("ArdiaPasswords"));
+  const Arg private_profile = Arg::String("incognito:w-1@");
+  for (const char* capability : kCapabilities) {
+    const Plan refused = PlanWindowInvoke(true, capability, Values({private_profile}));
+    ExpectInvalid(refused, "ERR_PROFILE_PRIVATE");
+    assert(refused.message == kPrivateCredentialsMessage);
+  }
+  for (const char* method : {"ArdiaPasswords.list", "ArdiaAutofill.addresses", "ArdiaPasswords.call"}) {
+    ExpectInvalid(PlanWindowInvoke(true, method, Values({private_profile})), "ERR_PROFILE_PRIVATE");
+    ExpectInvalid(PlanWindowInvoke(false, method, Values({Arg::String("")})), "ERR_UNKNOWN_CALL");
+  }
+  ExpectInvalid(PlanWindowInvoke(true, "ArdiaPasswords.unlock", Values({})), "ERR_PROFILE_PRIVATE");
+  ExpectInvalid(PlanWindowInvoke(true, "ArdiaPasswords.unlock", Values({Arg::String(""), Arg::String("extra")})), "ERR_PROFILE_PRIVATE");
+  ExpectInvalid(PlanWindowInvoke(false, "ArdiaPasswords.unlock", Values({})), "ERR_PROFILE");
+  ExpectEngine(PlanWindowInvoke(false, "ArdiaPasswords.unlock", Values({Arg::String("work")})), "ac_passwords_unlock", "{}",
+               Reply::kUnlocked, {Store::kPasswords});
 
   Plan status = PlanInvoke("ArdiaPasswords.status", Values({Arg::String("default")}));
   assert(status.ok() && status.reply == Reply::kStatus && status.service.empty() && status.requires_stores.empty());

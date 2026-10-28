@@ -106,12 +106,10 @@ credentials::Arg ToArg(const base::Value& value, int depth) {
 
 using Resolved = base::OnceCallback<void(Profile*, std::string_view code, std::string_view message)>;
 
-constexpr char kPrivateMessage[] = "Saved passwords and autofill data aren't available in a private window";
-
 void ResolveCredentialProfile(std::string_view engine_profile, bool private_window, Resolved done) {
   namespace profiles = ardiacore::linux_profiles;
   if (private_window) {
-    return std::move(done).Run(nullptr, "ERR_PROFILE_PRIVATE", kPrivateMessage);
+    return std::move(done).Run(nullptr, "ERR_PROFILE_PRIVATE", credentials::kPrivateCredentialsMessage);
   }
   const std::optional<profiles::ProfileName> name = profiles::ParseProfileName(engine_profile);
   if (!name) {
@@ -119,12 +117,12 @@ void ResolveCredentialProfile(std::string_view engine_profile, bool private_wind
                                profiles::ProfileErrorMessage(profiles::ProfileError::kInvalid));
   }
   if (name->kind == profiles::ProfileKind::kPrivate) {
-    return std::move(done).Run(nullptr, "ERR_PROFILE_PRIVATE", kPrivateMessage);
+    return std::move(done).Run(nullptr, "ERR_PROFILE_PRIVATE", credentials::kPrivateCredentialsMessage);
   }
   ardiacore::ResolveLinuxProfile(engine_profile, base::BindOnce(
       [](Resolved done, Profile* profile, profiles::ProfileError error) {
         if (profile && profile->IsOffTheRecord()) {
-          return std::move(done).Run(nullptr, "ERR_PROFILE_PRIVATE", kPrivateMessage);
+          return std::move(done).Run(nullptr, "ERR_PROFILE_PRIVATE", credentials::kPrivateCredentialsMessage);
         }
         if (!profile) {
           return std::move(done).Run(nullptr, profiles::ProfileErrorCode(error), profiles::ProfileErrorMessage(error));
@@ -662,7 +660,7 @@ void LinuxCredentialsCall(const std::string& engine_profile,
 }
 
 bool LinuxCredentialsInvokes(std::string_view method) {
-  return credentials::HandlesInvoke(method);
+  return credentials::ClaimsInvoke(method);
 }
 
 void LinuxCredentialsInvoke(bool private_window,
@@ -676,7 +674,7 @@ void LinuxCredentialsInvoke(bool private_window,
     args.push_back(ToArg(value, kArgDepth));
   }
   const std::string engine_profile = !values.empty() && values[0].is_string() ? values[0].GetString() : std::string();
-  credentials::Plan plan = credentials::PlanInvoke(method, args);
+  credentials::Plan plan = credentials::PlanWindowInvoke(private_window, method, args);
   args.clear();
   Run(engine_profile, private_window, shell, std::move(plan), method == "ArdiaAutofill.status", std::move(done));
 }
