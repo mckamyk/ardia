@@ -6,7 +6,7 @@ Branch `t3/linux-page-followups`. Source-level work for #129, #132, #133, #134, 
 
 ### Hung renderer without a current page (#129)
 
-- `ac_linux_page_status`: `DeferLinuxHang`, `ResolveDeferredLinuxHang`, `ForgetDeferredLinuxHangs` and `DeferredLinuxHangs` keep hangs per `WebContents` (widget id → restarter, at most 64 per contents, destroyed widgets pruned).
+- `ac_linux_page_status`: `DeferLinuxHang`, `ResolveDeferredLinuxHang`, `ForgetDeferredLinuxHangs` and `DeferredLinuxHangs` keep hangs per `WebContents` (widget id → restarter, at most 64 per contents, destroyed widgets pruned). Each entry is owned by a `WebContentsObserver` that erases it when the contents is destroyed, so an unclaimed tab that hangs and closes leaves nothing behind.
 - The `RendererUnresponsive` hook hands the hang to a live page as before. If no page took it and any Ardia window holds the tab (bound, or still in its strip while unclaimed or transferring), it defers the hang and returns `true`, so Chromium's hidden hung dialog never runs.
 - `LinuxPageStatus::AppendSnapshot` adopts every deferred hang whose widget is still unresponsive, so the next document, restore or rebind snapshot carries `unresponsive` and the shell shows Page Unresponsive as soon as the tab is presented. Wait and Exit Page then work as before.
 - A page retired while hung (transfer, renderer retirement, discard migration) defers its hangs instead of restarting the monitor. `RendererResponsive` drops a deferred hang. `TabBinding` forgets them when the contents is destroyed or replaced.
@@ -25,11 +25,11 @@ Branch `t3/linux-page-followups`. Source-level work for #129, #132, #133, #134, 
 
 - Before its first install in a renderer process, the page agent calls `blink::SetIsolatedWorldInfo` once for `ISOLATED_WORLD_ID_ARDIA_PAGE`, with CSP `script-src 'none'; object-src 'none'` and a unique opaque security origin.
 - A world with its own policy bypasses the page's CSP and Trusted Types (`ShouldBypassMainWorldDeprecated`), so the password-eye `innerHTML` and its shadow-root style work on Trusted Types and strict-CSP sites. The world's policy still stops it from running `eval` or injecting script and plugin elements.
-- Why opaque: Blink requires an origin with a world CSP, and the origin is process-wide for the world id. An opaque origin gives the world no network or storage identity of its own, and `page_script.js` makes no requests. The shared V8 security token only lets Ardia's own world contexts in one process reach each other, as content scripts of one extension already do. DOM, cookies and storage keep each document's own origin.
+- Why opaque: Blink requires an origin with a world CSP, and the origin is process-wide for the world id. An opaque origin gives the world no network or storage identity of its own, and `page_script.js` makes no requests. An opaque origin also gets V8's default security token, so the world's contexts in different frames go through the full cross-origin access checks rather than sharing a token. DOM, cookies and storage keep each document's own origin.
 
 ### Shared evaluate callers (#133)
 
-- `hostPageScripts.ts` maps the engine-switch unsaved-work probe (`engines/actions.ts`) to the native `unsavedInput` command, like the PiP probes. A test pins the literal to the shared source.
+- `hostPageScripts.ts` maps the engine-switch unsaved-work probe (`engines/actions.ts`) to a native `editedInput` tab command, like the PiP probes. It answers from the performance manager's form interaction and user edits only, so a `beforeunload` handler alone doesn't count. Anything but an explicit `false` (unknown, refused) counts as unsaved, so the shared flow asks before moving the page. Form interaction lasts for the whole document, so a field edited and then restored still counts, unlike the shared value-versus-default check; that errs toward asking. A test pins the literal to the shared source.
 - Translate never reaches a page on Linux (no translation backend, so `translation` is null). The Apple Events JavaScript bridge is macOS-only and refuses. Selection, PiP state and close, and the unsaved-input checks were already mapped. The extension Web Store bridge and the popup size probe belong to the extensions lane and are tracked in a follow-up.
 
 ### Drift check (#135)
@@ -45,6 +45,7 @@ Branch `t3/linux-page-followups`. Source-level work for #129, #132, #133, #134, 
 
 | Item | Contract |
 | --- | --- |
+| Tab command `editedInput` | `boolean \| null`: form interaction or user edits on the primary page |
 | Page message `linkDrop` | `{url}` from the active primary main document; opens only through the drag gate |
 | Page event `openWindow` | adds `disposition: "foreground"` for link drops |
 | Engine event | `ArdiaEngine/engine {name: "engine.inputActivity", data: {}}`, at most twice a second, to every browser window |
@@ -59,10 +60,11 @@ Branch `t3/linux-page-followups`. Source-level work for #129, #132, #133, #134, 
 | `python3 -m unittest discover -s engine/ardiacore-linux/tests` | 444 passed |
 | `node --test engine/ardiacore-linux/tests/bootstrap.test.mjs` | 8 passed |
 | `pnpm --filter @ardia/linux typecheck` | passed |
-| `pnpm --filter @ardia/linux test:host` | 378 passed (new `pageOperations.test.mjs`) |
-| `pnpm --filter @ardia/linux test:graph` | `page-state-components.test.mjs` fails identically on `origin/linux` (the #160 credential-wording plugin rejects its partial build); not caused by this lane |
+| `pnpm --filter @ardia/linux test:host` | 415 passed (new `pageOperations.test.mjs`) |
+| `pnpm --filter @ardia/linux test:graph` | 3 passed |
 | `pnpm --filter @ardia/linux build` | passed |
-| `pnpm --filter @ardia/linux acceptance:self-test` | 65 passed |
+| `pnpm --filter @ardia/linux acceptance:self-test` | 67 passed |
+| `scripts/linux/syntax-check-156.sh` on the lane's native files (host, page status, page channel, link gesture, page messages, page media, tab policy, page agent) | 8 of 8 pass |
 | `patch -p1 -F0 --dry-run` of `chromium-linux-page-status.patch` on a copy of the 156 `browser_web_contents_delegate.cc` | applies |
 
 New native cases: `deferred-hang` and updated `hung` (`test_page_state`), `link-drops` and `activity` (`test_page_messages`), the link-drop and activity contracts (`test_page_channel_contract`), `test_page_world`, and the hang forgetting in `test_native_callbacks`. Each failed (did not compile, or asserted) before its change.
