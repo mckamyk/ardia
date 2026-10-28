@@ -259,6 +259,18 @@ int main() {
         start = method(self.host, 'void StartLinuxHost() {')
         self.assertLess(start.index('StartLinuxExtensions(std::move(extensions));'), start.index('ac_engine_set_event_sink(EngineEvent'))
 
+    def test_reloading_an_unpacked_folder_turns_developer_mode_on_first(self):
+        forward = self.service[self.service.index('void Forward(Profile* profile'):self.service.index('struct Inspected {')]
+        keep = forward.index('KeepDeveloperModeForReload(profile, name, input);')
+        self.assertLess(keep, forward.index('ac_engine_call('))
+        helper = self.service[self.service.index('void KeepDeveloperModeForReload('):self.service.index('void Forward(Profile* profile')]
+        self.assertIn('ext::ReloadsExtensionFolder(name, input)', helper)
+        self.assertIn('extensions::Manifest::IsUnpackedLocation(extension->location())', helper)
+        self.assertIn('extensions::util::SetDeveloperModeForProfile(profile, true);', helper)
+        engine = (ROOT.parents[0] / 'chromium/src/chrome/browser/ardia/ac_extensions.cc').read_text()
+        install = engine[engine.index('AC_ENGINE_CALL(ac_extensions_install)'):engine.index('AC_ENGINE_CALL(ac_extensions_install_crx)')]
+        self.assertIn('extensions::util::SetDeveloperModeForProfile(profile, true);', install)
+
     def test_window_and_renderer_retirement_release_surfaces_and_prompts(self):
         retire = method(self.host, '  void RetireRenderer() {')
         self.assertLess(retire.index('++renderer_generation_;'), retire.index('DetachViewports();'))

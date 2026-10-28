@@ -249,6 +249,27 @@ void StoreAvailability() {
   temporary.error = StoreError::kTemporary;
   assert(Assess(Store::kPasswords, temporary).available);
 
+  assert(AwaitsStore(StoreError::kInactionable, 0));
+  assert(AwaitsStore(StoreError::kInactionable, 2000));
+  assert(AwaitsStore(StoreError::kInactionable, kStoreReadyTimeoutMs - 1));
+  assert(!AwaitsStore(StoreError::kInactionable, kStoreReadyTimeoutMs));
+  for (StoreError settled : {StoreError::kNone, StoreError::kTemporary, StoreError::kKeychain, StoreError::kOther}) {
+    assert(!AwaitsStore(settled, 0));
+  }
+  assert(kStoreReadyPollMs > 0 && kStoreReadyPollMs < kStoreReadyTimeoutMs);
+  std::vector<StoreError> loading(40, StoreError::kInactionable);
+  loading.push_back(StoreError::kNone);
+  Probe first_call;
+  int64_t waited = 0;
+  size_t read = 0;
+  first_call.error = loading[read];
+  while (AwaitsStore(first_call.error, waited)) {
+    waited += kStoreReadyPollMs;
+    first_call.error = loading[++read];
+  }
+  assert(Assess(Store::kPasswords, first_call).available);
+  assert(waited == 40 * kStoreReadyPollMs);
+
   Probe no_key;
   no_key.encryption = false;
   assert(Assess(Store::kPasswords, no_key).reason == "encryptionUnavailable");

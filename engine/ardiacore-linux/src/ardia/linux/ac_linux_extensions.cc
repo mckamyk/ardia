@@ -139,6 +139,13 @@ std::optional<base::DictValue> Configuration(const base::DictValue& input) {
   return result;
 }
 
+bool ReloadsExtensionFolder(std::string_view name, const base::DictValue& input) {
+  if (name == "extensions.reload") return true;
+  if (name != "extensions.configure") return false;
+  const auto configured = Configuration(input);
+  return configured && (configured->contains("incognito") || configured->contains("fileAccess"));
+}
+
 std::string ValidateRequest(std::string_view name, const base::DictValue& input) {
   if (name == "extensions.list" || name == "extensions.watchActions" || name == "extensions.chooseFolder" ||
       name == "extensions.syncState" || name == "search.engines") {

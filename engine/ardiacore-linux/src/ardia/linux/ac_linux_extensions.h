@@ -41,6 +41,7 @@ bool UsesWindowProfile(std::string_view name);
 bool ServesPrivateWindow(std::string_view name);
 std::string ValidateRequest(std::string_view name, const base::DictValue& input);
 std::optional<base::DictValue> Configuration(const base::DictValue& input);
+bool ReloadsExtensionFolder(std::string_view name, const base::DictValue& input);
 
 struct ManifestFacts {
   std::string name;

@@ -184,6 +184,16 @@ Manual: Web Store consent and Cancel, the permission-increase re-enable prompt (
 - `chrome.action.openPopup()` from an extension opens Ardia's popup and resolves.
 - The folder picker opens through the portal or GTK.
 
+## Acceptance fix: reloading an unpacked extension (#197)
+
+`extensions.reload` on the `--load-extension` fixture answered `ok`, then left it `DISABLED` at its old version, with no service worker. F09's reload, badge, popup and side-panel checks failed on it.
+
+- **Cause.** The fixture loads as `kCommandLine`. Chromium reloads an extension that has no stored manifest through `UnpackedInstaller::Load(path)`, which loads it as `kUnpacked`. `ExtensionManagement::IsAllowedByUnpackedDeveloperModePolicy` exempts `kCommandLine` but not `kUnpacked`, so with `extensions.ui.developer_mode` off the reloaded copy stays disabled with `DISABLE_UNSUPPORTED_DEVELOPER_EXTENSION` (`1 << 24`, read from the probe profile's `Preferences`). The install prompt (#137) isn't involved: unpacked loads show none. `ac_extensions_install` already turns developer mode on before it loads a folder, so only folders that never went through Load unpacked hit this.
+- **Fix.** Before forwarding a call that makes Chromium reload the extension (`extensions.reload`, or `extensions.configure` with `incognito` or `fileAccess`, which reload through `util::SetIsIncognitoEnabled`/`SetAllowFileAccess`), `KeepDeveloperModeForReload` turns developer mode on for that profile when the extension's location is unpacked (`Manifest::IsUnpackedLocation`). `ReloadsExtensionFolder` in the pure helper decides which calls those are. The shared engine and macOS are unchanged.
+- **Evidence.** On the 156 build (`ardia-linux-x64-e051e893`), a reload with developer mode off left the fixture `1.0`/`DISABLED`. With developer mode on beforehand, it came back as `1.1`/`ENABLED` with its worker reporting `1.1`.
+- **F02-99.** Granting incognito access through `configure` reloads the extension the same way, so the private-window action state should now arrive too; the acceptance loop confirms.
+- **Still open.** `chrome.runtime.reload()` from a `--load-extension` extension reloads it outside Ardia's calls, so it still needs developer mode to be on already.
+
 ## Open risks and follow-ups
 
 - Prompts and side-panel events count as delivered when the window's renderer is attached, even if its extension listener hasn't subscribed yet. A prompt that arrives during the first moments of startup could wait until the window closes or its renderer reloads, and is then re-sent or cancelled.
