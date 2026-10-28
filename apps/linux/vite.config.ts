@@ -24,6 +24,7 @@ const replacements = new Map([
   [here("../browser/src/state/import/apply.ts"), here("./src/importApply.ts")],
   [here("../browser/src/state/tabs/tabKeepAlive.ts"), here("./src/tabKeepAlive.ts")],
   [here("../browser/src/state/sync/engine.ts"), here("./src/syncEngine.ts")],
+  [here("../browser/src/state/extensions/store.ts"), here("./src/extensionsStore.ts")],
 ]);
 const importedPasswordSave = {
   source: here("../browser/src/state/site/passwords.ts"),

@@ -19,6 +19,7 @@
 #include "base/scoped_observation.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/profiles/profile.h"
@@ -68,6 +69,16 @@ bool IsOffTheRecord(DownloadItem* item) {
   content::BrowserContext* context =
       content::DownloadItemUtils::GetBrowserContext(item);
   return context && context->IsOffTheRecord();
+}
+
+base::DictValue Removal(DownloadItem* item) {
+  base::DictValue removal = base::DictValue().Set("id", item->GetGuid());
+#if BUILDFLAG(IS_LINUX)
+  if (IsOffTheRecord(item)) {
+    removal.Set("offTheRecord", true);
+  }
+#endif
+  return removal;
 }
 
 void UseTestDownloadsDir(Profile* profile) {
@@ -184,7 +195,7 @@ class DownloadsState : public ProfileState {
         const bool emitted = it->second.emitted;
         entries_.erase(it);
         if (emitted) {
-          Post("downloads.removed", base::DictValue().Set("id", item->GetGuid()));
+          Post("downloads.removed", Removal(item));
         }
       }
       return;
@@ -217,7 +228,7 @@ class DownloadsState : public ProfileState {
       return;
     }
     entries_.erase(item->GetGuid());
-    Post("downloads.removed", base::DictValue().Set("id", item->GetGuid()));
+    Post("downloads.removed", Removal(item));
   }
 
   void Drop(Profile* profile) {

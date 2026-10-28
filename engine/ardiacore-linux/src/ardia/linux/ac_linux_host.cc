@@ -959,6 +959,7 @@ class ShellHostView : public views::View,
   void QueueTransaction(std::optional<int> command);
   void EngineEvent(std::string_view topic, const base::DictValue& payload);
   bool ReceivesPrivateDownload(const base::DictValue& download);
+  bool ReceivesRemoval(bool private_removal, const std::string& profile_path);
   void Invoke(std::string method, const base::DictValue& args,
               base::OnceCallback<void(bool, base::Value)> done);
   void ReportPictureInPicture(content::WebContents* contents, base::DictValue state);
@@ -1021,6 +1022,28 @@ class ShellHostView : public views::View,
       return true;
     }
     return false;
+  }
+  TabBinding* PrivateLinkBinding() {
+    TabBinding* fallback = nullptr;
+    for (const auto& [id, binding] : bindings_) {
+      if (!binding->contents() || !binding->page()) continue;
+      if (binding->presented) return binding.get();
+      if (!fallback) fallback = binding.get();
+    }
+    return fallback;
+  }
+  bool OpenSurfacePrivateLink(content::WebContents* contents, const GURL& url) {
+    if (!extension_surfaces_ || !extension_surfaces_->HostsContents(contents)) return false;
+    Profile* page = page_profile();
+    const auto original = page ? ardiacore::LinuxProfileName(page->GetOriginalProfile()) : std::nullopt;
+    TabBinding* binding = PrivateLinkBinding();
+    if (!original || !binding) {
+      LOG(WARNING) << "[ardia] off-the-record link refused: its window has no live page to open a private window from";
+      return true;
+    }
+    binding->ReportPresentation("openWindow", base::DictValue()
+        .Set("url", url.spec()).Set("disposition", "incognito").Set("profile", *original));
+    return true;
   }
   void NoteAutoPictureInPictureRequested(content::WebContents* contents) {
     for (const auto& [id, binding] : bindings_) {
@@ -3244,12 +3267,22 @@ bool ShellHostView::ReceivesPrivateDownload(const base::DictValue& download) {
   return page && page->IsOffTheRecord() && !page->ShutdownStarted() && id && LinuxDownloadOwned(page, *id);
 }
 
+bool ShellHostView::ReceivesRemoval(bool private_removal, const std::string& profile_path) {
+  Profile* page = page_profile();
+  return linux_downloads::DeliversRemoval(private_removal, page && page->IsOffTheRecord(),
+                                          page ? page->GetOriginalProfile()->GetPath().value() : std::string(),
+                                          profile_path);
+}
+
 void ShellHostView::EngineEvent(std::string_view topic,
                                 const base::DictValue& payload) {
   if (!profile()) return;
   base::DictValue translated = payload.Clone();
+  const bool private_removal = topic == "downloads.removed" && translated.FindBool("offTheRecord").value_or(false);
+  if (private_removal) translated.Remove("offTheRecord");
   if (translated.FindBool("offTheRecord").value_or(false)) return;
   if (!translated.FindString("profile")) return;
+  if (!ReceivesRemoval(private_removal, String(translated, "profile"))) return;
   const auto engine_profile = ardiacore::LinuxProfileNameForPath(String(translated, "profile"));
   if (!engine_profile) return;
   translated.Set("profile", *engine_profile);
@@ -5189,6 +5222,15 @@ class HostRegistry : public BrowserCollectionObserver,
       observation_{this};
 };
 
+content::WebContents* PrivateLinkSource(content::WebContents* contents) {
+  for (int depth = 0; depth < 4 && contents; ++depth) {
+    DevToolsWindow* devtools = DevToolsWindow::AsDevToolsWindow(contents);
+    if (!devtools) return contents;
+    contents = devtools->GetInspectedWebContents();
+  }
+  return nullptr;
+}
+
 void EngineEvent(void*, const char* topic, const char* json) {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   if (!topic || !json) return;
@@ -5245,10 +5287,15 @@ void StartLinuxHost() {
   };
   g_ardia_linux_off_the_record_navigation = [](content::WebContents* contents, const GURL& url) {
     if (!contents || !url.is_valid()) return false;
+    content::WebContents* source = PrivateLinkSource(contents);
     for (const auto& [id, host] : Hosts()) {
-      if (host->OpenPrivateLink(contents, url)) return true;
+      if (source && host->OpenPrivateLink(source, url)) return true;
     }
-    return false;
+    for (const auto& [id, host] : Hosts()) {
+      if (host->OpenSurfacePrivateLink(source, url)) return true;
+    }
+    LOG(WARNING) << "[ardia] off-the-record link refused: its source is not an Ardia tab, extension view or DevTools window";
+    return true;
   };
   g_ardia_linux_drag_ended = [](BrowserWindowInterface* browser) {
     if (!browser) return;

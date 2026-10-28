@@ -42,6 +42,27 @@ class PrivateDownloadHostTests(unittest.TestCase):
         self.assertIn('page && page->IsOffTheRecord() && !page->ShutdownStarted()', receives)
         self.assertIn('LinuxDownloadOwned(page, *id)', receives)
 
+    def test_private_removals_reach_only_private_windows_of_their_profile(self):
+        event = method(self.host, 'void ShellHostView::EngineEvent(')
+        removal = event.index('const bool private_removal = topic == "downloads.removed" && translated.FindBool("offTheRecord").value_or(false);')
+        self.assertLess(removal, event.index('if (translated.FindBool("offTheRecord").value_or(false)) return;'))
+        self.assertIn('if (private_removal) translated.Remove("offTheRecord");', event)
+        self.assertIn('if (!ReceivesRemoval(private_removal, String(translated, "profile"))) return;', event)
+        receives = method(self.host, 'bool ShellHostView::ReceivesRemoval(')
+        self.assertIn('linux_downloads::DeliversRemoval(private_removal, page && page->IsOffTheRecord(),', receives)
+        self.assertIn('page->GetOriginalProfile()->GetPath().value()', receives)
+
+    def test_the_engine_tags_private_removals_on_linux_only(self):
+        engine = (ROOT.parents[1] / 'engine/chromium/src/chrome/browser/ardia/ac_downloads.cc').read_text()
+        self.assertIn('#include "build/build_config.h"', engine)
+        removal = method(engine, 'base::DictValue Removal(DownloadItem* item) {')
+        self.assertIn('base::DictValue removal = base::DictValue().Set("id", item->GetGuid());', removal)
+        gated = removal[removal.index('#if BUILDFLAG(IS_LINUX)'):removal.index('#endif')]
+        self.assertIn('if (IsOffTheRecord(item)) {', gated)
+        self.assertIn('removal.Set("offTheRecord", true);', gated)
+        self.assertEqual(engine.count('Post("downloads.removed", Removal(item));'), 2)
+        self.assertNotIn('Post("downloads.removed", base::DictValue()', engine)
+
     def test_file_operations_follow_the_page_profile_into_private_windows(self):
         invoke = method(self.host, 'void ShellHostView::Invoke(')
         files = invoke[invoke.index('if (LinuxFilesHandles(method)) {'):]
