@@ -15,8 +15,12 @@
 #include <memory>
 #include <utility>
 
+#include "ardia/linux/ac_linux_import_crypto.h"
+#include "ardia/linux/ac_linux_import_keyring.h"
+#include "ardia/linux/ac_linux_import_secrets.h"
+#include "ardia/linux/ac_linux_import_sessions.h"
+#include "ardia/linux/ac_linux_import_storage.h"
 #include "base/json/json_reader.h"
-#include "third_party/boringssl/src/include/openssl/evp.h"
 #include "third_party/sqlite/sqlite3.h"
 
 namespace ardia::linux_import {
@@ -63,37 +67,6 @@ constexpr BrowserDefinition kBrowsers[] = {
 constexpr const char* kKindOrder[] = {"bookmarks", "history", "tabs", "passwords", "cookies",
                                       "autofill", "spaces", "pinnedTabs", "favorites"};
 
-std::string Join(std::string_view directory, std::string_view name) {
-  if (name.empty() || name == ".") return std::string(directory);
-  std::string path(directory);
-  if (path.empty() || path.back() != '/') path.push_back('/');
-  path += name;
-  return path;
-}
-
-bool IsDirectory(const std::string& path) {
-  struct stat info;
-  return !path.empty() && stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
-}
-
-bool IsFile(const std::string& path) {
-  struct stat info;
-  return !path.empty() && stat(path.c_str(), &info) == 0 && S_ISREG(info.st_mode);
-}
-
-std::vector<std::string> ListDirectory(const std::string& path) {
-  std::vector<std::string> names;
-  DIR* directory = opendir(path.c_str());
-  if (!directory) return names;
-  while (dirent* entry = readdir(directory)) {
-    const std::string name = entry->d_name;
-    if (name != "." && name != "..") names.push_back(name);
-  }
-  closedir(directory);
-  std::sort(names.begin(), names.end());
-  return names;
-}
-
 std::string RealPath(const std::string& path) {
   if (path.empty()) return {};
   char* resolved = realpath(path.c_str(), nullptr);
@@ -134,188 +107,6 @@ std::string SkColorHex(int color) {
   return buffer;
 }
 
-FileRead CopyFile(const std::string& from, const std::string& to, size_t max_bytes, const ImportObserver* observer) {
-  const int in = open(from.c_str(), O_RDONLY | O_CLOEXEC | O_NOCTTY | O_NOFOLLOW | O_NONBLOCK);
-  if (in < 0) return errno == ENOENT ? FileRead::kMissing : FileRead::kUnreadable;
-  struct stat info;
-  if (fstat(in, &info) != 0 || !S_ISREG(info.st_mode)) {
-    close(in);
-    return FileRead::kUnreadable;
-  }
-  if (static_cast<uint64_t>(info.st_size) > max_bytes) {
-    close(in);
-    return FileRead::kTooLarge;
-  }
-  const int out = open(to.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
-  if (out < 0) {
-    close(in);
-    return FileRead::kUnreadable;
-  }
-  std::vector<char> buffer(64 * 1024);
-  bool ok = true;
-  uint64_t copied = 0;
-  int chunks = 0;
-  while (ok) {
-    if (observer && ++chunks % 64 == 0 && observer->Cancelled()) {
-      ok = false;
-      break;
-    }
-    const ssize_t got = read(in, buffer.data(), buffer.size());
-    if (got < 0 && errno == EINTR) continue;
-    if (got <= 0) {
-      ok = got == 0;
-      break;
-    }
-    copied += static_cast<uint64_t>(got);
-    if (copied > max_bytes) {
-      ok = false;
-      break;
-    }
-    for (ssize_t written = 0; written < got;) {
-      const ssize_t put = write(out, buffer.data() + written, static_cast<size_t>(got - written));
-      if (put < 0 && errno == EINTR) continue;
-      if (put <= 0) {
-        ok = false;
-        break;
-      }
-      written += put;
-    }
-  }
-  close(in);
-  if (close(out) != 0) ok = false;
-  return ok ? FileRead::kOk : FileRead::kUnreadable;
-}
-
-class ScratchDirectory {
- public:
-  explicit ScratchDirectory(const std::string& root) {
-    std::string pattern = Join(root.empty() ? "/tmp" : root, "ardia-import-XXXXXX");
-    std::vector<char> buffer(pattern.begin(), pattern.end());
-    buffer.push_back('\0');
-    if (mkdtemp(buffer.data())) path_ = buffer.data();
-  }
-  ScratchDirectory(const ScratchDirectory&) = delete;
-  ScratchDirectory& operator=(const ScratchDirectory&) = delete;
-  ~ScratchDirectory() {
-    if (path_.empty()) return;
-    for (const std::string& name : ListDirectory(path_)) unlink(Join(path_, name).c_str());
-    rmdir(path_.c_str());
-  }
-
-  bool ok() const { return !path_.empty(); }
-  std::string Next() { return Join(path_, "copy-" + std::to_string(++counter_)); }
-
- private:
-  std::string path_;
-  int counter_ = 0;
-};
-
-class Statement {
- public:
-  Statement(sqlite3* db, const std::string& sql) {
-    if (sqlite3_prepare_v2(db, sql.c_str(), static_cast<int>(sql.size()), &statement_, nullptr) != SQLITE_OK) {
-      sqlite3_finalize(statement_);
-      statement_ = nullptr;
-    }
-  }
-  Statement(const Statement&) = delete;
-  Statement& operator=(const Statement&) = delete;
-  ~Statement() { sqlite3_finalize(statement_); }
-
-  bool ok() const { return statement_ != nullptr; }
-  bool failed() const { return failed_; }
-  void Bind(int index, int64_t value) {
-    if (statement_) sqlite3_bind_int64(statement_, index, value);
-  }
-  void BindStatic(int index, std::string_view text) {
-    if (statement_) sqlite3_bind_text(statement_, index, text.data(), static_cast<int>(text.size()), nullptr);
-  }
-  bool Step() {
-    if (!statement_) return false;
-    const int result = sqlite3_step(statement_);
-    if (result == SQLITE_ROW) return true;
-    if (result != SQLITE_DONE) failed_ = true;
-    return false;
-  }
-  int Column(std::string_view name) const {
-    if (!statement_) return -1;
-    for (int i = 0; i < sqlite3_column_count(statement_); ++i) {
-      const char* column = sqlite3_column_name(statement_, i);
-      if (column && name == column) return i;
-    }
-    return -1;
-  }
-  bool IsNull(int i) const { return i < 0 || sqlite3_column_type(statement_, i) == SQLITE_NULL; }
-  int64_t Int(int i) const { return i < 0 ? 0 : sqlite3_column_int64(statement_, i); }
-  std::string Text(int i) const {
-    if (i < 0) return {};
-    const unsigned char* text = sqlite3_column_text(statement_, i);
-    const int bytes = sqlite3_column_bytes(statement_, i);
-    return text ? std::string(reinterpret_cast<const char*>(text), static_cast<size_t>(bytes)) : std::string();
-  }
-  std::string Blob(int i) const {
-    if (i < 0) return {};
-    const void* blob = sqlite3_column_blob(statement_, i);
-    const int bytes = sqlite3_column_bytes(statement_, i);
-    return blob ? std::string(static_cast<const char*>(blob), static_cast<size_t>(bytes)) : std::string();
-  }
-
- private:
-  sqlite3_stmt* statement_ = nullptr;
-  bool failed_ = false;
-};
-
-class Database {
- public:
-  static std::unique_ptr<Database> Snapshot(const std::string& source, ScratchDirectory& scratch,
-                                            const ImportObserver& observer, FileRead* status) {
-    if (!scratch.ok()) {
-      *status = FileRead::kUnreadable;
-      return nullptr;
-    }
-    const std::string copy = scratch.Next();
-    *status = CopyFile(source, copy, kMaxDatabaseBytes, &observer);
-    if (*status != FileRead::kOk) return nullptr;
-    for (const char* suffix : {"-wal", "-journal"}) {
-      const FileRead side = CopyFile(source + suffix, copy + suffix, kMaxDatabaseBytes, &observer);
-      if (side != FileRead::kOk && side != FileRead::kMissing) {
-        *status = side;
-        return nullptr;
-      }
-    }
-    if (sqlite3_initialize() != SQLITE_OK) {
-      *status = FileRead::kUnreadable;
-      return nullptr;
-    }
-    sqlite3* db = nullptr;
-    if (sqlite3_open_v2(copy.c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, nullptr) != SQLITE_OK) {
-      sqlite3_close_v2(db);
-      *status = FileRead::kUnreadable;
-      return nullptr;
-    }
-    return std::unique_ptr<Database>(new Database(db));
-  }
-  Database(const Database&) = delete;
-  Database& operator=(const Database&) = delete;
-  ~Database() { sqlite3_close_v2(db_); }
-
-  sqlite3* get() const { return db_; }
-  bool HasTable(std::string_view name) {
-    Statement statement(db_, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1");
-    statement.BindStatic(1, name);
-    return statement.Step();
-  }
-
- private:
-  explicit Database(sqlite3* db) : db_(db) {}
-  sqlite3* db_;
-};
-
-struct Failure {
-  std::string code;
-  std::string message;
-};
-
 std::string Plural(int count, std::string_view word) {
   return std::to_string(count) + " " + std::string(word) + (count == 1 ? "" : "s");
 }
@@ -331,7 +122,13 @@ base::ListValue ChromiumKinds(const std::string& directory) {
   base::ListValue kinds;
   if (IsFile(Join(directory, "Bookmarks")) || IsFile(Join(directory, "AccountBookmarks"))) kinds.Append("bookmarks");
   if (IsFile(Join(directory, "History"))) kinds.Append("history");
+  if (IsDirectory(Join(directory, "Sessions")) || IsDirectory(Join(directory, "Sessions_Encrypted")) ||
+      IsFile(Join(directory, "Current Session")) || IsFile(Join(directory, "Last Session"))) {
+    kinds.Append("tabs");
+  }
   if (IsFile(Join(directory, "Login Data")) || IsFile(Join(directory, "Login Data For Account"))) kinds.Append("passwords");
+  if (IsFile(Join(directory, "Network/Cookies")) || IsFile(Join(directory, "Cookies"))) kinds.Append("cookies");
+  if (IsFile(Join(directory, "Web Data"))) kinds.Append("autofill");
   return kinds;
 }
 
@@ -395,6 +192,7 @@ std::vector<base::DictValue> ChromiumProfiles(const std::string& root, const Bro
     const bool is_default = last_used ? id == *last_used : (id == "Default" || id == ".");
     profile.Set("isDefault", is_default);
     profile.Set("available", ChromiumKinds(path));
+    if (ChromiumSessionNeedsKey(path)) profile.Set("tabsNeedKey", true);
     profiles.push_back(std::move(profile));
   }
   return profiles;
@@ -413,6 +211,12 @@ std::vector<base::DictValue> FirefoxProfiles(const std::string& root) {
       kinds.Append("bookmarks");
       kinds.Append("history");
     }
+    if (IsFile(Join(path, "sessionstore.jsonlz4")) || IsFile(Join(path, "sessionstore-backups/recovery.jsonlz4")) ||
+        IsFile(Join(path, "sessionstore-backups/previous.jsonlz4"))) {
+      kinds.Append("tabs");
+    }
+    if (IsFile(Join(path, "logins.json")) && IsFile(Join(path, "key4.db"))) kinds.Append("passwords");
+    if (IsFile(Join(path, "cookies.sqlite"))) kinds.Append("cookies");
     base::DictValue profile;
     profile.Set("id", entry.path);
     profile.Set("name", entry.name);
@@ -683,10 +487,12 @@ struct LoginsRead {
   std::vector<Credential> credentials;
   int undecryptable = 0;
   int keyring = 0;
+  int portal = 0;
 };
 
 std::optional<Failure> ReadChromiumLogins(const std::string& directory, ScratchDirectory& scratch,
-                                          ImportObserver& observer, LoginsRead* out, bool* cancelled) {
+                                          ImportObserver& observer, const SecretBytes* key, LoginsRead* out,
+                                          bool* cancelled) {
   bool found = false;
   for (const char* name : {"Login Data", "Login Data For Account"}) {
     const std::string file = Join(directory, name);
@@ -716,13 +522,17 @@ std::optional<Failure> ReadChromiumLogins(const std::string& directory, ScratchD
       std::string blob = statement.Blob(password);
       if (blob.empty()) continue;
       Credential credential;
-      const Decrypted decrypted = DecryptChromiumPassword(blob, &credential.password);
+      const ValueDecrypt decrypted = DecryptChromiumValue(blob, key, std::string_view(), &credential.password);
       Wipe(blob);
-      if (decrypted == Decrypted::kKeyring) {
+      if (decrypted == ValueDecrypt::kKeyring) {
         ++out->keyring;
         continue;
       }
-      if (decrypted == Decrypted::kFailed) {
+      if (decrypted == ValueDecrypt::kPortal) {
+        ++out->portal;
+        continue;
+      }
+      if (decrypted == ValueDecrypt::kFailed) {
         ++out->undecryptable;
         continue;
       }
@@ -829,7 +639,7 @@ std::optional<std::string> ProfileDirectory(const Environment& environment, cons
   return directory;
 }
 
-base::ListValue ListBrowsers(const Environment& environment) {
+base::ListValue ListBrowsers(const Environment& environment, Keyring* keyring) {
   base::ListValue sources;
   const std::string own = RealPath(environment.own_data_directory);
   for (const BrowserDefinition& browser : kBrowsers) {
@@ -847,7 +657,14 @@ base::ListValue ListBrowsers(const Environment& environment) {
     source.Set("name", browser.name);
     source.Set("family", browser.family == Family::kChromium ? "chromium" : "firefox");
     source.Set("requiresExport", false);
-    source.Set("needsKeychain", false);
+    bool keychain = false;
+    if (browser.family == Family::kChromium && keyring) {
+      if (std::optional<SafeStorageItem> item = SafeStorageFor(browser.id)) {
+        keychain = keyring->Exists(*item, kKeyringProbeTimeoutMs) == KeyringStatus::kOk;
+        if (keychain) source.Set("keychainService", item->kwallet_key);
+      }
+    }
+    source.Set("needsKeychain", keychain);
     source.Set("needsFullDiskAccess", false);
     source.Set("profiles", std::move(list));
     sources.Append(std::move(source));
@@ -904,47 +721,23 @@ FileRead ReadFileLimited(const std::string& path, size_t max_bytes, std::string*
   return FileRead::kOk;
 }
 
-namespace {
-
-bool DecryptWith(const unsigned char* key, std::string_view cipher, std::string* password) {
-  unsigned char iv[16];
-  std::fill(std::begin(iv), std::end(iv), static_cast<unsigned char>(' '));
-  std::string plain(cipher.size() + 16, '\0');
-  int first = 0;
-  int last = 0;
-  EVP_CIPHER_CTX* context = EVP_CIPHER_CTX_new();
-  const bool ok = context &&
-      EVP_DecryptInit_ex(context, EVP_aes_128_cbc(), nullptr, key, iv) == 1 &&
-      EVP_DecryptUpdate(context, reinterpret_cast<unsigned char*>(plain.data()), &first,
-                        reinterpret_cast<const unsigned char*>(cipher.data()), static_cast<int>(cipher.size())) == 1 &&
-      EVP_DecryptFinal_ex(context, reinterpret_cast<unsigned char*>(plain.data()) + first, &last) == 1;
-  EVP_CIPHER_CTX_free(context);
-  if (!ok || first + last < 0 || !ValidUtf8(std::string_view(plain).substr(0, static_cast<size_t>(first + last)))) {
-    Wipe(plain);
-    return false;
-  }
-  password->assign(plain, 0, static_cast<size_t>(first + last));
-  Wipe(plain);
-  return true;
-}
-
-}
-
 Decrypted DecryptChromiumPassword(std::string_view blob, std::string* password) {
-  password->clear();
-  if (blob.substr(0, 3) == "v11" || blob.substr(0, 3) == "v12") return Decrypted::kKeyring;
-  if (blob.substr(0, 3) != "v10") {
-    if (blob.empty() || !ValidUtf8(blob)) return Decrypted::kFailed;
-    password->assign(blob);
-    return Decrypted::kOk;
-  }
-  const std::string_view cipher = blob.substr(3);
-  if (cipher.empty() || cipher.size() % 16 != 0) return Decrypted::kFailed;
-  if (DecryptWith(kChromiumBasicKey, cipher, password) || DecryptWith(kChromiumEmptyKey, cipher, password)) {
-    return Decrypted::kOk;
+  switch (DecryptChromiumValue(blob, nullptr, std::string_view(), password)) {
+    case ValueDecrypt::kOk:
+      return Decrypted::kOk;
+    case ValueDecrypt::kKeyring:
+    case ValueDecrypt::kPortal:
+      return Decrypted::kKeyring;
+    case ValueDecrypt::kFailed:
+      return Decrypted::kFailed;
   }
   return Decrypted::kFailed;
 }
+
+ImportOutcome::ImportOutcome() = default;
+ImportOutcome::ImportOutcome(ImportOutcome&&) = default;
+ImportOutcome& ImportOutcome::operator=(ImportOutcome&&) = default;
+ImportOutcome::~ImportOutcome() = default;
 
 ImportOutcome ReadBrowserProfile(const Environment& environment, std::string_view browser_id,
                                  std::string_view profile_id, const std::vector<std::string>& kinds,
@@ -964,6 +757,7 @@ ImportOutcome ReadBrowserProfile(const Environment& environment, std::string_vie
     return outcome;
   }
   const bool chromium = browser->family == Family::kChromium;
+  const SecretBytes* chromium_key = options.chromium_key ? &*options.chromium_key : nullptr;
   ScratchDirectory scratch(environment.temp_root);
   base::DictValue result;
   result.Set("browserId", browser->id);
@@ -1013,14 +807,19 @@ ImportOutcome ReadBrowserProfile(const Environment& environment, std::string_vie
       history_count = count;
     } else if (name == "passwords" && chromium) {
       LoginsRead logins;
-      failure = ReadChromiumLogins(*directory, scratch, observer, &logins, &cancelled);
+      failure = ReadChromiumLogins(*directory, scratch, observer, chromium_key, &logins, &cancelled);
       if (!failure && !cancelled) {
         count = static_cast<int>(logins.credentials.size());
-        const int skipped = logins.keyring + logins.undecryptable;
+        const int skipped = logins.keyring + logins.portal + logins.undecryptable;
         if (logins.keyring > 0) {
-          warn(name, "undecryptable",
+          warn(name, "locked",
                Plural(logins.keyring, "password") + " protected by the system keyring " +
                    (logins.keyring == 1 ? "wasn't" : "weren't") + " imported");
+        }
+        if (logins.portal > 0) {
+          warn(name, "undecryptable",
+               Plural(logins.portal, "password") + " protected by the desktop portal " +
+                   (logins.portal == 1 ? "wasn't" : "weren't") + " imported");
         }
         if (logins.undecryptable > 0) {
           warn(name, "undecryptable", Plural(logins.undecryptable, "password") + " couldn't be decrypted");
@@ -1031,13 +830,77 @@ ImportOutcome ReadBrowserProfile(const Environment& environment, std::string_vie
         outcome.credentials = std::move(logins.credentials);
       }
     } else if (name == "passwords") {
-      failure = Failure{"unsupported", std::string(browser->name) + " passwords can't be imported on Linux yet"};
+      FirefoxLoginsRead logins;
+      const std::string_view primary =
+          options.firefox_primary_password ? std::string_view(options.firefox_primary_password->value()) : std::string_view();
+      failure = ReadFirefoxLogins(*directory, scratch, observer, primary, &logins, &cancelled);
+      if (!failure && !cancelled) {
+        count = static_cast<int>(logins.credentials.size());
+        if (logins.undecryptable > 0) {
+          warn(name, "undecryptable", Plural(logins.undecryptable, "password") + " couldn't be decrypted");
+        }
+        outcome.credentials = std::move(logins.credentials);
+      }
+    } else if (name == "tabs") {
+      OpenTabs tabs;
+      failure = chromium ? ReadChromiumTabs(*directory, chromium_key, &tabs) : ReadFirefoxTabs(*directory, &tabs);
+      if (!failure) {
+        count = tabs.count;
+        result.Set("tabs", std::move(tabs.tabs));
+        result.Set("tabGroups", std::move(tabs.groups));
+      }
+    } else if (name == "cookies") {
+      CookieRead cookies;
+      failure = chromium ? ReadChromiumCookies(*directory, scratch, observer, chromium_key, options.now_ms, &cookies, &cancelled)
+                         : ReadFirefoxCookies(*directory, scratch, observer, options.now_ms, &cookies, &cancelled);
+      if (!failure && !cancelled) {
+        count = static_cast<int>(cookies.cookies.size());
+        if (cookies.keyring > 0) {
+          warn(name, "locked", "Unlock " + std::string(browser->name) + " to import " + Plural(cookies.keyring, "cookie"));
+        }
+        if (cookies.portal > 0) {
+          warn(name, "undecryptable", Plural(cookies.portal, "cookie") + " protected by the desktop portal " +
+                                          (cookies.portal == 1 ? "wasn't" : "weren't") + " imported");
+        }
+        if (cookies.undecryptable > 0) {
+          warn(name, "undecryptable", Plural(cookies.undecryptable, "cookie") + " couldn't be decrypted");
+        }
+        if (cookies.skipped > 0) {
+          warn(name, "skipped", Plural(cookies.skipped, "cookie") + " from containers or private windows " +
+                                    (cookies.skipped == 1 ? "wasn't" : "weren't") + " imported");
+        }
+        if (cookies.cookies.empty() && cookies.keyring + cookies.portal + cookies.undecryptable > 0) {
+          failure = Failure{"locked", "None of " + std::string(browser->name) + "'s cookies could be decrypted"};
+        }
+        outcome.cookies = std::move(cookies.cookies);
+      }
+    } else if (name == "autofill" && chromium) {
+      AutofillRead autofill;
+      failure = ReadChromiumAutofill(*directory, scratch, observer, chromium_key, &autofill, &cancelled);
+      if (!failure && !cancelled) {
+        count = static_cast<int>(autofill.addresses.size() + autofill.cards.size());
+        if (autofill.locked_cards > 0) {
+          warn(name, "locked", "Unlock " + std::string(browser->name) + " to import " + Plural(autofill.locked_cards, "saved card"));
+        }
+        if (autofill.portal > 0) {
+          warn(name, "undecryptable", Plural(autofill.portal, "card") + " protected by the desktop portal " +
+                                          (autofill.portal == 1 ? "wasn't" : "weren't") + " imported");
+        }
+        if (autofill.undecryptable > 0) {
+          warn(name, "undecryptable", Plural(autofill.undecryptable, "card") + " couldn't be decrypted");
+        }
+        outcome.addresses = std::move(autofill.addresses);
+        outcome.cards = std::move(autofill.cards);
+      }
     } else {
-      failure = Failure{"unsupported", std::string(browser->name) + " " + std::string(name) + " can't be imported on Linux yet"};
+      failure = Failure{"unsupported", std::string(browser->name) + " has no " + std::string(name) + " to import"};
     }
     if (cancelled || observer.Cancelled()) {
       outcome.cancelled = true;
       outcome.credentials.clear();
+      outcome.cookies.clear();
+      outcome.addresses.clear();
+      outcome.cards.clear();
       return outcome;
     }
     if (failure && failure->code == "empty") {
@@ -1053,12 +916,12 @@ ImportOutcome ReadBrowserProfile(const Environment& environment, std::string_vie
 
   result.Set("history", std::move(history));
   result.Set("historyCount", history_count);
-  result.Set("tabs", base::ListValue());
-  result.Set("tabGroups", base::ListValue());
+  if (!result.FindList("tabs")) result.Set("tabs", base::ListValue());
+  if (!result.FindList("tabGroups")) result.Set("tabGroups", base::ListValue());
   result.Set("credentials", base::ListValue());
-  result.Set("cookieCount", 0);
-  result.Set("addressCount", 0);
-  result.Set("cardCount", 0);
+  result.Set("cookieCount", static_cast<int>(outcome.cookies.size()));
+  result.Set("addressCount", static_cast<int>(outcome.addresses.size()));
+  result.Set("cardCount", static_cast<int>(outcome.cards.size()));
   result.Set("spaces", base::ListValue());
   result.Set("favorites", base::ListValue());
   result.Set("favicons", base::ListValue());

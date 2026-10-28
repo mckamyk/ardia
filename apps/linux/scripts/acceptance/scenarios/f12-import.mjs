@@ -16,7 +16,7 @@ function writeToken(shell, token, profile) {
   return runRequest(shell, "ArdiaImport.writePasswords", [`write-${++writes}`, token, profile]);
 }
 
-function runRequest(shell, method, args, { cancelOnHistoryProgress = false } = {}) {
+export function runRequest(shell, method, args, { cancelOnHistoryProgress = false } = {}) {
   return shell.eval(`new Promise((resolve) => {
     const jobId = ${js(args[0])};
     const progress = [];
@@ -67,7 +67,7 @@ export default {
     { name: "Native file chooser", steps: ["In the Import window press 'Bookmarks HTML File…': the portal or GTK chooser opens over the Import window.", "Cancel it: nothing is imported and the window stays on the chooser step.", "Choose an exported bookmarks.html: its folders appear under 'Imported from HTML File' with the right link count."], reason: "needs a desktop portal or GTK session" },
     { name: "Passwords CSV import from Settings", steps: ["Settings › Passwords › Import, choose a CSV with three new logins and one duplicate row.", "The pane says 'Imported 3 passwords' and lists them; importing the same file again says 'Imported 0 passwords' and adds nothing."], reason: "needs the native chooser in a desktop session" },
     { name: "Chromium's SQLite build reads real profiles", steps: ["Import from a current Chrome and Firefox profile copied from a real machine into a scratch HOME.", "History and bookmarks import with the source's counts: Chromium's SQLite build omits UPSERT, window functions and JSON, and the readers' queries must not need them on real schemas."], reason: "fixtures use the system SQLite; only a real build exercises Chromium's" },
-    { name: "Keyring-protected Chrome passwords", steps: ["Import from a Chrome profile that uses the GNOME keyring or KWallet (v11).", "The Done step notes that the keyring-protected passwords weren't imported; nothing claims success for them."], reason: "keyring decryption is tracked as a follow-up; needs a real keyring session" },
+    { name: "Keyring-protected Chrome passwords", steps: ["Import from a Chrome profile that uses the GNOME keyring or KWallet (v11).", "Ardia asks to unlock the browser's Safe Storage key; allowing it imports the keyring-protected passwords, and skipping notes that they weren't imported."], reason: "needs the user's real keyring session; the generated keyring path is automated in I109" },
   ],
   async run(t) {
     const run = nonce("f12");
@@ -103,7 +103,7 @@ export default {
       const counts = { links: countLinks(result.bookmarks), history: result.history.length, passwords: result.passwords?.count, failed: result.failed, credentials: result.credentials.length };
       const want = { links: fixtures.expected.chromeLinks, history: fixtures.expected.chromeHistory, passwords: fixtures.expected.chromePasswords, failed: [], credentials: 0 };
       if (JSON.stringify(counts) !== JSON.stringify(want)) throw new Error(`counts ${JSON.stringify(counts)} want ${JSON.stringify(want)}`);
-      if (!result.warnings.some((w) => w.code === "undecryptable" && /keyring/.test(w.message))) throw new Error(`no keyring note in ${JSON.stringify(result.warnings)}`);
+      if (!result.warnings.some((w) => w.code === "locked" && /keyring/.test(w.message))) throw new Error(`no keyring note in ${JSON.stringify(result.warnings)}`);
       token = result.passwords.token;
       return { counts, warnings: result.warnings, progress: reply.progress };
     }, { critical: true });
@@ -162,12 +162,12 @@ export default {
       return { progressEvents: reply.progress.length, left };
     });
 
-    await t.check("a Firefox profile imports bookmarks and history and reports passwords as unsupported", async () => {
+    await t.check("a Firefox profile imports bookmarks and history and reports that it has no saved logins", async () => {
       const firefox = browsers.find((b) => b.id === "firefox").profiles[0].id;
       const reply = await runJob(shell, [`${run}-firefox`, "firefox", firefox, ["bookmarks", "history", "passwords"], {}]);
       if (reply.type !== "done") throw new Error(`firefox ${JSON.stringify(reply)}`);
       const counts = { links: countLinks(reply.result.bookmarks), history: reply.result.history.length, failed: reply.result.failed };
-      if (counts.links !== fixtures.expected.firefoxLinks || counts.history !== fixtures.expected.firefoxHistory || counts.failed.join() !== "passwords") throw new Error(`counts ${JSON.stringify(counts)}`);
+      if (counts.links !== fixtures.expected.firefoxLinks || counts.history !== fixtures.expected.firefoxHistory || counts.failed.length || !reply.result.warnings.some((w) => w.kind === "passwords" && w.code === "empty")) throw new Error(`counts ${JSON.stringify(counts)}`);
       return counts;
     });
 

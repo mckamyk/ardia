@@ -29,7 +29,8 @@ inline constexpr const char* kImportCapabilities[] = {
     "ArdiaImport.listBrowsers",  "ArdiaImport.startImport",     "ArdiaImport.cancelImport",
     "ArdiaImport.writePasswords", "ArdiaImport.discardPasswords", "ArdiaImport.chooseImportFile",
     "ArdiaImport.importBookmarksHTML", "ArdiaImport.importPasswordsCSV", "ArdiaImport.listExtensions",
-    "ArdiaImport.forgetUnlockedKeys", "ArdiaImport.cancelChooser"};
+    "ArdiaImport.forgetUnlockedKeys", "ArdiaImport.cancelChooser", "ArdiaImport.unlockBrowser",
+    "ArdiaImport.writeImported", "ArdiaImport.discardImported"};
 
 void Wipe(std::string& secret);
 

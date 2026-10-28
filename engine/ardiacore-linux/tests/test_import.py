@@ -18,7 +18,12 @@ SHIMS = {
     'base/json/json_reader.h': '#include "import_base.h"\n',
     'third_party/sqlite/sqlite3.h': '#include <sqlite3.h>\n',
     'third_party/boringssl/src/include/openssl/evp.h': '#include <openssl/evp.h>\n',
+    'third_party/boringssl/src/include/openssl/hmac.h': '#include <openssl/hmac.h>\n',
+    'third_party/boringssl/src/include/openssl/sha.h': '#include <openssl/sha.h>\n',
 }
+IMPORT_SOURCES = ['ac_linux_import_formats.cc', 'ac_linux_import_readers.cc', 'ac_linux_import_crypto.cc',
+                  'ac_linux_import_storage.cc', 'ac_linux_import_secrets.cc', 'ac_linux_import_sessions.cc',
+                  'ac_linux_import_keyring.cc']
 
 
 def basic_key():
@@ -99,8 +104,8 @@ class ImportFixture(unittest.TestCase):
         compiled = subprocess.run([
             compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-g', '-fsanitize=address,undefined',
             '-fno-omit-frame-pointer', f'-I{include}', '-I', str(ROOT / 'src'),
-            str(LINUX / 'ac_linux_import_formats.cc'), str(LINUX / 'ac_linux_import_readers.cc'),
-            str(FIXTURES / 'import_scenarios.cc'), '-lsqlite3', '-lcrypto', '-o', str(cls.binary),
+            *[str(LINUX / name) for name in IMPORT_SOURCES],
+            str(FIXTURES / 'import_scenarios.cc'), '-lsqlite3', '-lcrypto', '-ldl', '-o', str(cls.binary),
         ], capture_output=True, text=True, timeout=300)
         if compiled.returncode != 0:
             raise AssertionError(compiled.stderr)
@@ -399,7 +404,7 @@ class ReaderTests(ImportFixture):
         self.assertEqual(result['history'][3]['visits'], 1)
         self.assertEqual(result['historyCount'], 4)
         self.assertEqual(result['credentials'], [])
-        self.assertEqual(result['failed'], ['cookies'])
+        self.assertEqual(result['failed'], [])
         self.assertEqual(sorted((c['url'], c['username'], c['password']) for c in out['credentials']), [
             ('https://account.example/', 'acc', 'acc pass'),
             ('https://other.example/', 'bob', 'battery staple'),
@@ -408,8 +413,9 @@ class ReaderTests(ImportFixture):
         site = next(c for c in out['credentials'] if c['username'] == 'alice')
         self.assertEqual((site['realm'], site['created'], site['lastUsed'], site['timesUsed']), ('https://site.example/', 1600000000000, 1700000000000, 3))
         codes = [(w['kind'], w['code']) for w in result['warnings']]
+        self.assertIn(('passwords', 'locked'), codes)
         self.assertIn(('passwords', 'undecryptable'), codes)
-        self.assertIn(('cookies', 'unsupported'), codes)
+        self.assertIn(('cookies', 'empty'), codes)
         self.assertTrue(any(w['message'] == "1 password protected by the system keyring wasn't imported" for w in result['warnings']))
         self.assertTrue(any('1 password couldn' in w['message'] for w in result['warnings']))
         serialized = json.dumps(result)
@@ -483,8 +489,8 @@ class ReaderTests(ImportFixture):
         self.assertEqual(toolbar['children'][1]['children'][0]['url'], 'https://ff-b.example/')
         self.assertEqual([(h['url'], h['visits'], h['lastVisit'], h['typedCount']) for h in result['history']],
                          [('https://ff-a.example/', 4, 1700000000000, 1), ('https://ff-b.example/', 1, 1690000000000, 0)])
-        self.assertEqual(result['failed'], ['passwords'])
-        self.assertEqual(result['warnings'][0]['code'], 'unsupported')
+        self.assertEqual(result['failed'], [])
+        self.assertEqual([(w['kind'], w['code']) for w in result['warnings']], [('passwords', 'empty')])
         self.assertNotIn('profile', result)
 
     def test_extensions_come_from_preferences_and_locales(self):
@@ -542,7 +548,7 @@ class ReviewRoundOneTests(ImportFixture):
         out = self.read('chrome', 'Default', ['passwords'])
         self.assertEqual([(c['username'], c['password']) for c in out['credentials']], [('e', 'empty key pass')])
         messages = [w['message'] for w in out['result']['warnings']]
-        self.assertIn("1 password protected by the system keyring wasn't imported", messages)
+        self.assertIn("1 password protected by the desktop portal wasn't imported", messages)
         self.assertFalse(any('decrypted' in m for m in messages))
 
     def test_fifos_are_refused_without_blocking(self):

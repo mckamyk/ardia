@@ -10,8 +10,11 @@
 #include <utility>
 #include <vector>
 
+#include "ardia/linux/ac_linux_import_crypto.h"
 #include "ardia/linux/ac_linux_import_formats.h"
+#include "ardia/linux/ac_linux_import_keyring.h"
 #include "ardia/linux/ac_linux_import_readers.h"
+#include "ardia/linux/ac_linux_import_secrets.h"
 #include "ardia/linux/ac_linux_profile_service.h"
 #include "ardia/linux/ac_linux_profiles.h"
 #include "base/callback_list.h"
@@ -19,6 +22,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/json/json_reader.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -31,6 +35,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "chrome/browser/ardia/public/ac_engine.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate_factory.h"
 #include "chrome/browser/lifetime/termination_notification.h"
@@ -61,6 +66,8 @@ using Flag = base::RefCountedData<std::atomic<bool>>;
 constexpr size_t kMaxJobs = 8;
 constexpr base::TaskTraits kBlocking = {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
                                         base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN};
+constexpr base::TaskTraits kKeyring = {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+                                       base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN};
 
 void Fail(Done done, std::string_view code, std::string_view message) {
   std::move(done).Run(false, base::Value(base::DictValue().Set("code", code).Set("message", message)));
@@ -136,12 +143,35 @@ class JobObserver : public li::ImportObserver {
   std::string job_;
 };
 
+struct KeyRead {
+  li::KeyringStatus status = li::KeyringStatus::kUnavailable;
+  li::SecretBytes key;
+};
+
+KeyRead ReadSafeStorageKey(li::SafeStorageItem item) {
+  KeyRead read;
+  li::KeyringLookup lookup = li::SystemKeyring()->Read(item, li::kKeyringPromptTimeoutMs);
+  read.status = lookup.status;
+  if (lookup.status == li::KeyringStatus::kOk) {
+    read.key = li::DeriveChromiumKey(lookup.secret.value());
+    if (read.key.value().size() != li::kChromiumKeyBytes) read.status = li::KeyringStatus::kUnavailable;
+  }
+  return read;
+}
+
+base::ListValue ListBrowsersWithKeyring(li::Environment environment) {
+  std::unique_ptr<li::Keyring> keyring = li::SystemKeyring();
+  return li::ListBrowsers(environment, keyring.get());
+}
+
 li::ImportOutcome RunImport(li::Environment environment, std::string browser, std::string profile,
                             std::vector<std::string> kinds, li::ImportOptions options, scoped_refptr<Flag> cancelled,
                             scoped_refptr<base::SequencedTaskRunner> ui, Emit emit, std::string job) {
   li::RemoveStaleScratch(environment.temp_root, static_cast<int64_t>(base::Time::Now().ToTimeT()), li::kStaleScratchSeconds);
   JobObserver observer(std::move(cancelled), std::move(ui), std::move(emit), std::move(job));
-  return li::ReadBrowserProfile(environment, browser, profile, kinds, options, observer);
+  li::ImportOutcome outcome = li::ReadBrowserProfile(environment, browser, profile, kinds, options, observer);
+  outcome.withheld = outcome.error_code.empty() && !outcome.cancelled && li::OutcomeLeaks(outcome);
+  return outcome;
 }
 
 base::Value ReadBookmarksFile(std::string path) {
@@ -348,6 +378,119 @@ class PasswordWriter : public ProfileObserver {
   base::WeakPtrFactory<PasswordWriter> weak_factory_{this};
 };
 
+class ImportedWriter {
+ public:
+  using Finished = base::OnceCallback<void(base::DictValue)>;
+  using Progress = base::RepeatingCallback<void(std::string_view kind, int processed, int total)>;
+
+  ImportedWriter(base::FilePath profile_dir, li::ImportedData data, bool cookies, bool autofill, Progress progress,
+                 Finished finished)
+      : profile_dir_(std::move(profile_dir)),
+        data_(std::move(data)),
+        cookies_(cookies),
+        autofill_(autofill),
+        progress_(std::move(progress)),
+        finished_(std::move(finished)) {}
+  ImportedWriter(const ImportedWriter&) = delete;
+  ImportedWriter& operator=(const ImportedWriter&) = delete;
+
+  void Start() { Next(); }
+
+ private:
+  struct Pending {
+    base::WeakPtr<ImportedWriter> writer;
+    bool cookies = false;
+  };
+
+  static void Replied(void* context, const char* json) {
+    std::unique_ptr<Pending> pending(static_cast<Pending*>(context));
+    if (!pending->writer) return;
+    std::optional<base::Value> parsed = json ? base::JSONReader::Read(json, base::JSON_PARSE_RFC) : std::nullopt;
+    pending->writer->Answer(pending->cookies, parsed && parsed->is_dict() ? &parsed->GetDict() : nullptr);
+  }
+
+  int Count(const base::DictValue& reply, std::string_view key) {
+    const std::optional<int> value = reply.FindInt(key);
+    return value && *value > 0 ? *value : 0;
+  }
+
+  void Answer(bool cookies, const base::DictValue* reply) {
+    if (!reply || reply->Find("error")) {
+      if (cookies) {
+        cookies_failed_ = true;
+      } else {
+        autofill_failed_ = true;
+      }
+      return Next();
+    }
+    if (cookies) {
+      written_cookies_ += Count(*reply, "imported");
+      rejected_cookies_ += Count(*reply, "rejected");
+      existing_cookies_ += Count(*reply, "existing");
+      progress_.Run("cookies", static_cast<int>(std::min(cookie_offset_, data_.cookies.size())),
+                    static_cast<int>(data_.cookies.size()));
+    } else {
+      written_addresses_ += Count(*reply, "addresses");
+      written_cards_ += Count(*reply, "cards");
+      progress_.Run("autofill", static_cast<int>(autofill_offset_),
+                    static_cast<int>(std::max(data_.addresses.size(), data_.cards.size())));
+    }
+    Next();
+  }
+
+  void Next() {
+    const std::string dir = profile_dir_.value();
+    if (cookies_ && cookie_offset_ < data_.cookies.size()) {
+      const size_t end = std::min(data_.cookies.size(), cookie_offset_ + li::kCookieBatch);
+      int dropped = 0;
+      li::SecretBytes payload = li::CookiesPayload(data_.cookies, cookie_offset_, end, &dropped);
+      rejected_cookies_ += dropped;
+      cookie_offset_ = end;
+      auto pending = std::make_unique<Pending>(Pending{weak_factory_.GetWeakPtr(), true});
+      ac_engine_call("ac_cookies_import", dir.c_str(), payload.value().c_str(), &ImportedWriter::Replied,
+                     pending.release());
+      return;
+    }
+    const size_t autofill_total = std::max(data_.addresses.size(), data_.cards.size());
+    if (autofill_ && autofill_offset_ < autofill_total) {
+      const size_t end = std::min(autofill_total, autofill_offset_ + li::kAutofillBatch);
+      li::SecretBytes payload = li::AutofillPayload(data_.addresses, data_.cards, autofill_offset_, end);
+      autofill_offset_ = end;
+      auto pending = std::make_unique<Pending>(Pending{weak_factory_.GetWeakPtr(), false});
+      ac_engine_call("ac_autofill_import", dir.c_str(), payload.value().c_str(), &ImportedWriter::Replied,
+                     pending.release());
+      return;
+    }
+    data_ = li::ImportedData();
+    base::DictValue counts;
+    counts.Set("cookies", written_cookies_);
+    counts.Set("cookiesRejected", rejected_cookies_);
+    counts.Set("cookiesExisting", existing_cookies_);
+    counts.Set("addresses", written_addresses_);
+    counts.Set("cards", written_cards_);
+    if (cookies_failed_) counts.Set("cookiesFailed", 1);
+    if (autofill_failed_) counts.Set("autofillFailed", 1);
+    if (finished_) std::move(finished_).Run(std::move(counts));
+  }
+
+  base::FilePath profile_dir_;
+  li::ImportedData data_;
+  bool cookies_;
+  bool autofill_;
+  bool cookies_failed_ = false;
+  bool autofill_failed_ = false;
+  size_t cookie_offset_ = 0;
+  size_t autofill_offset_ = 0;
+  int written_cookies_ = 0;
+  int rejected_cookies_ = 0;
+  int existing_cookies_ = 0;
+  int written_addresses_ = 0;
+  int written_cards_ = 0;
+  Progress progress_;
+  Finished finished_;
+  base::WeakPtrFactory<ImportedWriter> weak_factory_{this};
+};
+
 class ImportService {
  public:
   static ImportService& Get() {
@@ -357,6 +500,8 @@ class ImportService {
 
   void Invoke(LinuxImportRequester requester, const std::string& method, const base::ListValue& values, Done done) {
     vault_.Expire(NowMs());
+    imported_.Expire(NowMs());
+    unlocked_.Expire(NowMs());
     if (terminating_) return Fail(std::move(done), "ERR_SHUTTING_DOWN", "Ardia is quitting");
     if (method == "ArdiaImport.listBrowsers") return ListBrowsers(std::move(done));
     if (method == "ArdiaImport.startImport") return StartImport(std::move(requester), values, std::move(done));
@@ -371,7 +516,13 @@ class ImportService {
     }
     if (method == "ArdiaImport.forgetUnlockedKeys") {
       vault_.DiscardOwner(requester.owner);
+      ForgetSecrets(requester.owner);
       return std::move(done).Run(true, base::Value());
+    }
+    if (method == "ArdiaImport.unlockBrowser") return Unlock(std::move(requester), values, std::move(done));
+    if (method == "ArdiaImport.writeImported") return WriteImported(std::move(requester), values, std::move(done));
+    if (method == "ArdiaImport.discardImported") {
+      return std::move(done).Run(true, base::Value(imported_.Discard(requester.owner, Argument(values, 0))));
     }
     if (method == "ArdiaImport.chooseImportFile") return Choose(std::move(requester), values, std::move(done));
     if (method == "ArdiaImport.cancelChooser") {
@@ -409,6 +560,7 @@ class ImportService {
       }
     }
     vault_.DiscardOwner(owner);
+    ForgetSecrets(owner);
     chosen_.Forget(owner);
     choosers_.erase(std::string(owner));
   }
@@ -430,7 +582,156 @@ class ImportService {
     for (auto& [key, flag] : jobs_) flag->data.store(true);
     jobs_.clear();
     vault_.Clear();
+    imported_.Clear();
+    unlocked_.Clear();
     choosers_.clear();
+    imported_writers_.clear();
+  }
+
+  void ForgetSecrets(std::string_view owner) {
+    unlocked_.Forget(owner);
+    imported_.DiscardOwner(owner);
+    ++secret_generation_[std::string(owner)];
+  }
+
+  int SecretGeneration(const std::string& owner) {
+    return secret_generation_[owner];
+  }
+
+  void Unlock(LinuxImportRequester requester, const base::ListValue& values, Done done) {
+    const std::string request = Argument(values, 0);
+    const std::string browser_id = Argument(values, 1);
+    if (!li::ValidJobId(request) || !li::ValidBrowserId(browser_id)) return Fail(std::move(done), "invalid", "Invalid unlock request");
+    const li::BrowserDefinition* browser = li::FindBrowser(browser_id);
+    if (!browser) return Fail(std::move(done), "notFound", "Unknown browser");
+    if (browser->family == li::Family::kFirefox) {
+      const bool given = values.size() > 2 && values[2].is_string();
+      if (given && values[2].GetString().size() > 4096) return Fail(std::move(done), "invalid", "Invalid unlock request");
+      unlocked_.Set(requester.owner, browser_id, li::SecretBytes(given ? values[2].GetString() : std::string()), NowMs());
+      std::move(done).Run(true, base::Value(true));
+      requester.emit.Run(base::Value(base::DictValue().Set("jobId", request).Set("type", "unlocked")));
+      return;
+    }
+    std::optional<li::SafeStorageItem> item = li::SafeStorageFor(browser_id);
+    if (!item) return Fail(std::move(done), "unsupported", "This browser has no Safe Storage key");
+    if (unlocking_.contains(requester.owner)) return Fail(std::move(done), "busy", "An unlock is already waiting");
+    unlocking_.insert(requester.owner);
+    std::move(done).Run(true, base::Value(true));
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, kKeyring, base::BindOnce(&ReadSafeStorageKey, std::move(*item)),
+        base::BindOnce(&ImportService::Unlocked, weak_factory_.GetWeakPtr(), requester.owner, request, browser_id,
+                       std::string(browser->name), SecretGeneration(requester.owner), requester.emit));
+  }
+
+  void Unlocked(std::string owner, std::string request, std::string browser, std::string name, int generation, Emit emit,
+                KeyRead read) {
+    unlocking_.erase(owner);
+    base::DictValue event;
+    event.Set("jobId", request);
+    if (generation != SecretGeneration(owner) || terminating_) {
+      event.Set("type", "failed");
+      event.Set("code", "cancelled");
+      event.Set("message", "The unlock was cancelled");
+    } else if (read.status == li::KeyringStatus::kOk) {
+      unlocked_.Set(owner, browser, std::move(read.key), NowMs());
+      event.Set("type", "unlocked");
+    } else {
+      event.Set("type", "failed");
+      event.Set("code", li::KeyringErrorCode(read.status));
+      event.Set("message", li::KeyringErrorMessage(read.status, name));
+    }
+    emit.Run(base::Value(std::move(event)));
+  }
+
+  void StoreImported(const std::string& owner, li::ImportOutcome& outcome, base::DictValue& reply,
+                     base::ListValue& failed, base::ListValue& warnings) {
+    li::ImportedData data;
+    data.cookies = std::move(outcome.cookies);
+    data.addresses = std::move(outcome.addresses);
+    data.cards = std::move(outcome.cards);
+    if (data.empty()) return;
+    const std::string token = base::HexEncodeLower(base::RandBytesAsVector(16));
+    if (!imported_.Put(owner, token, std::move(data), NowMs())) {
+      for (const char* kind : {"cookies", "autofill"}) {
+        failed.Append(kind);
+        warnings.Append(base::DictValue().Set("kind", kind).Set("code", "unavailable").Set(
+            "message", "The imported data couldn't be held for saving"));
+      }
+      return;
+    }
+    reply.Set("vaultToken", token);
+    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce(&ImportService::ExpireVault, weak_factory_.GetWeakPtr()),
+        base::Milliseconds(li::kVaultLifetimeMs + 1));
+  }
+
+  void WriteImported(LinuxImportRequester requester, const base::ListValue& values, Done done) {
+    const std::string request = Argument(values, 0);
+    const std::string token = Argument(values, 1);
+    if (!li::ValidJobId(request) || !li::ValidToken(token)) return Fail(std::move(done), "invalid", "Invalid import write");
+    const std::string engine_profile = Argument(values, 2);
+    bool cookies = false;
+    bool autofill = false;
+    if (values.size() > 3 && values[3].is_list()) {
+      for (const base::Value& kind : values[3].GetList()) {
+        if (!kind.is_string()) continue;
+        cookies |= kind.GetString() == "cookies";
+        autofill |= kind.GetString() == "autofill";
+      }
+    }
+    const li::ProfileTarget target = li::ClassifyProfile(engine_profile);
+    if (target == li::ProfileTarget::kPrivate || target == li::ProfileTarget::kInvalid) {
+      imported_.Discard(requester.owner, token);
+      return Fail(std::move(done), li::ProfileErrorCode(target), "Imported data can't be saved into that profile");
+    }
+    std::optional<li::ImportedData> data = imported_.Take(requester.owner, token, NowMs());
+    if (!data) return Fail(std::move(done), "expired", "The imported data is no longer available");
+    std::move(done).Run(true, base::Value(true));
+    auto taken = std::make_unique<li::ImportedData>(std::move(*data));
+    ResolveImportProfile(engine_profile,
+                         base::BindOnce(&ImportService::ImportedResolved, weak_factory_.GetWeakPtr(), request,
+                                        std::move(taken), cookies, autofill, requester.emit));
+  }
+
+  void ImportedResolved(std::string request, std::unique_ptr<li::ImportedData> data, bool cookies, bool autofill,
+                        Emit emit, Profile* profile, std::string code) {
+    if (!profile) {
+      emit.Run(base::Value(base::DictValue()
+                               .Set("jobId", request)
+                               .Set("type", "failed")
+                               .Set("code", code)
+                               .Set("message", "Imported data can't be saved into that profile")));
+      return;
+    }
+    const int id = ++next_writer_;
+    auto writer = std::make_unique<ImportedWriter>(
+        profile->GetPath(), std::move(*data), cookies, autofill,
+        base::BindRepeating(
+            [](Emit emit, std::string request, std::string_view kind, int processed, int total) {
+              emit.Run(base::Value(base::DictValue()
+                                       .Set("jobId", request)
+                                       .Set("type", "progress")
+                                       .Set("kind", kind)
+                                       .Set("phase", "progress")
+                                       .Set("processed", processed)
+                                       .Set("total", total)));
+            },
+            emit, request),
+        base::BindOnce(&ImportService::ImportedWritten, weak_factory_.GetWeakPtr(), id, request, emit));
+    ImportedWriter* started = writer.get();
+    imported_writers_[id] = std::move(writer);
+    started->Start();
+  }
+
+  void ImportedWritten(int id, std::string request, Emit emit, base::DictValue counts) {
+    auto found = imported_writers_.find(id);
+    if (found != imported_writers_.end()) {
+      base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(found->second));
+      imported_writers_.erase(found);
+    }
+    counts.Set("jobId", request);
+    counts.Set("type", "importedWritten");
+    emit.Run(base::Value(std::move(counts)));
   }
 
   void Store(const std::string& owner, std::vector<li::Credential> credentials, base::DictValue& reply,
@@ -452,11 +753,15 @@ class ImportService {
         base::Milliseconds(li::kVaultLifetimeMs + 1));
   }
 
-  void ExpireVault() { vault_.Expire(NowMs()); }
+  void ExpireVault() {
+    vault_.Expire(NowMs());
+    imported_.Expire(NowMs());
+    unlocked_.Expire(NowMs());
+  }
 
   void ListBrowsers(Done done) {
     base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, kBlocking, base::BindOnce(&li::ListBrowsers, CurrentEnvironment()),
+        FROM_HERE, kKeyring, base::BindOnce(&ListBrowsersWithKeyring, CurrentEnvironment()),
         base::BindOnce([](Done done, base::ListValue list) { std::move(done).Run(true, base::Value(std::move(list))); },
                        std::move(done)));
   }
@@ -477,6 +782,14 @@ class ImportService {
       if (std::optional<int> limit = given.FindInt("historyLimit"); limit && *limit > 0) options.history_limit = limit;
       if (std::optional<double> since = given.FindDouble("historySince"); since && *since > 0) options.history_since = since;
     }
+    options.now_ms = base::Time::Now().InMillisecondsFSinceUnixEpoch();
+    if (std::optional<li::SecretBytes> secret = unlocked_.Copy(requester.owner, browser, NowMs())) {
+      if (li::FindBrowser(browser)->family == li::Family::kChromium) {
+        options.chromium_key = std::move(secret);
+      } else {
+        options.firefox_primary_password = std::move(secret);
+      }
+    }
     const std::string key = JobKey(requester.owner, job);
     if (jobs_.contains(key)) return Fail(std::move(done), "busy", "That import is already running");
     if (jobs_.size() >= kMaxJobs) return Fail(std::move(done), "busy", "Too many imports are running");
@@ -484,7 +797,7 @@ class ImportService {
     jobs_[key] = cancelled;
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, kBlocking,
-        base::BindOnce(&RunImport, CurrentEnvironment(), browser, profile, kinds, options, cancelled,
+        base::BindOnce(&RunImport, CurrentEnvironment(), browser, profile, kinds, std::move(options), cancelled,
                        base::SequencedTaskRunner::GetCurrentDefault(), requester.emit, job),
         base::BindOnce(&ImportService::Imported, weak_factory_.GetWeakPtr(), requester.owner, job, requester.emit));
     std::move(done).Run(true, base::Value(true));
@@ -506,7 +819,7 @@ class ImportService {
       event.Set("code", outcome.error_code);
       event.Set("message", outcome.error);
     } else {
-      if (li::ReplyLeaksSecret(base::Value(outcome.result.Clone()), outcome.credentials)) {
+      if (outcome.withheld) {
         event.Set("type", "failed");
         event.Set("code", "ERR_SECRET_IN_REPLY");
         event.Set("message", "The import result was withheld because it contained a password");
@@ -516,6 +829,7 @@ class ImportService {
         if (base::ListValue* listed = outcome.result.FindList("failed")) failed = std::move(*listed);
         if (base::ListValue* listed = outcome.result.FindList("warnings")) warnings = std::move(*listed);
         Store(owner, std::move(outcome.credentials), outcome.result, failed, warnings);
+        StoreImported(owner, outcome, outcome.result, failed, warnings);
         outcome.result.Set("failed", std::move(failed));
         outcome.result.Set("warnings", std::move(warnings));
         event.Set("type", "done");
@@ -523,6 +837,9 @@ class ImportService {
       }
     }
     outcome.credentials.clear();
+    outcome.cookies.clear();
+    outcome.addresses.clear();
+    outcome.cards.clear();
     emit.Run(base::Value(std::move(event)));
   }
 
@@ -679,6 +996,11 @@ class ImportService {
   li::ChosenFiles chosen_;
   std::map<std::string, OpenChooser> choosers_;
   std::map<int, std::unique_ptr<PasswordWriter>> writers_;
+  std::map<int, std::unique_ptr<ImportedWriter>> imported_writers_;
+  li::ImportedVault imported_;
+  li::UnlockedKeys unlocked_;
+  std::set<std::string> unlocking_;
+  std::map<std::string, int> secret_generation_;
   int next_writer_ = 0;
   base::WeakPtrFactory<ImportService> weak_factory_{this};
 };
