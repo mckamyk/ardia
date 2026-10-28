@@ -53,6 +53,7 @@ const LAZY_COMPONENTS: Record<string, string[]> = {
 
 const LAZY_PREFIX = "\0ardia-lazy:";
 const EAGER_QUERY = "?ardia-eager";
+export const lazyComponentId = (file: string) => LAZY_PREFIX + file;
 
 function lazyComponents(): Plugin {
   return {
