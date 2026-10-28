@@ -1,6 +1,7 @@
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -28,6 +29,21 @@ BUS_CONFIG = '''<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Config
 
 def has_gi():
     return subprocess.run(['python3', '-I', '-c', 'import gi'], capture_output=True).returncode == 0
+
+
+def stop(process):
+    if not process:
+        return
+    for sig in [signal.SIGTERM, signal.SIGKILL]:
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=5)
+            return
+        except subprocess.TimeoutExpired:
+            continue
 
 
 class KeyringLockedAtLaunchTests(unittest.TestCase):
@@ -106,9 +122,7 @@ class KeyringLockedAtLaunchTests(unittest.TestCase):
                 self.assertNotIn('AddressSanitizer', output)
             finally:
                 for process in [daemon, bus, screen]:
-                    if process and process.poll() is None:
-                        os.killpg(process.pid, 15)
-                        process.wait(timeout=10)
+                    stop(process)
 
 
 if __name__ == '__main__':
