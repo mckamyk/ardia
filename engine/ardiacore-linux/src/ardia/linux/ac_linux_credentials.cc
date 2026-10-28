@@ -555,6 +555,15 @@ bool HandlesInvoke(std::string_view method) {
   return false;
 }
 
+bool ClaimsInvoke(std::string_view method) {
+  for (std::string_view domain : {std::string_view("ArdiaPasswords."), std::string_view("ArdiaAutofill.")}) {
+    if (method.size() > domain.size() && method.starts_with(domain)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::optional<std::string> NormalizeOrigin(std::string_view origin) {
   if (origin.empty() || !PlainText(origin, kMaxOriginBytes)) {
     return std::nullopt;
@@ -683,6 +692,13 @@ Plan PlanCall(std::string_view name, const Arg& input) {
     return Invalid("ERR_CREDENTIAL_REQUEST", "A valid id is required");
   }
   return Engine("ac_autofill_remove", Json().Text("id", id->text), Reply::kOk, {Store::kAddresses});
+}
+
+Plan PlanWindowInvoke(bool private_window, std::string_view method, const std::vector<Arg>& values) {
+  if (private_window) {
+    return Invalid("ERR_PROFILE_PRIVATE", kPrivateCredentialsMessage);
+  }
+  return PlanInvoke(method, values);
 }
 
 Plan PlanInvoke(std::string_view method, const std::vector<Arg>& values) {

@@ -29,6 +29,19 @@ class CredentialHelperTests(unittest.TestCase):
         self.assertEqual(len(native), 9)
         self.assertEqual(sorted(native), sorted(json.loads(result.stdout)))
 
+    def test_private_windows_are_refused_before_any_credential_call_is_parsed_or_routed(self):
+        service = (LINUX / 'ac_linux_credential_service.cc').read_text()
+        invokes = service[service.index('bool LinuxCredentialsInvokes('):]
+        self.assertIn('return credentials::ClaimsInvoke(method);', invokes[:invokes.index('\n}\n')])
+        invoke = service[service.index('void LinuxCredentialsInvoke('):]
+        invoke = invoke[:invoke.index('\n}\n')]
+        self.assertIn('credentials::PlanWindowInvoke(private_window, method, args)', invoke)
+        self.assertNotIn('credentials::PlanInvoke(', invoke)
+        self.assertIn('credentials::kPrivateCredentialsMessage', service)
+        host = (LINUX / 'ac_linux_host.cc').read_text()
+        invoke_host = host[host.index('void ShellHostView::Invoke('):]
+        self.assertLess(invoke_host.index('LinuxCredentialsInvokes(method)'), invoke_host.index('Unsupported Linux host method'))
+
     def test_credential_sources_never_log_or_trace(self):
         for name in ['ac_linux_credentials.cc', 'ac_linux_credentials.h', 'ac_linux_credential_service.cc',
                      'ac_linux_credential_service.h']:
