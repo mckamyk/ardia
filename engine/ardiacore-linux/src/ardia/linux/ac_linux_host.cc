@@ -386,6 +386,8 @@ void ActivateNativeWindow(BrowserWindowInterface* browser, linux_window::Activat
   browser->GetWindow()->Activate();
 }
 
+constexpr base::TimeDelta kUnrequestedActivationWindow = base::Seconds(5);
+
 class WindowPointerHandler : public ui::EventHandler {
  public:
   void OnMouseEvent(ui::MouseEvent* event) override {
@@ -1132,6 +1134,7 @@ class ShellHostView : public views::View,
   bool CanHandleAccelerators() const override;
   void UnregisterAccelerators();
   void FocusShell();
+  void FocusShellOnActivation();
   void OnKeyEvent(ui::KeyEvent* event) override;
   void ReplayTypeahead(bool field);
   void DiscardTypeahead();
@@ -2756,8 +2759,26 @@ void BroadcastWindowEvent(const base::DictValue& event) {
   }
 }
 
+void ReturnUnrequestedActivation(int window) {
+  const auto keep = WindowFocus().Unrequested(window);
+  if (!keep) return;
+  const auto found = Hosts().find(*keep);
+  if (found != Hosts().end()) ActivateNativeWindow(found->second->browser(), WindowFocus().Focus(*keep));
+}
+
+void ShellHostView::FocusShellOnActivation() {
+  views::Widget* widget = GetWidget();
+  views::FocusManager* focus = GetFocusManager();
+  if (!widget || !focus || !shell_ || wm::GetModalTransient(widget->GetNativeWindow())) return;
+  if (const views::View* focused = focus->GetFocusedView(); focused && Contains(focused)) return;
+  FocusShell();
+}
+
 void ShellHostView::OnWidgetActivationChanged(views::Widget*, bool active) {
-  if (!WindowFocus().Observe(id_, active) || is_utility() || window_id_.empty()) return;
+  if (active) FocusShellOnActivation();
+  const bool changed = WindowFocus().Observe(id_, active);
+  if (active) ReturnUnrequestedActivation(id_);
+  if (!changed || is_utility() || window_id_.empty()) return;
   BroadcastWindowEvent(base::DictValue().Set("type", "focus").Set("id", window_id_));
 }
 
@@ -4227,7 +4248,14 @@ void OpenNativeWindow(WindowOpening opening, uint64_t generation, Profile* page,
   request.opener_host = opening.opener_host;
   request.opener_generation = opening.opener_generation;
   RequestedWindows()[created->GetSessionID().id()] = std::move(request);
-  ShowNativeWindow(created, WindowFocus().Create(created->GetSessionID().id(), opening.intent));
+  const int created_id = created->GetSessionID().id();
+  const auto presentation = WindowFocus().Create(created_id, opening.intent);
+  ShowNativeWindow(created, presentation);
+  if (presentation == linux_window::Presentation::kInactive) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce([](int window) { WindowFocus().Settle(window); }, created_id),
+        kUnrequestedActivationWindow);
+  }
   FinishWindowOpening(id, generation, true, base::Value(base::DictValue().Set("pending", true)));
 }
 
@@ -4826,10 +4854,15 @@ void ShellHostView::Invoke(
       return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kInvalid));
     }
     const std::string* behind = options ? options->FindString("behind") : nullptr;
+    int behind_window = 0;
+    for (const auto& [native_id, host] : Hosts()) {
+      if (behind && host->window_id() == *behind && !host->is_utility() && FocusReaches(host)) behind_window = native_id;
+    }
     const linux_window::OpenIntent intent{
         .focus = options ? options->FindBool("focus").value_or(true) : true,
         .behind = behind && !behind->empty(),
-        .utility = utility};
+        .utility = utility,
+        .behind_window = behind_window};
     std::optional<linux_window::Requested> requested;
     const base::ListValue* frame = options ? options->FindList("frame") : nullptr;
     if (!utility && frame &&

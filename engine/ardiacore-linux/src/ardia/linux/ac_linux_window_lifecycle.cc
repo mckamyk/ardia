@@ -16,9 +16,22 @@ bool FocusLedger::Wants(const OpenIntent& intent) const {
 }
 
 Presentation FocusLedger::Create(int window, const OpenIntent& intent) {
-  if (!Wants(intent)) return Presentation::kInactive;
-  Request(window);
-  return Presentation::kActivate;
+  if (Wants(intent)) {
+    Request(window);
+    return Presentation::kActivate;
+  }
+  const int keep = intent.behind_window ? intent.behind_window : active_;
+  if (may_activate_ && keep && keep != window) kept_[window] = {keep, presses_};
+  return Presentation::kInactive;
+}
+
+std::optional<int> FocusLedger::Unrequested(int window) {
+  const auto found = kept_.find(window);
+  if (found == kept_.end()) return std::nullopt;
+  const Kept kept = found->second;
+  kept_.erase(found);
+  if (kept.presses != presses_) return std::nullopt;
+  return kept.window;
 }
 
 Activation FocusLedger::Reuse(int window, const OpenIntent& intent,
@@ -62,6 +75,8 @@ bool FocusLedger::Observe(int window, bool active) {
 
 void FocusLedger::Forget(int window) {
   pending_.erase(window);
+  kept_.erase(window);
+  std::erase_if(kept_, [window](const auto& entry) { return entry.second.window == window; });
   if (active_ == window) active_ = 0;
 }
 

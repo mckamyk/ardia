@@ -102,6 +102,37 @@ static void ObservedActivationIsReportedOncePerTransition() {
   assert(ledger.active() == 0);
 }
 
+static void ACompositorActivationOfABehindWindowIsHandedBack() {
+  FocusLedger ledger(true);
+  ledger.Observe(1, true);
+  assert(ledger.Create(2, {.focus = false, .behind = true, .behind_window = 1}) == Presentation::kInactive);
+  ledger.Observe(1, false);
+  assert(ledger.Observe(2, true));
+  assert(ledger.Unrequested(2) == std::optional<int>(1));
+  assert(!ledger.Unrequested(2));
+  ledger.Create(3, {.focus = false});
+  ledger.PointerPressed();
+  assert(!ledger.Unrequested(3));
+  ledger.Create(4, {.focus = false});
+  ledger.Settle(4);
+  assert(!ledger.Unrequested(4));
+  ledger.Create(5, {.focus = false, .behind = true, .behind_window = 6});
+  ledger.Forget(6);
+  assert(!ledger.Unrequested(5));
+  ledger.Create(7, {.focus = true});
+  assert(!ledger.Unrequested(7));
+  ledger.Create(8, {.focus = false, .behind = true, .behind_window = 9});
+  ledger.Forget(8);
+  assert(!ledger.Unrequested(8));
+  FocusLedger background(false);
+  background.Observe(1, true);
+  background.Create(2, {.focus = false});
+  assert(!background.Unrequested(2));
+  FocusLedger idle(true);
+  idle.Create(2, {.focus = false});
+  assert(!idle.Unrequested(2));
+}
+
 static void SharedFramesUseBottomUpPrimaryCoordinates() {
   const Rect primary{0, 0, 1920, 1080};
   const auto shared = SharedFrame({100, 50, 800, 600}, primary);
@@ -170,6 +201,7 @@ int main() {
   ReadinessRetriesOnlyWhileNothingElseWasActivated();
   APointerPressBlocksTheReadinessRetry();
   ObservedActivationIsReportedOncePerTransition();
+  ACompositorActivationOfABehindWindowIsHandedBack();
   SharedFramesUseBottomUpPrimaryCoordinates();
   WaylandFramesCarrySizeOnly();
   MalformedFramesAreRejected();
@@ -268,8 +300,9 @@ template <typename T> class AutoReset {
 };
 template <typename... Args> int BindOnce(Args&&...) { return 0; }
 template <typename T> T* Unretained(T* value) { return value; }
-inline int Milliseconds(int value) { return value; }
-inline int Seconds(int value) { return value; }
+using TimeDelta = int;
+constexpr int Milliseconds(int value) { return value; }
+constexpr int Seconds(int value) { return value; }
 struct OneShotTimer {
   bool running = false;
   void Start(int, int, int) { running = true; }
@@ -278,6 +311,7 @@ struct OneShotTimer {
 struct SingleThreadTaskRunner {
   static SingleThreadTaskRunner* GetCurrentDefault() { static SingleThreadTaskRunner runner; return &runner; }
   void PostTask(int, int) {}
+  void PostDelayedTask(int, int, int) {}
 };
 template <typename T> class WeakPtr {
  public:
@@ -364,10 +398,27 @@ struct Screen {
 };
 }
 
+namespace aura {
+struct Window {
+  bool modal = false;
+};
+}
+
+namespace wm {
+inline aura::Window* GetModalTransient(aura::Window* window) { return window && window->modal ? window : nullptr; }
+}
+
 namespace views {
+struct View {};
+struct FocusManager {
+  View* focused = nullptr;
+  View* GetFocusedView() { return focused; }
+};
 struct Widget {
   bool fullscreen = false, minimized = false, active = false, visible = true;
   gfx::Rect bounds;
+  aura::Window native;
+  aura::Window* GetNativeWindow() { return &native; }
   bool IsVisible() const { return visible; }
   bool IsFullscreen() const { return fullscreen; }
   bool IsMinimized() const { return minimized; }
@@ -552,6 +603,15 @@ struct ShellHostView {
   }
   views::Widget* GetWidget() { return &widget; }
   const views::Widget* GetWidget() const { return &widget; }
+  views::FocusManager focus_manager;
+  views::FocusManager* GetFocusManager() { return &focus_manager; }
+  views::View overlay_child;
+  views::WebView shell_view;
+  views::WebView* shell_ = &shell_view;
+  int shell_focus = 0;
+  bool Contains(const views::View* view) const { return view == &overlay_child; }
+  void FocusShell() { ++shell_focus; }
+  void FocusShellOnActivation();
   void Event(std::string_view module, std::string_view event, base::Value payload) {
     if (module == "ArdiaShell" && event == "onWindowEvent") events.push_back(payload.GetDict().Clone());
   }
@@ -686,6 +746,32 @@ static void Clicked() {
   assert(Count(clicked->window.calls, "Activate") == 1);
 }
 
+static void RestoredBehind() {
+  for (const bool pressed : {false, true}) {
+    BrowserWindowInterface main_browser{1};
+    ShellHostView main(1, "main", &main_browser);
+    main.OnWidgetActivationChanged(&main.widget, true);
+    Call(main, "ArdiaShell.openWindow", Args("w-back", base::DictValue().Set("focus", false).Set("behind", "main")));
+    BrowserWindowInterface* back_browser = created_browsers.back().get();
+    assert((back_browser->window.calls == std::vector<std::string>{"ShowInactive"}));
+    if (pressed) {
+      WindowPointerHandler pointer;
+      ui::MouseEvent press{{ui::EventType::kMousePressed}};
+      pointer.OnMouseEvent(&press);
+    }
+    ShellHostView back(back_browser->GetSessionID().id(), "w-back", back_browser);
+    main.OnWidgetActivationChanged(&main.widget, false);
+    back.OnWidgetActivationChanged(&back.widget, true);
+    assert(Count(main_browser.window.calls, "Activate") == (pressed ? 0 : 1));
+    assert(Count(back_browser->window.calls, "Activate") == 0);
+    back.OnWidgetActivationChanged(&back.widget, false);
+    main.OnWidgetActivationChanged(&main.widget, true);
+    back.OnWidgetActivationChanged(&back.widget, true);
+    assert(Count(main_browser.window.calls, "Activate") == (pressed ? 0 : 1));
+    back.OnWidgetActivationChanged(&back.widget, false);
+  }
+}
+
 static void Activation() {
   BrowserWindowInterface main_browser{1};
   ShellHostView main(1, "main", &main_browser);
@@ -700,6 +786,36 @@ static void Activation() {
   assert(EventsOf(main, "focus", "w-other") == 1);
   settings.OnWidgetActivationChanged(&settings.widget, true);
   assert(EventsOf(main, "focus", "settings") == 0 && settings.events.empty());
+}
+
+static void KeyboardFocusFollowsActivation() {
+  BrowserWindowInterface main_browser{1};
+  ShellHostView main(1, "main", &main_browser);
+  BrowserWindowInterface settings_browser{2};
+  ShellHostView settings(2, "settings", &settings_browser, "settings");
+  main.OnWidgetActivationChanged(&main.widget, true);
+  assert(main.shell_focus == 1);
+  main.OnWidgetActivationChanged(&main.widget, false);
+  assert(main.shell_focus == 1);
+  settings.OnWidgetActivationChanged(&settings.widget, true);
+  assert(settings.shell_focus == 1);
+  views::View chrome_contents;
+  main.focus_manager.focused = &chrome_contents;
+  main.OnWidgetActivationChanged(&main.widget, true);
+  assert(main.shell_focus == 2);
+  main.focus_manager.focused = &main.overlay_child;
+  main.OnWidgetActivationChanged(&main.widget, true);
+  assert(main.shell_focus == 2);
+  main.focus_manager.focused = nullptr;
+  main.widget.native.modal = true;
+  main.OnWidgetActivationChanged(&main.widget, true);
+  assert(main.shell_focus == 2);
+  main.widget.native.modal = false;
+  BrowserWindowInterface seeded_browser{3};
+  ShellHostView seeded(3, "w-seeded", &seeded_browser);
+  seeded.widget.active = true;
+  seeded.SeedWindowActivation();
+  assert(seeded.shell_focus == 1);
 }
 
 static void Seeded() {
@@ -1056,7 +1172,7 @@ int main(int argc, char** argv) {
   const std::string mode = argc > 1 ? argv[1] : "";
   const std::map<std::string, void (*)()> scenarios = {
       {"created", Created}, {"reused", Reused}, {"ready", Ready}, {"clicked", Clicked},
-      {"activation", Activation}, {"seeded", Seeded}, {"geometry", Geometry}, {"page-focus", PageFocus},
+      {"activation", Activation}, {"keyboard-focus", KeyboardFocusFollowsActivation}, {"restored-behind", RestoredBehind}, {"seeded", Seeded}, {"geometry", Geometry}, {"page-focus", PageFocus},
       {"wayland", Wayland}, {"background", Background}, {"frames", Frames},
       {"fullscreen-restore", FullScreenRestored}, {"fullscreen-given-up", FullScreenGivenUp},
       {"fullscreen-background", FullScreenInBackground}, {"fullscreen-focus-yields", FullScreenFocusYieldsToTheUser},
@@ -1128,9 +1244,10 @@ def host_harness():
     restore_branch = extract(HOST, '  if (method == "ArdiaShell.restoreFullScreen")')
     restore = '\n'.join(extract(HOST, signature) for signature in ['void FinishFullScreenRestore()', 'void ExpireFullScreenRestore()'])
     open_branch = extract(HOST, '  if (method == "ArdiaShell.openWindow")')
-    broadcast = extract(HOST, 'void BroadcastWindowEvent(')
+    broadcast = extract(HOST, 'void BroadcastWindowEvent(') + '\n' + extract(HOST, 'void ReturnUnrequestedActivation(')
     members = '\n'.join(extract(HOST, signature) for signature in [
         'void ShellHostView::OnWidgetActivationChanged(',
+        'void ShellHostView::FocusShellOnActivation(',
         'void ShellHostView::OnWidgetBoundsChanged(',
         'void ShellHostView::OnWidgetShowStateChanged(',
         'void ShellHostView::OnWidgetVisibilityChanged(',
@@ -1154,6 +1271,23 @@ def host_harness():
     invoke = ('void ShellHostView::WindowInvoke(const std::string& method, const base::ListValue& values, Done done) {\n'
               + restore_branch + '\n' + window_branch + '\n' + open_branch + '\n  std::move(done).Run(false, base::Value("unsupported"));\n}\n')
     return PRELUDE + hosts + free + pointer + fullscreen + HOST_FAKE + broadcast + '\n' + restore + '\n' + profile_openings() + invoke + members + SCENARIOS
+
+
+class WindowLifecycleLedgerTests(unittest.TestCase):
+    def test_ledger(self):
+        compiler = shutil.which('clang++') or shutil.which('c++')
+        if compiler is None:
+            self.skipTest('C++ compiler is unavailable')
+        with tempfile.TemporaryDirectory(prefix='ardia-window-ledger-') as scratch:
+            root = pathlib.Path(scratch)
+            (root / 'ledger.cc').write_text(LEDGER)
+            binary = root / 'ledger'
+            built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-I', str(SOURCE),
+                                    str(root / 'ledger.cc'), str(LINUX / 'ac_linux_window_lifecycle.cc'), '-o', str(binary)],
+                                   capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            ran = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
 
 
 class WindowLifecycleHostTests(unittest.TestCase):
@@ -1199,6 +1333,12 @@ class WindowLifecycleHostTests(unittest.TestCase):
 
     def test_observed_activation_reaches_regular_renderers_only(self):
         self.run_mode('activation')
+
+    def test_activation_gives_the_shell_keyboard_focus_unless_ardia_already_holds_it(self):
+        self.run_mode('keyboard-focus')
+
+    def test_a_restored_behind_window_the_compositor_focuses_hands_focus_back(self):
+        self.run_mode('restored-behind')
 
     def test_activation_before_attach_is_seeded_and_replayed_last(self):
         self.run_mode('seeded')

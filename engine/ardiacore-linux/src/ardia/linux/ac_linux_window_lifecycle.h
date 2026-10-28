@@ -14,6 +14,7 @@ struct OpenIntent {
   bool focus = true;
   bool behind = false;
   bool utility = false;
+  int behind_window = 0;
 };
 
 enum class Presentation { kActivate, kInactive };
@@ -28,7 +29,12 @@ class FocusLedger {
   Activation Focus(int window);
   Activation Ready(int window);
   bool Observe(int window, bool active);
-  void PointerPressed() { ++epoch_; }
+  std::optional<int> Unrequested(int window);
+  void Settle(int window) { kept_.erase(window); }
+  void PointerPressed() {
+    ++epoch_;
+    ++presses_;
+  }
   void Forget(int window);
 
   bool pending(int window) const { return pending_.contains(window); }
@@ -39,10 +45,17 @@ class FocusLedger {
   bool Wants(const OpenIntent& intent) const;
   void Request(int window) { pending_[window] = epoch_; }
 
+  struct Kept {
+    int window = 0;
+    uint64_t presses = 0;
+  };
+
   bool may_activate_;
   uint64_t epoch_ = 0;
   int active_ = 0;
+  uint64_t presses_ = 0;
   std::map<int, uint64_t> pending_;
+  std::map<int, Kept> kept_;
 };
 
 struct Rect {
