@@ -374,7 +374,12 @@ struct Widget {
   bool IsActive() const { return active; }
   gfx::Rect GetWindowBoundsInScreen() const { return bounds; }
   std::vector<int64_t> fullscreen_targets;
-  void SetFullscreen(bool, int64_t target) { fullscreen_targets.push_back(target); }
+  std::function<void()> show_state_changed;
+  void SetFullscreen(bool on, int64_t target) {
+    fullscreen_targets.push_back(target);
+    fullscreen = on;
+    if (show_state_changed) show_state_changed();
+  }
 };
 struct WebView {
   bool visible = true;
@@ -479,10 +484,17 @@ struct FullscreenController {
   bool tab = false, caused_by_tab = false;
   bool browser_fullscreen = false;
   int toggles = 0;
+  views::Widget* widget = nullptr;
   bool IsWindowFullscreenForTabOrPending() const { return tab; }
   bool IsFullscreenCausedByTab() const { return caused_by_tab; }
   bool IsFullscreenForBrowser() const { return browser_fullscreen; }
-  void ToggleBrowserFullscreenMode(bool) { ++toggles; browser_fullscreen = !browser_fullscreen; }
+  void ToggleBrowserFullscreenMode(bool) {
+    ++toggles;
+    browser_fullscreen = !browser_fullscreen;
+    if (!widget) return;
+    widget->fullscreen = browser_fullscreen;
+    if (widget->show_state_changed) widget->show_state_changed();
+  }
 };
 struct ExclusiveAccessManager {
   FullscreenController controller;
@@ -494,7 +506,11 @@ struct ExclusiveAccessManager {
 };
 struct ShellHostView {
   ShellHostView(int id, std::string window_id, BrowserWindowInterface* browser, std::string kind = "")
-      : id_(id), window_id_(std::move(window_id)), kind_(std::move(kind)), browser_(browser) { Hosts()[id_] = this; }
+      : id_(id), window_id_(std::move(window_id)), kind_(std::move(kind)), browser_(browser) {
+    Hosts()[id_] = this;
+    widget.show_state_changed = [this] { OnWidgetShowStateChanged(&widget); };
+    ExclusiveAccessManager::From(browser_)->controller.widget = &widget;
+  }
   ~ShellHostView() { Hosts().erase(id_); }
   int id_;
   std::string window_id_;
@@ -520,7 +536,9 @@ struct ShellHostView {
   PrefService* WindowOutputPrefs() const;
   void RememberWindowOutput();
   void ForgetWindowOutput();
-  std::optional<int64_t> SavedWindowOutput() const;
+  std::optional<std::pair<int64_t, std::string>> SavedWindowOutput() const;
+  std::optional<std::string> output_target_;
+  bool output_forgotten_ = false;
   std::string page_profile_;
   int opener_host_ = 0;
   uint64_t opener_generation_ = 0;
@@ -892,6 +910,8 @@ static void FullScreenOnTheSavedOutput() {
     assert(SavedOutput(app, "w-other"));
     other.ForgetWindowOutput();
     assert(!SavedOutput(app, "w-other"));
+    other.RememberWindowOutput();
+    assert(!SavedOutput(app, "w-other"));
   }
   BrowserWindowInterface main_browser{1};
   ShellHostView main(1, "main", &main_browser);
@@ -900,14 +920,17 @@ static void FullScreenOnTheSavedOutput() {
   display::Screen::nearest = display::Screen::displays[0];
   bool ok = false;
   Call(main, "ArdiaShell.restoreFullScreen", RestoreArgs({"main"}, "main"), &ok);
-  assert(ok && Toggles(main_browser) == 1);
+  assert(ok && Toggles(main_browser) == 1 && main.widget.fullscreen);
   assert((main.widget.fullscreen_targets == std::vector<int64_t>{20}));
-  main.widget.fullscreen = true;
-  main.OnWidgetShowStateChanged(&main.widget);
+  assert(*SavedOutput(app, "main") == "Out B");
+  main.ReportWindowGeometry();
   assert(*SavedOutput(app, "main") == "Out B");
   display::Screen::nearest = display::Screen::displays[1];
   main.ReportWindowGeometry();
   assert(*SavedOutput(app, "main") == "Out B");
+  display::Screen::nearest = display::Screen::displays[0];
+  main.ReportWindowGeometry();
+  assert(*SavedOutput(app, "main") == "Out A");
 }
 
 static void FullScreenWhenTheSavedOutputIsGone() {
@@ -1120,7 +1143,7 @@ def host_harness():
         'PrefService* ShellHostView::WindowOutputPrefs(',
         'void ShellHostView::RememberWindowOutput(',
         'void ShellHostView::ForgetWindowOutput(',
-        'std::optional<int64_t> ShellHostView::SavedWindowOutput(',
+        'std::optional<std::pair<int64_t, std::string>> ShellHostView::SavedWindowOutput(',
         'void TabBinding::FocusFromHost(',
         'void TabBinding::OnWebContentsFocused('])
     status = (LINUX / 'ac_linux_page_status.h').read_text()

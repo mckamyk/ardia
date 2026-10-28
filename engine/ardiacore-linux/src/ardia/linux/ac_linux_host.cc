@@ -1025,7 +1025,7 @@ class ShellHostView : public views::View,
   PrefService* WindowOutputPrefs() const;
   void RememberWindowOutput();
   void ForgetWindowOutput();
-  std::optional<int64_t> SavedWindowOutput() const;
+  std::optional<std::pair<int64_t, std::string>> SavedWindowOutput() const;
   bool AutoPictureInPictureCancelled(content::WebContents* contents) const {
     for (const auto& [id, binding] : bindings_) {
       if (binding->contents() == contents) {
@@ -1272,6 +1272,8 @@ class ShellHostView : public views::View,
   linux_window::GeometryLedger geometry_{GlobalScreenCoordinates()};
   base::OneShotTimer frame_timer_;
   std::unique_ptr<linux_window::TypeaheadInput> typeahead_;
+  std::optional<std::string> output_target_;
+  bool output_forgotten_ = false;
   base::OneShotTimer typeahead_timer_;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
@@ -2797,9 +2799,10 @@ void ShellHostView::RestoreFullScreenNow() {
   if (!manager) return;
   FullscreenController* fullscreen = manager->fullscreen_controller();
   if (FullScreenRestorer().Enter(window_id_, fullscreen->IsFullscreenForBrowser())) {
-    const std::optional<int64_t> output = SavedWindowOutput();
+    const auto output = SavedWindowOutput();
+    if (output) output_target_ = output->second;
     fullscreen->ToggleBrowserFullscreenMode(false);
-    if (output) widget->SetFullscreen(true, *output);
+    if (output) widget->SetFullscreen(true, output->first);
   }
   FinishFullScreenRestore();
 }
@@ -2850,9 +2853,17 @@ PrefService* ShellHostView::WindowOutputPrefs() const {
 
 void ShellHostView::RememberWindowOutput() {
   PrefService* prefs = WindowOutputPrefs();
-  if (!prefs || !browser_ || !WindowFullScreen() || FullScreenRestorer().active()) return;
+  if (!prefs || !browser_ || output_forgotten_) return;
+  if (!WindowFullScreen()) {
+    output_target_.reset();
+    return;
+  }
   const std::string label =
       display::Screen::Get()->GetDisplayNearestWindow(browser_->GetWindow()->GetNativeWindow()).label();
+  if (output_target_) {
+    if (label != *output_target_) return;
+    output_target_.reset();
+  }
   const base::DictValue* saved = chrome::GetWindowPlacementDictionaryReadOnly(kWindowOutputs, prefs);
   const std::string* known = saved ? saved->FindString(window_id_) : nullptr;
   if (label.empty() || (known && *known == label)) return;
@@ -2861,6 +2872,7 @@ void ShellHostView::RememberWindowOutput() {
 }
 
 void ShellHostView::ForgetWindowOutput() {
+  output_forgotten_ = true;
   PrefService* prefs = WindowOutputPrefs();
   const base::DictValue* saved = prefs ? chrome::GetWindowPlacementDictionaryReadOnly(kWindowOutputs, prefs) : nullptr;
   if (!saved || !saved->FindString(window_id_)) return;
@@ -2868,7 +2880,7 @@ void ShellHostView::ForgetWindowOutput() {
   chrome::GetWindowPlacementDictionaryReadWrite(kWindowOutputs, prefs, update).Remove(window_id_);
 }
 
-std::optional<int64_t> ShellHostView::SavedWindowOutput() const {
+std::optional<std::pair<int64_t, std::string>> ShellHostView::SavedWindowOutput() const {
   PrefService* prefs = WindowOutputPrefs();
   const base::DictValue* saved = prefs ? chrome::GetWindowPlacementDictionaryReadOnly(kWindowOutputs, prefs) : nullptr;
   const std::string* label = saved ? saved->FindString(window_id_) : nullptr;
@@ -2877,7 +2889,9 @@ std::optional<int64_t> ShellHostView::SavedWindowOutput() const {
   for (const display::Display& display : display::Screen::Get()->GetAllDisplays()) {
     outputs.push_back({display.id(), display.label()});
   }
-  return linux_window::OutputLabelled(outputs, *label);
+  const auto id = linux_window::OutputLabelled(outputs, *label);
+  if (!id) return std::nullopt;
+  return std::make_pair(*id, *label);
 }
 
 std::vector<base::DictValue> ShellHostView::WindowState() const {
