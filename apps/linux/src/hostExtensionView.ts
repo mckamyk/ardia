@@ -8,6 +8,16 @@ export type ExtensionViewOptions = { kind: ExtensionViewKind; url: string; profi
 
 export const EXTENSION_VIEW_MODULE = "ArdiaExtensionView";
 
+export type FocusWitness = { current: () => readonly unknown[]; now: () => number };
+type FocusRequest = { owner: readonly unknown[]; at: number };
+
+export const DEFERRED_FOCUS_MS = 1500;
+
+const shellFocus: FocusWitness = {
+  current: () => (typeof document === "undefined" ? [] : [document.activeElement, document.hasFocus()]),
+  now: () => performance.now(),
+};
+
 export const extensionViewsSupported = (host?: ArdiaHost) => !!host && hostSupports("extensionView.create", host);
 
 export class HostExtensionView {
@@ -18,11 +28,13 @@ export class HostExtensionView {
   private queue: Promise<unknown> = Promise.resolve();
   private lastViewport = "";
   private shown = false;
-  private focusWanted = false;
+  private focusWanted: FocusRequest | null = null;
+  private focus: FocusWitness;
   private unsubscribe: () => void;
 
-  constructor(host: ArdiaHost, options: ExtensionViewOptions, onEvent: (event: ExtensionViewEvent) => void) {
+  constructor(host: ArdiaHost, options: ExtensionViewOptions, onEvent: (event: ExtensionViewEvent) => void, focus: FocusWitness = shellFocus) {
     this.host = host;
+    this.focus = focus;
     const early: { id: string; event: ExtensionViewEvent }[] = [];
     const deliver = (event: ExtensionViewEvent) => {
       try { onEvent(event); } catch (error) { console.error("[ardia host] extension view listener failed", error); }
@@ -68,7 +80,7 @@ export class HostExtensionView {
     return this.enqueue(async () => {
       if (this.disposed || this.id === undefined) throw new Error("Ardia extension view released");
       if (command === "focus" && !this.shown) {
-        this.focusWanted = true;
+        this.focusWanted = { owner: this.focus.current(), at: this.focus.now() };
         return undefined as T;
       }
       return invokeHost<T>("extensionView.command", { id: this.id, command, args }, this.host);
@@ -87,10 +99,17 @@ export class HostExtensionView {
         throw error;
       });
       this.shown = shown.visible;
-      if (!this.shown || !this.focusWanted) return;
-      this.focusWanted = false;
+      const wanted = this.shown ? this.focusWanted : null;
+      if (!wanted) return;
+      this.focusWanted = null;
+      if (!this.focusStillWanted(wanted)) return;
       await invokeHost<void>("extensionView.command", { id: this.id, command: "focus", args: [] }, this.host);
     });
+  }
+
+  private focusStillWanted({ owner, at }: FocusRequest) {
+    const now = this.focus.current();
+    return this.focus.now() - at <= DEFERRED_FOCUS_MS && now.length === owner.length && now.every((value, i) => value === owner[i]);
   }
 
   dispose() {
