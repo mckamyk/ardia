@@ -30,6 +30,8 @@ import { startHostDownloads } from "./hostDownloads";
 import { startHostTabLifecycle } from "./hostTabLifecycle";
 import { startLinuxTabPolicies, TAB_POLICY_CHANNEL, watchHostInputActivity } from "./hostPolicies";
 import { watchInstallPromptCancellations } from "./extensionPrompts";
+import { followExtensionChanges } from "./utilityExtensions";
+import { refreshExtensionsAfterChange } from "../../browser/src/state/extensions/actions";
 import { provideNativeModuleProvider, requireNativeModule } from "./shims/expo-modules-core";
 import { setHostPageHooks } from "./hostPageHooks";
 import { applyHostPageTheme, resetHostPage } from "./hostPageLifecycle";
@@ -74,6 +76,7 @@ async function start() {
     startHostData();
     startAppCommands(windowId, linuxCapabilities(ardiaHost), undefined, UTILITY_APP_COMMANDS);
     startLinuxSync({ host: ardiaHost, candidate: false });
+    followExtensionChanges(ardiaHost, () => useExtensions.getState().lists, refreshExtensionsAfterChange);
     await startUtility(ardiaHost);
   } else {
     if (!ardiaHost.bootstrap.privateWindow) useBrowser.setState(adoptParkedPins(useBrowser.getState(), windowId, profileId));
