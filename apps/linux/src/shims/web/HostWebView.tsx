@@ -4,7 +4,7 @@ import { toAppUrl, toEngineUrl } from "@ardia/core";
 import type { WebViewHandle, WebViewProps } from "@ardia-real/ardiacore";
 import { ardiaHost, reportHostError } from "../../host";
 import { HostPageEvents } from "../../hostPageEvents";
-import { applyHostPageThemeState, resetHostPageState } from "../../hostPageHooks";
+import { applyHostPageThemeState, forgetHostPageState, resetHostPageState } from "../../hostPageHooks";
 import { hostPageScript } from "../../hostPageScripts";
 import { HostTab, type HostPageFactory, type HostTabEvent } from "../../hostTab";
 import { extensionViewsSupported } from "../../hostExtensionView";
@@ -46,6 +46,8 @@ const HostTabWebView = forwardRef<WebViewHandle, WebViewProps>(function HostTabW
     return () => {
       current.dispose();
       if (tab.current === current) tab.current = null;
+      const tabId = latest.current.tabId;
+      if (tabId) forgetHostPageState(tabId);
     };
   }, []);
 

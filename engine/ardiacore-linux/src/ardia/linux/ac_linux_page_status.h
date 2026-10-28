@@ -63,6 +63,7 @@ class LinuxPageStatus : public content::WebContentsObserver,
   void AdoptDeferredHangs();
   void DeferHangs();
   blocked_content::PopupBlockerTabHelper* Popups() const;
+  const BlockedPopup* RememberBlocked(int32_t id, const GURL& url);
   void StopObservingPopups();
   base::WeakPtr<LinuxPageLease> lease_;
   bool observing_popups_ = false;

@@ -621,6 +621,20 @@ void Popups() {
   Mount destroyed;destroyed.page.Notify([](auto* o) { o->WebContentsDestroyed(); });assert(destroyed.popup_helper.manager()->observers.empty());
 }
 
+void RemountedPopups() {
+  Mount m;std::optional<base::DictValue> created;m.state->CreationState();
+  m.popup_helper.Block(4,GURL("https://pop.test/one"));m.popup_helper.Block(6,GURL("https://pop.test/two"));
+  m.Remount(4);
+  assert(m.popup_helper.manager()->observers.size()==1);
+  const auto& moved=Created(m,created);
+  assert(Count(moved,"popupBlocked")==2 && Text(*Named(moved,"popupBlocked"),"id")=="4" && Text(*Named(moved,"popupBlocked"),"url")=="https://pop.test/one");
+  assert(Text(*Named(moved,"popupBlocked",1),"id")=="6" && Text(*Named(moved,"popupBlocked",1),"origin")=="https://example.test");
+  assert(m.state->status()->OpenBlockedPopup(base::ListValue().Append("6")));
+  assert(m.popup_helper.shown.size()==1 && m.popup_helper.shown[0].first==6 && Count(Created(m,created),"popupBlocked")==1);
+  m.popup_helper.Block(8,GURL("https://pop.test/three"));
+  assert(m.LastName()=="popupBlocked" && Text(m.LastData(),"id")=="8" && Count(Created(m,created),"popupBlocked")==2);
+}
+
 void Producers() {
   Mount m;int runs=0;
   m.state->SetSnapshotProducer([&runs] {
@@ -660,5 +674,5 @@ void ProducerLifetimes() {
 
 int main(int argc,char** argv) {
   assert(argc==2);std::string mode=argv[1];
-  if(mode=="authority") Authority();else if(mode=="split-profiles") SplitProfiles();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="sampled-theme") SampledTheme();else if(mode=="page-messages") PageMessages();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else if(mode=="page-status") PageStatus();else if(mode=="hung") Hung();else if(mode=="deferred-hang") DeferredHang();else if(mode=="popups") Popups();else if(mode=="producers") Producers();else if(mode=="producer-lifetimes") ProducerLifetimes();else return 2;
+  if(mode=="authority") Authority();else if(mode=="split-profiles") SplitProfiles();else if(mode=="documents") Documents();else if(mode=="provisional") Provisional();else if(mode=="transport") Transport();else if(mode=="security") Security();else if(mode=="history") History();else if(mode=="history-bounds") HistoryBounds();else if(mode=="domain") Domain();else if(mode=="zoom") Zoom();else if(mode=="theme") Theme();else if(mode=="sampled-theme") SampledTheme();else if(mode=="page-messages") PageMessages();else if(mode=="reentrant") Reentrant();else if(mode=="overlapping") Overlapping();else if(mode=="committed-security") CommittedSecurity();else if(mode=="creation") Creation();else if(mode=="boundaries") Boundaries();else if(mode=="commands") Commands();else if(mode=="favicons") Favicons();else if(mode=="strip-lookups") StripLookups();else if(mode=="closing") Closing();else if(mode=="rebinding") Rebinding();else if(mode=="page-status") PageStatus();else if(mode=="hung") Hung();else if(mode=="deferred-hang") DeferredHang();else if(mode=="popups") Popups();else if(mode=="remounted-popups") RemountedPopups();else if(mode=="producers") Producers();else if(mode=="producer-lifetimes") ProducerLifetimes();else return 2;
 }

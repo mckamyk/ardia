@@ -1,4 +1,5 @@
-import { patchPage, setPopover } from "../../browser/src/state/tabs/pageState";
+import { patchPage, setPopover, usePages } from "../../browser/src/state/tabs/pageState";
+import { useBrowser } from "../../browser/src/state/browser/store";
 import { updateLive } from "../../browser/src/state/tabs/actions";
 import { revealToolbar } from "../../browser/src/state/windows/toolbarAutoHide";
 import type { NavigationState } from "../../../packages/ardiacore/src/pageTypes";
@@ -46,6 +47,17 @@ export function resetHostPage(tabId: string, reason: PageResetReason, replaced: 
   setPopover(tabId, null);
   updateLive(tabId, { themeColor: null });
   revealToolbar(tabId);
+}
+
+export function forgetDepartedPage(tabId: string, windowId: string) {
+  if (useBrowser.getState().tabs[tabId]?.windowId === windowId) return;
+  usePages.setState((s) => {
+    if (!(tabId in s.pages) && !(tabId in s.popover) && !(tabId in s.ready)) return s;
+    const { [tabId]: _page, ...pages } = s.pages;
+    const { [tabId]: _popover, ...popover } = s.popover;
+    const { [tabId]: _ready, ...ready } = s.ready;
+    return { pages, popover, ready };
+  });
 }
 
 export function applyHostPageTheme(tabId: string, navigation: NavigationState) {
