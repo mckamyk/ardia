@@ -94,6 +94,14 @@ struct ShellHostView {
     ++dispatches;
     return consume;
   }
+  bool extension_consumes = false;
+  int extension_dispatches = 0;
+  bool last_reserved = false;
+  bool ExtensionShortcutPressed(const ui::KeyEvent&, bool reserved_by_ardia) {
+    ++extension_dispatches;
+    last_reserved = reserved_by_ardia;
+    return extension_consumes && !reserved_by_ardia;
+  }
   void OnKeyEvent(ui::KeyEvent* event);
 };
 '''
@@ -104,11 +112,21 @@ int main() {
   assert(host.shell_view.requests == 1 && host.contents.focuses == 1);
   ui::KeyEvent event;
   host.OnKeyEvent(&event);
-  assert(event.stopped && host.dispatches == 1);
+  assert(event.stopped && host.dispatches == 1 && host.extension_dispatches == 0);
   host.consume = false;
   event.stopped = false;
   host.OnKeyEvent(&event);
-  assert(!event.stopped && host.dispatches == 2);
+  assert(!event.stopped && host.dispatches == 2 && host.extension_dispatches == 1 && !host.last_reserved);
+  host.extension_consumes = true;
+  host.OnKeyEvent(&event);
+  assert(event.stopped && host.dispatches == 3 && host.extension_dispatches == 2);
+  event.stopped = false;
+  host.shortcuts_.insert(ui::Accelerator(84, 4));
+  host.OnKeyEvent(&event);
+  assert(!event.stopped && host.dispatches == 4 && host.extension_dispatches == 3 && host.last_reserved);
+  host.shortcuts_.clear();
+  host.extension_consumes = false;
+  host.dispatches = 2;
   host.modal = true;
   host.OnKeyEvent(&event);
   assert(!event.stopped && host.dispatches == 2);

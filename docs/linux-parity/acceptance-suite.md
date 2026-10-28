@@ -139,6 +139,9 @@ S106, S107 and S108 need `ARDIA_ACCEPTANCE_CONTENT_BLOCKER` (or a package built 
 | I109 | #109 | A private `dbus-daemon` runs the generated fake Secret Service (`engine/ardiacore-linux/tests/fixtures/fake_keyring.py`) holding a locked "Chrome Safe Storage" item. Discovery marks Chrome `needsKeychain` without unlocking; without consent the `v11` passwords stay locked; a dismissed prompt reports `denied` and imports nothing; an allowed prompt unlocks the key, both passwords import into Ardia's `Login Data`, and `forgetUnlockedKeys` drops the key | GNOME Keyring and KWallet with their real prompts |
 | I110 | #110 | NSS (`certutil` + `PK11SDR_Encrypt`) generates `key4.db`/`logins.json` with and without a primary password. The plain profile imports and saves 2 passwords; the primary-password profile reports `locked`, stays locked with a wrong password, and imports 2 with the right one; no password reaches the renderer | A real Firefox profile |
 | I111 | #111 | A generated Chrome profile (SNSS session, v24 `Cookies` with host-hashed v10 values, `Web Data` address and card) and a Firefox profile (mozLz4 session store, `cookies.sqlite` with a container cookie). Discovery advertises the kinds; the Chrome import returns 2 tabs and a vault token with no cookie value or card number in the reply; `writeImported` stores 2 cookies, 1 address and 1 card in Ardia's profile (decrypted and compared), and the token is single use; a private target loses it; Firefox imports 1 tab and 1 cookie and skips the container; sources hash the same and no scratch copy is left | Import window click-through with a real profile |
+| E97 | #97 | The follow-up fixture (`fixtures/extension-followups`, loaded by `--load-extension`) declares `chrome_settings_overrides.search_provider`; `search.engines` lists it with `isOmniboxExtension: false` and keyword `ardiasearch`; Ardia maps it into `settings.extensionSearchEngines`; uninstalling removes it from both | The provider row in Settings › Search |
+| E98 | #98 | Chromium assigns the fixture's `_execute_action` (`Alt+Shift+Y`) and named (`Alt+Shift+U`) shortcuts on Linux (`chrome.commands.getAll()`) | Pressing the shortcuts: popup under Ardia's toolbar button, `onCommand`, no shadowing of an Ardia shortcut, side panel through the action |
+| E100 | #100 | A generated echo host (Node, `stdio`) answers `chrome.runtime.sendNativeMessage` from `~/.config/chromium/NativeMessagingHosts` (Ardia's new lookup) and from `~/.config/google-chrome/NativeMessagingHosts` (Helium's); Ardia's own `<data dir>/NativeMessagingHosts` wins over both; a host that doesn't list the extension is forbidden and an unknown host isn't found | A real password manager's desktop app connecting |
 
 ## Manual steps
 
@@ -286,6 +289,12 @@ The JSON lists each manual item with these steps. They are kept here so they can
 - **Keyring.** Import passwords from a Chrome profile that uses gnome-libsecret, then from one that uses KWallet. The import window asks to unlock, and the system prompt appears. Allow imports the passwords; Cancel imports none and shows the locked note.
 - **Firefox.** Import passwords from a real Firefox profile. The count matches about:logins. A profile with a primary password reports locked (#178 adds the prompt).
 - **Tabs, cookies and autofill.** Import them from a real Chrome profile. The tabs open in an Imported group, a site is still signed in, and Settings › Autofill lists the address and card.
+
+**#97, #98, #100 extension follow-ups**
+
+- **Search provider.** Load `fixtures/extension-followups` unpacked. Settings › Search lists Ardia Fixture Search; removing the extension removes it.
+- **Shortcuts.** Pin the fixture. With a page focused, `Alt+Shift+Y` opens its popup under Ardia's toolbar button, and holding the keys doesn't reopen it. `Alt+Shift+U` records `fixture-command` in the service worker's `globalThis.commandReports`, with the page focused and with the sidebar focused. Assign `Alt+Shift+U` to an Ardia command in Settings › Keyboard Shortcuts: Ardia's command runs and the fixture records nothing.
+- **Password managers.** Install 1Password, Bitwarden or KeePassXC with browser integration for Chrome or Chromium, then its Web Store extension in Ardia. The extension connects to the desktop app.
 
 ## Notes for the first real run
 
