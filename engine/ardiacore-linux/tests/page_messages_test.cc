@@ -252,6 +252,14 @@ void LinkDrops() {
   gate.NoteDragEnded(0, true, 21.0);
   Expect(!gate.AcceptLinkDrop(1, true, 21.1).empty() && gate.DragSource() == 1, "an unknown source never matches");
 
+  gate.NotePress(1);
+  gate.NoteRelease(1, kLinuxLinkShift, 50.0, LinuxLinkPoint{4, 4}, true);
+  Expect(gate.DragSource() == 1, "the release that ends a drag keeps the drag source");
+  gate.NoteDragEnded(1, true, 50.1);
+  Expect(gate.AcceptLinkDrop(1, true, 50.2).empty(), "a drag the platform ended with a release still opens its link");
+  Expect(gate.Decide(Request(1, "shift", 50.3), LinuxPageOptions()).outcome == LinuxLinkOutcome::kNone,
+         "the release that ends a drag is no click");
+
   gate.NotePress(5);
   gate.NoteDragEnded(5, true, 30.0);
   gate.Forget(5);
