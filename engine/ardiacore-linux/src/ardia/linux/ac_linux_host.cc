@@ -1334,6 +1334,7 @@ class HostMessageHandler : public content::WebUIMessageHandler,
     std::string name;
     base::WeakPtr<HostMessageHandler> handler;
     std::string id;
+    std::string profile_path;
   };
   void RegisterMessages() override {
     web_ui()->RegisterMessageCallback(
@@ -1397,6 +1398,15 @@ class HostMessageHandler : public content::WebUIMessageHandler,
         }
         task.GetDict().Set("tabIds", std::move(translated));
         task.GetDict().Remove("browserIds");
+      }
+    }
+    if (const auto change = ardiacore::linux_contract::ChangeAnnouncedAfter(
+            reply->name, value->is_dict() ? value->GetDict().FindInt("applied").value_or(0) : 0);
+        !change.empty() && !reply->profile_path.empty()) {
+      base::DictValue changed;
+      changed.Set("profile", reply->profile_path);
+      for (const auto& [host_id, host] : Hosts()) {
+        if (host != reply->handler->host_.get()) host->EngineEvent(change, changed);
       }
     }
     reply->handler->Resolve(reply->id, std::move(*value));
@@ -1639,7 +1649,7 @@ class HostMessageHandler : public content::WebUIMessageHandler,
             }
             const std::string path = resolved->GetPath().value();
             ac_engine_call(service.c_str(), path.c_str(), json.c_str(), Replied,
-                           new EngineReply{name, handler, id});
+                           new EngineReply{name, handler, id, path});
           }, weak_factory_.GetWeakPtr(), name, id, service, json));
       return;
     }

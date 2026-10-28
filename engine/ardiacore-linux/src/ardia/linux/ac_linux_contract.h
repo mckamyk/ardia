@@ -103,6 +103,11 @@ inline std::string_view EventName(std::string_view topic) {
   return {};
 }
 
+inline std::string_view ChangeAnnouncedAfter(std::string_view call, int applied) {
+  if (call == "bookmarks.apply" && applied > 0) return EventName("bookmarks.changed");
+  return {};
+}
+
 }
 
 #endif
