@@ -17,6 +17,7 @@
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/media_player_id.h"
 #include "content/public/browser/media_session.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/frame/sudden_termination_disabler_type.mojom.h"
@@ -45,7 +46,12 @@ LinuxPageMedia::LinuxPageMedia(content::WebContents* contents, LinuxMediaReporte
   reporter_.SetAccess(Access());
   if (InPictureInPicture())
     reporter_.SetPictureInPicture({contents->HasPictureInPictureDocument() ? "document" : "video", true});
+  for (const auto& [id, playing] : content::ArdiaLinuxPlayedVideoPlayers(contents)) {
+    videos_.Started(id, true);
+    if (!playing) videos_.Stopped(id);
+  }
   ObserveSession(content::MediaSession::GetIfExists(contents));
+  if (videos_.Summary().present) UpdateNowPlaying();
 }
 
 LinuxPageMedia::~LinuxPageMedia() {
@@ -173,8 +179,10 @@ void LinuxPageMedia::UpdateNowPlaying() {
     session_.playback_rate = 1;
   }
   session_.now_ms = base::Time::Now().InMillisecondsFSinceUnixEpoch();
-  session_.page_video_playing = std::ranges::any_of(playing_players_, [](const auto& player) { return player.second; });
-  session_.page_title = session_.page_video_playing && web_contents() ? web_contents()->GetTitle() : std::u16string();
+  const LinuxPageVideo video = videos_.Summary();
+  session_.page_video = video.present;
+  session_.page_video_playing = video.playing;
+  session_.page_title = video.present && web_contents() ? web_contents()->GetTitle() : std::u16string();
   reporter_.SetNowPlaying(LinuxNowPlayingFromSession(session_));
 }
 
@@ -249,24 +257,26 @@ void LinuxPageMedia::RequestPictureInPicture(const base::ListValue& args, bool a
 void LinuxPageMedia::MediaStartedPlaying(const MediaPlayerInfo& info, const content::MediaPlayerId& id) {
   content::WebContents* contents = web_contents();
   if (!contents || id.frame_routing_id != contents->GetPrimaryMainFrame()->GetGlobalId()) return;
-  playing_players_[id] = info.has_video;
-  UpdateNowPlaying();
+  if (videos_.Started(id, info.has_video)) UpdateNowPlaying();
 }
 
 void LinuxPageMedia::MediaStoppedPlaying(const MediaPlayerInfo&, const content::MediaPlayerId& id,
                                          MediaStoppedReason) {
-  if (playing_players_.erase(id)) UpdateNowPlaying();
+  if (videos_.Stopped(id)) UpdateNowPlaying();
 }
 
 void LinuxPageMedia::MediaMetadataChanged(const MediaPlayerInfo& info, const content::MediaPlayerId& id) {
-  const auto player = playing_players_.find(id);
-  if (player == playing_players_.end() || player->second == info.has_video) return;
-  player->second = info.has_video;
-  UpdateNowPlaying();
+  if (videos_.Metadata(id, info.has_video)) UpdateNowPlaying();
 }
 
 void LinuxPageMedia::TitleWasSet(content::NavigationEntry*) {
-  if (session_.page_video_playing) UpdateNowPlaying();
+  if (session_.page_video) UpdateNowPlaying();
+}
+
+void LinuxPageMedia::PrimaryPageChanged(content::Page& page) {
+  const content::GlobalRenderFrameHostId frame = page.GetMainDocument().GetGlobalId();
+  if (videos_.Retain([frame](const content::MediaPlayerId& id) { return id.frame_routing_id == frame; }))
+    UpdateNowPlaying();
 }
 
 void LinuxPageMedia::MediaResized(const gfx::Size& size, const content::MediaPlayerId& id) {
@@ -275,7 +285,7 @@ void LinuxPageMedia::MediaResized(const gfx::Size& size, const content::MediaPla
 
 void LinuxPageMedia::MediaDestroyed(const content::MediaPlayerId& id) {
   video_sizes_.erase(id);
-  if (playing_players_.erase(id)) UpdateNowPlaying();
+  if (videos_.Destroyed(id)) UpdateNowPlaying();
 }
 
 void LinuxPageMedia::FinishPictureInPicture() {

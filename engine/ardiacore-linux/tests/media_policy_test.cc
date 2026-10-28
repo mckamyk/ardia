@@ -68,6 +68,7 @@ void Mapping() {
 
 void PageVideo() {
   LinuxSessionSample muted;
+  muted.page_video = true;
   muted.page_video_playing = true;
   muted.page_title = u"Clips";
   muted.now_ms = 1700000000000.0;
@@ -75,15 +76,39 @@ void PageVideo() {
   assert(video && video->has_video && !video->controllable && video->playback_state == "playing");
   assert(video->title == "Clips" && video->actions.empty() && !video->duration && video->timestamp == 1700000000000.0);
   muted.page_video_playing = false;
+  auto paused = LinuxNowPlayingFromSession(muted);
+  assert(paused && paused->has_video && !paused->controllable && paused->playback_state == "paused");
+  muted.page_video = false;
   assert(!LinuxNowPlayingFromSession(muted));
   auto audio = Sample();
   audio.has_video = false;
-  audio.page_video_playing = true;
+  audio.page_video = true;
   audio.page_title = u"Clips";
   auto joined = LinuxNowPlayingFromSession(audio);
   assert(joined && joined->has_video && joined->controllable && joined->title == "Track");
-  audio.page_video_playing = false;
+  audio.page_video = false;
   assert(!LinuxNowPlayingFromSession(audio)->has_video);
+}
+
+void PageVideos() {
+  LinuxPageVideos<int> videos;
+  assert(!videos.Summary().present && !videos.Summary().playing);
+  assert(!videos.Stopped(1) && !videos.Metadata(1, true));
+  assert(videos.Started(1, true) && videos.Started(2, true) && videos.Started(3, true));
+  assert(videos.Summary().present && videos.Summary().playing);
+  assert(!videos.Started(1, true));
+  assert(videos.Stopped(2) && videos.Stopped(3) && videos.Stopped(1));
+  assert(videos.Summary().present && !videos.Summary().playing);
+  assert(!videos.Stopped(1));
+  assert(videos.Started(4, false) && !videos.Summary().playing);
+  assert(videos.Metadata(4, true) && videos.Summary().playing);
+  assert(videos.Destroyed(4) && !videos.Destroyed(4) && !videos.Summary().playing);
+  assert(videos.Retain([](int id) { return id != 1; }) && videos.Summary().present);
+  assert(!videos.Retain([](int) { return true; }));
+  assert(videos.Destroyed(2) && videos.Destroyed(3) && !videos.Summary().present);
+  LinuxPageVideos<int> audio_only;
+  assert(audio_only.Started(5, false) && !audio_only.Summary().present);
+  assert(audio_only.Stopped(5) && !audio_only.Summary().present);
 }
 
 void Events() {
@@ -338,6 +363,7 @@ int main(int argc, char** argv) {
   const std::string mode = argv[1];
   if (mode == "mapping") Mapping();
   else if (mode == "page-video") PageVideo();
+  else if (mode == "page-videos") PageVideos();
   else if (mode == "events") Events();
   else if (mode == "reporter") Reporter();
   else if (mode == "commands") Commands();
