@@ -3,7 +3,7 @@ process.env.TZ = "America/Los_Angeles";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveHostModule } from "./hostModules.ts";
-import { CALENDAR_CAPABILITIES, calendarsFromSources, normalizeColor } from "./hostCalendar.ts";
+import { CALENDAR_CAPABILITIES, calendarsFromSources, linuxCalendar, normalizeColor } from "./hostCalendar.ts";
 
 const WORK = {
   uid: "work",
@@ -207,4 +207,17 @@ test("hidden calendars are not read, and one failing calendar doesn't hide the o
   const refused = fixture({ consent: true, replies: { objects: ([ids]) => ({ calendars: Object.fromEntries(ids.map((id) => [id, { status: "denied", message: "the account needs signing in again" }])) }) } });
   await refused.calendar("calendars")();
   await assert.rejects(refused.calendar("events")(START, END, ["work"]), (error) => error.code === "ERR_CALENDAR_DENIED" && /signing in again/.test(error.message));
+});
+
+test("one unreadable object or calendar doesn't blank the others, and truncation is reported", async () => {
+  const deep = "BEGIN:VCALENDAR\r\n" + "BEGIN:X\r\n".repeat(120000) + "END:VCALENDAR\r\n";
+  const { calendar, host } = fixture({ consent: true, replies: { objects: ([ids]) => ({ calendars: Object.fromEntries(ids.map((id) => [id, id === "work"
+    ? { status: "ok", message: "", truncated: true, objects: [deep, ELECTION] }
+    : { status: "ok", message: "", objects: [LUNCH, 42] }])) }) } });
+  await calendar("calendars")();
+  const events = await calendar("events")(START, END, ["work", "personal"]);
+  assert.deepEqual(events.map((e) => e.title), ["Election Day", "Lunch"]);
+  const report = linuxCalendar(host).lastRefresh();
+  assert.deepEqual(report.truncatedCalendars, ["work"]);
+  assert.equal(report.skippedObjects, 2);
 });

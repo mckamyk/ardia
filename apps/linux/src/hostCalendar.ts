@@ -12,6 +12,7 @@ import {
   referencedTzids,
   unescapeText,
   vtimezoneZone,
+  type ExpansionBudget,
   type IcsComponent,
   type IcsProperty,
   type Zone,
@@ -20,13 +21,15 @@ import {
 export const CALENDAR_CONSENT_DOCUMENT = "linux-calendar.json";
 export const CALENDAR_CAPABILITIES = ["ArdiaCalendar.status", "ArdiaCalendar.requestAccess", "ArdiaCalendar.sources", "ArdiaCalendar.objects", "ArdiaCalendar.timezones"] as const;
 const DEFAULT_COLOR = "#8E8E93";
+const EXPANSION_BUDGET_MS = 750;
 const STATUSES: ReadonlySet<string> = new Set(["notDetermined", "fullAccess", "restricted", "denied"]);
 const READ_ONLY_BACKENDS = new Set(["webcal", "contacts", "weather"]);
 const ACCOUNT_FALLBACK: Record<string, string> = { local: "On This Computer", webcal: "On The Web", contacts: "Contacts", weather: "Weather" };
 
 export type EdsSourceData = Record<string, Record<string, string>>;
 export type EdsSource = { uid: string; calendar: boolean; data: EdsSourceData };
-type CalendarObjects = { status: string; message: string; objects?: string[] };
+type CalendarObjects = { status: string; message: string; objects?: unknown[]; truncated?: boolean };
+export type CalendarRefreshReport = { truncatedCalendars: string[]; truncatedEvents: string[]; skippedObjects: number; failedCalendars: string[] };
 type KnownCalendar = SystemCalendar & { emails: string[] };
 
 export type LinuxCalendar = {
@@ -35,6 +38,7 @@ export type LinuxCalendar = {
   requestAccess(): Promise<boolean>;
   calendars(): Promise<SystemCalendar[]>;
   events(start: number, end: number, calendarIds: string[]): Promise<SystemCalendarEvent[]>;
+  lastRefresh(): CalendarRefreshReport;
 };
 
 export function consentGranted(host: ArdiaHost): boolean {
@@ -144,10 +148,23 @@ export function zoneLookup(inline: Map<string, IcsComponent>, fetched: Map<strin
   };
 }
 
-export function calendarEvents(objects: string[], calendar: KnownCalendar, start: number, end: number, fetched = new Map<string, string | null>()): SystemCalendarEvent[] {
-  const components = objects.flatMap((object) => parseIcs(object));
+export function parseObjects(objects: unknown[]): { components: IcsComponent[]; skipped: number } {
+  const components: IcsComponent[] = [];
+  let skipped = 0;
+  for (const object of objects) {
+    try {
+      if (typeof object !== "string") throw new Error("not iCalendar text");
+      components.push(...parseIcs(object));
+    } catch {
+      skipped++;
+    }
+  }
+  return { components, skipped };
+}
+
+export function calendarEvents(components: IcsComponent[], calendar: KnownCalendar, start: number, end: number, fetched = new Map<string, string | null>(), budget?: ExpansionBudget): SystemCalendarEvent[] {
   const lookup = zoneLookup(inlineZones(components), fetched);
-  return occurrences(veventsOf(components), start, end, lookup).map((found) => ({
+  return occurrences(veventsOf(components), start, end, lookup, budget).map((found) => ({
     ...eventFields(found.event, calendar),
     start: found.start,
     end: found.end,
@@ -156,8 +173,7 @@ export function calendarEvents(objects: string[], calendar: KnownCalendar, start
   }));
 }
 
-export function missingTzids(objects: string[]): string[] {
-  const components = objects.flatMap((object) => parseIcs(object));
+export function missingTzids(components: IcsComponent[]): string[] {
   const inline = inlineZones(components);
   return [...referencedTzids(components)].filter((tzid) => !inline.has(tzid) && !ianaName(tzid));
 }
@@ -169,6 +185,7 @@ export function createLinuxCalendar(host: ArdiaHost): LinuxCalendar {
   let status: CalendarAuthorization = !supported ? "restricted" : consentGranted(host) ? "fullAccess" : "notDetermined";
   let message = supported ? "" : "This Ardia engine was built without the Linux calendar service";
   let known: KnownCalendar[] = [];
+  let report: CalendarRefreshReport = { truncatedCalendars: [], truncatedEvents: [], skippedObjects: 0, failedCalendars: [] };
   const invoke = <T>(method: string, args: unknown[]) => invokeHost<T>(`ArdiaCalendar.${method}`, { args }, host);
   const adopt = (next: unknown, detail?: unknown) => {
     if (!supported || typeof next !== "string" || !STATUSES.has(next)) return;
@@ -199,6 +216,7 @@ export function createLinuxCalendar(host: ArdiaHost): LinuxCalendar {
   return {
     authorizationStatus: () => status,
     message: () => message,
+    lastRefresh: () => report,
     async requestAccess() {
       if (!supported) return false;
       const reply = await invoke<{ granted?: unknown; status?: unknown; message?: unknown }>("requestAccess", []).catch(fail);
@@ -218,19 +236,36 @@ export function createLinuxCalendar(host: ArdiaHost): LinuxCalendar {
       const results = reply?.calendars ?? {};
       const found: SystemCalendarEvent[] = [];
       const failures: CalendarObjects[] = [];
+      const budget: ExpansionBudget = { deadline: performance.now() + EXPANSION_BUDGET_MS, truncated: [] };
+      const next: CalendarRefreshReport = { truncatedCalendars: [], truncatedEvents: [], skippedObjects: 0, failedCalendars: [] };
       for (const calendar of wanted) {
         const result = results[calendar.id];
         if (!result || result.status !== "ok" || !Array.isArray(result.objects)) {
           failures.push(result ?? { status: "failed", message: `${calendar.title} didn't answer` });
+          next.failedCalendars.push(calendar.id);
           continue;
         }
-        const missing = missingTzids(result.objects);
-        const fetched = new Map<string, string | null>();
-        if (missing.length) {
-          const zones = await invoke<{ timezones?: Record<string, string | null> }>("timezones", [calendar.id, missing.slice(0, 64)]).catch(() => ({ timezones: {} }));
-          for (const [tzid, ics] of Object.entries(zones?.timezones ?? {})) fetched.set(tzid, typeof ics === "string" ? ics : null);
+        if (result.truncated) next.truncatedCalendars.push(calendar.id);
+        try {
+          const { components, skipped } = parseObjects(result.objects);
+          next.skippedObjects += skipped;
+          const missing = missingTzids(components);
+          const fetched = new Map<string, string | null>();
+          if (missing.length) {
+            const zones = await invoke<{ timezones?: Record<string, string | null> }>("timezones", [calendar.id, missing.slice(0, 64)]).catch(() => ({ timezones: {} }));
+            for (const [tzid, ics] of Object.entries(zones?.timezones ?? {})) fetched.set(tzid, typeof ics === "string" ? ics : null);
+          }
+          const before = budget.truncated.length;
+          found.push(...calendarEvents(components, calendar, start, end, fetched, budget));
+          next.truncatedEvents.push(...budget.truncated.slice(before).map((uid) => `${calendar.id}/${uid}`));
+        } catch (error) {
+          failures.push({ status: "failed", message: `${calendar.title} couldn't be read: ${String((error as Error)?.message ?? error)}` });
+          next.failedCalendars.push(calendar.id);
         }
-        found.push(...calendarEvents(result.objects, calendar, start, end, fetched));
+      }
+      report = next;
+      if (next.truncatedCalendars.length || next.truncatedEvents.length || next.skippedObjects) {
+        console.warn("[ardia linux] calendar refresh incomplete", next);
       }
       if (failures.length === wanted.length) {
         const denied = failures.find((f) => f.status === "denied");

@@ -6,6 +6,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ardia/linux/ac_linux_calendar_eds.h"
@@ -34,7 +35,19 @@ std::string Quote(const std::string& text) {
 }
 
 std::string Status(const EdsResult& result) {
-  return "\"status\":" + Quote(std::string(EdsStatusName(result.status))) + ",\"message\":" + Quote(result.message);
+  return "\"status\":" + Quote(std::string(EdsStatusName(result.status))) + ",\"message\":" + Quote(result.message) +
+         ",\"timedOut\":" + (result.timed_out ? "true" : "false");
+}
+
+long long Since(std::chrono::steady_clock::time_point started) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+}
+
+std::string ObjectsReply(const ardia::linux_calendar::EdsCalendarObjects& objects, long long elapsed) {
+  std::string reply = "{" + Status(objects.result) + ",\"truncated\":" + (objects.truncated ? "true" : "false") +
+                      ",\"elapsedMs\":" + std::to_string(elapsed) + ",\"objects\":[";
+  for (size_t i = 0; i < objects.objects.size(); ++i) reply += std::string(i ? "," : "") + Quote(objects.objects[i]);
+  return reply + "]}";
 }
 
 const char* ChangeName(EdsChange change) {
@@ -53,6 +66,8 @@ int main() {
   g_main_context_push_thread_default(context);
   std::set<std::string> changes;
   auto client = ardia::linux_calendar::SessionEdsClient([&](EdsChange change) { changes.insert(ChangeName(change)); });
+  std::thread background;
+  std::string background_reply;
   std::string line;
   while (std::getline(std::cin, line)) {
     std::istringstream words(line);
@@ -82,15 +97,39 @@ int main() {
         reply += "}}";
       }
       reply += "]}";
-    } else if (command == "objects") {
+    } else if (command == "objects" || command == "bgobjects") {
       std::string uid;
       long long start = 0;
       long long end = 0;
+      int budget = ardia::linux_calendar::kRequestBudgetMs;
+      size_t max_bytes = ardia::linux_calendar::kMaxReplyBytes;
       words >> uid >> start >> end;
-      const auto objects = client->Objects(uid, start, end);
-      reply = "{" + Status(objects.result) + ",\"objects\":[";
-      for (size_t i = 0; i < objects.objects.size(); ++i) reply += std::string(i ? "," : "") + Quote(objects.objects[i]);
-      reply += "]}";
+      if (!(words >> budget)) budget = ardia::linux_calendar::kRequestBudgetMs;
+      if (!(words >> max_bytes)) max_bytes = ardia::linux_calendar::kMaxReplyBytes;
+      auto run = [&client, uid, start, end, budget, max_bytes] {
+        const auto started = std::chrono::steady_clock::now();
+        const auto objects = client->Objects(uid, start, end, budget, max_bytes);
+        return ObjectsReply(objects, Since(started));
+      };
+      if (command == "objects") {
+        reply = run();
+      } else {
+        background = std::thread([&background_reply, run] { background_reply = run(); });
+        reply = "{\"started\":true}";
+      }
+    } else if (command == "join") {
+      if (background.joinable()) background.join();
+      reply = background_reply;
+    } else if (command == "probe-standalone") {
+      const auto started = std::chrono::steady_clock::now();
+      const EdsResult result = ardia::linux_calendar::ProbeEds();
+      reply = "{" + Status(result) + ",\"elapsedMs\":" + std::to_string(Since(started)) + "}";
+    } else if (command == "query") {
+      long long start = 0;
+      long long end = 0;
+      words >> start >> end;
+      const auto query = ardia::linux_calendar::EdsTimeRangeQuery(start, end);
+      reply = "{\"query\":" + (query ? Quote(*query) : std::string("null")) + "}";
     } else if (command == "timezone") {
       std::string uid;
       std::string tzid;
@@ -123,6 +162,7 @@ int main() {
     }
     std::cout << reply << std::endl;
   }
+  if (background.joinable()) background.join();
   client.reset();
   g_main_context_pop_thread_default(context);
   g_main_context_unref(context);

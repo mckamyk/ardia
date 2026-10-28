@@ -85,6 +85,25 @@ Calendar fields:
 - **Color.** Normalized to `#RRGGBB`, falling back to macOS's grey.
 - **Skipped sources.** Disabled sources, sources under a disabled collection, task lists and memo lists are left out.
 
+## Limits and failure isolation (review round 1)
+
+**Recurrence**
+- Expansion jumps straight to the range for every rule without COUNT. It also jumps for a counted rule with a fixed step and no BY parts (SECONDLY to WEEKLY), working the count out arithmetically. Only counted rules with BY parts still walk from DTSTART.
+- One rule stops at 50,000 periods. One refresh shares a 750 ms expansion budget. Running out of either puts the event in `lastRefresh().truncatedEvents` and logs a warning rather than silently dropping it.
+- Years 0 to 99 no longer read as 19xx.
+
+**Parsing**
+- Components nested more than 16 deep are refused, and the tree walkers are iterative.
+- A bad object is skipped and counted in `skippedObjects`. A calendar that throws is reported as failed without blanking the others.
+
+**Native**
+- Each `objects` request has one 90 s deadline, under the 120 s deadline on the JS side, and each calendar call is capped at whatever time is left.
+- A calendar that times out is skipped for two minutes. Its entry is marked `timedOut`. The skip clears when an EDS service appears or vanishes.
+- `status` answers from a separate thread-pool probe on its own short-lived connection, so it never waits behind a stuck calendar open.
+- One `NameOwnerChanged` watch covers the EDS namespace. When `Sources<N>` or `Calendar<N>` gains an owner, the service re-probes and broadcasts, so `restricted` recovers by itself.
+- An `objects` reply holds at most 32 MiB across all its calendars. String sizes are checked before copying, and capped calendars and replies carry `truncated`.
+- Times are clamped to ±8.64e15 ms before the int64 cast. A query outside years 1 to 9999, or a failed `gmtime_r`, builds no query.
+
 ## Decisions
 
 - **Consent before reading.** A Linux desktop has no privacy prompt for calendars, so Connect Calendar is the consent, as on macOS. Nothing beyond the bus probe happens before it. The consent is app-wide, matching macOS's app-wide calendar permission.

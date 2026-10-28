@@ -2,7 +2,7 @@ process.env.TZ = "America/Los_Angeles";
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { expandRule, ianaName, ianaZone, occurrences, parseIcs, parseRule, property, vtimezoneZone, events, unescapeText } from "./calendarIcs.ts";
+import { daysInMonth, expandRule, ianaName, ianaZone, inlineZones, occurrences, parseIcs, parseRule, parseTime, property, referencedTzids, vtimezoneZone, wallMs, events, unescapeText } from "./calendarIcs.ts";
 
 const wall = (year, month, day, hour = 0, minute = 0, second = 0) => ({ year, month, day, hour, minute, second });
 const day = (w) => `${w.year}-${String(w.month).padStart(2, "0")}-${String(w.day).padStart(2, "0")}`;
@@ -94,4 +94,74 @@ test("a long-running daily rule stays fast", () => {
   const found = occurrences(objects, Date.UTC(2026, 10, 2), Date.UTC(2026, 10, 3, 12), (tzid) => ianaZone(tzid));
   assert.deepEqual(found.map((o) => new Date(o.start).toISOString()), ["2026-11-02T07:00:00.000Z", "2026-11-03T07:00:00.000Z"]);
   assert.ok(performance.now() - started < 2000);
+});
+
+const RANGE_START = Date.UTC(2026, 10, 2);
+const RANGE_END = RANGE_START + 36 * 3600000;
+const single = (lines) => events(parseIcs(["BEGIN:VEVENT", ...lines, "END:VEVENT", ""].join("\r\n")));
+const starts = (found) => found.map((o) => o.start);
+
+test("sub-daily rules from years ago jump to the range instead of walking every period", () => {
+  const started = performance.now();
+  const minutely = occurrences(single(["UID:m", "DTSTART:20200101T000000Z", "DURATION:PT5M", "RRULE:FREQ=MINUTELY;INTERVAL=7"]), RANGE_START, RANGE_END, () => null);
+  const step = 7 * 60000;
+  const origin = Date.UTC(2020, 0, 1);
+  const first = origin + Math.ceil((RANGE_START - 5 * 60000 - origin) / step) * step;
+  const firstOverlapping = first + 5 * 60000 > RANGE_START ? first : first + step;
+  assert.equal(minutely[0].start, firstOverlapping);
+  assert.equal(minutely.length, Math.ceil((RANGE_END - firstOverlapping) / step));
+  assert.ok(starts(minutely).every((start, i, all) => !i || start - all[i - 1] === step));
+  const hourly = occurrences(single(["UID:h", "DTSTART:20000101T000000Z", "RRULE:FREQ=HOURLY;INTERVAL=5"]), RANGE_START, RANGE_END, () => null);
+  assert.ok(hourly.length >= 7 && starts(hourly).every((start) => (start - Date.UTC(2000, 0, 1)) % (5 * 3600000) === 0));
+  assert.ok(performance.now() - started < 200, `${performance.now() - started} ms`);
+});
+
+test("a simple counted rule is counted arithmetically from DTSTART", () => {
+  const counted = (count) => occurrences(single(["UID:c", "DTSTART:20000101T090000Z", `RRULE:FREQ=DAILY;COUNT=${count}`]), RANGE_START, RANGE_END, () => null);
+  const index = (RANGE_START - Date.UTC(2000, 0, 1)) / 86400000;
+  assert.deepEqual(starts(counted(index + 2)), [Date.UTC(2026, 10, 2, 9), Date.UTC(2026, 10, 3, 9)]);
+  assert.deepEqual(starts(counted(index + 1)), [Date.UTC(2026, 10, 2, 9)]);
+  assert.deepEqual(starts(counted(index)), []);
+  const weekly = occurrences(single(["UID:w", "DTSTART:20000103T090000Z", "RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=5000"]), RANGE_START, RANGE_START + 14 * 86400000, () => null);
+  assert.equal(weekly.length, 1);
+  assert.equal((weekly[0].start - Date.UTC(2000, 0, 3, 9)) % (14 * 86400000), 0);
+});
+
+test("fifty old minutely series fit in one refresh", () => {
+  const objects = Array.from({ length: 50 }, (_, i) => single([`UID:m${i}`, "DTSTART:20200101T000000Z", "RRULE:FREQ=MINUTELY;INTERVAL=7"])[0]);
+  const started = performance.now();
+  const found = occurrences(objects, RANGE_START, RANGE_END, () => null);
+  assert.ok(found.length > 50 * 300);
+  assert.ok(performance.now() - started < 1500, `${performance.now() - started} ms`);
+});
+
+test("expansion that runs out of periods or time is reported, not silently dropped", () => {
+  const budget = { deadline: Infinity, truncated: [] };
+  occurrences(single(["UID:seconds", "DTSTART:20200101T000000Z", "RRULE:FREQ=SECONDLY;BYSECOND=0;COUNT=100000000"]), RANGE_START, RANGE_END, () => null, budget);
+  assert.deepEqual(budget.truncated, ["seconds"]);
+  const late = { deadline: performance.now() - 1, truncated: [] };
+  const found = occurrences([
+    ...single(["UID:daily", "DTSTART:20260101T090000Z", "RRULE:FREQ=DAILY"]),
+    ...single(["UID:once", "DTSTART:20261102T100000Z", "DTEND:20261102T110000Z"]),
+  ], RANGE_START, RANGE_END, () => null, late);
+  assert.deepEqual(found.map((o) => property(o.event, "UID").value), ["once"]);
+  assert.deepEqual(late.truncated, ["daily"]);
+});
+
+test("years before 100 are not read as 19xx", () => {
+  assert.equal(wallMs({ year: 50, month: 1, day: 1, hour: 12, minute: 0, second: 0 }), Date.parse("0050-01-01T12:00:00Z"));
+  assert.equal(daysInMonth(0, 2), 29);
+  assert.equal(daysInMonth(1900, 2), 28);
+  assert.ok(parseTime("00040229"));
+  assert.equal(parseTime("00030229"), null);
+});
+
+test("deeply nested components are refused without overflowing the stack", () => {
+  const deep = "BEGIN:VCALENDAR\r\n" + "BEGIN:X\r\n".repeat(120000) + "END:VCALENDAR\r\n";
+  assert.throws(() => parseIcs(deep), /nested too deeply/);
+  let tree = { name: "VEVENT", properties: [{ name: "UID", params: {}, value: "inner" }, { name: "DTSTART", params: { TZID: "Deep/Zone" }, value: "20261102T100000" }], components: [] };
+  for (let i = 0; i < 200000; i++) tree = { name: "X", properties: [], components: [tree] };
+  assert.equal(events([tree]).length, 1);
+  assert.deepEqual([...referencedTzids([tree])], ["Deep/Zone"]);
+  assert.equal(inlineZones([tree]).size, 0);
 });

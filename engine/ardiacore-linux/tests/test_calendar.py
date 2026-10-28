@@ -60,7 +60,7 @@ class CalendarBusTests(unittest.TestCase):
             self.assertEqual(glib.returncode, 0, glib.stderr)
             compiled = subprocess.run([
                 compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-g', '-fsanitize=address,undefined',
-                '-fno-omit-frame-pointer', '-I', str(ROOT / 'src'), str(LINUX / 'ac_linux_calendar_eds.cc'),
+                '-fno-omit-frame-pointer', '-pthread', '-I', str(ROOT / 'src'), str(LINUX / 'ac_linux_calendar_eds.cc'),
                 str(FIXTURES / 'calendar_eds_driver.cc'), *glib.stdout.split(), '-ldl', '-o', str(self.driver),
             ], capture_output=True, text=True, timeout=300)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
@@ -190,6 +190,51 @@ class CalendarBusTests(unittest.TestCase):
         self.assertEqual(waited['changes'], [])
         self.assertEqual(second['status'], 'unavailable')
 
+    def test_a_hung_calendar_is_bounded_by_the_request_budget_then_skipped_while_others_answer(self):
+        config = {**CONFIG, 'sources': SOURCES + [{'uid': 'slow', 'data': WORK}], 'hangOpen': ['slow']}
+        hung, again, work = self.run_bus(config, [
+            {'driver': f'objects slow {START} {END} 1500'}, {'driver': f'objects slow {START} {END} 60000'}, {'driver': f'objects work {START} {END} 60000'}])
+        self.assertEqual((hung['status'], hung['timedOut']), ('failed', True))
+        self.assertLess(hung['elapsedMs'], 4000)
+        self.assertEqual(again['status'], 'failed')
+        self.assertIn("didn't answer", again['message'])
+        self.assertLess(again['elapsedMs'], 500)
+        self.assertEqual(work['objects'], [EVENT])
+        expired = self.run_bus(config, [{'driver': f'objects work {START} {END} 0'}])[0]
+        self.assertEqual((expired['status'], expired['timedOut']), ('failed', True))
+
+    def test_the_standalone_probe_answers_while_a_calendar_open_is_stuck(self):
+        config = {**CONFIG, 'sources': SOURCES + [{'uid': 'slow', 'data': WORK}], 'hangOpen': ['slow']}
+        started, probe, joined = self.run_bus(config, [
+            {'driver': f'bgobjects slow {START} {END} 4000'}, {'driver': 'probe-standalone'}, {'driver': 'join'}])
+        self.assertTrue(started['started'])
+        self.assertEqual(probe['status'], 'ok')
+        self.assertLess(probe['elapsedMs'], 1500)
+        self.assertTrue(joined['timedOut'])
+
+    def test_a_data_server_that_appears_later_is_noticed(self):
+        probe, started, waited, sources = self.run_bus({**CONFIG, 'serve': False}, [
+            {'driver': 'probe'}, {'start': True}, {'driver': 'wait 4000'}, {'driver': 'sources'}])
+        self.assertEqual(probe['status'], 'unavailable')
+        self.assertEqual(waited['changes'], ['service'])
+        self.assertEqual(sources['status'], 'ok')
+
+    def test_objects_stop_at_the_reply_byte_budget_and_say_so(self):
+        big = [EVENT.replace('Standup', f'Standup {i} ' + 'x' * 1000) for i in range(3)]
+        full, capped = self.run_bus({**CONFIG, 'objects': {'work': big}}, [
+            {'driver': f'objects work {START} {END} 60000 100000'}, {'driver': f'objects work {START} {END} 60000 2500'}])
+        self.assertEqual((len(full['objects']), full['truncated']), (3, False))
+        self.assertEqual((capped['status'], len(capped['objects']), capped['truncated']), ('ok', 2, True))
+
+    def test_unrepresentable_ranges_build_no_query(self):
+        (ok, far, huge, negative) = self.run_bus({'serve': False}, [
+            {'driver': f'query {START} {END}'}, {'driver': 'query 0 253402300800000'},
+            {'driver': 'query 0 9223372036854775807'}, {'driver': 'query -62135596800001 0'}])
+        self.assertEqual(ok['query'], '(occur-in-time-range? (make-time "20251028T000000Z") (make-time "20251029T120000Z"))')
+        self.assertIsNone(far['query'])
+        self.assertIsNone(huge['query'])
+        self.assertIsNone(negative['query'])
+
     def test_probing_never_starts_an_activatable_data_server_but_reading_does(self):
         with tempfile.TemporaryDirectory(prefix='ardia-calendar-bus-') as scratch:
             root = pathlib.Path(scratch)
@@ -246,13 +291,35 @@ class CalendarSourceTests(unittest.TestCase):
         self.assertIn('ui->PostTask(FROM_HERE, base::BindOnce(&LinuxCalendarService::Changed', self.service)
         self.assertNotIn('LOG(', self.service + self.eds)
 
+    def test_status_never_queues_behind_the_calendar_thread(self):
+        invoke = body(self.service, 'void Invoke(base::FilePath documents')
+        status = invoke[invoke.index('if (method == "ArdiaCalendar.status")'):]
+        self.assertIn('probe_runner_->PostTaskAndReplyWithResult(', status[:status.index('return;')])
+        probe = body(self.service, 'Reply ProbeStatus(const base::FilePath& documents)')
+        self.assertIn('eds::ProbeEds()', probe)
+        self.assertNotIn('Client()', probe)
+        self.assertIn('base::MayBlock()', self.service[self.service.index('probe_runner_'):])
+
+    def test_a_data_server_appearing_triggers_a_recheck(self):
+        changed = body(self.service, 'void Changed(eds::EdsChange change)')
+        self.assertIn('if (change == eds::EdsChange::kService) Recheck();', changed)
+        recheck = body(self.service, 'void Recheck()')
+        self.assertIn('probe_runner_->PostTaskAndReplyWithResult(', recheck)
+
+    def test_objects_have_one_deadline_one_byte_budget_and_clamped_times(self):
+        objects = body(self.service, 'Reply Objects(const base::ListValue& values)')
+        self.assertIn('base::Milliseconds(eds::kRequestBudgetMs)', objects)
+        self.assertIn('eds::kMaxReplyBytes - used', objects)
+        self.assertIn('.Set("truncated", truncated)', objects)
+        self.assertLess(objects.index('std::fabs(start) > kMaxTimeMs'), objects.index('static_cast<int64_t>(start)'))
+
     def test_nothing_reads_calendars_before_the_user_connects(self):
         run = body(self.service, 'Reply Run(base::FilePath documents')
         guard = run.index('if (!connected)')
         for method in ['Sources()', 'Objects(values)', 'Timezones(values)']:
             self.assertGreater(run.index(f'return {method}'), guard)
         self.assertIn('"ERR_CALENDAR_NOT_CONNECTED"', run)
-        self.assertNotIn('Sources(', body(self.service, 'Reply Status(bool connected)'))
+        self.assertNotIn('Sources(', body(self.service, 'Reply ProbeStatus(const base::FilePath& documents)'))
 
     def test_the_host_routes_calendar_calls_through_the_app_profile_and_rebroadcasts_changes(self):
         bootstrap = body(self.host, 'base::DictValue ShellHostView::Bootstrap(')

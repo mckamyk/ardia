@@ -13,12 +13,15 @@
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/location.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/no_destructor.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -37,6 +40,7 @@ constexpr base::TimeDelta kChangeDelay = base::Milliseconds(750);
 constexpr size_t kMaxCalendars = 64;
 constexpr size_t kMaxIdLength = 512;
 constexpr double kMaxRangeMs = 400.0 * 24 * 3600 * 1000;
+constexpr double kMaxTimeMs = 8.64e15;
 constexpr int kConsentLimit = 4096;
 
 struct Reply {
@@ -45,6 +49,7 @@ struct Reply {
   std::optional<std::string> status;
   std::string message;
   bool broadcast = false;
+  bool probe = false;
 };
 
 std::string_view StatusFor(eds::EdsStatus status) {
@@ -132,6 +137,13 @@ class LinuxCalendarService {
 
   void Invoke(base::FilePath documents, std::string method, base::ListValue values, Done done) {
     Start();
+    documents_ = documents;
+    if (method == "ArdiaCalendar.status") {
+      probe_runner_->PostTaskAndReplyWithResult(
+          FROM_HERE, base::BindOnce(&LinuxCalendarService::ProbeStatus, std::move(documents)),
+          base::BindOnce(&LinuxCalendarService::Replied, base::Unretained(this), std::move(done)));
+      return;
+    }
     thread_.task_runner()->PostTaskAndReplyWithResult(
         FROM_HERE,
         base::BindOnce(&LinuxCalendarService::Run, base::Unretained(this), std::move(documents), std::move(method),
@@ -154,6 +166,14 @@ class LinuxCalendarService {
   }
 
   void Replied(Done done, Reply reply) {
+    if (reply.probe && reply.status == "fullAccess" && status_ == "denied") {
+      reply.status = status_;
+      reply.message = message_;
+      if (reply.value.is_dict()) {
+        reply.value.GetDict().Set("status", status_);
+        reply.value.GetDict().Set("message", message_);
+      }
+    }
     if (reply.status && (reply.broadcast || *reply.status != status_ || reply.message != message_)) {
       status_ = *reply.status;
       message_ = reply.message;
@@ -166,9 +186,17 @@ class LinuxCalendarService {
     pending_reason_ = change == eds::EdsChange::kObjects   ? "objects"
                       : change == eds::EdsChange::kSources ? "sources"
                                                            : "service";
+    if (change == eds::EdsChange::kService) Recheck();
     if (change_timer_.IsRunning()) return;
     change_timer_.Start(FROM_HERE, kChangeDelay,
                         base::BindOnce(&LinuxCalendarService::Publish, base::Unretained(this), std::string()));
+  }
+
+  void Recheck() {
+    if (documents_.empty()) return;
+    probe_runner_->PostTaskAndReplyWithResult(
+        FROM_HERE, base::BindOnce(&LinuxCalendarService::ProbeStatus, documents_),
+        base::BindOnce(&LinuxCalendarService::Replied, base::Unretained(this), base::DoNothing()));
   }
 
   void Publish(std::string reason) {
@@ -190,7 +218,6 @@ class LinuxCalendarService {
 
   Reply Run(base::FilePath documents, std::string method, base::ListValue values) {
     const bool connected = ReadConsent(documents);
-    if (method == "ArdiaCalendar.status") return Status(connected);
     if (method == "ArdiaCalendar.requestAccess") return RequestAccess(documents);
     if (!connected) {
       return Failure("ERR_CALENDAR_NOT_CONNECTED", "Connect your calendars in Settings › Calendar first",
@@ -202,9 +229,11 @@ class LinuxCalendarService {
     return Failure("ERR_CALENDAR_REQUEST", "Unknown calendar request");
   }
 
-  Reply Status(bool connected) {
-    const eds::EdsResult probe = Client().Probe();
+  static Reply ProbeStatus(const base::FilePath& documents) {
+    const bool connected = ReadConsent(documents);
+    const eds::EdsResult probe = eds::ProbeEds();
     Reply reply;
+    reply.probe = true;
     const std::string status = connected ? std::string(StatusFor(probe.status)) : "notDetermined";
     reply.value = base::Value(base::DictValue()
                                   .Set("status", status)
@@ -263,8 +292,8 @@ class LinuxCalendarService {
     const double start = values[1].GetDouble();
     const double end = values[2].GetDouble();
     const base::ListValue& ids = values[0].GetList();
-    if (!std::isfinite(start) || !std::isfinite(end) || end <= start || end - start > kMaxRangeMs ||
-        ids.size() > kMaxCalendars) {
+    if (!std::isfinite(start) || !std::isfinite(end) || std::fabs(start) > kMaxTimeMs || std::fabs(end) > kMaxTimeMs ||
+        end <= start || end - start > kMaxRangeMs || ids.size() > kMaxCalendars) {
       return Failure("ERR_CALENDAR_REQUEST", "That calendar range isn't valid");
     }
     for (const auto& id : ids) {
@@ -276,29 +305,39 @@ class LinuxCalendarService {
       if (!listed.ok()) return Failure(listed);
       Remember(sources, listed);
     }
+    const base::TimeTicks deadline = base::TimeTicks::Now() + base::Milliseconds(eds::kRequestBudgetMs);
     base::DictValue calendars;
     size_t unavailable = 0;
+    size_t used = 0;
+    bool truncated = false;
     for (const auto& id : ids) {
       const std::string& uid = id.GetString();
       if (!calendars_.contains(uid)) {
         calendars.Set(uid, base::DictValue().Set("status", "failed").Set("message", "No such calendar"));
         continue;
       }
-      const eds::EdsCalendarObjects objects =
-          Client().Objects(uid, static_cast<int64_t>(start), static_cast<int64_t>(end));
+      const int budget = static_cast<int>(std::max<int64_t>(0, (deadline - base::TimeTicks::Now()).InMilliseconds()));
+      const eds::EdsCalendarObjects objects = Client().Objects(
+          uid, static_cast<int64_t>(start), static_cast<int64_t>(end), budget, eds::kMaxReplyBytes - used);
       if (objects.result.status == eds::EdsStatus::kUnavailable) ++unavailable;
+      truncated = truncated || objects.truncated;
       base::ListValue list;
-      for (const auto& object : objects.objects) list.Append(object);
+      for (const auto& object : objects.objects) {
+        used += object.size();
+        list.Append(object);
+      }
       calendars.Set(uid, base::DictValue()
                              .Set("status", eds::EdsStatusName(objects.result.status))
                              .Set("message", objects.result.message)
+                             .Set("timedOut", objects.result.timed_out)
+                             .Set("truncated", objects.truncated)
                              .Set("objects", std::move(list)));
     }
     if (unavailable && unavailable == ids.size()) {
       return Failure("ERR_CALENDAR_UNAVAILABLE", "Evolution Data Server stopped answering", std::string("restricted"));
     }
     Reply reply;
-    reply.value = base::Value(base::DictValue().Set("calendars", std::move(calendars)));
+    reply.value = base::Value(base::DictValue().Set("calendars", std::move(calendars)).Set("truncated", truncated));
     reply.status = "fullAccess";
     return reply;
   }
@@ -324,6 +363,9 @@ class LinuxCalendarService {
   }
 
   base::Thread thread_{"ArdiaCalendar"};
+  scoped_refptr<base::SequencedTaskRunner> probe_runner_ = base::ThreadPool::CreateSequencedTaskRunner(
+      {base::MayBlock(), base::TaskPriority::USER_VISIBLE, base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN});
+  base::FilePath documents_;
   scoped_refptr<base::SingleThreadTaskRunner> ui_;
   std::unique_ptr<eds::EdsClient> client_;
   std::set<std::string> calendars_;

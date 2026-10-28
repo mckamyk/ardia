@@ -6,8 +6,9 @@ export type IcsTime = { wall: Wall; kind: "date" | "utc" | "floating" | "zoned";
 const DAY_MS = 86_400_000;
 const ZONE_SLACK_MS = 15 * 3_600_000;
 const WEEKDAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
-const MAX_PERIODS = 200_000;
+const MAX_PERIODS = 50_000;
 const MAX_INSTANCES = 5_000;
+const MAX_DEPTH = 16;
 
 export function parseIcs(text: string): IcsComponent[] {
   const root: IcsComponent = { name: "", properties: [], components: [] };
@@ -18,6 +19,7 @@ export function parseIcs(text: string): IcsComponent[] {
     if (!property) continue;
     const top = stack[stack.length - 1]!;
     if (property.name === "BEGIN") {
+      if (stack.length > MAX_DEPTH) throw new Error("iCalendar components are nested too deeply");
       const component: IcsComponent = { name: property.value.toUpperCase(), properties: [], components: [] };
       top.components.push(component);
       stack.push(component);
@@ -98,10 +100,26 @@ export function parseDuration(value: string): { days: number; ms: number } | nul
   return { days, ms };
 }
 
-export const wallMs = (w: Wall) => Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second);
-export const daysInMonth = (year: number, month: number) => new Date(Date.UTC(year, month, 0)).getUTCDate();
+function utcMs(year: number, monthIndex: number, day: number, hour = 0, minute = 0, second = 0): number {
+  if (year < 0 || year >= 100) return Date.UTC(year, monthIndex, day, hour, minute, second);
+  const date = new Date(0);
+  date.setUTCFullYear(year, monthIndex, day);
+  date.setUTCHours(hour, minute, second, 0);
+  return date.getTime();
+}
+
+function localMs(year: number, monthIndex: number, day: number, hour: number, minute: number, second: number): number {
+  if (year < 0 || year >= 100) return new Date(year, monthIndex, day, hour, minute, second).getTime();
+  const date = new Date(2000, 0, 1);
+  date.setFullYear(year, monthIndex, day);
+  date.setHours(hour, minute, second, 0);
+  return date.getTime();
+}
+
+export const wallMs = (w: Wall) => utcMs(w.year, w.month - 1, w.day, w.hour, w.minute, w.second);
+export const daysInMonth = (year: number, month: number) => new Date(utcMs(year, month, 0)).getUTCDate();
 const leap = (year: number) => (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
-const dayNumber = (year: number, month: number, day: number) => Date.UTC(year, month - 1, day) / DAY_MS;
+const dayNumber = (year: number, month: number, day: number) => utcMs(year, month - 1, day) / DAY_MS;
 const weekday = (dn: number) => (new Date(dn * DAY_MS).getUTCDay() + 6) % 7;
 
 export function wallFromMs(ms: number): Wall {
@@ -116,7 +134,7 @@ const dateKey = (w: Wall) => `${w.year}-${w.month}-${w.day}`;
 export type Zone = { toUtc(wall: Wall): number };
 
 export const UTC_ZONE: Zone = { toUtc: wallMs };
-export const LOCAL_ZONE: Zone = { toUtc: (w) => new Date(w.year, w.month - 1, w.day, w.hour, w.minute, w.second).getTime() };
+export const LOCAL_ZONE: Zone = { toUtc: (w) => localMs(w.year, w.month - 1, w.day, w.hour, w.minute, w.second) };
 
 const formatters = new Map<string, Intl.DateTimeFormat | null>();
 
@@ -149,7 +167,7 @@ export function ianaZone(name: string): Zone | null {
   if (!format) return null;
   return offsetZone((utc) => {
     const parts = Object.fromEntries(format.formatToParts(new Date(utc)).map((p) => [p.type, p.value]));
-    const local = Date.UTC(+parts.year!, +parts.month! - 1, +parts.day!, +parts.hour!, +parts.minute!, +parts.second!);
+    const local = utcMs(+parts.year!, +parts.month! - 1, +parts.day!, +parts.hour!, +parts.minute!, +parts.second!);
     return local - Math.floor(utc / 1000) * 1000;
   });
 }
@@ -377,12 +395,37 @@ function periodTimes(rule: Rule, start: Wall, index: number, dn: number, allDay:
   return hours.flatMap((hour) => minutes.flatMap((minute) => seconds.map((second) => ({ ...day, hour, minute, second }))));
 }
 
-export function expandRule(start: Wall, allDay: boolean, input: Rule, beyond: (wall: Wall) => boolean, passedUntil: (wall: Wall) => boolean, keep: (wall: Wall) => boolean = () => true): Wall[] {
+const FIXED_STEP: Partial<Record<Rule["freq"], number>> = { SECONDLY: 1000, MINUTELY: 60_000, HOURLY: 3_600_000, DAILY: DAY_MS, WEEKLY: 7 * DAY_MS };
+
+function periodsBefore(rule: Rule, start: Wall, from: number): number {
+  const delta = from - wallMs(start);
+  if (!(delta > 0)) return 0;
+  const step = FIXED_STEP[rule.freq];
+  const target = wallFromMs(from);
+  const periods = step ? Math.floor(delta / (step * rule.interval))
+    : rule.freq === "MONTHLY" ? Math.floor(((target.year - start.year) * 12 + target.month - start.month) / rule.interval)
+      : Math.floor((target.year - start.year) / rule.interval);
+  return Math.max(0, periods - 1);
+}
+
+const simpleRule = (rule: Rule) => !!FIXED_STEP[rule.freq] && !rule.byMonth && !rule.byWeekNo && !rule.byYearDay && !rule.byMonthDay && !rule.byDay && !rule.byHour && !rule.byMinute && !rule.bySecond && !rule.bySetPos;
+
+export type ExpandOptions = { from?: number; deadline?: number; onTruncate?: () => void };
+
+export function expandRule(start: Wall, allDay: boolean, input: Rule, beyond: (wall: Wall) => boolean, passedUntil: (wall: Wall) => boolean, keep: (wall: Wall) => boolean = () => true, options: ExpandOptions = {}): Wall[] {
   const rule = withDefaults(input, start);
   const instances: Wall[] = keep(start) ? [start] : [];
   const seen = new Set([wallMs(start)]);
-  let produced = 1;
-  for (let index = 0; index < MAX_PERIODS; index++) {
+  const jump = options.from !== undefined && (!rule.count || simpleRule(input)) ? periodsBefore(rule, start, options.from) : 0;
+  let produced = Math.max(1, jump);
+  if (rule.count && produced >= rule.count) return instances;
+  const truncate = () => {
+    options.onTruncate?.();
+    return instances;
+  };
+  for (let index = jump, walked = 0; ; index++, walked++) {
+    if (walked >= MAX_PERIODS) return truncate();
+    if ((walked & 255) === 0 && options.deadline !== undefined && performance.now() > options.deadline) return truncate();
     const days = periodDays(rule, start, index);
     if (!days.length) continue;
     if (beyond({ ...wallFromMs(days[0]! * DAY_MS), hour: 0, minute: 0, second: 0 }) && index > 0) break;
@@ -399,7 +442,8 @@ export function expandRule(start: Wall, allDay: boolean, input: Rule, beyond: (w
       seen.add(key);
       produced++;
       if (keep(candidate)) instances.push(candidate);
-      if ((rule.count && produced >= rule.count) || instances.length >= MAX_INSTANCES) return instances;
+      if (rule.count && produced >= rule.count) return instances;
+      if (instances.length >= MAX_INSTANCES) return truncate();
     }
   }
   return instances;
@@ -413,38 +457,43 @@ export function zoneFor(time: IcsTime, lookup: ZoneLookup): Zone {
   return LOCAL_ZONE;
 }
 
+function walk(components: IcsComponent[], visit: (component: IcsComponent) => boolean) {
+  const pending = [...components].reverse();
+  while (pending.length) {
+    const component = pending.pop()!;
+    if (!visit(component)) continue;
+    for (let i = component.components.length - 1; i >= 0; i--) pending.push(component.components[i]!);
+  }
+}
+
 export function referencedTzids(components: IcsComponent[]): Set<string> {
   const tzids = new Set<string>();
-  const visit = (component: IcsComponent) => {
-    if (component.name === "VTIMEZONE") return;
+  walk(components, (component) => {
+    if (component.name === "VTIMEZONE") return false;
     for (const p of component.properties) if (p.params.TZID) tzids.add(p.params.TZID);
-    component.components.forEach(visit);
-  };
-  components.forEach(visit);
+    return true;
+  });
   return tzids;
 }
 
 export function inlineZones(components: IcsComponent[]): Map<string, IcsComponent> {
   const zones = new Map<string, IcsComponent>();
-  const visit = (component: IcsComponent) => {
-    if (component.name === "VTIMEZONE") {
-      const tzid = property(component, "TZID")?.value;
-      if (tzid) zones.set(tzid, component);
-      return;
-    }
-    component.components.forEach(visit);
-  };
-  components.forEach(visit);
+  walk(components, (component) => {
+    if (component.name !== "VTIMEZONE") return true;
+    const tzid = property(component, "TZID")?.value;
+    if (tzid) zones.set(tzid, component);
+    return false;
+  });
   return zones;
 }
 
 export function events(components: IcsComponent[]): IcsComponent[] {
   const found: IcsComponent[] = [];
-  const visit = (component: IcsComponent) => {
-    if (component.name === "VEVENT") found.push(component);
-    else component.components.forEach(visit);
-  };
-  components.forEach(visit);
+  walk(components, (component) => {
+    if (component.name !== "VEVENT") return true;
+    found.push(component);
+    return false;
+  });
   return found;
 }
 
@@ -501,7 +550,9 @@ function atOrAfter(zone: Zone, wall: Wall, shift: number, limit: number): boolea
   return zone.toUtc(wall) + shift >= limit;
 }
 
-export function occurrences(objects: IcsComponent[], rangeStart: number, rangeEnd: number, lookup: ZoneLookup): Occurrence[] {
+export type ExpansionBudget = { deadline: number; truncated: string[] };
+
+export function occurrences(objects: IcsComponent[], rangeStart: number, rangeEnd: number, lookup: ZoneLookup, budget: ExpansionBudget = { deadline: Infinity, truncated: [] }): Occurrence[] {
   const byUid = new Map<string, { master?: IcsComponent; overrides: IcsComponent[] }>();
   for (const event of objects) {
     const uid = property(event, "UID")?.value ?? "";
@@ -512,7 +563,7 @@ export function occurrences(objects: IcsComponent[], rangeStart: number, rangeEn
   }
   const found: Occurrence[] = [];
   const overlaps = (start: number, end: number) => (end > start ? end > rangeStart : end >= rangeStart) && start < rangeEnd;
-  for (const { master, overrides } of byUid.values()) {
+  for (const [uid, { master, overrides }] of byUid) {
     const masterTiming = master && timing(master, lookup);
     const replaced = new Set<string>();
     for (const override of overrides) {
@@ -527,9 +578,14 @@ export function occurrences(objects: IcsComponent[], rangeStart: number, rangeEn
     if (!master || !masterTiming) continue;
     const rule = property(master, "RRULE");
     const parsedRule = rule ? parseRule(rule.value) : null;
+    if (parsedRule && performance.now() > budget.deadline) {
+      budget.truncated.push(uid);
+      continue;
+    }
+    const reach = masterTiming.ms + (masterTiming.days + 2) * DAY_MS;
     const walls = parsedRule
       ? expandRule(masterTiming.start.wall, masterTiming.allDay, parsedRule, (w) => atOrAfter(masterTiming.zone, w, 0, rangeEnd), (w) => untilPassed(parsedRule, w, masterTiming.zone.toUtc),
-        (w) => atOrAfter(masterTiming.zone, w, masterTiming.ms + (masterTiming.days + 2) * DAY_MS, rangeStart))
+        (w) => atOrAfter(masterTiming.zone, w, reach, rangeStart), { from: rangeStart - reach - ZONE_SLACK_MS, deadline: budget.deadline, onTruncate: () => budget.truncated.push(uid) })
       : [masterTiming.start.wall];
     const excluded = new Set(dateList(master, "EXDATE").flatMap((time) => time.kind === "date" ? [`d:${dateKey(time.wall)}`, `date:${dateKey(time.wall)}`] : [recurrenceKey(time, masterTiming, lookup)]));
     const emitted = new Set<string>();

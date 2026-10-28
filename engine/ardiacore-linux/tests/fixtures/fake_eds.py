@@ -86,6 +86,7 @@ class FakeEds:
         self.calls = []
         self.registrations = []
         self.backend_owned = False
+        self.held = []
 
     def source_path(self, uid):
         if uid not in self.paths:
@@ -108,6 +109,9 @@ class FakeEds:
             return
         if uid not in self.sources:
             invocation.return_dbus_error(PREFIX + 'Calendar.NoSuchCalendar', 'no such calendar')
+            return
+        if uid in self.config.get('hangOpen', []):
+            self.held.append(invocation)
             return
         if not self.backend_owned:
             self.own_backend()
@@ -250,12 +254,21 @@ def scenario(driver_path, config, steps):
                                   stdout=subprocess.PIPE, text=True)
         ready, _, _ = select.select([server.stdout], [], [], 20)
         assert ready and server.stdout.readline().strip() == 'ready'
+    def start_server():
+        started = subprocess.Popen([sys.executable, '-I', os.path.abspath(__file__), '--serve', json.dumps(config)], stdout=subprocess.PIPE, text=True)
+        ready, _, _ = select.select([started.stdout], [], [], 20)
+        assert ready and started.stdout.readline().strip() == 'ready'
+        return started
+
     driver = subprocess.Popen([driver_path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     transcript = []
     try:
         for step in steps:
-            if 'control' in step:
+            if 'start' in step:
+                server = start_server()
+                transcript.append(True)
+            elif 'control' in step:
                 transcript.append(control(connection, step['control'], step.get('args', [])))
             else:
                 transcript.append(ask(driver, step['driver']))
