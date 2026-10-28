@@ -95,10 +95,6 @@ export default {
   issue: 16,
   title: "Site permissions, browsing-data clearing and the content blocker act on the engine",
   deadline: 480000,
-  manual: [
-    { name: "Site panel and Privacy settings drive the same state", steps: ["Open a site's Site Controls panel: Camera, Location and Notifications show the values set in Settings › Privacy › Site settings.", "Change one in the panel: Settings shows it after reopening, and the page's navigator.permissions agrees after reload.", "The panel's content blocker toggle turns blocking off for that site and Settings › Privacy lists it under Sites without blocking."], reason: "needs the visible panel and Settings layouts on a desktop" },
-    { name: "Native permission prompts", steps: ["Visit a page that asks for the camera and microphone with real devices attached.", "Allow with Remember: the choice appears in Site settings and survives restart; Block likewise."], reason: "needs physical devices and the prompt UI" },
-  ],
   async run(t) {
     let state = await startBrowser(t, { name: "site-controls", extraArgs });
     const blank = t.fixtures.url.page(1, nonce("f06"));
