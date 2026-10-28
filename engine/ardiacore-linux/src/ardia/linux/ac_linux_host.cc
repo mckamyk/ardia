@@ -1155,6 +1155,8 @@ class ShellHostView : public views::View,
   void FocusShellOnActivation();
   void OnKeyEvent(ui::KeyEvent* event) override;
   void ReplayTypeahead(bool field);
+  bool RunHeldShortcut(const ui::KeyEvent& event);
+  static ui::Accelerator KeyAccelerator(const ui::KeyEvent& event);
   void DiscardTypeahead();
   bool ShellHoldsTextField();
   bool ExtensionShortcutPressed(const ui::KeyEvent& event, bool reserved_by_ardia);
@@ -2035,23 +2037,36 @@ void ShellHostView::DiscardTypeahead() {
 void ShellHostView::ReplayTypeahead(bool field) {
   typeahead_timer_.Stop();
   std::vector<ui::KeyEvent> held = typeahead_ ? typeahead_->Release() : std::vector<ui::KeyEvent>();
-  if (!field) return;
   const auto weak = GetWeakPtr();
   for (ui::KeyEvent& event : held) {
-    if (!ShellHoldsTextField()) return;
+    if (RunHeldShortcut(event)) {
+      if (!weak) return;
+      continue;
+    }
+    if (!field || !ShellHoldsTextField()) continue;
     ui::Event::DispatcherApi(&event).set_target(GetWidget()->GetNativeWindow());
     std::ignore = GetWidget()->GetInputMethod()->DispatchKeyEvent(&event);
     if (!weak) return;
   }
 }
 
+bool ShellHostView::RunHeldShortcut(const ui::KeyEvent& event) {
+  if (event.type() != ui::EventType::kKeyPressed || !CanHandleAccelerators() || !focus_manager_ ||
+      shortcut_recording_ || focus_manager_->shortcut_handling_suspended()) return false;
+  const ui::Accelerator accelerator = KeyAccelerator(event);
+  return shortcuts_.contains(accelerator) && AcceleratorPressed(accelerator);
+}
+
+ui::Accelerator ShellHostView::KeyAccelerator(const ui::KeyEvent& event) {
+  const ui::KeyboardCode physical = ui::DomCodeToUsLayoutKeyboardCode(event.code());
+  return ui::Accelerator(physical == ui::VKEY_UNKNOWN ? event.key_code() : physical, event.flags());
+}
+
 void ShellHostView::OnKeyEvent(ui::KeyEvent* event) {
   if (!CanHandleAccelerators() || !OwnsKeyboardEvent(*event) || !focus_manager_ || shortcut_recording_ ||
       focus_manager_->shortcut_handling_suspended() ||
       event->type() != ui::EventType::kKeyPressed) return;
-  const ui::KeyboardCode physical = ui::DomCodeToUsLayoutKeyboardCode(event->code());
-  const ui::Accelerator accelerator(physical == ui::VKEY_UNKNOWN ? event->key_code() : physical,
-                                    event->flags());
+  const ui::Accelerator accelerator = KeyAccelerator(*event);
   if (base::CommandLine::ForCurrentProcess()->HasSwitch("ardia-keyboard-diagnostics") &&
       (event->IsControlDown() || shortcuts_.contains(accelerator))) {
     LOG(INFO) << "Ardia key window=" << window_id_

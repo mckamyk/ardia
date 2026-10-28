@@ -114,6 +114,8 @@ class TypeaheadInputTests(unittest.TestCase):
 
 REPLAY_FAKES = r'''#include <cstdio>
 #include <memory>
+#include <set>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -170,6 +172,7 @@ class Window : public ui::EventTarget {
 
 namespace ui {
 struct EventDispatchDetails {};
+using Accelerator = char;
 struct InputMethod {
   std::vector<char> keys;
   std::vector<aura::Window*> targets;
@@ -216,7 +219,65 @@ struct ShellHostView {
   Widget* GetWidget() { return &widget; }
   base::WeakPtr<ShellHostView> GetWeakPtr() { return {this}; }
   void ReplayTypeahead(bool field);
+  bool RunHeldShortcut(const ui::KeyEvent& event);
+  struct FocusManager {
+    bool suspended = false;
+    bool shortcut_handling_suspended() const { return suspended; }
+  } focus;
+  FocusManager* focus_manager_ = &focus;
+  bool shortcut_recording_ = false;
+  bool accelerators = true;
+  bool CanHandleAccelerators() const { return accelerators; }
+  std::set<ui::Accelerator> shortcuts_{'I', 'L'};
+  std::string order;
+  static ui::Accelerator KeyAccelerator(const ui::KeyEvent& event) { return event.key; }
+  bool AcceleratorPressed(const ui::Accelerator& accelerator) {
+    order += std::string("[") + accelerator + "]";
+    return true;
+  }
 };
+'''
+
+HELD_SHORTCUT_SCENARIO = r'''
+static void Hold(ShellHostView& host, std::initializer_list<std::pair<ui::EventType, char>> keys) {
+  for (const auto& [type, key] : keys) host.typeahead_->held.emplace_back(type, key);
+}
+
+int main() {
+  using ui::EventType;
+  {
+    ShellHostView host;
+    host.holds = false;
+    Hold(host, {{EventType::kKeyPressed, 'I'}, {EventType::kKeyReleased, 'I'}});
+    host.ReplayTypeahead(false);
+    if (host.order != "[I]") return 10;
+    if (!host.widget.input.keys.empty()) return 11;
+  }
+  {
+    ShellHostView host;
+    Hold(host, {{EventType::kKeyPressed, 'a'}, {EventType::kKeyPressed, 'L'}, {EventType::kKeyPressed, 'b'}});
+    host.ReplayTypeahead(true);
+    if (host.order != "[L]") return 12;
+    if ((host.widget.input.keys != std::vector<char>{'a', 'b'})) return 13;
+  }
+  {
+    ShellHostView host;
+    Hold(host, {{EventType::kKeyPressed, 'q'}, {EventType::kKeyPressed, 'I'}});
+    host.holds = false;
+    host.ReplayTypeahead(true);
+    if (host.order != "[I]" || !host.widget.input.keys.empty()) return 14;
+  }
+  for (int blocked = 0; blocked < 3; ++blocked) {
+    ShellHostView host;
+    host.accelerators = blocked != 0;
+    host.shortcut_recording_ = blocked == 1;
+    host.focus.suspended = blocked == 2;
+    Hold(host, {{EventType::kKeyPressed, 'I'}});
+    host.ReplayTypeahead(false);
+    if (!host.order.empty()) return 15 + blocked;
+  }
+  std::puts("held shortcut scenarios passed");
+}
 '''
 
 REPLAY_SCENARIO = r'''
@@ -240,14 +301,15 @@ int main() {
 
 
 class TypeaheadReplayTests(unittest.TestCase):
-    def test_replayed_keys_carry_a_target_the_gtk_input_method_can_dereference(self):
+    def run_replay(self, scenario, expected):
         compiler = shutil.which('clang++') or shutil.which('c++')
         if compiler is None:
             self.skipTest('C++ compiler is unavailable')
         replay = extract(HOST, 'void ShellHostView::ReplayTypeahead(bool field)')
+        shortcut = extract(HOST, 'bool ShellHostView::RunHeldShortcut(const ui::KeyEvent& event)')
         with tempfile.TemporaryDirectory(prefix='ardia-typeahead-replay-') as scratch:
             root = pathlib.Path(scratch)
-            (root / 'replay.cc').write_text(REPLAY_FAKES + replay + REPLAY_SCENARIO)
+            (root / 'replay.cc').write_text(REPLAY_FAKES + shortcut + '\n' + replay + scenario)
             binary = root / 'replay'
             built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-g', '-fsanitize=address,undefined',
                                     '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', str(root / 'replay.cc'), '-o', str(binary)],
@@ -255,7 +317,13 @@ class TypeaheadReplayTests(unittest.TestCase):
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
             ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
             self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
-            self.assertIn('replay scenarios passed', ran.stdout)
+            self.assertIn(expected, ran.stdout)
+
+    def test_replayed_keys_carry_a_target_the_gtk_input_method_can_dereference(self):
+        self.run_replay(REPLAY_SCENARIO, 'replay scenarios passed')
+
+    def test_shortcuts_pressed_while_keys_are_held_run_when_the_window_is_ready(self):
+        self.run_replay(HELD_SHORTCUT_SCENARIO, 'held shortcut scenarios passed')
 
 
 class TypeaheadHostTests(unittest.TestCase):
@@ -282,6 +350,11 @@ class TypeaheadHostTests(unittest.TestCase):
         self.assertIn('host_->AddEventRewriter(this)', start)
         handler = extract(HOST, 'void ShellHostView::OnKeyEvent(ui::KeyEvent* event)')
         self.assertNotIn('typeahead_', handler)
+        self.assertIn('KeyAccelerator(*event)', handler)
+        shortcut = extract(HOST, 'bool ShellHostView::RunHeldShortcut(const ui::KeyEvent& event)')
+        self.assertIn('KeyAccelerator(event)', shortcut)
+        accelerator = extract(HOST, 'ui::Accelerator ShellHostView::KeyAccelerator(const ui::KeyEvent& event)')
+        self.assertIn('ui::DomCodeToUsLayoutKeyboardCode(event.code())', accelerator)
         owns = extract(HOST, 'bool ShellHostView::OwnsKeyboardEvent(const ui::KeyEvent& event) const')
         self.assertIn('OwnsKeyboardTarget(static_cast<aura::Window*>(event.target()))', owns)
 
@@ -306,8 +379,8 @@ class TypeaheadHostTests(unittest.TestCase):
 
     def test_replay_only_reaches_the_shells_own_text_field(self):
         replay = extract(HOST, 'void ShellHostView::ReplayTypeahead(bool field)')
-        self.assertLess(replay.index('typeahead_->Release()'), replay.index('if (!field) return;'))
-        self.assertLess(replay.index('if (!ShellHoldsTextField()) return;'), replay.index('DispatchKeyEvent(&event)'))
+        self.assertLess(replay.index('typeahead_->Release()'), replay.index('if (!field || !ShellHoldsTextField()) continue;'))
+        self.assertLess(replay.index('if (!field || !ShellHoldsTextField()) continue;'), replay.index('DispatchKeyEvent(&event)'))
         holds = extract(HOST, 'bool ShellHostView::ShellHoldsTextField()')
         self.assertIn('shell_->HasFocus()', holds)
         self.assertIn('GetTextInputClient()', holds)
