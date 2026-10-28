@@ -3,6 +3,12 @@ import { startBrowser } from "../lib/flows.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
 
+async function onPage(shell, url) {
+  const tabId = await shell.newTab(url);
+  await shell.waitTabUrl(tabId, (current) => current === url);
+  await shell.app.pageLoaded(url);
+}
+
 async function typeQuery(shell, query) {
   await shell.state("s.openPanel(windowId, ''); return true;");
   await shell.waitFor("document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA'", { timeout: 6000, label: "command bar focus" });
@@ -30,6 +36,7 @@ export default {
     });
     const enabled = `ardia enabled ${run}`;
     await t.check("enabled suggestions arrive from the controlled endpoint", async () => {
+      await onPage(shell, t.fixtures.url.page(1, run));
       await typeQuery(shell, enabled);
       const want = suggestionsFor(enabled)[0];
       await until(async () => (await shell.text()).includes(want), { timeout: 15000, label: `suggestion "${want}" in the command bar` });
@@ -63,6 +70,7 @@ export default {
       await shell.state("s.updateSettings({ searchSuggestions: true }); return true;");
       const windowId = await shell.state(`return s.createWindow({ incognito: true, profileId: "default" });`);
       const privateShell = await app.shell(windowId, { timeout: 25000 });
+      await onPage(privateShell, t.fixtures.url.page(2, run));
       const query = `ardia private ${run}`;
       await typeQuery(privateShell, query);
       const want = suggestionsFor(query)[0];
