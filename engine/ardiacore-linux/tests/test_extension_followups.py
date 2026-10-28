@@ -49,6 +49,27 @@ class ExtensionFollowupHelperTests(unittest.TestCase):
         self.assertIn('extension follow-up scenarios passed', output)
 
 
+class NativeMessagingSearchOrderTests(unittest.TestCase):
+    def test_password_manager_manifest_folders_are_searched_after_ardia_own(self):
+        source = CHROMIUM / 'chrome/browser/extensions/api/messaging/launch_context_posix.cc'
+        paths = CHROMIUM / 'chrome/common/chrome_paths.cc'
+        if not source.exists() or not paths.exists():
+            self.skipTest('the Chromium 156 source tree is unavailable')
+        text = source.read_text()
+        order = [text.index(marker) for marker in ['DIR_USER_NATIVE_MESSAGING, host_name', 'DIR_CHROME_USER_NATIVE_MESSAGING, host_name',
+                                                   'g_ardia_native_messaging_manifest(host_name)', 'DIR_NATIVE_MESSAGING, host_name',
+                                                   'DIR_CHROME_NATIVE_MESSAGING, host_name']]
+        self.assertEqual(order, sorted(order))
+        defined = paths.read_text()
+        chrome_system = defined[defined.index('case chrome::DIR_CHROME_NATIVE_MESSAGING:'):][:400]
+        self.assertIn('"/etc/opt/chrome/native-messaging-hosts"', chrome_system)
+        self.assertIn('"/etc/chromium/native-messaging-hosts"', defined)
+        chrome_user = defined[defined.index('case chrome::DIR_CHROME_USER_NATIVE_MESSAGING:'):][:300]
+        self.assertIn('DIR_CHROME_USER_DATA', chrome_user)
+        self.assertIn('std::string data_dir_basename = "google-chrome";',
+                      (CHROMIUM / 'chrome/common/chrome_paths_linux.cc').read_text())
+
+
 class ExtensionShortcutWiringTests(unittest.TestCase):
     host = (LINUX / 'ac_linux_host.cc').read_text()
     glue = (LINUX / 'ac_linux_extension_keybindings.cc').read_text()
