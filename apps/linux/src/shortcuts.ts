@@ -1,5 +1,5 @@
 import type { BrowserCommand, MenuShortcut, ShortcutModifier } from "@ardia-real/shell";
-import { COMMANDS, shortcutSources } from "./commandCatalog";
+import { COMMANDS, LINUX_STANDARD_ITEMS, shortcutSources } from "./commandCatalog";
 import { resolveShortcuts, type ShortcutOverrides } from "./shortcutFormat";
 
 export type Binding = { keyCode: number; modifiers: number; command: BrowserCommand; arg: string | null; notInText: boolean };
@@ -25,13 +25,16 @@ const codeOf = (key: string): number | null => {
   if (key.length === 1 && point >= 0xf704 && point <= 0xf717) return 112 + point - 0xf704;
   return Object.values(specialKeys).find(([value]) => value === key)?.[1] ?? null;
 };
-const commandOf = (id: string) => id.split(":")[0] as BrowserCommand;
+const commandOf = (id: string) => (LINUX_STANDARD_ITEMS[id]?.command ?? id.split(":")[0]) as BrowserCommand;
+const argOf = (id: string) => id in LINUX_STANDARD_ITEMS || !id.includes(":") ? null : id.slice(id.indexOf(":") + 1);
 const titleOf = (id: string) => {
+  const standard = LINUX_STANDARD_ITEMS[id];
+  if (standard) return standard.title;
   const [command, arg] = id.split(":");
   const spec = COMMANDS[command as BrowserCommand];
   return (arg && spec.variants?.[arg]?.title) || spec.title || `${command!.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}${arg ? ` ${arg}` : ""}`;
 };
-const pathOf = (command: string) => /Settings|Profile/.test(command) ? "Ardia" : /Tab|Window|Group/.test(command) ? "Tabs" : /find|Find|Selection|copy/.test(command) ? "Edit" : /bookmark|Bookmark/.test(command) ? "Bookmarks" : /History|Browsing|downloads|back|forward/.test(command) ? "History" : "View";
+const pathOf = (command: string) => LINUX_STANDARD_ITEMS[command]?.path ?? (/Settings|Profile/.test(command) ? "Ardia" : /Tab|Window|Group/.test(command) ? "Tabs" : /find|Find|Selection|copy/.test(command) ? "Edit" : /bookmark|Bookmark/.test(command) ? "Bookmarks" : /History|Browsing|downloads|back|forward/.test(command) ? "History" : "View");
 
 export function linuxMenuShortcuts(overrides: ShortcutOverrides = {}, profiles: readonly string[] = []): MenuShortcut[] {
   const sources = shortcutSources(profiles, Object.keys(overrides));
@@ -56,8 +59,7 @@ export function linuxBindings(overrides: ShortcutOverrides = {}, profiles: reado
     if (bound.has(combo)) return [];
     bound.add(combo);
     const command = commandOf(id);
-    const arg = id.includes(":") ? id.slice(id.indexOf(":") + 1) : null;
-    return [{ keyCode, modifiers, command, arg, notInText: command === "returnToPinnedUrl" }];
+    return [{ keyCode, modifiers, command, arg: argOf(id), notInText: command === "returnToPinnedUrl" }];
   }));
 }
 

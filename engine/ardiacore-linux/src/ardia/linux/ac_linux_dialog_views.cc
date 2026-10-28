@@ -4,6 +4,7 @@
 
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -110,6 +111,10 @@ class DialogSurface : public LinuxDialogSurface, public views::WidgetObserver {
 std::unique_ptr<LinuxDialogSurface> Present(base::WeakPtr<views::Widget> parent,
     bool background, const LinuxDialogSpec& spec, LinuxDialogResponder responder) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (background) {
+    LOG(WARNING) << "[ardiacore] dialog (background run, not shown): \"" << spec.title << "\" ("
+                 << spec.confirm_title << " / " << spec.cancel_title << "): " << spec.cancel_title;
+  }
   if (background || !parent || parent->IsClosed() || parent->is_destroying()) {
     std::move(responder).Run({.forced = true});
     return nullptr;

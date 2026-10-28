@@ -96,6 +96,8 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/devtools/devtools_contents_resizing_strategy.h"
 #include "chrome/browser/devtools/devtools_window.h"
+#include "chrome/browser/download/download_core_service.h"
+#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
@@ -1819,7 +1821,9 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Append("ArdiaShell.launchSteps")
       .Append("ArdiaShell.completeLaunchStep")
       .Append("ArdiaShell.typeaheadReady")
-      .Append("ArdiaShell.restoreFullScreen");
+      .Append("ArdiaShell.restoreFullScreen")
+      .Append("ArdiaShell.downloadsInProgress")
+      .Append("ArdiaShell.quit");
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
   for (const auto& route : ardiacore::linux_contract::kRoutes)
     capabilities.Append(route.name);
@@ -4697,6 +4701,13 @@ void ShellHostView::Invoke(
   if (method == "ArdiaShell.setMenuState" || method == "ArdiaShell.setMenuBookmarks") {
     return std::move(done).Run(true, base::Value());
   }
+  if (method == "ArdiaShell.quit" || method == "ArdiaShell.downloadsInProgress") {
+    if (values.size() != 0) return std::move(done).Run(false, base::Value(method + " takes no arguments"));
+    if (method == "ArdiaShell.downloadsInProgress")
+      return std::move(done).Run(true, base::Value(DownloadCoreService::BlockingShutdownCountAllProfiles()));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, base::BindOnce(&chrome::AttemptExit));
+    return std::move(done).Run(true, base::Value());
+  }
   if (method == "search.setEngineName") {
     const std::string name = ArgumentString(values, 0);
     if (name.empty()) return std::move(done).Run(true, base::Value());
@@ -5275,6 +5286,7 @@ void StartLinuxHost() {
         if (found != Hosts().end() && found->second->browser() == browser)
           found->second->ChromeCloseCancelled(token);
       }};
+  SetLinuxQuitAsksAboutDownloads(true);
   LinuxExtensionsDelegate extensions;
   extensions.deliver = base::BindRepeating([](int window, std::string_view name, base::DictValue data) {
     const auto found = Hosts().find(window);

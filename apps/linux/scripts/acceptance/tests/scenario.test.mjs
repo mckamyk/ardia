@@ -140,7 +140,7 @@ describe("report", () => {
 
 describe("scenario catalogue", () => {
   it("covers every issue #81 names and the later feature issues, once each", () => {
-    assert.deepEqual(SCENARIOS.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 16, 17, 18, 19, 20, 22, 23, 25, 26, 27, 28, 30, 32, 33, 34, 35, 36, 37, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 88, 89, 92, 97, 98, 99, 100, 101, 102, 104, 105, 106, 107, 108, 109, 110, 111, 114, 137]);
+    assert.deepEqual(SCENARIOS.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 16, 17, 18, 19, 20, 22, 23, 25, 26, 27, 28, 30, 32, 33, 34, 35, 36, 37, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 88, 89, 92, 97, 98, 99, 100, 101, 102, 104, 105, 106, 107, 108, 109, 110, 111, 114, 137, 221]);
     assert.equal(new Set(SCENARIOS.map((s) => s.id)).size, SCENARIOS.length);
     for (const s of SCENARIOS) {
       assert.equal(typeof s.run, "function", s.id);
@@ -175,6 +175,17 @@ describe("scenario catalogue", () => {
     const { POLICY_LOCK } = await import("../scenarios/f18-policies.mjs");
     const policies = await readFile(new URL("../../../src/hostPolicies.ts", import.meta.url), "utf8");
     assert.ok(policies.includes(`export const TAB_POLICY_LOCK = "${POLICY_LOCK}";`));
+  });
+
+  it("expects the quit prompt in the same words the shell asks and the background dialog log writes", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { QUIT_BACKGROUND_ANSWER } = await import("../scenarios/q221-quit-warning.mjs");
+    const quit = await readFile(new URL("../../../src/quit.ts", import.meta.url), "utf8");
+    const views = await readFile(new URL("../../../../../engine/ardiacore-linux/src/ardia/linux/ac_linux_dialog_views.cc", import.meta.url), "utf8");
+    assert.equal(QUIT_BACKGROUND_ANSWER, '[ardiacore] dialog (background run, not shown): "Are you sure you want to quit Ardia?" (Quit / Cancel): Cancel');
+    for (const text of ["title: `Are you sure you want to quit ${app}?`", 'confirmTitle: "Quit"', 'cancelTitle: "Cancel"', 'appName: () => "Ardia"']) assert.ok(quit.includes(text), text);
+    assert.ok(views.includes('"[ardiacore] dialog (background run, not shown): \\""'));
+    assert.deepEqual(selectScenarios(["#221"]).map((s) => s.id), ["Q221"]);
   });
 
   it("selects by finding or issue number", () => {

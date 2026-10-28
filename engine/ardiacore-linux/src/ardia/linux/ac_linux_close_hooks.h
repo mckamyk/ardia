@@ -86,6 +86,9 @@ class LinuxCloseDispatchCompletion {
 
 extern LinuxCloseHooks g_ardia_linux_close_hooks;
 
+void SetLinuxQuitAsksAboutDownloads(bool asks);
+bool LinuxQuitAsksAboutDownloads();
+
 void RegisterLinuxCloseClient(BrowserWindowInterface* browser,
                               base::RepeatingClosure discard_chrome);
 void UnregisterLinuxCloseClient(BrowserWindowInterface* browser);
