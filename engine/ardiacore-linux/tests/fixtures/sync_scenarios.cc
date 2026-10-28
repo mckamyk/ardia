@@ -10,9 +10,12 @@
 #include <fstream>
 #include <functional>
 #include <sstream>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
+#include "ardia/linux/ac_linux_policy.h"
 #include "ardia/linux/ac_linux_sync.h"
 #include "ardia/linux/ac_linux_sync_crypto.h"
 #include "ardia/linux/ac_linux_sync_json.h"
@@ -442,8 +445,10 @@ void Core(const std::string& scratch) {
   CHECK(core.Dispatch("ArdiaSync.openLocal", {S("AAAA")}, now).value.type == JsonValue::Type::kNull);
   CHECK(core.Dispatch("ArdiaSync.recoveryWords", {}, now).code == "locked");
   CHECK(core.Dispatch("ArdiaSync.createPhrase", {S("../bad")}, now).code == "ERR_SYNC_ARGUMENT");
-  CHECK(core.Dispatch("ArdiaSync.readPasswords", {S("")}, now).value.type == JsonValue::Type::kNull);
-  CHECK(core.Dispatch("ArdiaSync.savePassword", {S(""), S("o"), S("u"), S("s"), JsonValue::Bool(false)}, now).value.flag == false);
+  CHECK(core.Dispatch("ArdiaSync.readPasswords", {S("default")}, now).code == "ERR_UNKNOWN_CALL");
+  CHECK(core.Dispatch("ArdiaSync.savePassword", {S("default"), S("https://a.example"), S("u"), S("s"), JsonValue::Bool(false)}, now).code ==
+        "ERR_UNKNOWN_CALL");
+  CHECK(core.Dispatch("ArdiaSync.status", {}, now).value.Find("passwords")->flag);
   CHECK(core.Dispatch("ArdiaSync.nope", {}, now).code == "ERR_UNKNOWN_CALL");
 
   const std::string device = NewFileId();
@@ -732,6 +737,140 @@ void KeyStorePolicy() {
 
 }
 
+LoginRead Logins(bool complete, std::vector<std::tuple<std::string, std::string, std::string, double>> rows) {
+  LoginRead read;
+  read.complete = complete;
+  for (auto& [realm, username, password, created] : rows) read.logins.emplace_back(realm, username, std::move(password), created);
+  return read;
+}
+
+void LargeLocalState(const std::string& scratch) {
+  SyncCore core(MakeFileKeyStore(scratch + "/large-keys"), {scratch + "/large-folder", "Large Device"});
+  CHECK(core.Dispatch("ArdiaSync.createPhrase", {S(NewFileId())}, NowSeconds()).value.flag);
+  std::string state = "{\"covers\":3,\"scopes\":{\"app\":\"";
+  while (state.size() < 12u * 1024 * 1024) state += "history-entry-0123456789abcdef-";
+  state += "\"}}";
+  auto sealed = core.Dispatch("ArdiaSync.sealLocal", {S(state)}, NowSeconds());
+  CHECK(sealed.ok && sealed.value.text.size() > ardia::linux_policy::kDocumentLimit);
+  CHECK(sealed.value.text.size() <= ardia::linux_policy::DocumentLimit(ardia::linux_policy::kSyncStateDocument));
+  CHECK(core.Dispatch("ArdiaSync.openLocal", {S(sealed.value.text)}, NowSeconds()).value.text == state);
+  std::printf("large local state: %zu sealed bytes round trip\n", sealed.value.text.size());
+}
+
+void SealedLogins(const std::string& scratch) {
+  CHECK(LoginOrigin("https://bank.example/") == std::optional<std::string>("https://bank.example"));
+  CHECK(LoginOrigin("http://intranet.example:8080") == std::optional<std::string>("http://intranet.example:8080"));
+  CHECK(!LoginOrigin("https://bank.example/realm"));
+  CHECK(!LoginOrigin("android://hash@com.example.app/"));
+  CHECK(!LoginOrigin("ftp://files.example"));
+  CHECK(!LoginOrigin("https://two words.example"));
+  CHECK(!LoginOrigin("https://"));
+  CHECK(!LoginOrigin(""));
+  CHECK(!LoginOrigin("https://bank.example\n"));
+  CHECK(!LoginOrigin(std::string("https://") + std::string(kMaxLoginOriginBytes, 'a')));
+
+  CHECK(ReadPasswordsProfile({S("default")}) == std::optional<std::string>("default"));
+  CHECK(!ReadPasswordsProfile({}));
+  CHECK(!ReadPasswordsProfile({JsonValue::Number(1)}));
+  CHECK(!ReadPasswordsProfile({S("")}));
+  CHECK(!ReadPasswordsProfile({S(std::string(kMaxProfileBytes + 1, 'p'))}));
+  auto save = ParsePasswordSave({S("default"), S("https://bank.example"), S("alice"), S("AAAA"), JsonValue::Bool(true)});
+  CHECK(save && save->profile == "default" && save->origin == "https://bank.example" && save->username == "alice" &&
+        save->sealed == "AAAA" && save->replacing && save->holdable);
+  CHECK(ParsePasswordSave({S("default"), S("https://bank.example"), S(""), S("AAAA"), JsonValue::Bool(false)}));
+  auto pathed = ParsePasswordSave({S("default"), S("https://bank.example/path"), S("alice"), S("AAAA"), JsonValue::Bool(false)});
+  CHECK(pathed && !pathed->holdable);
+  CHECK(!ParsePasswordSave({S("default"), S("https://bank.example"), S("alice"), S("AAAA"), S("yes")}));
+  CHECK(!ParsePasswordSave({S("default"), S("https://bank.example"), S("alice"), S("AAAA")}));
+  auto long_username = ParsePasswordSave({S("default"), S("https://bank.example"), S(std::string(kMaxLoginUsernameBytes + 1, 'u')),
+                                          S("AAAA"), JsonValue::Bool(false)});
+  CHECK(long_username && !long_username->holdable);
+  CHECK(!ParsePasswordSave({S("default"), S("https://bank.example"), S(std::string(kMaxSyncedFieldBytes + 1, 'u')), S("AAAA"),
+                            JsonValue::Bool(false)}));
+  CHECK(!ParsePasswordSave({S("default"), S(std::string(kMaxSyncedFieldBytes + 1, 'o')), S("alice"), S("AAAA"),
+                            JsonValue::Bool(false)}));
+  CHECK(kMaxLoginPasswordBytes == 65536 && kMaxSealedPasswordBytes >= 4 * (1 + kNonceBytes + kMaxLoginPasswordBytes + 36 + 2) / 3);
+  CHECK(!ParsePasswordSave({S("default"), S("https://bank.example"), S("alice"), S(std::string(kMaxSealedPasswordBytes + 1, 'A')),
+                            JsonValue::Bool(false)}));
+  CHECK(!ParsePasswordSave({JsonValue::Null(), S("https://bank.example"), S("alice"), S("AAAA"), JsonValue::Bool(false)}));
+
+  StoredLogin moved("https://bank.example", "alice", "moved-password", 0);
+  StoredLogin target(std::move(moved));
+  CHECK(moved.password.empty() && target.password == "moved-password");
+
+  SyncCore core(MakeFileKeyStore(scratch + "/login-keys"), {scratch + "/login-folder", "Login Device"});
+  const auto rows = [] {
+    return Logins(true, {{"https://bank.example/", "alice@example.com", "hunter2-password", 1700000000000.5},
+                         {"https://bank.example", "alice@example.com", "a-duplicate-password", 1},
+                         {"https://bank.example/", "", "\xc3\xa9t\xc3\xa9-password", 2},
+                         {"https://shop.example/", "bob", "", 3},
+                         {"https://shop.example/basic-realm", "bob", "realm-password", 4},
+                         {"android://hash@com.example.app/", "bob", "android-password", 5},
+                         {"http://intranet.example:8080/", "carol", "intranet-password", 0}});
+  };
+  CHECK(core.SealLogins(rows()).value.type == JsonValue::Type::kNull);
+  const PasswordSave locked{"default", "https://bank.example", "alice@example.com", "AAAA", false};
+  CHECK(!core.OpenLogin(locked));
+  CHECK(core.Dispatch("ArdiaSync.createPhrase", {S(NewFileId())}, NowSeconds()).value.flag);
+  CHECK(core.SealLogins(Logins(false, {{"https://bank.example/", "alice@example.com", "hunter2-password", 1}})).value.type ==
+        JsonValue::Type::kNull);
+  Outcome sealed = core.SealLogins(rows());
+  CHECK(sealed.ok && sealed.value.is_array() && sealed.value.items.size() == 3);
+  const std::string text = WriteJson(sealed.value);
+  for (const char* secret : {"hunter2", "duplicate", "\xc3\xa9t\xc3\xa9", "realm-password", "android-password", "intranet-password"})
+    CHECK(text.find(secret) == std::string::npos);
+  CHECK(text == WriteJson(core.SealLogins(rows()).value));
+  struct Expected {
+    const char* origin;
+    const char* username;
+    const char* password;
+    double created;
+  };
+  const Expected expected[] = {{"https://bank.example", "alice@example.com", "hunter2-password", 1700000000000.5},
+                               {"https://bank.example", "", "\xc3\xa9t\xc3\xa9-password", 2},
+                               {"http://intranet.example:8080", "carol", "intranet-password", 0}};
+  for (size_t i = 0; i < sealed.value.items.size() && i < 3; ++i) {
+    const JsonValue& login = sealed.value.items[i];
+    CHECK(login.members.size() == 4);
+    CHECK(login.Find("origin")->text == expected[i].origin && login.Find("username")->text == expected[i].username);
+    CHECK(std::strtod(login.Find("created")->text.c_str(), nullptr) == expected[i].created);
+    PasswordSave request{"default", expected[i].origin, expected[i].username, login.Find("sealed")->text, false};
+    auto opened = core.OpenLogin(request);
+    CHECK(opened && opened->password == expected[i].password && opened->realm == expected[i].origin &&
+          opened->username == expected[i].username);
+    request.username = std::string(expected[i].username) + "x";
+    CHECK(!core.OpenLogin(request));
+    request.username = expected[i].username;
+    request.origin = "https://evil.example";
+    CHECK(!core.OpenLogin(request));
+    request.origin = expected[i].origin;
+    request.sealed[request.sealed.size() / 2] = request.sealed[request.sealed.size() / 2] == 'A' ? 'B' : 'A';
+    CHECK(!core.OpenLogin(request));
+    request.sealed = "not base64!";
+    CHECK(!core.OpenLogin(request));
+  }
+  const std::string long_password(20000, 'L');
+  Outcome long_sealed = core.SealLogins(Logins(true, {{"https://long.example/", "lee", std::string(long_password), 0},
+                                                      {"https://huge.example/", "hugh", std::string(kMaxLoginPasswordBytes + 1, 'H'), 0}}));
+  CHECK(long_sealed.ok && long_sealed.value.items.size() == 1 && long_sealed.value.items[0].Find("sealed")->text.size() > 16384);
+  Outcome long_usernames = core.SealLogins(Logins(true, {{"https://site.example/", std::string(2000, 'u'), "pw", 0},
+                                                         {"https://site.example/", std::string(kMaxSyncedFieldBytes + 1, 'v'), "pw", 0}}));
+  CHECK(long_usernames.ok && long_usernames.value.items.empty());
+  Outcome kib_username = core.SealLogins(Logins(true, {{"https://site.example/", std::string(kMaxLoginUsernameBytes, 'u'), "pw", 0}}));
+  CHECK(kib_username.ok && kib_username.value.items.size() == 1);
+  auto long_save = ParsePasswordSave({S("default"), S("https://long.example"), S("lee"), S(long_sealed.value.items[0].Find("sealed")->text),
+                                      JsonValue::Bool(false)});
+  CHECK(long_save && long_save->holdable);
+  auto long_opened = long_save ? core.OpenLogin(*long_save) : std::nullopt;
+  CHECK(long_opened && long_opened->password == long_password);
+  PasswordSave before_forget{"default", "https://bank.example", "alice@example.com", sealed.value.items[0].Find("sealed")->text, false};
+  CHECK(core.OpenLogin(before_forget));
+  core.Dispatch("ArdiaSync.forget", {}, NowSeconds());
+  CHECK(!core.OpenLogin(before_forget));
+  CHECK(core.SealLogins(rows()).value.type == JsonValue::Type::kNull);
+  std::printf("sealed logins: %zu sealed, partial and locked reads refused\n", sealed.value.items.size());
+}
+
 int main(int argc, char** argv) {
   if (argc == 3 && std::string(argv[1]) == "--secret-service") {
     SecretServiceWithoutBus(argv[2]);
@@ -745,6 +884,8 @@ int main(int argc, char** argv) {
     LegacyPasswords();
     KeyStores(scratch);
     Core(scratch);
+    SealedLogins(scratch);
+    LargeLocalState(scratch);
     Lease();
     DeleteRace(scratch);
     SymlinkedChain(scratch);

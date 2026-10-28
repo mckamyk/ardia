@@ -351,6 +351,46 @@ int main(int argc, char** argv) {
     assert(files.tasks.size() == tasks && host.storage_pending_ == 3);
     Drain(); assert(!host.storage_pending_ && !host.storage_pending_bytes_ && host.storage_intents_.empty());
   }
+  if (mode == "large-sync-state") {
+    auto save = [&](std::string name, std::string text, std::string expected) {
+      base::ListValue input; input.Append(base::Value(std::move(name))); input.Append(base::Value(std::move(text)));
+      base::DictValue args; args.Set("args", base::Value(std::move(input)));
+      host.GenericInvoke("ArdiaShell.saveDocument", args, [expected](bool ok, auto value) {
+        if (expected == "ok") assert(ok);
+        else if (expected == "failed") assert(!ok);
+        else assert(!ok && *value.GetDict().FindString("code") == expected);
+      });
+    };
+    const size_t limit = ardia::linux_policy::kSyncStateDocumentLimit;
+    save("settings.json", std::string(8 * 1024 * 1024 + 1, 's'), "ERR_DOCUMENT_LIMIT");
+    save("sync-journal-1.nns", std::string(8 * 1024 * 1024 + 1, 'j'), "ERR_DOCUMENT_LIMIT");
+    save("sync-state.nns", std::string(limit + 1, 'x'), "ERR_DOCUMENT_LIMIT");
+    Drain();
+    assert(storage_attempts == 0 && host.storage_intents_.empty());
+    save("sync-state.nns", "small", "ok");
+    assert(host.storage_intents_.size() == 1 && host.storage_intents_[0]->operation.Find("contents"));
+    Drain();
+    const auto big = std::string(9 * 1024 * 1024, 'b');
+    const int digests = storage_digests;
+    save("sync-state.nns", big, "ok");
+    assert(storage_digests == digests);
+    assert(host.storage_intents_.size() == 1 && host.storage_intents_[0]->operation.Find("sha256") &&
+           !host.storage_intents_[0]->operation.Find("contents") && host.storage_intents_[0]->bytes < 1024);
+    save("sync-state.nns", std::string(9 * 1024 * 1024, 'c'), "ERR_DOCUMENT_BUSY");
+    assert(storage_digests == digests);
+    Drain();
+    assert(storage_digests == digests + 1);
+    assert(storage_disk["sync-state.nns"] == big && host.storage_intents_.empty());
+    save("sync-state.nns", std::string(limit, 'm'), "ok"); Drain();
+    assert(storage_disk["sync-state.nns"]->size() == limit);
+    storage_outcomes.push_back(false);
+    save("sync-state.nns", big, "failed"); Drain();
+    assert(host.storage_failures_.contains("sync-state.nns"));
+    save("sync-state.nns", std::string(9 * 1024 * 1024, 'd'), "ok"); Drain();
+    assert(host.storage_failures_.contains("sync-state.nns"));
+    save("sync-state.nns", big, "ok"); Drain();
+    assert(host.storage_failures_.empty() && host.storage_intents_.empty() && storage_disk["sync-state.nns"] == big);
+  }
   if (mode == "different-write") {
     storage_outcomes.push_back(false); Write(host, "first"); Drain();
     storage_outcomes.push_back(false); Write(host, "second"); Drain();
@@ -547,6 +587,9 @@ struct JSONReader {
 
     def test_duplicate_pending_work_also_reserves_native_byte_budget(self):
         self.run_mode("pending-byte-capacity")
+
+    def test_sync_state_may_exceed_the_document_limit_with_a_digest_ledger_entry(self):
+        self.run_mode("large-sync-state")
 
     def test_other_failed_payload_and_remove_success_do_not_recover_written_intent(self):
         self.run_mode("different-write")

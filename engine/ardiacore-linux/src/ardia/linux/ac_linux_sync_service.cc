@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ardia/core/ac_launch_switches.h"
+#include "ardia/linux/ac_linux_credential_service.h"
 #include "ardia/linux/ac_linux_files.h"
 #include "ardia/linux/ac_linux_sync.h"
 #include "ardia/linux/ac_linux_sync_crypto.h"
@@ -63,6 +64,7 @@ constexpr size_t kMaxArgs = 8;
 constexpr char kLockedMessage[] = "Sync isn't set up on this device.";
 constexpr char16_t kDisclosurePurpose[] = u"show your sync recovery phrase";
 constexpr char kKeyDirectory[] = "Ardia Sync Keys";
+constexpr char kSkippedLogin[] = "skipped";
 
 struct UiState {
   sync::AuthorityLease lease;
@@ -367,6 +369,54 @@ void SaveKit(base::WeakPtr<LinuxShellWebView> shell, base::WeakPtr<Profile> prof
                std::move(split.second));
 }
 
+void ReadPasswords(const std::vector<sync::JsonValue>& args, Done done) {
+  auto profile = sync::ReadPasswordsProfile(args);
+  if (!profile) return Fail(std::move(done), "ERR_SYNC_ARGUMENT", "A profile is required");
+  LinuxCredentialsReadLogins(*profile, base::BindOnce(
+      [](Done done, sync::LoginRead read) {
+        Runner()->PostTaskAndReplyWithResult(
+            FROM_HERE, base::BindOnce([](sync::LoginRead read) { return Core().SealLogins(std::move(read)); },
+                                      std::move(read)),
+            base::BindOnce(&Reply, std::move(done)));
+      },
+      std::move(done)));
+}
+
+void SavePassword(const std::vector<sync::JsonValue>& args, Done done) {
+  auto parsed = sync::ParsePasswordSave(args);
+  if (!parsed) return Fail(std::move(done), "ERR_SYNC_ARGUMENT", "A profile, login, sealed password and flag are required");
+  if (!parsed->holdable) return std::move(done).Run(true, base::Value(kSkippedLogin));
+  const std::string profile = parsed->profile;
+  Runner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce([](sync::PasswordSave save) { return Core().OpenLogin(save); }, std::move(*parsed)),
+      base::BindOnce(
+          [](std::string profile, Done done, std::optional<sync::StoredLogin> login) {
+            if (!login) return std::move(done).Run(true, base::Value(false));
+            LinuxCredentialsSaveLogin(profile, std::move(*login), base::BindOnce(
+                [](Done done, LinuxSyncedSave saved) {
+                  if (saved == LinuxSyncedSave::kSkipped) return std::move(done).Run(true, base::Value(kSkippedLogin));
+                  std::move(done).Run(true, base::Value(saved == LinuxSyncedSave::kSaved));
+                },
+                std::move(done)));
+          },
+          profile, std::move(done)));
+}
+
+void SyncStatus(base::WeakPtr<Profile> profile, Done done) {
+  Post("ArdiaSync.status", {}, base::BindOnce(
+      [](base::WeakPtr<Profile> profile, Done done, sync::Outcome outcome) {
+        if (sync::JsonValue* passwords = outcome.ok ? outcome.value.Find("passwords") : nullptr)
+          passwords->flag = profile && LinuxCredentialsPasswordsUsable(profile.get());
+        Reply(std::move(done), std::move(outcome));
+      },
+      profile, std::move(done)));
+}
+
+void SyncPasswords(const std::string& method, const std::vector<sync::JsonValue>& args, Done done) {
+  if (method == "ArdiaSync.readPasswords") return ReadPasswords(args, std::move(done));
+  SavePassword(args, std::move(done));
+}
+
 bool RevokesDisclosure(std::string_view method) {
   return method == "ArdiaSync.forget" || method == "ArdiaSync.createPhrase" || method == "ArdiaSync.enterPhrase";
 }
@@ -416,7 +466,14 @@ void LinuxSyncInvoke(const LinuxSyncCaller& caller, Profile* app_profile, LinuxS
             Reply(std::move(done), std::move(outcome));
           },
           RevokesDisclosure(method), std::move(done)));
+    case sync::Route::kPasswords:
+      if (!Ui().lease.Holds(caller.key, NowMs()))
+        return Fail(std::move(done), "ERR_SYNC_NOT_AUTHORITY", "Another Ardia window is running sync");
+      SyncPasswords(method, args, std::move(done));
+      for (auto& arg : args) sync::WipeJson(arg);
+      return;
     case sync::Route::kCore:
+      if (method == "ArdiaSync.status") return SyncStatus(weak_profile, std::move(done));
       return Post(method, std::move(args), base::BindOnce(&Reply, std::move(done)));
     case sync::Route::kDisclose:
       return Disclose(method, weak_profile, std::move(done));

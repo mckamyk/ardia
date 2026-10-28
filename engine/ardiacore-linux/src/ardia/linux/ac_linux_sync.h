@@ -22,6 +22,7 @@ enum class Route {
   kChooseFolder,
   kSaveKit,
   kReveal,
+  kPasswords,
   kClaim,
   kRelease,
   kNothing,
@@ -57,8 +58,8 @@ inline constexpr Method kMethods[] = {
     {"ArdiaSync.copyRecoveryKit", Route::kNothing},
     {"ArdiaSync.shareRecoveryKit", Route::kNothing},
     {"ArdiaSync.revealFolder", Route::kReveal},
-    {"ArdiaSync.readPasswords", Route::kNothing},
-    {"ArdiaSync.savePassword", Route::kCore},
+    {"ArdiaSync.readPasswords", Route::kPasswords},
+    {"ArdiaSync.savePassword", Route::kPasswords},
     {"ArdiaSync.claimAuthority", Route::kClaim},
     {"ArdiaSync.releaseAuthority", Route::kRelease},
 };
@@ -72,6 +73,12 @@ inline constexpr size_t kMaxKnownIds = 200000;
 inline constexpr char kLocalScopeTag[] = "local";
 inline constexpr char kLocalFileId[] = "state";
 inline constexpr char kKitTextName[] = "Ardia Recovery Kit.txt";
+inline constexpr size_t kMaxProfileBytes = 256;
+inline constexpr size_t kMaxLoginOriginBytes = 2048;
+inline constexpr size_t kMaxLoginUsernameBytes = 1024;
+inline constexpr size_t kMaxLoginPasswordBytes = 65536;
+inline constexpr size_t kMaxSealedPasswordBytes = 131072;
+inline constexpr size_t kMaxSyncedFieldBytes = 65536;
 
 std::optional<Route> RouteOf(std::string_view method);
 
@@ -84,6 +91,40 @@ struct Outcome {
   std::string code;
   std::string message;
 };
+
+class StoredLogin {
+ public:
+  StoredLogin() = default;
+  StoredLogin(std::string realm, std::string username, std::string&& password, double created_ms);
+  StoredLogin(StoredLogin&& other) noexcept;
+  StoredLogin& operator=(StoredLogin&& other) noexcept;
+  StoredLogin(const StoredLogin&) = delete;
+  StoredLogin& operator=(const StoredLogin&) = delete;
+  ~StoredLogin();
+
+  std::string realm;
+  std::string username;
+  std::string password;
+  double created_ms = 0;
+};
+
+struct LoginRead {
+  bool complete = false;
+  std::vector<StoredLogin> logins;
+};
+
+struct PasswordSave {
+  std::string profile;
+  std::string origin;
+  std::string username;
+  std::string sealed;
+  bool replacing = false;
+  bool holdable = true;
+};
+
+std::optional<std::string> LoginOrigin(std::string_view realm);
+std::optional<std::string> ReadPasswordsProfile(const std::vector<JsonValue>& args);
+std::optional<PasswordSave> ParsePasswordSave(const std::vector<JsonValue>& args);
 
 class AuthorityLease {
  public:
@@ -121,6 +162,8 @@ class SyncCore {
 
   Outcome Dispatch(std::string_view method, const std::vector<JsonValue>& args, int64_t now_seconds);
   Outcome SaveKit(const std::string& path, std::string_view created);
+  Outcome SealLogins(LoginRead read);
+  std::optional<StoredLogin> OpenLogin(const PasswordSave& save);
 
   bool unlocked() const { return keys_ != nullptr; }
   bool unreadable() const { return unreadable_; }

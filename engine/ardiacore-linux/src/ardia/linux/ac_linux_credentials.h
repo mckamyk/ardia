@@ -149,6 +149,16 @@ Plan PlanCall(std::string_view name, const Arg& input);
 Plan PlanInvoke(std::string_view method, const std::vector<Arg>& values);
 Plan PlanExport(std::string_view path);
 
+struct SyncedLoginPlans {
+  bool storable = false;
+  Plan remove;
+  Plan save;
+};
+
+SyncedLoginPlans PlanSyncedLogin(std::string_view profile, std::string_view origin, std::string_view username,
+                                 std::string_view password);
+bool PasswordsSyncUsable(bool skip_undecryptable, bool service, StoreError error);
+
 std::optional<std::string> NormalizeOrigin(std::string_view origin);
 
 struct Failure {

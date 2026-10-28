@@ -11,10 +11,13 @@
 #include "ardia/linux/ac_linux_files.h"
 #include "ardia/linux/ac_linux_profile_service.h"
 #include "ardia/linux/ac_linux_profiles.h"
+#include "ardia/linux/ac_linux_sync.h"
+#include "base/feature_list.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/json/json_reader.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -35,12 +38,16 @@
 #include "components/keyed_service/core/service_access_type.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "components/os_crypt/async/common/encryptor.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_manager_switches.h"
 #include "components/password_manager/core/browser/password_store/actionable_error.h"
+#include "components/password_manager/core/browser/password_store/password_store_consumer.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
+#include "components/password_manager/core/browser/password_store/stored_credential.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
+#include "crypto/process_bound_string.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/shell_dialogs/selected_file_info.h"
 #include "ui/views/widget/widget.h"
@@ -58,6 +65,7 @@ static_assert(std::string_view(autofill::prefs::kAutofillCreditCardEnabled) == c
 
 constexpr int kArgDepth = 2;
 constexpr base::TimeDelta kEncryptorTimeout = base::Seconds(10);
+constexpr base::TimeDelta kLoginReadTimeout = base::Seconds(30);
 constexpr base::TaskTraits kFileTasks = {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
                                          base::TaskShutdownBehavior::BLOCK_SHUTDOWN};
 
@@ -564,6 +572,80 @@ void Run(std::string_view engine_profile,
                      autofill_status, std::move(done)));
 }
 
+class SyncLoginReader : public password_manager::PasswordStoreConsumer {
+ public:
+  using Read = base::OnceCallback<void(linux_sync::LoginRead)>;
+
+  static void Start(scoped_refptr<password_manager::PasswordStoreInterface> store, Read read) {
+    auto* reader = new SyncLoginReader(std::move(read));
+    reader->timeout_.Start(FROM_HERE, kLoginReadTimeout,
+                           base::BindOnce(&SyncLoginReader::Finish, reader->weak_factory_.GetWeakPtr(),
+                                          linux_sync::LoginRead()));
+    store->GetAutofillableLogins(reader->weak_factory_.GetWeakPtr());
+  }
+
+  SyncLoginReader(const SyncLoginReader&) = delete;
+  SyncLoginReader& operator=(const SyncLoginReader&) = delete;
+  ~SyncLoginReader() override = default;
+
+  void OnGetPasswordStoreResultsOrErrorFrom(
+      password_manager::PasswordStoreInterface*,
+      base::expected<std::vector<password_manager::StoredCredential>, password_manager::PasswordStoreBackendError>
+          results) override {
+    linux_sync::LoginRead read;
+    if (results.has_value()) {
+      read.complete = true;
+      read.logins.reserve(results->size());
+      for (password_manager::StoredCredential& credential : *results) {
+        if (!credential.blocked_by_user && !credential.federation_origin.IsValid()) {
+          crypto::SecureU16String password = credential.password_value.secure_value();
+          std::string utf8 = SecretUTF8(std::u16string_view(password.data(), password.size()));
+          read.logins.emplace_back(credential.signon_realm, base::UTF16ToUTF8(credential.username_value),
+                                   std::move(utf8),
+                                   credential.date_created.is_null()
+                                       ? 0
+                                       : credential.date_created.InMillisecondsFSinceUnixEpochIgnoringNull());
+        }
+        credential.password_value.clear();
+      }
+    }
+    Finish(std::move(read));
+  }
+
+ private:
+  explicit SyncLoginReader(Read read) : read_(std::move(read)) {}
+
+  void Finish(linux_sync::LoginRead read) {
+    weak_factory_.InvalidateWeakPtrs();
+    timeout_.Stop();
+    Read done = std::move(read_);
+    base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
+    std::move(done).Run(std::move(read));
+  }
+
+  Read read_;
+  base::OneShotTimer timeout_;
+  base::WeakPtrFactory<SyncLoginReader> weak_factory_{this};
+};
+
+void ReadLoginsFor(base::OnceCallback<void(linux_sync::LoginRead)> done, Profile* profile, std::string_view,
+                   std::string_view) {
+  if (!profile || base::FeatureList::IsEnabled(password_manager::features::kSkipUndecryptablePasswords)) {
+    return std::move(done).Run(linux_sync::LoginRead());
+  }
+  WithProbes(profile, true, true, base::BindOnce(
+      [](base::WeakPtr<Profile> profile, base::OnceCallback<void(linux_sync::LoginRead)> done, Probes probes) {
+        scoped_refptr<password_manager::PasswordStoreInterface> store =
+            profile ? ProfilePasswordStoreFactory::GetForProfile(profile.get(), ServiceAccessType::EXPLICIT_ACCESS)
+                    : nullptr;
+        if (!store || !credentials::Assess(credentials::Store::kPasswords, probes.passwords).available) {
+          return std::move(done).Run(linux_sync::LoginRead());
+        }
+        SyncLoginReader::Start(std::move(store), std::move(done));
+      },
+      profile->GetWeakPtr(), std::move(done)));
+}
+
 }
 
 bool LinuxCredentialsHandles(std::string_view name) {
@@ -597,6 +679,46 @@ void LinuxCredentialsInvoke(bool private_window,
   credentials::Plan plan = credentials::PlanInvoke(method, args);
   args.clear();
   Run(engine_profile, private_window, shell, std::move(plan), method == "ArdiaAutofill.status", std::move(done));
+}
+
+void LinuxCredentialsReadLogins(const std::string& engine_profile,
+                                base::OnceCallback<void(linux_sync::LoginRead)> done) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  ResolveCredentialProfile(engine_profile, false, base::BindOnce(&ReadLoginsFor, std::move(done)));
+}
+
+void LinuxCredentialsSaveLogin(const std::string& engine_profile, linux_sync::StoredLogin login,
+                               base::OnceCallback<void(LinuxSyncedSave)> done) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  credentials::SyncedLoginPlans plans =
+      credentials::PlanSyncedLogin(engine_profile, login.realm, login.username, login.password);
+  if (!plans.storable) {
+    return std::move(done).Run(LinuxSyncedSave::kSkipped);
+  }
+  Done saved = base::BindOnce(
+      [](base::OnceCallback<void(LinuxSyncedSave)> done, bool ok, base::Value) {
+        std::move(done).Run(ok ? LinuxSyncedSave::kSaved : LinuxSyncedSave::kFailed);
+      },
+      std::move(done));
+  Run(engine_profile, false, nullptr, std::move(plans.remove), false, base::BindOnce(
+      [](std::string engine_profile, credentials::Plan save, Done saved, bool removed, base::Value) {
+        if (!removed) {
+          return std::move(saved).Run(false, base::Value());
+        }
+        Run(engine_profile, false, nullptr, std::move(save), false, std::move(saved));
+      },
+      engine_profile, std::move(plans.save), std::move(saved)));
+}
+
+bool LinuxCredentialsPasswordsUsable(Profile* profile) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  scoped_refptr<password_manager::PasswordStoreInterface> store =
+      profile && !profile->IsOffTheRecord()
+          ? ProfilePasswordStoreFactory::GetForProfile(profile, ServiceAccessType::EXPLICIT_ACCESS)
+          : nullptr;
+  return credentials::PasswordsSyncUsable(
+      base::FeatureList::IsEnabled(password_manager::features::kSkipUndecryptablePasswords), !!store,
+      store ? StoreErrorOf(store->GetError()) : credentials::StoreError::kOther);
 }
 
 }

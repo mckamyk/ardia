@@ -2,9 +2,18 @@
 #define ARDIA_LINUX_AC_LINUX_POLICY_H_
 
 #include <cerrno>
+#include <cstddef>
 #include <string_view>
 
 namespace ardia::linux_policy {
+
+inline constexpr size_t kDocumentLimit = 8 * 1024 * 1024;
+inline constexpr char kSyncStateDocument[] = "sync-state.nns";
+inline constexpr size_t kSyncStateDocumentLimit = 48 * 1024 * 1024;
+
+inline constexpr size_t DocumentLimit(std::string_view name) {
+  return name == kSyncStateDocument ? kSyncStateDocumentLimit : kDocumentLimit;
+}
 
 inline bool ValidDocumentName(std::string_view name) {
   if (name.empty() || name.size() > 128 || name == "." || name == "..") {

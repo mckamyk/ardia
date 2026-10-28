@@ -74,7 +74,7 @@ Choosing, disclosing and opening:
 
 **`hostSync.ts`** is the `ArdiaSync` adapter, registered in `hostModules.ts`.
 - `newDeviceId` (16 random bytes in base32) and `deviceName` (cached from `ArdiaSync.deviceName`) answer locally, because the engine calls them synchronously.
-- `readPasswords` returns `null` and `savePassword` returns `false` (#145).
+- `readPasswords` and `savePassword` are typed invokes to the sealed native path (#145, `sync-followups-handoff.md`).
 - Everything else becomes `host.invoke("ArdiaSync.<method>", {args})`; nothing goes through `engine.call`.
 - It also holds the keyring messages that replace the engine's "Keychain" text.
 
@@ -101,12 +101,13 @@ Every method is a host invoke, `ArdiaSync.<method>` with `{ args: [...] }`. A fa
 
 | Route | Methods | Rules |
 | --- | --- | --- |
-| Any renderer | `folderInfo(path\|null)`, `deviceName()`, `status()`, `chainStatus(folder)` | `folderInfo` returns `{path, defaultPath, iCloudAvailable, inICloud: false, exists, writable, hasSyncData}`. On Linux `iCloudAvailable` means the default folder's parent exists, because the shared pane uses it to gate the default folder. `status` returns `{keyStore, keyStoreStatus, lastKeyStatus, unlocked, unreadable, passwords: false}`. |
+| Any renderer | `folderInfo(path\|null)`, `deviceName()`, `status()`, `chainStatus(folder)` | `folderInfo` returns `{path, defaultPath, iCloudAvailable, inICloud: false, exists, writable, hasSyncData}`. On Linux `iCloudAvailable` means the default folder's parent exists, because the shared pane uses it to gate the default folder. `status` returns `{keyStore, keyStoreStatus, lastKeyStatus, unlocked, unreadable, passwords}`, where `passwords` says whether the profile's password store can sync now (#145). |
 | Lease holder only | `createPhrase`, `enterPhrase`, `unlock`, `forget`, `createChain`, `write`, `read`, `remove`, `deleteChain`, `sealLocal`, `openLocal` | Anyone else gets `ERR_SYNC_NOT_AUTHORITY`. Replies match macOS: `PhraseResult`, the `Listing` with `damaged.age` in ms, sealed base64 strings, `"ok"\|"missing"\|"unavailable"`. Without a key they fail with `locked`. After an unreadable legacy state, `write` and `sealLocal` fail with `unreadable`. |
 | Disclosure | `recoveryWords`, `qrCode`, `copyRecoveryPhrase` | `locked` if there's no key. Otherwise polkit asks (or a grant from the last 60 s is reused). A refusal returns `null`. |
 | Pickers | `chooseFolder(current)`, `saveRecoveryKit("text")` | Cancel returns `null`. `saveRecoveryKit("pdf")` fails with `ERR_SYNC_UNSUPPORTED`. The kit asks for polkit after the path is chosen, writes atomically with mode 0600 and returns the path. |
 | Lease | `claimAuthority()` → `{granted, leaseMs}`, `releaseAuthority()` | Utility windows are never granted. |
-| Not on Linux | `recoveryKitPreview`, `copyRecoveryKit`, `shareRecoveryKit`, `readPasswords` → `null`; `savePassword` → `false` | Tracked in #147 and #145. |
+| Passwords (lease holder only) | `readPasswords(profile)`, `savePassword(profile, origin, username, sealed, replacing)` | See `sync-followups-handoff.md` (#145). |
+| Not on Linux | `recoveryKitPreview`, `copyRecoveryKit`, `shareRecoveryKit` → `null` | The Linux Sync pane never calls them (#147). |
 
 ## Tests run
 
@@ -163,9 +164,7 @@ None of this was compiled or run in Chromium; the build belongs to another threa
 
 - **#174 macOS password vector.** Add a sealed-password test vector produced on a Mac.
 - **Phrase tokenizing.** Non-ASCII phrase input splits on a fixed list of separator ranges rather than Swift's `CharacterSet.lowercaseLetters`. ASCII input behaves identically, and a non-ASCII token is always an unknown word on both, but the reported word can differ.
-- **#145 Passwords.** No non-prompting sealed engine path exists for passwords yet, so they don't sync on Linux. The adapter skips them, and nothing is deleted.
-- **#146 Document size.** Linux's 8 MiB document limit can reject a large `sync-state.nns`.
-- **#147 Linux copy and kit formats.** The Sync pane still says Mac, iCloud and Finder, and the kit has no PDF, preview, copy or share.
+- **#145, #146, #147.** Done in `sync-followups-handoff.md`: passwords sync through a sealed native path, the sync state may grow to 48 MiB, and the pane has Linux wording and only Linux's kit actions.
 
 ## Risks
 

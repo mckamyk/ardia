@@ -6,6 +6,12 @@ import { SyncNative } from "../../browser/src/platform/sync";
 import { ardiaHost, type ArdiaHost } from "./host";
 import {
   claimSyncAuthority,
+  configureHeldLogins,
+  createHeldLogins,
+  HeldLoginsResetError,
+  enterPhraseBegins,
+  heldLoginsStatus,
+  whileResettingHeldLogins,
   keyringMessage,
   loadSyncDeviceName,
   presentSyncState,
@@ -16,7 +22,9 @@ import {
   withChosenSyncFolder,
   type SyncKeyStoreStatus,
 } from "./hostSync.ts";
-import { deleteDocument, refreshDocument } from "./shims/shellBase";
+import { deleteDocument, readDocument, refreshDocument, saveDocument } from "./shims/shellBase";
+import { useBrowser } from "../../browser/src/state/browser/store";
+import { engineProfile } from "../../browser/src/state/browser/model";
 import {
   INTERACTIVE_CALL_TIMEOUT_MS,
   SYNC_CHANNEL,
@@ -33,19 +41,76 @@ export const useSync = create<SyncUi>()(() => ({ ...engine.useSync.getState(), s
 
 let authority: SyncAuthority | null = null;
 let keyStore: SyncKeyStoreStatus | null = null;
+let heldLogins: ReturnType<typeof createHeldLogins> | null = null;
+
+function adoptHeldLogins() {
+  heldLogins = createHeldLogins({
+    read: readDocument,
+    save: saveDocument,
+    remove: deleteDocument,
+    seal: async (text) => SyncNative?.sealLocal(text),
+    open: async (sealed) => SyncNative?.openLocal(sealed),
+  });
+  configureHeldLogins(heldLogins);
+}
+
+let watchingProfiles = false;
+
+function dropDeletedProfiles() {
+  if (watchingProfiles) return;
+  watchingProfiles = true;
+  let last = useBrowser.getState().profiles;
+  let seen = new Set(Object.keys(last).map(engineProfile));
+  useBrowser.subscribe((state) => {
+    if (state.profiles === last) return;
+    last = state.profiles;
+    const live = new Set(Object.keys(last).map(engineProfile));
+    if (live.size) {
+      void heldLogins?.dropProfiles([...seen].filter((profile) => !live.has(profile))).catch((error: unknown) =>
+        console.warn("[ardia linux] sync", error instanceof Error ? error.message : error),
+      );
+    }
+    seen = live;
+  });
+}
+
+function dropHeldLogins() {
+  heldLogins = null;
+  configureHeldLogins(null);
+}
 
 function remoteFor(host: ArdiaHost): SyncRemote {
   return {
     syncNow: () => engine.syncNow(),
     turnOnSync: async (folder: string) => {
-      const result = await engine.turnOnSync(folder);
+      let result: Awaited<ReturnType<typeof engine.turnOnSync>>;
+      try {
+        result = await whileResettingHeldLogins(
+          () => engine.turnOnSync(folder),
+          (result) => !("error" in result),
+          () => engine.stopSync({ deleteData: true }),
+        );
+      } catch (error) {
+        if (error instanceof HeldLoginsResetError) return { error: error.message };
+        throw error;
+      }
       if ("error" in result && result.error === KEYCHAIN_ERROR) {
         keyStore = await syncKeyStoreStatus(host).catch(() => keyStore);
         return { error: keyringMessage(keyStore, true) ?? "Couldn’t save the sync key in your keyring." };
       }
       return result;
     },
-    enterRecoveryPhrase: (folder: string, text: string) => engine.enterRecoveryPhrase(folder, text),
+    enterRecoveryPhrase: (folder: string, text: string) => {
+      const begins = enterPhraseBegins(engine.useSync.getState());
+      return whileResettingHeldLogins(
+        () => engine.enterRecoveryPhrase(folder, text),
+        (result) => begins && "ok" in result,
+        () => engine.stopSync(),
+      ).catch((error: unknown) => {
+        if (error instanceof HeldLoginsResetError) return { error: "unavailable" as const };
+        throw error;
+      });
+    },
     stopSync: (options?: { deleteData?: boolean }) => engine.stopSync(options),
     setTypeSynced: (type: DataType, enabled: boolean) => engine.setTypeSynced(type, enabled),
     setProfileSynced: (profileId: string, enabled: boolean) => engine.setProfileSynced(profileId, enabled),
@@ -64,6 +129,8 @@ async function becomeAuthority(host: ArdiaHost) {
   }
   await loadSyncDeviceName(host);
   keyStore = await syncKeyStoreStatus(host).catch(() => null);
+  adoptHeldLogins();
+  dropDeletedProfiles();
   engine.startSync();
   return { store: engine.useSync, remote: remoteFor(host) };
 }
@@ -79,7 +146,15 @@ export function startLinuxSync(options: { host?: ArdiaHost; candidate: boolean; 
     locks: options.locks,
     channel,
     mirror: useSync,
-    claim: () => claimSyncAuthority(host),
+    claim: async () => {
+      const claim = await claimSyncAuthority(host);
+      if (!claim.granted) dropHeldLogins();
+      else if (!heldLogins && authority?.isAuthority()) adoptHeldLogins();
+      return claim;
+    },
+    onRole: (role) => {
+      if (role !== "authority") dropHeldLogins();
+    },
     release: () => releaseSyncAuthority(host),
     become: () => becomeAuthority(host),
     present: (state) => presentSyncState(state, keyStore),
@@ -92,6 +167,7 @@ export function startLinuxSync(options: { host?: ArdiaHost; candidate: boolean; 
 export const linuxSyncHooks = {
   state: () => useSync.getState(),
   role: () => authority?.role() ?? "unavailable",
+  heldLogins: () => heldLoginsStatus(),
   turnOnSync: (folder: string) => turnOnSync(folder),
   enterRecoveryPhrase: (folder: string, text: string) => enterRecoveryPhrase(folder, text),
   stopSync: (options?: { deleteData?: boolean }) => stopSync(options),

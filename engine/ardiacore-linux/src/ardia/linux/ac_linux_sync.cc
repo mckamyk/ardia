@@ -6,6 +6,7 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <set>
 #include <utility>
 
 #include "ardia/linux/ac_linux_sync_vault.h"
@@ -87,6 +88,79 @@ bool WriteFileAtomically(const std::string& path, const std::string& contents) {
 
 }
 
+namespace {
+
+void TakeSecret(std::string& into, std::string& from) {
+  Wipe(into);
+  into.assign(from.data(), from.size());
+  Wipe(from);
+  from.clear();
+}
+
+}
+
+StoredLogin::StoredLogin(std::string realm, std::string username, std::string&& password, double created_ms)
+    : realm(std::move(realm)), username(std::move(username)), created_ms(created_ms) {
+  TakeSecret(this->password, password);
+}
+
+StoredLogin::StoredLogin(StoredLogin&& other) noexcept
+    : realm(std::move(other.realm)), username(std::move(other.username)), created_ms(other.created_ms) {
+  TakeSecret(password, other.password);
+}
+
+StoredLogin& StoredLogin::operator=(StoredLogin&& other) noexcept {
+  if (this != &other) {
+    realm = std::move(other.realm);
+    username = std::move(other.username);
+    created_ms = other.created_ms;
+    TakeSecret(password, other.password);
+  }
+  return *this;
+}
+
+StoredLogin::~StoredLogin() {
+  Wipe(password);
+}
+
+std::optional<std::string> LoginOrigin(std::string_view realm) {
+  if (!realm.empty() && realm.back() == '/') realm.remove_suffix(1);
+  if (realm.size() > kMaxLoginOriginBytes) return std::nullopt;
+  std::string_view host;
+  if (realm.starts_with("https://")) {
+    host = realm.substr(8);
+  } else if (realm.starts_with("http://")) {
+    host = realm.substr(7);
+  } else {
+    return std::nullopt;
+  }
+  if (host.empty()) return std::nullopt;
+  for (const char c : host) {
+    const unsigned char byte = static_cast<unsigned char>(c);
+    if (c == '/' || byte <= 0x20 || byte == 0x7f) return std::nullopt;
+  }
+  return std::string(realm);
+}
+
+std::optional<std::string> ReadPasswordsProfile(const std::vector<JsonValue>& args) {
+  const std::string* profile = StringArg(args, 0, kMaxProfileBytes);
+  if (!profile || profile->empty()) return std::nullopt;
+  return *profile;
+}
+
+std::optional<PasswordSave> ParsePasswordSave(const std::vector<JsonValue>& args) {
+  auto profile = ReadPasswordsProfile(args);
+  const std::string* origin = StringArg(args, 1, kMaxSyncedFieldBytes);
+  const std::string* username = StringArg(args, 2, kMaxSyncedFieldBytes);
+  const std::string* sealed = StringArg(args, 3, kMaxSealedPasswordBytes);
+  const JsonValue* replacing = ArgAt(args, 4);
+  if (!profile || !origin || !username || !sealed || !replacing || replacing->type != JsonValue::Type::kBool) {
+    return std::nullopt;
+  }
+  const bool holdable = LoginOrigin(*origin) == *origin && username->size() <= kMaxLoginUsernameBytes;
+  return PasswordSave{std::move(*profile), *origin, *username, *sealed, replacing->flag, holdable};
+}
+
 std::optional<Route> RouteOf(std::string_view method) {
   for (const auto& entry : kMethods) {
     if (method == entry.name) return entry.route;
@@ -165,8 +239,6 @@ Outcome SyncCore::Dispatch(std::string_view method, const std::vector<JsonValue>
   if (method == "ArdiaSync.sealLocal") return SealLocal(args);
   if (method == "ArdiaSync.openLocal") return OpenLocal(args);
   if (method == "ArdiaSync.recoveryWords") return RecoveryWords();
-  if (method == "ArdiaSync.readPasswords") return Outcome::Value(JsonValue::Null());
-  if (method == "ArdiaSync.savePassword") return Outcome::Value(JsonValue::Bool(false));
   return Outcome::Error("ERR_UNKNOWN_CALL", "Unknown sync operation");
 }
 
@@ -387,7 +459,7 @@ Outcome SyncCore::Status() {
       {"lastKeyStatus", JsonValue::String(std::string(KeyStatusName(last_key_status_)))},
       {"unlocked", JsonValue::Bool(keys_ != nullptr)},
       {"unreadable", JsonValue::Bool(unreadable_)},
-      {"passwords", JsonValue::Bool(false)},
+      {"passwords", JsonValue::Bool(true)},
   }));
 }
 
@@ -401,6 +473,41 @@ Outcome SyncCore::SaveKit(const std::string& path, std::string_view created) {
   Wipe(text);
   if (!saved) return Outcome::Error("ERR_SYNC_KIT", "Couldn't save the Recovery Kit");
   return Outcome::Value(JsonValue::String(path));
+}
+
+Outcome SyncCore::SealLogins(LoginRead read) {
+  if (!keys_ || !read.complete) return Outcome::Value(JsonValue::Null());
+  JsonValue logins = JsonValue::Array();
+  std::set<std::pair<std::string, std::string>> seen;
+  for (StoredLogin& login : read.logins) {
+    auto origin = login.password.empty() || login.password.size() > kMaxLoginPasswordBytes ||
+                          login.username.size() > kMaxLoginUsernameBytes
+                      ? std::nullopt
+                      : LoginOrigin(login.realm);
+    if (!origin || !seen.emplace(*origin, login.username).second) continue;
+    auto sealed = keys_->SealPassword(login.password, *origin, login.username);
+    Wipe(login.password);
+    if (!sealed) {
+      WipeJson(logins);
+      return Outcome::Value(JsonValue::Null());
+    }
+    logins.Append(JsonValue::Object({{"origin", JsonValue::String(*origin)},
+                                     {"username", JsonValue::String(login.username)},
+                                     {"sealed", JsonValue::String(std::move(*sealed))},
+                                     {"created", JsonValue::Number(login.created_ms)}}));
+  }
+  return Outcome::Value(std::move(logins));
+}
+
+std::optional<StoredLogin> SyncCore::OpenLogin(const PasswordSave& save) {
+  if (!keys_) return std::nullopt;
+  std::string password;
+  if (keys_->OpenPassword(save.sealed, save.origin, save.username, &password) != OpenError::kNone ||
+      password.empty() || password.size() > kMaxLoginPasswordBytes) {
+    Wipe(password);
+    return std::nullopt;
+  }
+  return StoredLogin(save.origin, save.username, std::move(password), 0);
 }
 
 ClipboardWrite PhraseClipboard(std::string words) {
