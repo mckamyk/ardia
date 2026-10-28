@@ -214,6 +214,7 @@ extern bool (*g_ardia_linux_renderer_unresponsive)(content::WebContents*,
 extern bool (*g_ardia_linux_renderer_responsive)(content::WebContents*,
                                                  content::RenderWidgetHost*);
 extern bool (*g_ardia_linux_off_the_record_navigation)(content::WebContents*, const GURL&);
+extern void (*g_ardia_linux_devtools_opened_tab)(content::WebContents*, content::WebContents*, const GURL&);
 extern void (*g_ardia_linux_drag_ended)(BrowserWindowInterface*);
 extern void (*g_ardia_devtools_dock_changed)(BrowserWindowInterface* browser,
                                              content::WebContents* inspected,
@@ -1035,6 +1036,14 @@ class ShellHostView : public views::View,
       if (!original) return false;
       binding->ReportPresentation("openWindow", base::DictValue()
           .Set("url", url.spec()).Set("disposition", "incognito").Set("profile", *original));
+      return true;
+    }
+    return false;
+  }
+  bool ReportDevToolsOpenedTab(content::WebContents* inspected, content::WebContents* opened, const GURL& url) {
+    for (const auto& [id, binding] : bindings_) {
+      if (!inspected || binding->contents() != inspected) continue;
+      binding->ReportOpened(opened, url, "foreground");
       return true;
     }
     return false;
@@ -5391,6 +5400,12 @@ void StartLinuxHost() {
     }
     LOG(WARNING) << "[ardia] off-the-record link refused: its source is not an Ardia tab, extension view or DevTools window";
     return true;
+  };
+  g_ardia_linux_devtools_opened_tab = [](content::WebContents* inspected, content::WebContents* opened, const GURL& url) {
+    for (const auto& [id, host] : Hosts()) {
+      if (host->ReportDevToolsOpenedTab(inspected, opened, url)) return;
+    }
+    LOG(WARNING) << "[ardia] DevTools opened a tab for a page Ardia does not host";
   };
   ardiacore::InstallLinuxAutoplayPolicy();
   ardiacore::InstallLinuxWebStore(
