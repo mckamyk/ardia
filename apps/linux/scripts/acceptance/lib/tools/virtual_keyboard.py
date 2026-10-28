@@ -176,11 +176,12 @@ def main():
                 keyboard.load_keymap(compile_keymap(request.get("layout", "us"), request.get("variant", ""), request.get("options", "")))
             elif request["op"] == "tap":
                 keyboard.tap(KEYS[request["key"]])
-            elif request["op"] == "down":
-                keyboard.key(KEYS[request["key"]], True)
-                keyboard.roundtrip()
-            elif request["op"] == "up":
-                keyboard.key(KEYS[request["key"]], False)
+            elif request["op"] in ("down", "up"):
+                pressed = request["op"] == "down"
+                if request["key"] in MODIFIERS:
+                    keyboard.press_mod(request["key"], pressed)
+                else:
+                    keyboard.key(KEYS[request["key"]], pressed)
                 keyboard.roundtrip()
             print(json.dumps({"ok": True}), flush=True)
         except Exception as error:
