@@ -60,7 +60,8 @@ class LinuxLinkGestureGate {
   void Forget(uintptr_t surface);
   LinuxLinkDecision Decide(const LinuxLinkRequest& request, const LinuxPageOptions& options);
   uintptr_t DragSource() const { return press_open_ ? press_surface_ : 0; }
-  void NoteDragEnded(uintptr_t surface, bool over, double now);
+  void NoteDrop(uintptr_t target);
+  void NoteDragEnded(uintptr_t surface, double now);
   std::string AcceptLinkDrop(uintptr_t surface, bool visible, double now);
 
  private:
@@ -74,6 +75,7 @@ class LinuxLinkGestureGate {
   std::optional<LinuxLinkPoint> up_point_;
   uintptr_t press_surface_ = 0;
   bool press_open_ = false;
+  uintptr_t dropped_on_ = 0;
   uintptr_t drop_surface_ = 0;
   bool drop_over_ = false;
   bool drop_used_ = true;

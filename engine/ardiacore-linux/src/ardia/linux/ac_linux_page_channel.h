@@ -22,8 +22,16 @@
 #include "content/public/browser/weak_document_ptr.h"
 #include "ui/gfx/geometry/point_f.h"
 
+namespace aura::client {
+class DragDropClient;
+}
+
 namespace blink {
 class AssociatedInterfaceRegistry;
+}
+
+namespace gfx {
+class Point;
 }
 
 namespace ardiacore {
@@ -70,6 +78,7 @@ class LinuxPageChannel : public content::WebContentsObserver,
   void Peek(content::RenderFrameHost& frame, const base::DictValue& data);
   void LinkDrop(const std::string& spec);
   friend void NoteLinuxDragEnded(base::FunctionRef<bool(content::WebContents*)> in_window);
+  friend void NoteLinuxDrop(aura::client::DragDropClient* client, const gfx::Point& root_point);
   void Call(content::RenderFrameHost* frame, const std::string& kind, const std::string& json);
   void Greet(content::RenderFrameHost& frame);
   void Watch(content::RenderWidgetHost* widget);
@@ -100,6 +109,7 @@ void RegisterLinuxPageHostBinder(content::RenderFrameHost& frame, blink::Associa
 void WatchLinuxShellInput(content::WebContents* shell);
 void SetLinuxInputActivityListener(base::RepeatingClosure listener);
 void NoteLinuxDragEnded(base::FunctionRef<bool(content::WebContents*)> in_window);
+void NoteLinuxDrop(aura::client::DragDropClient* client, const gfx::Point& root_point);
 bool SetLinuxPageOption(const std::string& route, const base::DictValue& input, std::string* error);
 void RunLinuxPageEvaluation(content::RenderFrameHost* frame, const std::string& code,
                             base::OnceCallback<void(bool refused, std::optional<std::string> result)> done);

@@ -1,12 +1,16 @@
 #include "ardia/linux/ac_linux_page_channel.h"
 
+#include <algorithm>
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include "ardia/linux/ac_linux_autoplay.h"
 #include "ardia/linux/ac_linux_page_evaluation.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -24,8 +28,9 @@
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "ui/aura/client/drag_drop_client.h"
+#include "ui/aura/client/drag_drop_client_observer.h"
 #include "ui/aura/window.h"
-#include "ui/display/screen.h"
+#include "ui/base/dragdrop/drop_target_event.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -38,11 +43,48 @@ LinuxPageOptions& Options() {
   return *options;
 }
 
-bool DragInProgress(content::WebContents& contents) {
+class LinuxDropWatch : public aura::client::DragDropClientObserver {
+ public:
+  explicit LinuxDropWatch(aura::client::DragDropClient* client) : client_(client) { client_->AddObserver(this); }
+  ~LinuxDropWatch() override {
+    if (client_) client_->RemoveObserver(this);
+  }
+  LinuxDropWatch(const LinuxDropWatch&) = delete;
+  LinuxDropWatch& operator=(const LinuxDropWatch&) = delete;
+  aura::client::DragDropClient* client() const { return client_; }
+
+ private:
+  void OnDragCompleted(const ui::DropTargetEvent& event) override { NoteLinuxDrop(client_, event.root_location()); }
+  void OnDragDropClientDestroying() override {
+    client_->RemoveObserver(this);
+    client_ = nullptr;
+  }
+  raw_ptr<aura::client::DragDropClient> client_;
+};
+
+std::vector<std::unique_ptr<LinuxDropWatch>>& DropWatches() {
+  static base::NoDestructor<std::vector<std::unique_ptr<LinuxDropWatch>>> watches;
+  return *watches;
+}
+
+aura::client::DragDropClient* DragClientOf(content::WebContents& contents, aura::Window** root_out = nullptr) {
   aura::Window* view = contents.GetNativeView();
   aura::Window* root = view ? view->GetRootWindow() : nullptr;
-  aura::client::DragDropClient* client = root ? aura::client::GetDragDropClient(root) : nullptr;
+  if (root_out) *root_out = root;
+  return root ? aura::client::GetDragDropClient(root) : nullptr;
+}
+
+bool DragInProgress(content::WebContents& contents) {
+  aura::client::DragDropClient* client = DragClientOf(contents);
   return client && client->IsDragDropInProgress();
+}
+
+void WatchDrops(content::WebContents& contents) {
+  aura::client::DragDropClient* client = DragClientOf(contents);
+  auto& watches = DropWatches();
+  std::erase_if(watches, [](const auto& watch) { return !watch->client(); });
+  if (!client || std::ranges::any_of(watches, [client](const auto& watch) { return watch->client() == client; })) return;
+  watches.push_back(std::make_unique<LinuxDropWatch>(client));
 }
 
 LinuxLinkGestureGate& Gate() {
@@ -351,7 +393,10 @@ void LinuxPageChannel::OnInputEvent(const content::RenderWidgetHost& widget, con
   if (type != blink::WebInputEvent::Type::kMouseDown && type != blink::WebInputEvent::Type::kMouseUp) return;
   const auto& mouse = static_cast<const blink::WebMouseEvent&>(event);
   if (mouse.button != blink::WebPointerProperties::Button::kLeft) return;
-  if (type == blink::WebInputEvent::Type::kMouseDown) return Gate().NotePress(surface_);
+  if (type == blink::WebInputEvent::Type::kMouseDown) {
+    WatchDrops(GetWebContents());
+    return Gate().NotePress(surface_);
+  }
   std::optional<LinuxLinkPoint> point;
   content::RenderFrameHost* main = GetWebContents().GetPrimaryMainFrame();
   if (main && main->GetRenderWidgetHost() == &widget)
@@ -388,11 +433,23 @@ void NoteLinuxDragEnded(base::FunctionRef<bool(content::WebContents*)> in_window
   if (!source) return;
   for (LinuxPageChannel* channel : Channels()) {
     if (channel->surface_ != source) continue;
-    content::WebContents* contents = &channel->GetWebContents();
-    if (!in_window(contents)) return;
-    const gfx::Point cursor = display::Screen::Get()->GetCursorScreenPoint();
-    return Gate().NoteDragEnded(source, contents->GetContainerBounds().Contains(cursor), Now());
+    if (!in_window(&channel->GetWebContents())) return;
+    return Gate().NoteDragEnded(source, Now());
   }
+}
+
+void NoteLinuxDrop(aura::client::DragDropClient* client, const gfx::Point& root_point) {
+  uintptr_t target = 0;
+  for (LinuxPageChannel* channel : Channels()) {
+    aura::Window* root = nullptr;
+    if (!client || DragClientOf(channel->GetWebContents(), &root) != client) continue;
+    aura::Window* view = channel->GetWebContents().GetNativeView();
+    aura::Window* hit = root->GetEventHandlerForPoint(root_point);
+    if (!hit || !view->Contains(hit)) continue;
+    target = channel->surface_;
+    break;
+  }
+  Gate().NoteDrop(target);
 }
 
 bool SetLinuxPageOption(const std::string& route, const base::DictValue& input, std::string* error) {
