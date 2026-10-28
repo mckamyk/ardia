@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
-import { webShellConfig } from "./vite.shared";
+import { lazyComponentId, webShellConfig } from "./vite.shared";
 import { inputAdapters, rawBookmarkAdapter, resolveInputAdapter } from "./inputAdapters";
 import { credentialWording } from "./credentialWording";
 import { linuxWording } from "./linuxWording";
@@ -41,6 +41,7 @@ const tabLifecycle = here("../browser/src/state/tabs/tabLifecycle.ts");
 const importerReplacements = new Map([
   [`${here("../browser/src/state/splits/actions.ts")}\0${tabLifecycle}`, here("./src/policyToasts.ts")],
   [`${here("../browser/src/platform/performance.ts")}\0${tabLifecycle}`, here("./src/policyPerformance.ts")],
+  [`${lazyComponentId(here("../browser/src/components/extensions/ExtensionOverlays.tsx"))}\0${here("../browser/src/components/settings/panes/Extensions.tsx")}`, here("./src/SettingsInstallDialog.tsx")],
 ]);
 const adapters = new Set([...replacements.values(), ...importerReplacements.values(), rawBookmarkAdapter.replacement, importedPasswordSave.replacement]);
 
