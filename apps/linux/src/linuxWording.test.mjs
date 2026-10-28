@@ -48,6 +48,15 @@ test("the rows that describe those panes are reworded too", () => {
   assert.doesNotMatch(section(privacy, "whatsSent: {", "keywords"), MACOS);
 });
 
+test("a Live folder whose token sits in a locked or missing keyring says so instead of asking to sign back in", () => {
+  const engine = linuxCopy("state/live/engine.ts");
+  const errorText = engine.slice(engine.indexOf("export function errorText("));
+  const cases = errorText.slice(0, errorText.indexOf("    default:"));
+  assert.match(cases, /case "keyringLocked":\n\s+return `Unlock your keyring to refresh \$\{name\}`;/);
+  assert.match(cases, /case "keyringUnavailable":\n\s+return `Start your keyring to refresh \$\{name\}`;/);
+  assert.match(cases, /case "signedOut":\n\s+return `Sign back in to \$\{name\}`;/);
+});
+
 test("the Engines pane, whose passkey copy is about macOS, is not offered on Linux without WebKit", () => {
   assert.ok(unavailablePanes({ webkit: false }).has("engines"));
 });

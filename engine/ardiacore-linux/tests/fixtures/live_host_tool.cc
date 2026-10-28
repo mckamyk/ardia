@@ -372,7 +372,11 @@ int main(int argc, char** argv) {
   }
   Loop loop;
   SocketTransport transport(loop, std::atoi(argv[2]));
-  LoopStore store(loop, keys::MakeFileKeyStore(argv[1], live::LiveKeySchema()));
+  const std::string token_store = argv[1];
+  const std::string secret_service = "secret-service:";
+  LoopStore store(loop, token_store.starts_with(secret_service)
+                            ? keys::MakeSecretServiceKeyStore(token_store.substr(secret_service.size()), live::LiveKeySchema())
+                            : keys::MakeFileKeyStore(token_store, live::LiveKeySchema()));
   int64_t offset = 0;
   bool eof = false;
   std::vector<std::unique_ptr<live::LiveCore>> retired;

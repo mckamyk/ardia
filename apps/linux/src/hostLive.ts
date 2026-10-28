@@ -5,11 +5,15 @@ export const LIVE_CAPABILITIES = ["ArdiaLive.request", "ArdiaLive.connect", "Ard
 
 export const UNAVAILABLE_MESSAGE = "Live folder services are unavailable in this Linux host";
 
-const KINDS: Record<string, LiveErrorKind> = {
+export type LinuxLiveErrorKind = LiveErrorKind | "keyringLocked" | "keyringUnavailable";
+
+const KINDS: Record<string, LinuxLiveErrorKind> = {
   ERR_LIVE_SIGNED_OUT: "signedOut",
   ERR_LIVE_SSO: "sso",
   ERR_LIVE_RATE_LIMITED: "rateLimited",
   ERR_LIVE_NETWORK: "network",
+  ERR_LIVE_KEYRING_LOCKED: "keyringLocked",
+  ERR_LIVE_KEYRING_UNAVAILABLE: "keyringUnavailable",
 };
 
 export type LiveCallOptions = { signal?: AbortSignal };
@@ -26,7 +30,7 @@ export function liveError(error: unknown, connected: boolean): LiveError {
   const code = (error as { code?: unknown })?.code;
   const message = String((error as Error)?.message ?? error);
   if (code === "ERR_LIVE_NOT_CONNECTED") return new LiveError(connected ? "signedOut" : "notConfigured", "Not signed in");
-  return new LiveError((typeof code === "string" && KINDS[code]) || "other", message);
+  return new LiveError(((typeof code === "string" && KINDS[code]) || "other") as LiveErrorKind, message);
 }
 
 const cancelled = () => new LiveError("other", "Cancelled");

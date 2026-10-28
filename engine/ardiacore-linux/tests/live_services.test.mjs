@@ -268,9 +268,9 @@ test("privileged requests outside the fixed provider contract are refused", asyn
 test("a locked keyring is an explicit failure, never a silent success", async () => {
   await call("Tool.locked", [true]);
   await call("Tool.restart", []);
-  await rejectsWith(SOURCES.notion.fetch(docFolder), "other", /Unlock your keyring/);
+  await rejectsWith(SOURCES.notion.fetch(docFolder), "keyringLocked", /Unlock your keyring/);
   setAccount("notion", null);
-  await rejectsWith(linux.connectNotion(LIVE_FIXTURE.notion.token), "other", /Unlock your keyring/);
+  await rejectsWith(linux.connectNotion(LIVE_FIXTURE.notion.token), "keyringLocked", /Unlock your keyring/);
   assert.equal(live().accounts.notion, undefined);
   await call("Tool.locked", [false]);
   await linux.connectNotion(LIVE_FIXTURE.notion.token);

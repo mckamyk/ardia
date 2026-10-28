@@ -27,8 +27,9 @@ test("native error codes keep the shared Live error meanings", () => {
   assert.equal(liveError(coded("ERR_LIVE_NOT_CONNECTED"), true).kind, "signedOut");
   assert.equal(liveError(coded("ERR_LIVE_NOT_CONNECTED"), false).kind, "notConfigured");
   const locked = liveError(coded("ERR_LIVE_KEYRING_LOCKED", "Unlock your keyring"), true);
-  assert.equal(locked.kind, "other");
+  assert.equal(locked.kind, "keyringLocked");
   assert.equal(locked.message, "Unlock your keyring");
+  assert.equal(liveError(coded("ERR_LIVE_KEYRING_UNAVAILABLE", "No keyring"), true).kind, "keyringUnavailable");
   assert.equal(liveError(coded("ERR_PRIVATE_SERVICE"), true).kind, "other");
   const same = new LiveError("network", "x");
   assert.equal(liveError(same, true), same);

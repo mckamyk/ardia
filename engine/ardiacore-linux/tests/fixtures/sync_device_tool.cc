@@ -130,7 +130,12 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "usage: sync_device_tool <key dir> <default folder> <device name>\n");
     return 2;
   }
-  SyncCore core(MakeFileKeyStore(argv[1]), {argv[2], argv[3]});
+  const std::string key_store = argv[1];
+  const std::string secret_service = "secret-service:";
+  SyncCore core(key_store.starts_with(secret_service) ? MakeSecretServiceKeyStore(key_store.substr(secret_service.size()))
+                                                      : MakeFileKeyStore(key_store),
+                {argv[2], argv[3]});
+  int64_t offset_seconds = 0;
   std::map<LoginKey, StoredLogin> logins;
   std::map<LoginKey, int> attempts;
   std::string line;
@@ -142,8 +147,11 @@ int main(int argc, char** argv) {
     } else {
       const std::string& method = request->Find("method")->text;
       const auto& args = request->Find("args")->items;
-      std::optional<Outcome> stored = LoginStore(logins, attempts, core, method, args);
-      Outcome outcome = stored ? std::move(*stored) : core.Dispatch(method, args, NowSeconds());
+      if (method == "Tool.advance" && !args.empty() && args[0].type == JsonValue::Type::kNumber)
+        offset_seconds += static_cast<int64_t>(std::strtod(args[0].text.c_str(), nullptr));
+      std::optional<Outcome> stored = method == "Tool.advance" ? std::optional<Outcome>(Outcome::Value(JsonValue::Bool(true)))
+                                                               : LoginStore(logins, attempts, core, method, args);
+      Outcome outcome = stored ? std::move(*stored) : core.Dispatch(method, args, NowSeconds() + offset_seconds);
       reply = outcome.ok ? JsonValue::Object({{"ok", JsonValue::Bool(true)}, {"value", std::move(outcome.value)}})
                          : JsonValue::Object({{"ok", JsonValue::Bool(false)},
                                               {"code", JsonValue::String(outcome.code)},
