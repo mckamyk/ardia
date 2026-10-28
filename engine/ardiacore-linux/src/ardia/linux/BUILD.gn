@@ -91,6 +91,8 @@ source_set("linux") {
     "ac_linux_auto_pip.h",
     "ac_linux_auto_pip_service.cc",
     "ac_linux_auto_pip_service.h",
+    "ac_linux_background_dialogs.cc",
+    "ac_linux_background_dialogs.h",
     "ac_linux_close.h",
     "ac_linux_contract.h",
     "ac_linux_credential_service.cc",

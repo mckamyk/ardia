@@ -19,6 +19,7 @@
 #include "ardia/linux/ac_linux_policy.h"
 #include "ardia/linux/ac_linux_contract.h"
 #include "ardia/linux/ac_linux_auto_pip_service.h"
+#include "ardia/linux/ac_linux_background_dialogs.h"
 #include "ardia/linux/ac_linux_close.h"
 #include "ardia/linux/ac_linux_close_hooks.h"
 #include "ardia/linux/ac_linux_credential_service.h"
@@ -5192,6 +5193,7 @@ void StartLinuxHost() {
   if (std::exchange(started, true)) return;
   ardiacore::InitializeLinuxLaunchConfig();
   ardiacore::DecideTestGateAtStartup();
+  ardiacore::InstallLinuxBackgroundFileDialogs();
   g_ardia_auto_picture_in_picture_off = true;
   g_ardia_linux_tab_shown = [](content::WebContents* contents) {
     for (const auto& [id, host] : Hosts()) {
