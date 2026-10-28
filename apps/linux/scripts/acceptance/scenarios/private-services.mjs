@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { FIND_WORD } from "../lib/fixtures.mjs";
-import { restartBrowser, startBrowser } from "../lib/flows.mjs";
+import { restartBrowser, startBrowser, waitPageViewport } from "../lib/flows.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
 import { FIXTURE_NAME, prepareExtension } from "./f09-extensions.mjs";
 
@@ -246,7 +246,7 @@ export const privatePageCommands = {
       const url = t.fixtures.url.find(count, `${label}-${run}`);
       const tabId = await shell.newTab(url);
       await shell.waitTabUrl(tabId, (u) => u === url);
-      await shell.app.pageLoaded(url);
+      await waitPageViewport(shell.app, await shell.app.pageLoaded(url));
       await shell.state(`s.activate(${js(tabId)}); s.setFind(${js(tabId)}, { open: true, query: ${js(FIND_WORD)}, focusRequest: Date.now() }); return true;`);
       return until(async () => {
         const f = await shell.state(`return s.find[${js(tabId)}] ?? null;`);

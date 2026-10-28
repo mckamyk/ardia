@@ -189,7 +189,7 @@ export class ArdiaApp {
       if (!session) return false;
       try {
         const href = prefix ? `location.href.startsWith(${js(url)})` : `location.href === ${js(url)}`;
-        const loaded = await evaluate(session, `${href} && document.readyState === "complete"`, { timeout: 2000 }).catch(() => false);
+        const loaded = await evaluate(session, `${href} && document.readyState === "complete"`, { timeout: 2000, userGesture: false }).catch(() => false);
         return loaded ? target : false;
       } finally {
         await session.close().catch(() => {});
