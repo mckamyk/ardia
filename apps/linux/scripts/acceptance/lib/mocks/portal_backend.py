@@ -44,6 +44,10 @@ def _answer(self, method, handle, app_id, parent, title, options):
     results = {}
     if answer.get("uris"):
         results["uris"] = dbus.Array([dbus.String(u) for u in answer["uris"]], signature="s")
+    if answer.get("filter"):
+        for name, patterns in options.get("filters", []):
+            if str(name) == answer["filter"]:
+                results["current_filter"] = dbus.Struct((dbus.String(name), dbus.Array([dbus.Struct((dbus.UInt32(kind), dbus.String(glob)), signature="us") for kind, glob in patterns], signature="(us)")), signature="sa(us)")
     if "choices" in answer:
         results["choices"] = dbus.Array([dbus.Struct((dbus.String(a), dbus.String(b)), signature="ss") for a, b in answer["choices"]], signature="(ss)")
     return (dbus.UInt32(answer.get("response", 0)), dbus.Dictionary(results, signature="sv"))

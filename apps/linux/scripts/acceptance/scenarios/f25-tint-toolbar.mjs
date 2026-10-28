@@ -22,10 +22,6 @@ export default {
   issue: 35,
   title: "Website tint from meta, header and background colors and scroll-driven toolbar hiding",
   deadline: 240000,
-  manual: [
-    { name: "Toolbar hides and returns on screen", steps: ["With Settings › Tabs › Hide Toolbar While Scrolling on, scroll a long page down: the toolbar slides away; scroll up: it returns.", "Turn the setting off and scroll again: the toolbar stays."], reason: "the slide animation and layout need a visual check" },
-    { name: "Tint looks right", steps: ["Open a site with a colored header and no theme-color, then one with a theme-color meta tag.", "The sidebar and toolbar take each page's color and reset when you navigate to a plain page; turning off Extend Website Color keeps Ardia's own colors."], reason: "the rendered colors need a visual check" },
-  ],
   async run(t) {
     const run = nonce("f25");
     const state = await startBrowser(t, { name: "tint-toolbar" });

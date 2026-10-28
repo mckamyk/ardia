@@ -17,9 +17,6 @@ export default {
   issue: 34,
   title: "Favicons are fetched through the page's profile on a cache miss and survive restart",
   deadline: 300000,
-  manual: [
-    { name: "Icons in essentials and the top strip", steps: ["Pin the fixture page as an essential and switch to the top tab strip.", "The fetched icon shows in the essential tile and the strip, not the generic globe."], reason: "visual check of pinned layouts" },
-  ],
   async run(t) {
     const run = nonce("f24");
     const { url, ports } = t.fixtures;

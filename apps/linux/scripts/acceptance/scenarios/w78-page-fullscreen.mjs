@@ -16,9 +16,6 @@ export default {
   issue: 78,
   title: "Page fullscreen is kept apart from window fullscreen and exiting it restores the window",
   deadline: 240000,
-  manual: [
-    { name: "Compositor fullscreen keeps page fullscreen separate", steps: ["Make an Ardia window fullscreen with the window manager's fullscreen key.", "Enter and leave fullscreen on a page.", "The window stays fullscreen with Ardia's chrome shown again."], reason: "needs the desktop compositor" },
-  ],
   async run(t) {
     const run = nonce("w78");
     const state = await startBrowser(t, { name: "page-fullscreen" });

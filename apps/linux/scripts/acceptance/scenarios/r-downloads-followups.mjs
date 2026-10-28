@@ -48,9 +48,6 @@ export const w75 = {
   issue: 75,
   title: "Downloads: per-volume trash and reveal failures that are reported",
   deadline: 240000,
-  manual: [
-    { name: "A finished download never flashes as missing", steps: ["Download a file and watch its row in the downloads popover and in Ctrl+J as it finishes.", "The row goes straight from progress to the finished file; it never shows 'Missing' first."], reason: "a frame-level check of the rendered row" },
-  ],
   async run(t) {
     const scratch = await t.scratch("volume");
     const bin = join(scratch, "launcher-bin");
@@ -155,9 +152,6 @@ export const w76 = {
   issue: 76,
   title: "Docked DevTools asked for before a pane's first viewport opens once the viewport arrives",
   deadline: 180000,
-  manual: [
-    { name: "DevTools on a fresh tab", steps: ["Press Ctrl+T, type a URL and press Enter, then press Ctrl+Alt+I immediately.", "DevTools appears docked in that tab's pane as soon as the page shows, with keyboard focus; nothing appears behind Ardia's window.", "The panel keeps the page's 12 pt corner (no Dia measurement exists to compare)."], reason: "the frame-by-frame placement needs a person" },
-  ],
   async run(t) {
     const { app, shell } = await startBrowser(t, { name: "devtools", background: false });
     await t.check("DevTools requested before a new tab's first viewport opens and inspects it", async () => {

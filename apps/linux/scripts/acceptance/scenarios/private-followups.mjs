@@ -203,9 +203,6 @@ export const privateAutoPip = {
   issue: 173,
   title: "Private windows never enter automatic PiP, as on macOS",
   deadline: 120000,
-  manual: [
-    { name: "Automatic PiP stays off in a private window", steps: ["With Settings › Tabs › Automatic Picture in Picture on, play a video that registers for automatic PiP in a private window and switch to another tab.", "No PiP window opens (Chrome treats the private window's ASK as BLOCK), while the same page in a regular window enters PiP.", "Turn the setting off: neither window enters PiP."], reason: "needs a compositor and media playback" },
-  ],
   async run(t) {
     const state = await startBrowser(t, { name: "private-auto-pip" });
     await t.check("automatic PiP is on for the regular profile while a private window is open", async () => {

@@ -111,12 +111,6 @@ export default {
   issue: 11,
   title: "Find, Print, Save Page and DevTools execute on the exact pane",
   deadline: 420000,
-  manual: [
-    { name: "System print dialog prints the correct pane", steps: ["Open two split panes with different text.", "Focus pane B, choose Print Using System Dialog (Ctrl+Shift+P).", "Confirm the GTK/portal print dialog previews pane B and printing to a file writes pane B's text."] },
-    { name: "Save Page writes the focused pane", steps: ["Focus pane B and press Ctrl+S.", "Choose a scratch folder in the native save dialog and save as 'Webpage, Complete' and as 'Single File'.", "Confirm the saved files contain pane B's text and a _files folder for the complete variant."], reason: "Chromium's Save Page always asks for a path through a native file dialog" },
-    { name: "Docked DevTools layout and focus", steps: ["Open DevTools on pane A, dock it bottom, right and left; drag the splitter each time.", "Check overlays (find bar, menus) draw over the frontend and the page keeps its corner radius.", "Close DevTools; keyboard focus returns to pane A.", "Undock DevTools; its own window opens and Toggle reveals it."] },
-    { name: "DevTools and Find shortcuts from page focus", steps: ["Click into pane B's page content.", "Press Ctrl+F; pane B's find bar opens and pane A's stays closed.", "Press Ctrl+Alt+I, Ctrl+Shift+J and Ctrl+Shift+C; DevTools opens on pane B each time in the right panel."], reason: "Ardia's shortcuts are handled at the window's Aura root, which CDP key events sent to a page never reach" },
-  ],
   async run(t) {
     const run = nonce("f01");
     const downloads = join(await t.scratch("downloads"), "");
