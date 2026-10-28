@@ -67,6 +67,7 @@ function nativeService(initial) {
         },
         invoke(method, pair) {
           assert.equal(client.closed, false);
+          if (method === "session.read") return Promise.resolve(cloneSessionValue(canonical));
           assert.equal(method, "session.write");
           requests.push({ windowId, ...cloneSessionValue(pair) });
           const base = canonical;
@@ -320,6 +321,76 @@ test("window additions and removals synchronize while preserving another rendere
     stop(); restore();
   }
 });
+
+function withoutWindow(session, id) {
+  const { [id]: gone, ...windows } = session.windows;
+  for (const key of gone?.tabIds ?? []) delete session.tabs[key];
+  return { ...session, windows, windowOrder: session.windowOrder.filter((windowId) => windowId !== id) };
+}
+
+test("a window its opener never saves stays out of the session and survives the opener's next write", async () => {
+  const restore = browserEvents();
+  const { initial, aKey } = sharedSession();
+  const native = nativeService(initial);
+  const seeded = initialHostSession({ bootstrap: { windowId: "small", profileId: "default", startup: false } }, initial);
+  const store = stateStore(seeded, "small");
+  const stop = startHostPersistence(native.client("small"), store, initial);
+  try {
+    await flush();
+    assert.equal(native.session.windows.small, undefined);
+    native.external((session) => { const opener = withoutWindow(session, "small"); opener.tabs[aKey].url = "A2"; return opener; });
+    await flush();
+    assert.ok(store.getState().windows.small);
+    assert.equal(native.session.windows.small, undefined);
+    assert.equal(native.session.tabs[aKey].url, "A2");
+  } finally {
+    stop(); restore();
+  }
+});
+
+function openerSavesIsolatedWindow(initial) {
+  const opener = cloneSessionValue(initial);
+  opener.profiles["p-iso"] = { id: "p-iso", name: "Work", color: "blue", icon: null, createdAt: 1 };
+  opener.profileOrder = [...opener.profileOrder, "p-iso"];
+  opener.windows.iso = { id: "iso", profileId: "p-iso", incognito: false, tabIds: ["tab-3"], activeTabIds: { "p-iso": "tab-3" }, sidebarOpen: true, frame: null, createdAt: 1 };
+  opener.windowOrder = [...opener.windowOrder, "iso"];
+  opener.tabs["tab-3"] = { ...initial.tabs[initial.windows.a.tabIds[0]], id: "tab-3", windowId: "iso", profileId: "p-iso", url: "https://work.example/", title: "Work" };
+  return (session) => mergeSession(initial, opener, session);
+}
+
+for (const saved of ["before its renderer subscribes", "after its renderer starts"]) {
+  test(`an isolated window's stand-in yields to the window its opener saves ${saved}`, async () => {
+    const restore = browserEvents();
+    const { initial } = sharedSession();
+    const native = nativeService(initial);
+    const isoHost = { bootstrap: { windowId: "iso", profileId: "default", pageProfile: "p-iso", startup: false } };
+    const seeded = initialHostSession(isoHost, initial);
+    assert.equal(seeded.windows.iso.profileId, "p-iso");
+    const store = stateStore(seeded, "iso");
+    const openerSave = openerSavesIsolatedWindow(initial);
+    if (saved.startsWith("before")) native.external(openerSave);
+    const stop = startHostPersistence(native.client("iso"), store, initial);
+    try {
+      await flush();
+      if (!saved.startsWith("before")) {
+        assert.equal(native.session.windows.iso, undefined);
+        assert.equal(native.session.profiles["p-iso"], undefined);
+        native.external(openerSave);
+        await flush();
+      }
+      const state = store.getState();
+      assert.deepEqual(state.windows.iso.tabIds, ["tab-3"]);
+      assert.deepEqual(state.windows.iso.activeTabIds, { "p-iso": "tab-3" });
+      assert.equal(state.tabs["tab-3"].profileId, "p-iso");
+      assert.equal(state.profiles["p-iso"].name, "Work");
+      assert.deepEqual(native.session.windows.iso.tabIds, ["tab-3"]);
+      assert.equal(native.session.profiles["p-iso"].name, "Work");
+      assert.ok(Object.values(native.session.tabs).every((tab) => tab.windowId !== "iso" || tab.id === "tab-3"));
+    } finally {
+      stop(); restore();
+    }
+  });
+}
 
 test("final pending write uses a coherent latest canonical pair and invalidates an older queued snapshot", async () => {
   const restore = browserEvents();
