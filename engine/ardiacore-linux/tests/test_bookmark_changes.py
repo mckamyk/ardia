@@ -25,7 +25,7 @@ int main() {
   assert(EventName(ChangeAnnouncedAfter("bookmarks.apply", 1)) == "bookmarks.changed");
   assert(ChangeAnnouncedAfter("bookmarks.apply", 0).empty());
   assert(ChangeAnnouncedAfter("bookmarks.apply", -1).empty());
-  for (auto name : {"bookmarks.tree", "bookmarks.watch", "history.add", "history.import", "favicons.set", "extensions.install", ""})
+  for (auto name : {"bookmarks.tree", "bookmarks.watch", "history.add", "history.query", "history.deleteUrls", "favicons.set", "extensions.install", ""})
     assert(ChangeAnnouncedAfter(name, 1).empty());
 }
 '''
@@ -33,6 +33,26 @@ int main() {
             source = pathlib.Path(directory) / 'changes.cc'
             source.write_text(code)
             compile_and_run(self, 'bookmark-changes', [source])
+
+    def test_a_history_import_is_announced_so_other_windows_read_history_again(self):
+        code = r'''
+#include "ardia/linux/ac_linux_contract.h"
+#include <cassert>
+#include <optional>
+using namespace ardiacore::linux_contract;
+int main() {
+  assert(ChangeAnnouncedAfter("history.import", std::nullopt) == "history.imported");
+  assert(ChangeAnnouncedAfter("history.import", 0) == "history.imported");
+  assert(EventName(ChangeAnnouncedAfter("history.import", std::nullopt)) == "history.imported");
+  assert(EventName("history.imported") == "history.imported");
+  assert(ChangeAnnouncedAfter("bookmarks.apply", std::nullopt).empty());
+  assert(ChangeAnnouncedAfter("history.add", std::nullopt).empty());
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='ardia-history-imports-') as directory:
+            source = pathlib.Path(directory) / 'imports.cc'
+            source.write_text(code)
+            compile_and_run(self, 'history-imports', [source])
 
     def test_the_engine_still_mutes_its_own_change_event_while_applying(self):
         engine = (ENGINE / 'ac_bookmarks.cc').read_text()
@@ -51,6 +71,7 @@ int main() {
         self.assertLess(error, announce)
         self.assertLess(announce, resolve)
         block = replied[announce:resolve]
+        self.assertIn(': std::nullopt', block)
         self.assertIn('FindInt("applied")', block)
         self.assertIn('!reply->profile_path.empty()', block)
         self.assertIn('Hosts()', block)

@@ -97,14 +97,15 @@ inline const Route* FindRoute(std::string_view name) {
 }
 
 inline std::string_view EventName(std::string_view topic) {
-  for (const auto name : {"history.changed", "bookmarks.changed", "extensions.action", "extensions.sync", "downloads.changed", "downloads.removed"}) {
+  for (const auto name : {"history.changed", "history.imported", "bookmarks.changed", "extensions.action", "extensions.sync", "downloads.changed", "downloads.removed"}) {
     if (topic == name) return name;
   }
   return {};
 }
 
-inline std::string_view ChangeAnnouncedAfter(std::string_view call, int applied) {
-  if (call == "bookmarks.apply" && applied > 0) return EventName("bookmarks.changed");
+inline std::string_view ChangeAnnouncedAfter(std::string_view call, std::optional<int> applied) {
+  if (call == "bookmarks.apply" && applied.value_or(0) > 0) return EventName("bookmarks.changed");
+  if (call == "history.import") return EventName("history.imported");
   return {};
 }
 

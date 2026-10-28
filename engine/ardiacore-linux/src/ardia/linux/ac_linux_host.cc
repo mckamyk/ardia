@@ -1449,7 +1449,7 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       }
     }
     if (const auto change = ardiacore::linux_contract::ChangeAnnouncedAfter(
-            reply->name, value->is_dict() ? value->GetDict().FindInt("applied").value_or(0) : 0);
+            reply->name, value->is_dict() ? value->GetDict().FindInt("applied") : std::nullopt);
         !change.empty() && !reply->profile_path.empty()) {
       base::DictValue changed;
       changed.Set("profile", reply->profile_path);
