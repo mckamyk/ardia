@@ -27,9 +27,11 @@
 #include "ardia/linux/ac_linux_dialog_views.h"
 #include "ardia/linux/ac_linux_document_service.h"
 #include "ardia/linux/ac_linux_downloads.h"
+#include "ardia/linux/ac_linux_extension_keybindings.h"
 #include "ardia/linux/ac_linux_extension_service.h"
 #include "ardia/linux/ac_linux_extension_views.h"
 #include "ardia/linux/ac_linux_extensions.h"
+#include "ardia/linux/ac_linux_native_messaging.h"
 #include "ardia/linux/ac_linux_files.h"
 #include "ardia/linux/ac_linux_fullscreen_restore.h"
 #include "ardia/linux/ac_linux_import_formats.h"
@@ -61,6 +63,7 @@
 #include "base/command_line.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file.h"
+#include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
@@ -207,6 +210,7 @@ extern void (*g_ardia_linux_drag_ended)(BrowserWindowInterface*);
 extern void (*g_ardia_devtools_dock_changed)(BrowserWindowInterface* browser,
                                              content::WebContents* inspected,
                                              content::WebContents* devtools);
+extern base::FilePath (*g_ardia_native_messaging_manifest)(const std::string& host_name);
 
 namespace ardia {
 namespace {
@@ -214,6 +218,16 @@ namespace {
 constexpr size_t kDocumentLimit = 8 * 1024 * 1024;
 constexpr size_t kAssetLimit = 32 * 1024 * 1024;
 constexpr char kSessionName[] = "linux-session.json";
+
+base::FilePath NativeMessagingManifest(const std::string& host_name) {
+  std::unique_ptr<base::Environment> environment = base::Environment::Create();
+  linux_native_messaging::Environment paths;
+  paths.home = environment->GetVar("HOME").value_or("");
+  paths.xdg_config_home = environment->GetVar("XDG_CONFIG_HOME").value_or("");
+  paths.chrome_config_home = environment->GetVar("CHROME_CONFIG_HOME").value_or("");
+  return base::FilePath(
+      linux_native_messaging::FindManifest(linux_native_messaging::ExtraUserDirectories(paths), host_name));
+}
 
 class ShellHostView;
 class HostMessageHandler;
@@ -1073,6 +1087,7 @@ class ShellHostView : public views::View,
   void ReplayTypeahead(bool field);
   void DiscardTypeahead();
   bool ShellHoldsTextField();
+  bool ExtensionShortcutPressed(const ui::KeyEvent& event, bool reserved_by_ardia);
   bool OwnsKeyboardEvent(const ui::KeyEvent& event) const;
   void OnWindowDestroying(aura::Window* window) override;
   void ArmWindowClose();
@@ -1150,6 +1165,7 @@ class ShellHostView : public views::View,
   uint64_t renderer_generation_ = 0;
   std::unique_ptr<LinuxWindowDialogs> dialogs_;
   std::unique_ptr<LinuxExtensionSurfaces> extension_surfaces_;
+  std::unique_ptr<LinuxExtensionKeybindings> extension_keybindings_;
   std::map<std::string, LinuxDialogSuspension> close_dialogs_;
   std::optional<std::pair<std::string, base::DictValue>> close_departure_;
   content::WeakDocumentPtr renderer_document_;
@@ -1852,6 +1868,7 @@ void ShellHostView::UnregisterAccelerators() {
     input_observation_.Reset();
   }
   input_handler_.reset();
+  extension_keybindings_.reset();
   if (focus_manager_) {
     if (shortcut_recording_) focus_manager_->set_shortcut_handling_suspended(false);
   }
@@ -1933,7 +1950,25 @@ void ShellHostView::OnKeyEvent(ui::KeyEvent* event) {
               << " shell_view=" << shell_->HasFocus()
               << " binding=" << shortcuts_.contains(accelerator);
   }
-  if (AcceleratorPressed(accelerator)) event->StopPropagation();
+  if (AcceleratorPressed(accelerator) || ExtensionShortcutPressed(*event, shortcuts_.contains(accelerator))) {
+    event->StopPropagation();
+  }
+}
+
+bool ShellHostView::ExtensionShortcutPressed(const ui::KeyEvent& event, bool reserved_by_ardia) {
+  if (!ExtensionsListening() || !page_profile()) return false;
+  if (!extension_keybindings_) {
+    extension_keybindings_ = std::make_unique<LinuxExtensionKeybindings>(
+        browser_.get(), base::BindRepeating(
+            [](base::WeakPtr<ShellHostView> host, content::WebContents* contents, const extensions::ExtensionId& id) {
+              if (!host) return false;
+              const std::string key = host->ExtensionTabKey(contents);
+              return !key.empty() && host->ExtensionEvent(linux_extension_shortcuts::kActionShortcutEvent,
+                                                          base::DictValue().Set("tabId", key).Set("extensionId", id));
+            },
+            GetWeakPtr()));
+  }
+  return extension_keybindings_->Handle(ui::Accelerator(event.key_code(), event.flags()), reserved_by_ardia);
 }
 
 bool ShellHostView::CanHandleAccelerators() const {
@@ -5273,6 +5308,7 @@ void StartLinuxHost() {
       }
     }
   });
+  g_ardia_native_messaging_manifest = &NativeMessagingManifest;
   StartLinuxExtensions(std::move(extensions));
   ac_engine_set_event_sink(EngineEvent, nullptr);
   StartLinuxSiteControls(base::BindRepeating([](Profile* profile, base::Value stats) {
