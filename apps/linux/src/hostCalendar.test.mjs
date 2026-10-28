@@ -155,6 +155,43 @@ test("sources become calendars with Linux accounts, colors and ownership", () =>
   assert.equal(normalizeColor("#ffff00008080"), "#FF0080");
 });
 
+test("GNOME Online Accounts sources for Google and Nextcloud list only the calendars the account has turned on", () => {
+  const collection = (uid, backend, identity, calendarEnabled) => ({
+    uid, calendar: false, data: {
+      "Data Source": { DisplayName: identity, Enabled: "true" },
+      Collection: { BackendName: backend, Identity: identity, CalendarEnabled: calendarEnabled, ContactsEnabled: "true", MailEnabled: "true" },
+      "GNOME Online Accounts": { AccountId: `account_1793200000_${uid}` },
+      Authentication: { Method: "OAuth2", User: identity },
+    },
+  });
+  const child = (uid, parent, name, color, user, enabled = "true") => ({
+    uid, calendar: true, data: {
+      "Data Source": { DisplayName: name, Enabled: enabled, Parent: parent },
+      Calendar: { BackendName: "caldav", Color: color, Selected: "true" },
+      Authentication: { Host: parent === "goa-google" ? "apidata.googleusercontent.com" : "cloud.example.org", Method: "OAuth2", Port: "443", User: user },
+      Offline: { StaySynchronized: "true" },
+      Refresh: { Enabled: "true", IntervalMinutes: "30" },
+      Security: { Method: "tls" },
+      "WebDAV Backend": { AvoidIfmatch: "false", CalendarAutoSchedule: "false", DisplayName: name, EmailAddress: user, ResourcePath: `/caldav/v2/${uid}/events`, ResourceQuery: "" },
+    },
+  });
+  const sources = [
+    collection("goa-google", "google", "emma@gmail.example", "true"),
+    child("google-primary", "goa-google", "emma@gmail.example", "#9fe1e7", "emma@gmail.example"),
+    child("google-team", "goa-google", "Team", "#F83A22FF", "emma@gmail.example"),
+    collection("goa-nextcloud", "webdav", "emma@cloud.example.org", "false"),
+    child("nextcloud-personal", "goa-nextcloud", "Personal", "#0082c9", "emma"),
+    collection("goa-old", "google", "old@gmail.example", "true"),
+    child("old-primary", "goa-old", "old@gmail.example", "#7bd148", "old@gmail.example", "false"),
+  ];
+  const calendars = calendarsFromSources(sources);
+  assert.deepEqual(calendars.map((c) => [c.id, c.title, c.color, c.account, c.accountType, c.owned]), [
+    ["google-primary", "emma@gmail.example", "#9FE1E7", "emma@gmail.example", "calDAV", true],
+    ["google-team", "Team", "#F83A22", "emma@gmail.example", "calDAV", true],
+  ]);
+  assert.deepEqual(calendars[0].emails, ["emma@gmail.example"]);
+});
+
 test("recurring, time-zoned, all-day, declined and cancelled events map into shared events", async () => {
   const { calendar, requests } = fixture({ consent: true });
   const calendars = await calendar("calendars")();
