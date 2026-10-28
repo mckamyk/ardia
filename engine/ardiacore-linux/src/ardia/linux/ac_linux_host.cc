@@ -223,6 +223,7 @@ extern bool (*g_ardia_linux_renderer_responsive)(content::WebContents*,
                                                  content::RenderWidgetHost*);
 extern bool (*g_ardia_linux_off_the_record_navigation)(content::WebContents*, const GURL&);
 extern void (*g_ardia_linux_devtools_opened_tab)(content::WebContents*, content::WebContents*, const GURL&);
+extern void (*g_ardia_linux_devtools_open_url)(Profile*, const GURL&);
 extern void (*g_ardia_linux_drag_ended)(BrowserWindowInterface*);
 extern void (*g_ardia_devtools_dock_changed)(BrowserWindowInterface* browser,
                                              content::WebContents* inspected,
@@ -425,6 +426,17 @@ uint64_t NextPageBindingGeneration() {
 
 int TabId(content::WebContents* contents) {
   return sessions::SessionTabHelper::IdForTab(contents).id();
+}
+
+void CloseDevToolsTab(content::WebContents* contents) {
+  if (!contents) return;
+  GlobalBrowserCollection::GetInstance()->ForEach([contents](BrowserWindowInterface* browser) {
+    TabStripModel* strip = browser->GetTabStripModel();
+    const int index = strip ? strip->GetIndexOfWebContents(contents) : TabStripModel::kNoTab;
+    if (index == TabStripModel::kNoTab) return true;
+    strip->CloseWebContentsAt(index, TabCloseTypes::CLOSE_NONE);
+    return false;
+  });
 }
 
 std::string String(const base::DictValue& value, std::string_view key) {
@@ -1070,6 +1082,25 @@ class ShellHostView : public views::View,
     }
     return false;
   }
+  bool AdoptDevToolsTab(content::WebContents* opened, const GURL& url, bool holder_only) {
+    if (!opened || opened->GetBrowserContext() != page_profile() || (holder_only && !StripHolds(opened))) return false;
+    TabBinding* binding = PrivateLinkBinding();
+    if (!binding) return false;
+    binding->ReportOpened(opened, url, "foreground");
+    return true;
+  }
+  bool OpenDevToolsLink(Profile* profile, const GURL& url, bool active_only) {
+    if (!profile || profile != page_profile() || (active_only && !WindowActive())) return false;
+    TabBinding* binding = PrivateLinkBinding();
+    if (!binding) return false;
+    binding->ReportPresentation("openWindow", base::DictValue()
+        .Set("url", url.spec()).Set("disposition", "foreground").Set("userGesture", true));
+    return true;
+  }
+  bool StripHolds(content::WebContents* contents) const {
+    return browser_ && contents && browser_->GetTabStripModel()->GetIndexOfWebContents(contents) != TabStripModel::kNoTab;
+  }
+  bool WindowActive() { return GetWidget() && GetWidget()->IsActive(); }
   TabBinding* PrivateLinkBinding() {
     TabBinding* fallback = nullptr;
     for (const auto& [id, binding] : bindings_) {
@@ -5666,7 +5697,21 @@ void StartLinuxHost() {
     for (const auto& [id, host] : Hosts()) {
       if (host->ReportDevToolsOpenedTab(inspected, opened, url)) return;
     }
-    LOG(WARNING) << "[ardia] DevTools opened a tab for a page Ardia does not host";
+    for (const bool holder_only : {true, false}) {
+      for (const auto& [id, host] : Hosts()) {
+        if (host->AdoptDevToolsTab(opened, url, holder_only)) return;
+      }
+    }
+    LOG(WARNING) << "[ardia] DevTools link refused: no Ardia window of its profile can show it";
+    CloseDevToolsTab(opened);
+  };
+  g_ardia_linux_devtools_open_url = [](Profile* profile, const GURL& url) {
+    for (const bool active_only : {true, false}) {
+      for (const auto& [id, host] : Hosts()) {
+        if (host->OpenDevToolsLink(profile, url, active_only)) return;
+      }
+    }
+    LOG(WARNING) << "[ardia] DevTools link refused: no Ardia window of its profile can show it";
   };
   ardiacore::InstallLinuxAutoplayPolicy();
   ardiacore::InstallLinuxWebStore(
