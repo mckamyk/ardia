@@ -5,7 +5,7 @@ import { evaluate } from "../lib/cdp.mjs";
 import { ardiaWindow, clickBlankPage, clickInPage, clickMenuItem, clickRowToggle, clickSidebarTab, focusPageByClick, openSettingsRow, pageFixtures, pageSession, paneRect, probe, rowControl, screenPoint, scrolledIntoView, shot, titledSeed , closeSettingsWindow } from "../lib/desktopPages.mjs";
 import { colorDistance, differingFraction, fractionNear, meanColor, parseHex, toHex, towards } from "../lib/desktopPixels.mjs";
 import { changedCells, regions } from "../lib/desktop.mjs";
-import { clickLabelIn, clickTextIn, currentRect, desktopUnavailable, openDesktop, pointAt, startDesktopBrowser } from "../lib/desktopSession.mjs";
+import { clickLabelIn, clickTextIn, currentRect, desktopUnavailable, newWindow, openDesktop, pointAt, startDesktopBrowser } from "../lib/desktopSession.mjs";
 import { ICON_COLOR } from "../lib/pageFixtures.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
@@ -185,6 +185,37 @@ export const f16Desktop = {
       await desktop.command(`[con_id=${window.id}] floating disable`);
       if (after !== before) throw new Error(`${after - before} tabs opened`);
       return { drops: await evaluate(two, "drops", { userGesture: false }) };
+    });
+
+    await t.check("dragging a link onto a second Ardia window at the same in-window point opens nothing", async () => {
+      const url = `${target}-two`;
+      await focusPageByClick(desktop, window, shell, app, urlTwo, tabTwo);
+      const known = await desktop.windows();
+      await desktop.key("ctrl+n");
+      const second = await newWindow(desktop, known, { label: "the second Ardia window" });
+      const secondShell = await until(async () => {
+        const found = (await app.shells()).find((s) => s.ready && !s.utility && s.windowId !== shell.windowId);
+        return found ? app.shell(found.windowId) : false;
+      }, { timeout: 15000, label: "the second window's shell" });
+      const otherUrl = t.fixtures.url.page(3, run);
+      const otherTab = await secondShell.newTab(otherUrl);
+      await secondShell.waitTabUrl(otherTab, (u) => u === otherUrl);
+      await delay(1500);
+      const first = await currentRect(desktop, window);
+      const other = await currentRect(desktop, second);
+      if (first.x === other.x) throw new Error(`the two windows overlap: ${JSON.stringify({ first, other })}`);
+      const before = { first: (await tabsOn(shell, url)).length, second: (await tabsOn(secondShell, url)).length };
+      await focusPageByClick(desktop, window, shell, app, urlTwo, tabTwo);
+      const from = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('link')");
+      const start = { x: from.rect.x + 24, y: from.y };
+      const drop = { x: start.x - first.x + other.x, y: start.y - first.y + other.y };
+      await desktop.drag(start, drop, { steps: 24, hold: 250 });
+      await delay(4000);
+      await shot(t, desktop, "drop-on-second-window");
+      const after = { first: (await tabsOn(shell, url)).length, second: (await tabsOn(secondShell, url)).length };
+      const secondTabs = await secondShell.state("return Object.values(s.tabs).filter((x) => x.windowId === windowId).map((x) => x.url);");
+      if (after.first !== before.first || after.second !== before.second) throw new Error(`a tab opened on the dragged link: before ${JSON.stringify(before)}, after ${JSON.stringify(after)}`);
+      return { windows: [first, other], start, drop, secondTabs };
     });
     await t.stop(app);
   },
