@@ -5,9 +5,9 @@ import { runInNewContext } from "node:vm";
 import { test } from "node:test";
 import { HostPageEvents } from "./hostPageEvents.ts";
 import { HostTab } from "./hostTab.ts";
-import { applyHostPageTheme, resetHostPage } from "./hostPageLifecycle.ts";
+import { applyHostPageTheme, forgetDepartedPage, resetHostPage } from "./hostPageLifecycle.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
-import { pageOf, patchPage } from "../../browser/src/state/tabs/pageState.ts";
+import { pageOf, patchPage, setPopover, usePages } from "../../browser/src/state/tabs/pageState.ts";
 import { navigated } from "../../browser/src/state/tabs/actions.ts";
 
 const lease = { claim: "claim", rendererGeneration: "2", bindingGeneration: "3", documentEpoch: "1" };
@@ -184,4 +184,24 @@ test("recovery, pop-up and favicon commands reach the exact pane and its produce
   } finally {
     a.dispose(); b.dispose(); await new Promise(setImmediate);
   }
+});
+
+test("a page that leaves this window drops its state here and a page that stays keeps it", () => {
+  const h = setup(status({ text: "https://example.test/link", popups: ["4"] }));
+  const windowId = useBrowser.getState().tabs[h.tab].windowId;
+  setPopover(h.tab, "popups");
+  forgetDepartedPage(h.tab, windowId);
+  assert.deepEqual(h.page().popups.map((p) => p.id), ["4"]);
+  assert.equal(usePages.getState().popover[h.tab], "popups");
+  useBrowser.setState((s) => ({ tabs: { ...s.tabs, [h.tab]: { ...s.tabs[h.tab], windowId: "elsewhere" } } }));
+  forgetDepartedPage(h.tab, windowId);
+  assert.equal(usePages.getState().pages[h.tab], undefined);
+  assert.equal(usePages.getState().popover[h.tab], undefined);
+  assert.deepEqual(h.page().popups, []);
+  assert.equal(h.page().status, "");
+  const closed = setup(status({ popups: ["5"] }));
+  const closedWindow = useBrowser.getState().tabs[closed.tab].windowId;
+  useBrowser.setState((s) => { const { [closed.tab]: _gone, ...tabs } = s.tabs; return { tabs }; });
+  forgetDepartedPage(closed.tab, closedWindow);
+  assert.equal(usePages.getState().pages[closed.tab], undefined);
 });
