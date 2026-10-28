@@ -9,7 +9,17 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 PATCHES = ROOT.parents[0] / 'patches'
 PATCH = PATCHES / 'chromium-linux-wayland-cursor-fallback.patch'
 TREE_FILE = 'ui/ozone/platform/wayland/host/wayland_screen.cc'
-SOURCE = pathlib.Path.home() / 'ardia-linux-build-156/chromium_git/chromium/src' / TREE_FILE
+TREE = pathlib.Path.home() / 'ardia-linux-build-156/chromium_git/chromium/src'
+
+
+def pristine():
+    if not (TREE / '.git').exists():
+        return None
+    result = subprocess.run(['git', '-C', str(TREE), 'show', f'HEAD:{TREE_FILE}'], capture_output=True, text=True)
+    return result.stdout if result.returncode == 0 else None
+
+
+PRISTINE = pristine()
 SIGNATURE = 'gfx::Point WaylandScreen::GetCursorScreenPoint() const {'
 
 HARNESS = r'''
@@ -128,15 +138,15 @@ def patched(source):
         return target.read_text()
 
 
-@unittest.skipUnless(SOURCE.exists() and shutil.which(os.environ.get('CXX', 'c++')), 'needs the Chromium 156 tree and a C++ compiler')
+@unittest.skipUnless(PRISTINE is not None and shutil.which(os.environ.get('CXX', 'c++')), 'needs the Chromium 156 tree and a C++ compiler')
 class WaylandCursorFallbackTests(unittest.TestCase):
     def test_chromium_puts_the_no_pointer_cursor_inside_the_browser_when_a_popup_sits_off_the_origin(self):
-        points = fallback_points(SOURCE.read_text())
+        points = fallback_points(PRISTINE)
         self.assertEqual(points[0], ['106', '100', 'inside'])
         self.assertEqual(points[1][2], 'inside')
 
     def test_the_patched_fallback_lies_outside_every_window(self):
-        points = fallback_points(patched(SOURCE.read_text()))
+        points = fallback_points(patched(PRISTINE))
         self.assertEqual(points, [['1930', '1090', 'outside'], ['1930', '1090', 'outside'], ['1930', '1090', 'outside']])
 
 
@@ -148,12 +158,12 @@ class WaylandCursorFallbackSeriesTests(unittest.TestCase):
         added = [line[1:] for line in text.splitlines() if line.startswith('+') and not line.startswith('+++')]
         self.assertFalse([line for line in added if line.strip().startswith('//')])
 
-    @unittest.skipUnless(SOURCE.exists(), 'needs the Chromium 156 tree')
+    @unittest.skipUnless(PRISTINE is not None, 'needs the Chromium 156 tree')
     def test_the_patch_applies_to_the_156_tree_without_fuzz(self):
         with tempfile.TemporaryDirectory(prefix='ardia-cursor-apply-') as directory:
             target = pathlib.Path(directory) / TREE_FILE
             target.parent.mkdir(parents=True)
-            shutil.copy(SOURCE, target)
+            target.write_text(PRISTINE)
             result = subprocess.run(['git', 'apply', '--check', str(PATCH)], cwd=directory, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
