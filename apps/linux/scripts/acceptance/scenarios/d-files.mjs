@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { clickTextIn, currentRect, desktopShot, desktopUnavailable, inside, openDesktop, openSettingsWindow, pointAt, pressInPrompt, promptAfter, promptLike, startDesktopBrowser } from "../lib/desktopSession.mjs";
 import { startFileManager, startPortal } from "../lib/desktopServices.mjs";
+import { openDownloadsPopover } from "../lib/desktopUi.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { FIXTURE_NAME, listed, prepareExtension } from "./f09-extensions.mjs";
 import { js, until } from "../lib/util.mjs";
@@ -66,7 +67,7 @@ async function clickReveal(desktop, shell, path) {
   const name = path.split("/").pop();
   let row = await shell.rectByText(name, { exact: true });
   if (!row) {
-    await desktop.key("ctrl+shift+j");
+    await openDownloadsPopover(desktop, window, shell);
     row = await until(() => shell.rectByText(name, { exact: true }), { timeout: 8000, label: "the download row in the popover" });
   }
   const frame = await currentRect(desktop, window);
@@ -213,7 +214,7 @@ export const f08Desktop = {
     await t.check("clicking a finished row opens the file with the desktop's handler", async () => {
       const window = await desktop.focused();
       const row = await until(() => shell.rectByText(finished.path.split("/").pop(), { exact: true }), { timeout: 8000, label: "the download row" }).catch(async () => {
-        await desktop.key("ctrl+shift+j");
+        await openDownloadsPopover(desktop, window, shell);
         return until(() => shell.rectByText(finished.path.split("/").pop(), { exact: true }), { timeout: 8000, label: "the download row after reopening the popover" });
       });
       await pointAt(desktop, window, row);

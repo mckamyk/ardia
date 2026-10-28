@@ -405,6 +405,15 @@ function swayDriver(desktop) {
     async scroll(dy, dx = 0) {
       await desktop.pointer.scroll(dy, dx);
     },
+    async swipe(x, y, distance, { steps = 24, interval = 12 } = {}) {
+      await driver.pointerMove(x, y);
+      await delay(120);
+      for (const step of swipeSteps(distance, steps)) {
+        await desktop.pointer.fingerScroll(step);
+        await delay(interval);
+      }
+      await desktop.pointer.fingerLift();
+    },
     async drag(from, to, { steps = 12, hold = 150 } = {}) {
       await driver.pointerMove(from.x, from.y);
       await driver.pointerPress();
@@ -503,6 +512,12 @@ function x11Driver(desktop) {
     },
   };
   return driver;
+}
+
+export function swipeSteps(distance, steps) {
+  const weights = Array.from({ length: steps }, (_, i) => Math.sin((Math.PI * (i + 0.5)) / steps));
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  return weights.map((w) => (distance * w) / total);
 }
 
 export function parsePpm(buffer) {

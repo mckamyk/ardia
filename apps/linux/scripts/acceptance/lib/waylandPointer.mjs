@@ -5,6 +5,7 @@ import { until } from "./util.mjs";
 export const BTN_LEFT = 0x110;
 export const BTN_RIGHT = 0x111;
 export const BTN_MIDDLE = 0x112;
+export const AXIS_SOURCE_FINGER = 1;
 
 export function encodeString(text) {
   const bytes = Buffer.from(`${text}\0`, "utf8");
@@ -41,6 +42,18 @@ export function decodeMessages(buffer) {
     offset += size;
   }
   return { messages, rest: buffer.subarray(offset) };
+}
+
+export function fingerScrollFrame(pointer, time, dx, dy = 0) {
+  const parts = [encodeMessage(pointer, 5, [AXIS_SOURCE_FINGER])];
+  if (dy) parts.push(encodeMessage(pointer, 3, [time, 0, Math.round(dy * 256)]));
+  if (dx) parts.push(encodeMessage(pointer, 3, [time, 1, Math.round(dx * 256)]));
+  parts.push(encodeMessage(pointer, 4));
+  return Buffer.concat(parts);
+}
+
+export function fingerLiftFrame(pointer, time) {
+  return Buffer.concat([encodeMessage(pointer, 5, [AXIS_SOURCE_FINGER]), encodeMessage(pointer, 6, [time, 0]), encodeMessage(pointer, 6, [time, 1]), encodeMessage(pointer, 4)]);
 }
 
 export function decodeGlobal(body) {
@@ -97,6 +110,12 @@ export async function openVirtualPointer({ runtime, display, width, height }) {
       if (dx) parts.push(encodeMessage(6, 3, [time(), 1, Math.round(dx * 256)]));
       parts.push(encodeMessage(6, 4));
       await send(Buffer.concat(parts));
+    },
+    async fingerScroll(dx, dy = 0) {
+      await send(fingerScrollFrame(6, time(), dx, dy));
+    },
+    async fingerLift() {
+      await send(fingerLiftFrame(6, time()));
     },
     async close() {
       if (socket.destroyed) return;
