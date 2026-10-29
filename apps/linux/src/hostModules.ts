@@ -8,6 +8,7 @@ import { syncModuleMethod } from "./hostSync.ts";
 import { linuxSystemMethod } from "./hostFiles.ts";
 import { linuxModuleMethod } from "./hostSystem.ts";
 import { linuxShellMethod } from "./shellMethods.ts";
+import { appModuleFallback } from "./appModuleFallbacks.ts";
 
 const synchronousDefaults: Record<string, Record<string, unknown>> = {
   ArdiaApp: { apiVersion: 0 },
@@ -40,6 +41,8 @@ export function resolveHostModule(host: ArdiaHost, name: string, method: string)
   if (syncMethod !== undefined) return syncMethod;
   const calendar = calendarModuleMethod(host, name, method);
   if (calendar !== undefined) return calendar;
+  const fallback = appModuleFallback(host, name, method);
+  if (fallback) return fallback;
   if (name === "ArdiaDocuments" && method === "call") {
     return (verb: string, profile: string, args: string) => {
       if (!["watch", "commit", "flush", "unwatch"].includes(verb)) return Promise.reject(Object.assign(new Error("Unknown document operation"), { code: "ERR_UNKNOWN_CALL" }));

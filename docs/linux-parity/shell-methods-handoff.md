@@ -34,7 +34,7 @@ The shell shim's exports still cover `showMenu`, `setTrafficLightsCenter`, `setA
 - **Every other module.** `resolveHostModule` marks its generic fall-through to the native host (`reachesNativeHostUnchecked`). A method that ends there must meet one of these:
   - It is advertised in the bootstrap.
   - Its name is routed in `engine/ardiacore-linux/src/ardia/linux`.
-  - It is on the test's explicit allow-to-reject list: `DEV_HOOKS`, the macOS developer hooks, and `TRACKED_IN_305`, the Mac-only features tracked in #305.
+  - It is on the test's explicit allow-to-reject list, which now holds only `ArdiaApp.systemInfo` (the bootstrap provides it as a constant).
 - **Stale entries.** A list entry that stops falling through fails the test.
 
 The test adds a fake `ArdiaApp.bogusAppMethod` and `ArdiaShell.bogusShellMethod` and expects the audit to report both. Adding the method to `AppModule` itself also fails the audit.
@@ -51,3 +51,20 @@ The test adds a fake `ArdiaApp.bogusAppMethod` and `ArdiaShell.bogusShellMethod`
 F20D's reorder check drops 11.5 px into a 34 px row, inside the shared targeting's "drop onto" band (25–75 % of a row). By design that never reorders, on macOS either.
 
 Follow-ups: no drag preview card on Linux (#325), and Escape cancels a drag only while the shell has keyboard focus (#326).
+
+## Mac-only module methods (#305)
+
+`appModuleFallbacks.ts` answers the shared `ArdiaApp`, `ArdiaKeychain`, `ArdiaTranslate`, `ArdiaInlineCompletion`, `ArdiaDockSelection` and `ArdiaSystem` methods that used to reach the native host and reject as "Unsupported Linux host method". An engine that advertises a method still wins.
+
+| Methods | Linux answer | Why it's truthful |
+| --- | --- | --- |
+| `updaterState` | `{ available: false }` | No updater; Settings › General hides Updates. |
+| `appIcons` | `[]` | No alternate icons; the Appearance picker hides with fewer than two. |
+| `crashReports` | `[]` | No crash report store on Linux. |
+| `postNotification` | `null` | The type's "not shown". Meeting alerts used to leave an unhandled rejection each time. |
+| `removeNotifications` | resolves | Nothing was posted. |
+| The updater actions, `setWindowActivity` (Handoff), `share`/`shareVia`, `isInDock`/`addToDock`, `appIcon`/`setAppIcon`, the notification permission and settings methods, AppleScript, the keychain, translation, inline completion, `iconTheme`, the native shortcut recorder and the `dev*` hooks | `ERR_UNAVAILABLE` naming the feature | Their UI is already hidden on Linux (`updates: false`, `ArdiaTranslate.available: false`, `LinuxHomeStep`, `liveNet.ts`), and their callers catch. |
+
+Desktop notifications themselves (org.freedesktop.Notifications for meeting alerts and site notifications) are a feature to build, not part of this adapter.
+
+`shellMethods.test.mjs`: every former #305 method resolves locally, with the answer above or `ERR_UNAVAILABLE`, and never falls through to the native host. An engine that advertises `ArdiaApp.postNotification` is called instead.
