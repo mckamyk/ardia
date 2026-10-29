@@ -63,7 +63,7 @@ Follow-ups: no drag preview card on Linux (#325), and Escape cancels a drag only
 | `crashReports` | `[]` | No crash report store on Linux. |
 | `postNotification` | `null` | The type's "not shown". Meeting alerts used to leave an unhandled rejection each time. |
 | `removeNotifications` | resolves | Nothing was posted. |
-| The updater actions, `setWindowActivity` (Handoff), `share`/`shareVia`, `isInDock`/`addToDock`, `appIcon`/`setAppIcon`, the notification permission and settings methods, AppleScript, the keychain, translation, inline completion, `iconTheme`, the native shortcut recorder and the `dev*` hooks | `ERR_UNAVAILABLE` naming the feature | Their UI is already hidden on Linux (`updates: false`, `ArdiaTranslate.available: false`, `LinuxHomeStep`, `liveNet.ts`), and their callers catch. |
+| The updater actions, `setWindowActivity` (Handoff), `share`/`shareVia`, `isInDock`/`addToDock`, `appIcon`/`setAppIcon`, the notification permission and settings methods, AppleScript, the keychain, translation, inline completion, `iconTheme`, the native shortcut recorder and the `dev*` hooks | `ERR_UNAVAILABLE` naming the feature | Their UI is already hidden on Linux (`updates: false`, `ArdiaTranslate.available: false`, `LinuxHomeStep`, `liveNet.ts`), and their callers catch, except `ensureNotificationPermission`: accepting a site's notification prompt drops its promise, so `permissions.ts` gets a Linux adapter that catches (#363). |
 
 Desktop notifications themselves (org.freedesktop.Notifications for meeting alerts and site notifications) are a feature to build, not part of this adapter.
 
