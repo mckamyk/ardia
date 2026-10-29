@@ -379,6 +379,10 @@ struct ShellHostView {
   void ResumeDialogsForClose(const std::string&);
   bool ClosingEndsSession() const;
   void AcknowledgeWindowClose(const base::DictValue&, base::OnceCallback<void(bool, base::Value)>);
+  int remembered_outputs = 0;
+  int forgotten_outputs = 0;
+  void RememberWindowOutput() { ++remembered_outputs; }
+  void ForgetWindowOutput() { ++forgotten_outputs; }
   void OnWidgetClosing(views::Widget*);
   void OnWidgetDestroying(views::Widget*);
 };

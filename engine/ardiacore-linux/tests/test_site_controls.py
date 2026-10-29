@@ -1,10 +1,10 @@
 import pathlib
 import re
-import shutil
 import subprocess
 import tempfile
 import unittest
 
+from chromium_series import applied
 from test_downloads import compile_and_run
 from test_session_merge import VALUES
 
@@ -178,16 +178,8 @@ class SiteControlsWiringTests(unittest.TestCase):
         build = (LINUX / 'BUILD.gn').read_text()
         for name in ['ac_linux_navigation_hold.cc', 'ac_linux_navigation_hold.h']:
             self.assertIn(f'"{name}"', build)
-        source = pathlib.Path.home() / 'ardia-linux-build-156/chromium_git/chromium/src/chrome/browser/chrome_content_browser_client.cc'
-        if not source.exists() or shutil.which('patch') is None:
-            self.skipTest('Chromium 156 source is unavailable')
-        with tempfile.TemporaryDirectory(prefix='ardia-navigation-hold-patch-') as directory:
-            target = pathlib.Path(directory) / 'chrome/browser/chrome_content_browser_client.cc'
-            target.parent.mkdir(parents=True)
-            target.write_text(source.read_text())
-            result = subprocess.run(['patch', '-p1', '--dry-run', '-F0', '-i', str(patch)], cwd=directory,
-                                    capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with applied(patch.name, 'chrome/browser/chrome_content_browser_client.cc') as directory:
+            self.assertIn('g_ardia_linux_navigation_throttles(registry);', (directory / 'chrome/browser/chrome_content_browser_client.cc').read_text())
 
     def test_bridge_files_carry_no_comments(self):
         for path in (ROOT / 'content-blocker').iterdir():
