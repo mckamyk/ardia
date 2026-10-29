@@ -1,4 +1,5 @@
 import type { Plugin } from "vite";
+import { hasMacModifiers, linuxShortcutText } from "./shortcutText";
 
 type Wording = { file: string; replacements: [string, string][] };
 
@@ -35,6 +36,7 @@ export const LINUX_WORDING: readonly Wording[] = [
   {
     file: "components/settings/rows/generalRows.ts",
     replacements: [
+      ["description: `Asks before ${APP} quits with ⌘Q.`", "description: `Asks before ${APP} quits with Ctrl+Shift+Q.`"],
       [
         `"Follow macOS uses System Settings › Appearance › Show scroll bars. Thin shows slim scroll bars over the page only while you scroll, even with a mouse."`,
         `"Follow system keeps the scroll bars your desktop shows. Thin shows slim scroll bars over the page only while you scroll, even with a mouse."`,
@@ -111,8 +113,9 @@ export function rewordForLinux(id: string, code: string): string | null {
   if (!wording) return null;
   let reworded = code;
   for (const [from, to] of wording.replacements) {
-    if (!reworded.includes(from)) throw new Error(`${path} no longer contains ${JSON.stringify(from.slice(0, 80))}; update apps/linux/linuxWording.ts`);
-    reworded = reworded.replace(from, () => to);
+    const found = reworded.includes(from) ? from : hasMacModifiers(from) && reworded.includes(linuxShortcutText(from)) ? linuxShortcutText(from) : null;
+    if (found === null) throw new Error(`${path} no longer contains ${JSON.stringify(from.slice(0, 80))}; update apps/linux/linuxWording.ts`);
+    reworded = reworded.replace(found, () => to);
   }
   return reworded;
 }

@@ -2,7 +2,7 @@ import type { ShortcutModifier } from "@ardia-real/shell";
 import { useBrowser } from "../../browser/src/state/browser/store";
 import { emitNativeEvent, provideNativeModuleProvider } from "./shims/expo-modules-core";
 import { ardiaHost, reportHostError, type ArdiaHost } from "./host";
-import { keyboardCombo, linuxBindings, linuxNativeBindings, recordableShortcut, type Binding } from "./shortcuts";
+import { keyboardCombo, linuxBindings, linuxNativeBindings, recordableShortcut, utilityBindings, type Binding } from "./shortcuts";
 
 let capturing = false;
 let holding = 0;
@@ -46,7 +46,7 @@ export async function startLinuxShortcuts(host: ArdiaHost) {
   const update = () => {
     const state = useBrowser.getState();
     bindings = linuxBindings(state.settings.shortcuts, state.profileOrder);
-    if (host.bootstrap.utility) bindings = bindings.filter((b) => ["closeTab", "openSettings", "findInPage", "quit"].includes(b.command));
+    if (host.bootstrap.utility) bindings = utilityBindings(bindings);
     const encoded = JSON.stringify(linuxNativeBindings(bindings, state.profileOrder));
     if (encoded === previous) return pending;
     previous = encoded;

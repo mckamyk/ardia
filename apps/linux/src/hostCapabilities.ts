@@ -9,6 +9,7 @@ export type LinuxCapabilities = {
   externalLinks: boolean;
   performanceRecording: boolean;
   taskManager: boolean;
+  videoUpscaling: boolean;
 };
 
 export function linuxCapabilities(host: ArdiaHost | undefined = ardiaHost): LinuxCapabilities {
@@ -22,6 +23,7 @@ export function linuxCapabilities(host: ArdiaHost | undefined = ardiaHost): Linu
     externalLinks: has("ArdiaApp.openExternalURL"),
     performanceRecording: has("engine.beginTracing", "engine.endTracing", "engine.isTracing"),
     taskManager: has("engine.openTaskManager"),
+    videoUpscaling: false,
   };
 }
 
@@ -30,6 +32,7 @@ export function unavailableSettingIds(capabilities: LinuxCapabilities, settingId
   if (!capabilities.defaultBrowser) ids.add("general.defaultBrowser");
   if (!capabilities.launchAtLogin) ids.add("general.openAtLogin");
   if (!capabilities.thinScrollBars) ids.add("appearance.pageScrollBars");
+  if (!capabilities.videoUpscaling) ids.add("tabs.videoUpscaling");
   if (!capabilities.cliControl) for (const id of ["advanced.cliControl", "advanced.cliInstall"]) ids.add(id);
   if (!capabilities.webkit) for (const id of settingIds) if (id.startsWith("engines.")) ids.add(id);
   return ids;
