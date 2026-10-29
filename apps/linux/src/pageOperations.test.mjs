@@ -96,7 +96,7 @@ const CALLERS = {
   "state/app/appIntegration.ts": { calls: 1, path: "AppleScript, which Linux never starts" },
   "state/commands/commands.ts": { calls: 1, path: "the pinned selectedText operation" },
   "state/engines/actions.ts": { calls: 1, path: "the editedInput page command" },
-  "state/extensions/bridge.ts": { calls: 1, path: "the webStoreRequest page command" },
+  "state/extensions/webStore.ts": { calls: 1, path: "the webStoreRequest page command" },
   "state/media/media.ts": { calls: 2, path: "the pictureInPictureState and exitPictureInPicture page commands" },
   "state/site/selection.ts": { calls: 4, path: "the pinned selection operations" },
   "state/site/translate.ts": { calls: 6, path: "translation, which is unavailable on Linux" },

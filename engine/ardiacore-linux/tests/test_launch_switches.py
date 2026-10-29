@@ -125,6 +125,7 @@ HARNESS = r'''
 int main(int argc, char** argv) {
   assert(argc >= 4);
   const std::string scenario = argv[1];
+  const std::string_view example_experiment = "example";
   auto* command = base::CommandLine::ForCurrentProcess();
   for (int i = 4; i < argc; ++i) {
     const std::string argument = argv[i];
@@ -141,8 +142,10 @@ int main(int argc, char** argv) {
   assert(!ardiacore::TestValue("reauth"));
   assert(!ardiacore::Traced("profileGate"));
   assert(!ardiacore::SwitchOn("newTabPrewarm"));
-  assert(ardiacore::SwitchOn("unknownDefaultOn"));
-  assert(!ardiacore::ExperimentOn("unknownDefaultOff"));
+  const std::string_view unregistered_switch = "unknownDefaultOn";
+  const std::string_view unregistered_experiment = "unknownDefaultOff";
+  assert(ardiacore::SwitchOn(unregistered_switch));
+  assert(!ardiacore::ExperimentOn(unregistered_experiment));
   auto config = ardiacore::LinuxLaunchConfig(base::FilePath(argv[2]), base::FilePath(argv[3]));
   assert(config.values.size() == 8);
   assert(config.At("dataDirectory").text == argv[2]);
@@ -161,7 +164,7 @@ int main(int argc, char** argv) {
     assert(config.At("background").boolean);
     assert(config.At("instance").dict->At("downloadsDir").text == "/tmp/downloads");
     assert(config.At("instance").dict->values.size() == 1);
-    assert(ardiacore::ExperimentOn("example"));
+    assert(ardiacore::ExperimentOn(example_experiment));
     assert(config.At("isolated").boolean);
   } else if (scenario == "hyprland") {
     assert(ardiacore::InstanceValue("hyprland-runtime-dir") == "/run/user/1000");
@@ -174,7 +177,7 @@ int main(int argc, char** argv) {
     assert(!ardiacore::InstanceValue("hyprland-runtime-dir"));
     assert(!ardiacore::InstanceValue("hyprland-instance"));
   } else if (scenario == "precedence") {
-    assert(!ardiacore::ExperimentOn("example"));
+    assert(!ardiacore::ExperimentOn(example_experiment));
     assert(!ardiacore::SwitchOverride("malformed"));
     assert(ardiacore::InstanceValue("downloads-dir") == "/tmp/cli");
     assert(config.At("instance").dict->At("downloadsDir").text == "/tmp/cli");
@@ -191,10 +194,10 @@ int main(int argc, char** argv) {
     assert(!renderer.HasSwitch("ardia-switches"));
   } else if (scenario == "child") {
     assert(!ardiacore::BackgroundInstance());
-    assert(!ardiacore::ExperimentOn("example"));
+    assert(!ardiacore::ExperimentOn(example_experiment));
     assert(config.At("instance").dict->values.empty());
   } else if (scenario == "empty-cli") {
-    assert(!ardiacore::ExperimentOn("example"));
+    assert(!ardiacore::ExperimentOn(example_experiment));
     assert(config.At("instance").dict->values.empty());
   } else if (scenario == "commas") {
     assert(ardiacore::InstanceValue("downloads-dir") == "/tmp/N05 downloads,review,part=two,, last");

@@ -4,7 +4,7 @@ import { HostPageEvents } from "./hostPageEvents.ts";
 import { applyHostPageTheme, resetHostPage } from "./hostPageLifecycle.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { pageOf, patchPage, popoverOf, setPopover } from "../../browser/src/state/tabs/pageState.ts";
-import { navigated, updateLive, updateTab } from "../../browser/src/state/tabs/actions.ts";
+import { updateLive, updateTab } from "../../browser/src/state/tabs/actions.ts";
 import { noteScroll, useToolbarAutoHide } from "../../browser/src/state/windows/toolbarAutoHide.ts";
 
 const lease = { claim: "claim", rendererGeneration: "2", bindingGeneration: "3", documentEpoch: "1" };
@@ -24,7 +24,7 @@ function setup() {
     onSecurity: (value) => { calls.push(["security", value]); patchPage(tab, { security: value }); },
     onNavigationChange: (value) => {
       calls.push(["navigation", value]);
-      navigated(tab, { url: value.url, title: value.title }, value);
+      updateTab(tab, { url: value.url, title: value.title }, value);
       patchPage(tab, { themeColorSource: value.themeColorSource });
     },
     onZoom: (value) => { calls.push(["zoom", value]); updateTab(tab, { zoom: value.zoom }); },

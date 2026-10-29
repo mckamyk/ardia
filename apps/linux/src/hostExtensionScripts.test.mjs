@@ -21,7 +21,7 @@ const settled = async (promise) => {
 const run = (script, reply) => reply.then(script.map, () => script.failed());
 
 test("the shared Web Store bridge script maps to the native store request and never reaches the page", () => {
-  assert.equal(WEB_STORE_REQUEST, literal("../../browser/src/state/extensions/bridge.ts", "STORE_SCRIPT"), "the shared Web Store script changed; update hostPageScripts.ts");
+  assert.equal(WEB_STORE_REQUEST, literal("../../browser/src/state/extensions/webStore.ts", "STORE_SCRIPT"), "the shared Web Store script changed; update hostPageScripts.ts");
   const script = hostPageScript("evaluate", [WEB_STORE_REQUEST]);
   assert.equal(script.command, "webStoreRequest");
   assert.deepEqual(script.args, []);

@@ -9,7 +9,7 @@ import { forgetHostPageState, setHostPageHooks } from "./hostPageHooks.ts";
 import { readFileSync } from "node:fs";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { pageOf, patchPage, setPopover, usePages } from "../../browser/src/state/tabs/pageState.ts";
-import { navigated } from "../../browser/src/state/tabs/actions.ts";
+import { updateTab } from "../../browser/src/state/tabs/actions.ts";
 
 const lease = { claim: "claim", rendererGeneration: "2", bindingGeneration: "3", documentEpoch: "1" };
 const navigation = { url: "https://example.test", committedUrl: "https://example.test", title: "Example", canGoBack: false, canGoForward: false, isLoading: false, themeColor: null, themeColorSource: null };
@@ -31,7 +31,7 @@ function setup(events = status()) {
   const window = useBrowser.getState().createWindow({ url: navigation.url });
   const tab = useBrowser.getState().windows[window].tabIds[0];
   const props = {
-    onNavigationChange: (value) => navigated(tab, { url: value.url, title: value.title }, value),
+    onNavigationChange: (value) => updateTab(tab, { url: value.url, title: value.title }, value),
     onSecurity: (value) => patchPage(tab, { security: value }),
     onFullscreen: (fullscreen) => patchPage(tab, { fullscreen }),
     onStatus: (text) => patchPage(tab, { status: text }),
