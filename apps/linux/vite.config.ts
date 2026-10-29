@@ -45,6 +45,7 @@ const importerReplacements = new Map([
   [`${here("../browser/src/state/splits/actions.ts")}\0${tabLifecycle}`, here("./src/policyToasts.ts")],
   [`${here("../browser/src/platform/performance.ts")}\0${tabLifecycle}`, here("./src/policyPerformance.ts")],
   [`${lazyComponentId(here("../browser/src/components/extensions/ExtensionOverlays.tsx"))}\0${here("../browser/src/components/settings/panes/Extensions.tsx")}`, here("./src/SettingsInstallDialog.tsx")],
+  [`${here("../browser/src/platform/webviews.ts")}\0${here("../browser/src/state/drag/tabDrag.ts")}`, here("./src/dragWebviews.ts")],
 ]);
 const adapters = new Set([...replacements.values(), ...importerReplacements.values(), rawBookmarkAdapter.replacement, importedPasswordSave.replacement]);
 
