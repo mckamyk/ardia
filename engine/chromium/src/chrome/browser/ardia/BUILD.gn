@@ -36,6 +36,8 @@ ardia_sources = [
   "ac_omnibox.h",
   "ac_passwords.cc",
   "ac_passwords.h",
+  "ac_passwords_exceptions.cc",
+  "ac_passwords_internal.h",
   "ac_process.cc",
   "ac_process.h",
   "ac_reauth.h",

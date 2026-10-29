@@ -40,7 +40,7 @@ int main(int, char** argv) {
   } else if (mode == "send") {
     SendHyprland(ConnectHyprland(argv[2]), argv[3]);
   } else if (mode == "path") {
-    auto path = HyprlandSocketPath();
+    auto path = HyprlandSocketPath(argv[2], argv[3]);
     if (path) std::cout << *path;
   }
 }
@@ -57,14 +57,21 @@ int main(int, char** argv) {
         return subprocess.run([str(self.binary), *map(str, args)],
                               capture_output=True, text=True, timeout=3, **kwargs)
 
-    def test_socket_environment_is_optional_and_rejects_path_traversal(self):
-        env = dict(os.environ, XDG_RUNTIME_DIR='/tmp/pip-runtime')
+    def test_socket_launch_values_are_optional_and_reject_path_traversal(self):
         for signature in ['', '../foreign', '..', 'x/y', 'a;exec']:
-            env['HYPRLAND_INSTANCE_SIGNATURE'] = signature
-            self.assertEqual(self.invoke('path', env=env).stdout, '')
-        env['HYPRLAND_INSTANCE_SIGNATURE'] = 'abc_123'
-        self.assertEqual(self.invoke('path', env=env).stdout,
+            self.assertEqual(self.invoke('path', '/tmp/pip-runtime', signature).stdout, '')
+        for runtime in ['', 'relative/runtime']:
+            self.assertEqual(self.invoke('path', runtime, 'abc_123').stdout, '')
+        env = dict(os.environ, XDG_RUNTIME_DIR='/tmp/from-environment',
+                   HYPRLAND_INSTANCE_SIGNATURE='from_environment')
+        self.assertEqual(self.invoke('path', '/tmp/pip-runtime', 'abc_123', env=env).stdout,
                          '/tmp/pip-runtime/hypr/abc_123/.socket.sock')
+        self.assertEqual(self.invoke('path', '', '', env=env).stdout, '')
+        source = (ROOT / 'pip/ac_pip_hyprland.cc').read_text()
+        self.assertNotIn('getenv', source)
+        platform = (ROOT / 'pip/ac_pip_linux.cc').read_text()
+        self.assertIn('ardiacore::InstanceValue("hyprland-runtime-dir")', platform)
+        self.assertIn('ardiacore::InstanceValue("hyprland-instance")', platform)
 
     def test_socket_requests_and_sends_are_bounded(self):
         path = str(self.directory / 'ipc.sock')

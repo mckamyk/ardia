@@ -163,6 +163,16 @@ int main(int argc, char** argv) {
     assert(config.At("instance").dict->values.size() == 1);
     assert(ardiacore::ExperimentOn("example"));
     assert(config.At("isolated").boolean);
+  } else if (scenario == "hyprland") {
+    assert(ardiacore::InstanceValue("hyprland-runtime-dir") == "/run/user/1000");
+    assert(ardiacore::InstanceValue("hyprland-instance") == "abc_123");
+    assert(config.At("instance").dict->values.empty());
+  } else if (scenario == "hyprland-cli") {
+    assert(ardiacore::InstanceValue("hyprland-runtime-dir") == "/tmp/cli-runtime");
+    assert(ardiacore::InstanceValue("hyprland-instance") == "cli_instance");
+  } else if (scenario == "no-hyprland") {
+    assert(!ardiacore::InstanceValue("hyprland-runtime-dir"));
+    assert(!ardiacore::InstanceValue("hyprland-instance"));
   } else if (scenario == "precedence") {
     assert(!ardiacore::ExperimentOn("example"));
     assert(!ardiacore::SwitchOverride("malformed"));
@@ -227,7 +237,7 @@ class LaunchSwitchTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def run_case(self, scenario, *args, environment=None, directory=None):
-        env = {key: value for key, value in os.environ.items() if not key.startswith('ARDIA_')}
+        env = {key: value for key, value in os.environ.items() if not key.startswith('ARDIA_') and key != 'HYPRLAND_INSTANCE_SIGNATURE'}
         env.update(environment or {})
         result = subprocess.run([str(self.binary), scenario, str(self.root) if directory is None else directory, str(self.user), *args], env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -238,6 +248,18 @@ class LaunchSwitchTests(unittest.TestCase):
 
     def test_environment_allowlist_and_real_root_isolation(self):
         self.run_case('environment', f'user-data-dir={self.alias}', environment={'ARDIA_BACKGROUND': '1', 'ARDIA_SWITCHES': 'example=on,newTabPrewarm=on', 'ARDIA_INSTANCE': 'unknown=secret,reauth=grant,downloadsDir=/tmp/downloads,updateFeed=secret'})
+
+    def test_hyprland_socket_values_come_from_the_launch_environment(self):
+        self.run_case('hyprland', environment={'XDG_RUNTIME_DIR': '/run/user/1000', 'HYPRLAND_INSTANCE_SIGNATURE': 'abc_123'})
+
+    def test_hyprland_socket_cli_values_win_over_the_environment(self):
+        self.run_case('hyprland-cli', 'ardia-hyprland-runtime-dir=/tmp/cli-runtime', 'ardia-hyprland-instance=cli_instance', environment={'XDG_RUNTIME_DIR': '/run/user/1000', 'HYPRLAND_INSTANCE_SIGNATURE': 'abc_123'})
+
+    def test_hyprland_socket_values_need_a_hyprland_session(self):
+        self.run_case('no-hyprland', environment={'XDG_RUNTIME_DIR': '/run/user/1000', 'HYPRLAND_INSTANCE_SIGNATURE': ''})
+
+    def test_renderer_never_imports_hyprland_environment(self):
+        self.run_case('no-hyprland', 'type=renderer', environment={'XDG_RUNTIME_DIR': '/run/user/1000', 'HYPRLAND_INSTANCE_SIGNATURE': 'abc_123'})
 
     def test_downloads_directory_preserves_shared_comma_grammar(self):
         self.run_case('commas', environment={'ARDIA_INSTANCE': 'unknown=secret,downloadsDir=/tmp/N05 downloads,review,part=two,, last,updateFeed=secret'})

@@ -28,7 +28,8 @@ struct Rectangle {
   bool operator==(const Rectangle&) const = default;
 };
 
-std::optional<std::string> HyprlandSocketPath();
+std::optional<std::string> HyprlandSocketPath(const std::string& runtime,
+                                              const std::string& signature);
 Connection ConnectHyprland(const std::string& path);
 std::optional<std::string> RequestHyprland(const std::string& path,
                                            const std::string& request);

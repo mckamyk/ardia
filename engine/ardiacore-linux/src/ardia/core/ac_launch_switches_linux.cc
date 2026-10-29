@@ -118,6 +118,16 @@ void InitializeLinuxLaunchConfig() {
       command->AppendSwitchASCII(kSwitchesSwitch, *value);
     }
   }
+  const auto hyprland = environment->GetVar("HYPRLAND_INSTANCE_SIGNATURE");
+  if (hyprland && !hyprland->empty()) {
+    if (!command->HasSwitch("ardia-hyprland-instance")) {
+      command->AppendSwitchNative("ardia-hyprland-instance", *hyprland);
+    }
+    const auto runtime = environment->GetVar("XDG_RUNTIME_DIR");
+    if (runtime && !command->HasSwitch("ardia-hyprland-runtime-dir")) {
+      command->AppendSwitchNative("ardia-hyprland-runtime-dir", *runtime);
+    }
+  }
   if (!command->HasSwitch("ardia-downloads-dir")) {
     const auto downloads =
         DownloadsDirectory(environment->GetVar("ARDIA_INSTANCE").value_or(""));

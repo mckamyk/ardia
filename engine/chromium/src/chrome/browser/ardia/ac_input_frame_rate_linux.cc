@@ -1,7 +1,5 @@
 #include "chrome/browser/ardia/ac_input_frame_rate.h"
 
-#include <cstdlib>
-#include <cstring>
 #include <set>
 
 #include "base/check.h"
@@ -112,10 +110,6 @@ class InputFrameRate : public ui::EventObserver, public aura::EnvObserver {
 
 void HoldFullFrameRateDuringInput() {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-  const char* setting = std::getenv("ARDIA_SCROLL_FULL_RATE");
-  if (setting && !std::strcmp(setting, "off")) {
-    return;
-  }
   static base::NoDestructor<InputFrameRate> observer;
   observer->Observe();
 }
