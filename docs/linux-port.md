@@ -337,16 +337,9 @@ If the report calls for engine work, follow the dedicated Linux build and packag
 git push --force-with-lease origin HEAD:t3/linux-build-patches
 ```
 
-## Planned prebuilt-engine CI (not implemented)
+## Prebuilt-engine CI
 
-Linux CI must follow the prebuilt-engine model in [`.github/workflows/build.yml`](../.github/workflows/build.yml) and [`packages/ardiacore/scripts/fetch-engine.sh`](../packages/ardiacore/scripts/fetch-engine.sh). GitHub Actions should consume an engine built on the dedicated Linux server rather than compile Chromium itself. The Linux fetcher support, engine archive publishing and Ubuntu job below are planned work, not implemented or verified by this port.
-
-1. Compile Chromium plus the pinned Helium Linux integration on the Linux build server. Key the engine artifact by the first 12 characters of `git rev-parse HEAD:engine`, and publish `ArdiaCore-<short-tree-sha>-linux-x64.tar.xz` plus its `.sha256` checksum. Define and verify the runtime payload needed by the Linux host (`chrome` and its resources, plus `libardiacore.so` if a separate library is produced). The existing application package from `scripts/linux/package.py` is not this engine-only archive.
-2. Extend `fetch-engine.sh` with `--arch linux-x86_64 --nearest`. It should walk `git rev-list HEAD -- engine` for an exact or nearest available engine release, verify SHA-256 before use, and unpack into `apps/browser/build-ardiacore/prebuilt-linux-x86_64/<short-tree-sha>/`. Preserve the current macOS archive names (`ArdiaCore-<short>.tar.xz` and `ArdiaCore-<short>-x64.tar.xz`) and behavior.
-3. Add an `app-linux-x64` job on `ubuntu-latest` alongside the existing macOS jobs. Cache `apps/browser/build-ardiacore/prebuilt-linux-x86_64` with `actions/cache@v6`, run `packages/ardiacore/scripts/fetch-engine.sh --arch linux-x86_64 --nearest`, and use `ARDIACORE_PREBUILT_REPO=mckamyk/ardia` as the repository fallback until `mantrakp04/ardia` hosts Linux archives.
-4. Build fresh `apps/linux/dist` with `pnpm --filter @ardia/linux build`, package it with the fetched Linux engine and runtime resources, and upload `Ardia-linux-x64-${{ github.sha }}.tar.xz` using `actions/upload-artifact@v7`. Add the appropriate checks and validate installation and launch of a real package before calling this job working.
-
-A roughly three-minute Ubuntu job is the intended goal once engine archives are available; no Linux fetch, cache, CI duration or runtime support has been established by this blueprint.
+[Linux CI](linux-ci.md) describes the manual Linux workflow, the engine archive the builder publishes with `scripts/linux/publish-engine.sh`, `fetch-engine.sh --arch linux-x86_64`, the shared runtime allowlist and the package smoke gate. ArdiaCore is linked into Linux's `chrome`; there is no separate `libardiacore.so`. Repository Actions are still disabled and no Linux engine is published yet.
 
 ## Optional build acceleration (planned)
 
