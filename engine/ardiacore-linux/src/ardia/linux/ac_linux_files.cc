@@ -61,6 +61,7 @@
 #include "net/base/filename_util.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/aura/env.h"
+#include "ui/aura/window.h"
 #include "ui/base/clipboard/file_info.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
@@ -466,6 +467,13 @@ void Open(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, b
       }, std::move(done)));
 }
 
+bool ChooserShowing(const ui::SelectFileDialog* dialog, gfx::NativeWindow window) {
+  if (!dialog) return false;
+  if (dialog->IsRunning(window)) return true;
+  gfx::NativeWindow root = window ? window->GetRootWindow() : gfx::NativeWindow();
+  return root && root != window && dialog->IsRunning(root);
+}
+
 class DownloadFolderPicker;
 
 linux_files::PickerSlots<gfx::NativeWindow, DownloadFolderPicker>& FolderPickers() {
@@ -488,7 +496,7 @@ class DownloadFolderPicker : public ui::SelectFileDialog::Listener {
                                 nullptr, 0, base::FilePath::StringType(), window);
   }
 
-  bool Showing(gfx::NativeWindow window) const { return dialog_ && dialog_->IsRunning(window); }
+  bool Showing(gfx::NativeWindow window) const { return ChooserShowing(dialog_.get(), window); }
 
   void Abandon() {
     FileSelectionCanceled();
@@ -554,7 +562,7 @@ class OpenFilesPicker : public ui::SelectFileDialog::Listener {
                                 nullptr, 0, base::FilePath::StringType(), window);
   }
 
-  bool Showing(gfx::NativeWindow window) const { return dialog_ && dialog_->IsRunning(window); }
+  bool Showing(gfx::NativeWindow window) const { return ChooserShowing(dialog_.get(), window); }
 
   void Abandon() {
     FileSelectionCanceled();
