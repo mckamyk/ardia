@@ -26,3 +26,7 @@ Two halves:
 ## Needs the next build to confirm
 
 F17D's "a pane moved to a new window takes its status and blocked pop-up with it and the old window shows none" needs the native half, so a package built from this branch.
+
+## On the 148104a3 build
+
+The pop-up now reaches the new window and the old window keeps nothing. F17D still failed at the next step, the hover status in the new window. sway tiles the new window to 960 px, so pane B is 763 px wide, and the fixture's link sits at x 600–1020: F17D pointed at its centre (x 810, past the pane's edge, off the 1920 px screen). Chrome never sent a target URL because the pointer never reached the link. F17D now hovers 40 px into the link. With that, F17D passes 3 of 3 on the 148104a3 package with its own UI.
