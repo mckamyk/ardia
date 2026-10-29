@@ -6,6 +6,7 @@ type Bounds = { x: number; y: number; width: number; height: number };
 
 const EXTENSION_POPUP = '[data-testid="ardia-extension-popup"]';
 const EXTENSION_POPUP_DISMISS = '[data-testid="ardia-extension-popup-dismiss"]';
+const SIDEBAR_PEEK = '[data-testid="ardia-sidebar-peek"]';
 
 let overlayBlocked = (_key: string | undefined) => false;
 export const hostOverlayBlocked = (key: string | undefined) => overlayBlocked(key);
@@ -29,13 +30,14 @@ export function watchTabViewport(element: HTMLElement, visible: () => boolean, r
     if (stopped) return;
     const rect = element.getBoundingClientRect();
     const viewport = tabViewport(rect, { width: window.innerWidth, height: window.innerHeight }, visible() && !document.hidden && element.isConnected);
+    const peeks = [...document.querySelectorAll<HTMLElement>(SIDEBAR_PEEK)].map((peek) => peek.getBoundingClientRect());
     const overlays = [...document.querySelectorAll<HTMLElement>('[data-testid="ardia-sidebar-hover"] > div > div, [data-testid="ardia-page-overlay"] > div > div')];
     const popup = document.querySelector<HTMLElement>(EXTENSION_POPUP);
     const above = popup && !popup.contains(element) ? popup : null;
     const covering = above ? [...overlays, above] : overlays;
     const dismiss = above && document.querySelector<HTMLElement>(EXTENSION_POPUP_DISMISS);
     if (viewport.visible) {
-      const occlusions = covering.map((card) => card.getBoundingClientRect()).filter((card) => card.width > 0 && card.height > 0 && card.left < rect.right && card.right > rect.left && card.top < rect.bottom && card.bottom > rect.top);
+      const occlusions = [...peeks, ...covering.map((card) => card.getBoundingClientRect())].filter((card) => card.width > 0 && card.height > 0 && card.left < rect.right && card.right > rect.left && card.top < rect.bottom && card.bottom > rect.top);
       if (occlusions.length) viewport.occlusions = occlusions.map(({ x, y, width, height }) => ({ x, y, width, height, paintOutset: 32 }));
       for (let parent: HTMLElement | null = element; parent; parent = parent.parentElement) {
         const style = getComputedStyle(parent);
@@ -54,6 +56,7 @@ export function watchTabViewport(element: HTMLElement, visible: () => boolean, r
       const bottom = Math.min(window.innerHeight, rect.bottom) - insetY;
       const points = [[left, top], [right, top], [left, bottom], [right, bottom], [(left + right) / 2, (top + bottom) / 2]];
       viewport.visible = points.every(([x, y]) => {
+        if (peeks.some((peek) => x! >= peek.left && x! < peek.right && y! >= peek.top && y! < peek.bottom)) return true;
         const hit = document.elementFromPoint(x!, y!);
         return !!hit && (hit === element || element.contains(hit) || covering.some((card) => card === hit || card.contains(hit)) || !!dismiss?.contains(hit));
       });

@@ -15,7 +15,7 @@ test("viewport observation tracks transforms, scroll, visual zoom, overlays, and
   let disconnected = false;
   const element = { isConnected: true, parentElement: null, getBoundingClientRect: () => rect, contains: () => false };
   const selectors = [];
-  const document = Object.assign(documentEvents, { hidden: false, querySelectorAll: (selector) => { selectors.push(selector); return cards; }, querySelector: () => null, elementFromPoint: () => blocked ? {} : cardAtSample ? cards[0] : element });
+  const document = Object.assign(documentEvents, { hidden: false, querySelectorAll: (selector) => { selectors.push(selector); return selector.includes("ardia-sidebar-peek") ? [] : cards; }, querySelector: () => null, elementFromPoint: () => blocked ? {} : cardAtSample ? cards[0] : element });
   globalThis.window = Object.assign(windowEvents, { innerWidth: 1280, innerHeight: 800, visualViewport });
   globalThis.document = document;
   globalThis.getComputedStyle = () => ({ display: "block", visibility: "visible", opacity: "1" });
@@ -167,4 +167,47 @@ test("a backdrop is reused while its occluders move or grow and retaken when a n
   assert.equal(backdropCovers([{ ...bar, x: 980, width: 81 }], [bar]), true);
   assert.equal(backdropCovers([card], [card, bar]), false);
   assert.equal(backdropCovers([card, bar], [bar]), true);
+});
+
+test("a peeked sidebar over the page's left edge is cut out of the page instead of hiding it", () => {
+  const previous = Object.fromEntries(["window", "document", "getComputedStyle", "ResizeObserver", "requestAnimationFrame", "cancelAnimationFrame"].map((key) => [key, globalThis[key]]));
+  const box = (x, y, width, height) => ({ x, y, width, height, left: x, top: y, right: x + width, bottom: y + height });
+  const page = { isConnected: true, parentElement: null, getBoundingClientRect: () => box(8, 8, 1264, 784), contains: (node) => node === page };
+  const row = {};
+  const peek = { getBoundingClientRect: () => box(5, 5, 240, 790), contains: (node) => node === peek };
+  const other = {};
+  let peeking = true;
+  let rightSide = page;
+  globalThis.window = Object.assign(new EventTarget(), { innerWidth: 1280, innerHeight: 800 });
+  globalThis.document = Object.assign(new EventTarget(), {
+    hidden: false,
+    querySelectorAll: (selector) => (selector === '[data-testid="ardia-sidebar-peek"]' && peeking ? [peek] : []),
+    querySelector: () => null,
+    elementFromPoint: (x) => (x < 245 ? row : rightSide),
+  });
+  globalThis.getComputedStyle = () => ({ display: "block", visibility: "visible", opacity: "1" });
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  let frame;
+  globalThis.requestAnimationFrame = (callback) => { frame = callback; return 1; };
+  globalThis.cancelAnimationFrame = () => {};
+  try {
+    const updates = [];
+    const stop = watchTabViewport(page, () => true, (update) => updates.push(update));
+    assert.equal(updates.at(-1).visible, true);
+    assert.deepEqual(updates.at(-1).occlusions, [{ x: 5, y: 5, width: 240, height: 790, paintOutset: 32 }]);
+    rightSide = other;
+    frame();
+    assert.equal(updates.at(-1).visible, false);
+    rightSide = page;
+    peeking = false;
+    frame();
+    assert.equal(updates.at(-1).visible, false);
+    assert.equal(updates.at(-1).occlusions, undefined);
+    stop();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  }
 });
