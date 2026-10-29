@@ -12,7 +12,17 @@
  namespace content {
  
  namespace {
-@@ -910,4 +915,58 @@
+@@ -80,6 +85,9 @@
+   void set_has_video(bool has_video) { has_video_ = has_video; }
+ 
+   void set_muted(bool muted) { muted_ = muted; }
++#if BUILDFLAG(IS_LINUX)
++  bool muted() const { return muted_; }
++#endif
+ 
+   bool is_playing() const { return is_playing_; }
+ 
+@@ -910,4 +918,65 @@
  
  DOCUMENT_USER_DATA_KEY_IMPL(AudibilityBypassTracker);
  
@@ -24,17 +34,24 @@
 +         WebContents::FromRenderFrameHost(frame) == web_contents_impl();
 +}
 +
-+std::vector<std::pair<MediaPlayerId, bool>>
++bool MediaWebContentsObserver::ArdiaLinuxPictureInPictureEligible(
++    const MediaPlayerId& id) {
++  const auto info = player_info_map_.find(id);
++  return info != player_info_map_.end() && info->second->has_video() &&
++         media_player_remotes_.contains(id) &&
++         session_controllers_manager()->ArdiaLinuxPictureInPictureAvailable(
++             id) &&
++         ArdiaLinuxInPrimaryPage(id);
++}
++
++std::vector<ArdiaLinuxPictureInPictureCandidate>
 +MediaWebContentsObserver::ArdiaLinuxPictureInPictureCandidates() {
-+  std::vector<std::pair<MediaPlayerId, bool>> candidates;
++  std::vector<ArdiaLinuxPictureInPictureCandidate> candidates;
 +  for (const auto& [id, info] : player_info_map_) {
-+    if (!info->has_video() || !media_player_remotes_.contains(id) ||
-+        !session_controllers_manager()->ArdiaLinuxPictureInPictureAvailable(
-+            id) ||
-+        !ArdiaLinuxInPrimaryPage(id)) {
++    if (!ArdiaLinuxPictureInPictureEligible(id)) {
 +      continue;
 +    }
-+    candidates.emplace_back(id, info->is_playing());
++    candidates.push_back({id, info->is_playing(), info->muted()});
 +  }
 +  return candidates;
 +}
@@ -43,14 +60,14 @@
 +    const MediaPlayerId& id) {
 +  const auto it = media_player_remotes_.find(id);
 +  if (it == media_player_remotes_.end() || !it->second.is_bound() ||
-+      !ArdiaLinuxInPrimaryPage(id)) {
++      !ArdiaLinuxPictureInPictureEligible(id)) {
 +    return false;
 +  }
 +  it->second->RequestEnterPictureInPicture(std::nullopt);
 +  return true;
 +}
 +
-+std::vector<std::pair<MediaPlayerId, bool>>
++std::vector<ArdiaLinuxPictureInPictureCandidate>
 +ArdiaLinuxPictureInPictureCandidates(WebContents* contents) {
 +  auto* impl = static_cast<WebContentsImpl*>(contents);
 +  MediaWebContentsObserver* observer =
@@ -82,13 +99,25 @@
  
  #include "base/containers/flat_map.h"
  #include "base/containers/flat_set.h"
-@@ -155,6 +157,13 @@
+@@ -58,6 +60,10 @@
+ class Size;
+ }  // namespace gfx
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "ardia/linux/ac_linux_content_hooks.h"  // nogncheck
++#endif
++
+ namespace content {
+ 
+ class AudibleMetrics;
+@@ -155,6 +161,14 @@
    // Returns whether or not the given player id is active.
    bool IsPlayerActive(const MediaPlayerId& player_id) const;
  
 +#if BUILDFLAG(IS_LINUX)
 +  bool ArdiaLinuxInPrimaryPage(const MediaPlayerId& id);
-+  std::vector<std::pair<MediaPlayerId, bool>>
++  bool ArdiaLinuxPictureInPictureEligible(const MediaPlayerId& id);
++  std::vector<ArdiaLinuxPictureInPictureCandidate>
 +  ArdiaLinuxPictureInPictureCandidates();
 +  bool ArdiaLinuxRequestPictureInPicture(const MediaPlayerId& id);
 +#endif
