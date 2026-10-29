@@ -3608,15 +3608,23 @@ void ShellHostView::EngineEvent(std::string_view topic,
 
 void ShellHostView::ReattachViewports() {
   if (!browser_view_) return;
-  browser_view_->GetActiveContentsWebView()->SetWebContents(nullptr);
-  browser_view_->GetActiveContentsWebView()->SetVisible(false);
+  views::WebView* chrome_view = browser_view_->GetActiveContentsWebView();
+  content::WebContents* taken = chrome_view->web_contents();
+  chrome_view->SetWebContents(nullptr);
+  chrome_view->SetVisible(false);
+  views::FocusManager* focus = GetFocusManager();
   for (auto& [id, binding] : bindings_) {
-    if (binding->viewport() && binding->viewport()->GetVisible() &&
-        binding->contents()) {
-      binding->viewport()->SetWebContents(nullptr);
-      binding->viewport()->SetWebContents(binding->contents());
-      if (binding->devtools_viewport()) LayoutPane(binding.get());
+    views::WebView* page = binding->viewport();
+    content::WebContents* contents = binding->contents();
+    if (!page || !page->GetVisible() || !contents) continue;
+    if (contents == taken || page->web_contents() != contents) {
+      const bool focused = focus && focus->GetFocusedView() == page;
+      if (focused) focus->ClearFocus();
+      page->SetWebContents(nullptr);
+      page->SetWebContents(contents);
+      if (focused) binding->FocusFromHost();
     }
+    if (binding->devtools_viewport()) LayoutPane(binding.get());
   }
 }
 

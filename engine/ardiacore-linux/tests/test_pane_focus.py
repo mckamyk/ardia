@@ -41,8 +41,8 @@ struct Split {
   }
   void Bind(Pane& pane, int id) {
     auto binding = std::make_unique<TabBinding>();
-    pane.viewport.contents = &pane.page;
-    pane.tools.contents = &pane.frontend;
+    pane.viewport.SetWebContents(&pane.page);
+    pane.tools.SetWebContents(&pane.frontend);
     binding->contents_ = &pane.page;
     binding->viewport_ = &pane.viewport;
     pane.binding = binding.get();
@@ -50,13 +50,16 @@ struct Split {
   }
   void ChromeActivates(Pane& from, Pane& to) {
     ChromeWebContentsViewFocusHelper::FromWebContents(&from.page)->StoreFocus();
-    views::focus_manager.focused = nullptr;
+    views::focus_manager.ClearFocus();
+    host.browser_view.active.SetWebContents(nullptr);
+    host.browser_view.active.SetWebContents(&to.page);
     if (!ChromeWebContentsViewFocusHelper::FromWebContents(&to.page)->RestoreFocus()) to.page.Focus();
+    host.KeepPaneFocus(nullptr);
+    host.ReattachViewports();
   }
   void ShellActivates(Pane& from, Pane& to) {
     host.KeepPaneFocus(to.binding);
     ChromeActivates(from, to);
-    host.KeepPaneFocus(nullptr);
   }
   void Click(Pane& pane) { pane.viewport.RequestFocus(); }
 };
@@ -73,10 +76,14 @@ int main(int argc, char** argv) {
     s.Click(s.a);
     s.ShellActivates(s.b, s.a);
     assert(views::focus_manager.focused == &s.a.viewport);
-    assert(s.b.page.focuses == b && s.a.page.focuses == a + 2);
+    assert(s.b.page.focuses == b);
+    assert(s.a.viewport.web_contents() == &s.a.page && !s.host.browser_view.active.web_contents());
     s.Click(s.b);
     s.ShellActivates(s.a, s.b);
-    assert(views::focus_manager.focused == &s.b.viewport && s.a.page.focuses == a + 2);
+    assert(views::focus_manager.focused == &s.b.viewport && s.a.page.focuses > a);
+    const int settled = s.a.page.focuses;
+    s.ShellActivates(s.a, s.b);
+    assert(views::focus_manager.focused == &s.b.viewport && s.a.page.focuses == settled);
     return 0;
   }
   if (mode == "sidebar") {
@@ -104,6 +111,7 @@ int main(int argc, char** argv) {
     const int b = s.b.page.focuses;
     s.ShellActivates(s.b, s.a);
     assert(views::focus_manager.focused == &s.a.tools && s.b.page.focuses == b);
+    assert(s.host.layouts >= 2);
     s.Click(s.b);
     s.ShellActivates(s.a, s.b);
     s.a.viewport.visible = false;
@@ -112,6 +120,20 @@ int main(int argc, char** argv) {
     s.shell.RequestFocus();
     s.ShellActivates(s.b, s.a);
     assert(views::focus_manager.focused != &s.b.viewport && s.b.page.focuses == hidden);
+    return 0;
+  }
+  if (mode == "reattach") {
+    Split s;
+    s.Click(s.a);
+    const int a = s.a.viewport.attaches, b = s.b.viewport.attaches;
+    s.host.browser_view.active.SetWebContents(&s.a.page);
+    s.host.ReattachViewports();
+    assert(s.a.viewport.attaches == a + 1 && s.b.viewport.attaches == b);
+    assert(views::focus_manager.focused == &s.a.viewport && s.a.binding->host_focuses == 1 && s.b.page.focuses == 0);
+    assert(!s.host.browser_view.active.web_contents() && !s.host.browser_view.active.GetVisible());
+    s.b.viewport.SetWebContents(nullptr);
+    s.host.ReattachViewports();
+    assert(s.b.viewport.web_contents() == &s.b.page && s.a.viewport.attaches == a + 1);
     return 0;
   }
   assert(false);
@@ -127,7 +149,8 @@ class PaneFocusTests(unittest.TestCase):
             raise unittest.SkipTest('C++ compiler unavailable')
         cls.host = HOST.read_text()
         code = FIXTURE.read_text().replace('#pragma once\n', '').replace(
-            'ARDIA_HOST_METHODS', method(cls.host, 'void ShellHostView::KeepPaneFocus('))
+            'ARDIA_HOST_METHODS', '\n'.join(method(cls.host, signature) for signature in [
+                'void ShellHostView::KeepPaneFocus(', 'void ShellHostView::ReattachViewports(']))
         cls.temp = tempfile.TemporaryDirectory(prefix='ardia-pane-focus-')
         cls.addClassCleanup(cls.temp.cleanup)
         root = pathlib.Path(cls.temp.name)
@@ -147,6 +170,9 @@ class PaneFocusTests(unittest.TestCase):
 
     def test_a_focused_docked_devtools_frontend_survives_activating_its_pane(self):
         self.run_case('devtools')
+
+    def test_reattaching_only_moves_the_page_chrome_took_and_keeps_its_focus(self):
+        self.run_case('reattach')
 
     def test_shell_activation_and_chromes_active_tab_change_keep_pane_focus(self):
         strip = method(self.host, 'void ShellHostView::StripCommand(')
