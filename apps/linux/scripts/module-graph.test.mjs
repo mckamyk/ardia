@@ -116,6 +116,10 @@ test("production graph uses current Linux adapters and one canonical shared stat
   assert.ok(graph.get(`${linux}SettingsInstallDialog.tsx`).importedIds.includes(lazyOverlays));
   assert.ok(graph.get(`${linux}SettingsInstallDialog.tsx`).importedIds.includes(`${linux}installRequestSheet.ts`));
 
+  const tabDrag = graph.get(`${browser}state/drag/tabDrag.ts`);
+  assert.ok(tabDrag.importedIds.includes(`${linux}dragWebviews.ts`), "a tab drag reaches page pictures through the Linux drag preview gate");
+  assert.ok(!tabDrag.importedIds.includes(`${browser}platform/webviews.ts`));
+
   const passwordsPane = graph.get(`${browser}components/settings/panes/Passwords.tsx`);
   assert.ok(passwordsPane.importedIds.includes(`${linux}importedPasswordSave.ts`), "the Passwords pane saves imported handles through the Linux adapter");
   assert.ok(!passwordsPane.importedIds.includes(`${browser}state/site/passwords.ts`));
