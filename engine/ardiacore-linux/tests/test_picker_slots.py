@@ -9,6 +9,7 @@ from test_renderer_contract import method
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'src'
 LINUX = SOURCE / 'ardia/linux'
+TREE = Path.home() / 'ardia-linux-build-156/chromium_git/chromium/src'
 
 
 class PickerSlotTests(unittest.TestCase):
@@ -53,6 +54,23 @@ class PickerSlotTests(unittest.TestCase):
             self.assertIn('FileSelectionCanceled();', abandon)
             finish = method(body, '  void Finish() {')
             self.assertIn('.Release(window_, this);', finish)
+
+    def test_a_chooser_parented_to_the_root_window_still_counts_as_showing(self):
+        showing = method(self.files, 'bool ChooserShowing(const ui::SelectFileDialog* dialog, gfx::NativeWindow window) {')
+        self.assertIn('if (dialog->IsRunning(window)) return true;', showing)
+        self.assertIn('window->GetRootWindow()', showing)
+        self.assertIn('dialog->IsRunning(root)', showing)
+        self.assertEqual(self.files.count('bool Showing(gfx::NativeWindow window) const { return ChooserShowing(dialog_.get(), window); }'), 2)
+
+    def test_the_portal_falls_back_to_gtk_with_the_hosts_root_window_as_parent(self):
+        portal = TREE / 'ui/shell_dialogs/select_file_dialog_linux_portal.cc'
+        if not portal.is_file():
+            self.skipTest('Chromium 156 source is unavailable')
+        text = portal.read_text()
+        self.assertIn('gfx::NativeWindow owning_window = host_ ? host_->window() : nullptr;', text)
+        self.assertIn('return fallback_dialog_->IsRunning(parent_window);', text)
+        gtk = (TREE / 'ui/gtk/select_file_dialog_linux_gtk.cc').read_text()
+        self.assertIn('return pair.second.parent == parent_window;', gtk)
 
     def test_the_file_selection_policy_is_honoured(self):
         self.assertIn('#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"', self.files)

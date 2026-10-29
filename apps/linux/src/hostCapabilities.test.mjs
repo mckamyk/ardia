@@ -99,3 +99,23 @@ test("Task Manager and tracing follow the advertised contract rather than the me
   assert.equal(linuxCapabilities(fakeHost(["engine.openTaskManager"]).host).taskManager, true);
   assert.equal(linuxCapabilities(fakeHost(["engine.beginTracing", "engine.endTracing", "engine.isTracing"]).host).performanceRecording, true);
 });
+
+test("accepting a site's notification prompt on Linux settles quietly when the desktop has no notification permission to ask", async () => {
+  const { shellNativeModules } = await import("../../browser/src/test-native/index.ts");
+  const { ensureNotificationPermission } = await import("./notificationPermission.ts");
+  const app = shellNativeModules.ArdiaApp;
+  const original = app.notificationPermission;
+  const unhandled = [];
+  const record = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", record);
+  app.notificationPermission = () => Promise.reject(Object.assign(new Error("Desktop notifications is unavailable on Linux"), { code: "ERR_UNAVAILABLE" }));
+  try {
+    assert.equal(await ensureNotificationPermission("main"), false);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    app.notificationPermission = original;
+    process.off("unhandledRejection", record);
+  }
+  assert.match(readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8"), /here\("\.\.\/browser\/src\/state\/site\/webNotifications\.ts"\)\}\\0\$\{here\("\.\.\/browser\/src\/state\/site\/permissions\.ts"\)\}`, here\("\.\/src\/notificationPermission\.ts"\)/);
+});
