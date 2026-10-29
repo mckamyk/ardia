@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { test } from "node:test";
 import { HostPageEvents } from "./hostPageEvents.ts";
 import { HostTab } from "./hostTab.ts";
 import { applyHostPageTheme, forgetDepartedPage, resetHostPage } from "./hostPageLifecycle.ts";
+import { forgetHostPageState, setHostPageHooks } from "./hostPageHooks.ts";
+import { readFileSync } from "node:fs";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { pageOf, patchPage, setPopover, usePages } from "../../browser/src/state/tabs/pageState.ts";
 import { navigated } from "../../browser/src/state/tabs/actions.ts";
@@ -204,4 +205,34 @@ test("a page that leaves this window drops its state here and a page that stays 
   useBrowser.setState((s) => { const { [closed.tab]: _gone, ...tabs } = s.tabs; return { tabs }; });
   forgetDepartedPage(closed.tab, closedWindow);
   assert.equal(usePages.getState().pages[closed.tab], undefined);
+});
+
+test("a view that unmounts before the store moves its tab drops the tab's state once the move lands", () => {
+  const h = setup(status({ text: "https://example.test/link", popups: ["6"] }));
+  const windowId = useBrowser.getState().tabs[h.tab].windowId;
+  setPopover(h.tab, "popups");
+  forgetDepartedPage(h.tab, windowId);
+  assert.deepEqual(h.page().popups.map((p) => p.id), ["6"]);
+  useBrowser.setState((s) => ({ tabs: { ...s.tabs, [h.tab]: { ...s.tabs[h.tab], windowId: "elsewhere" } } }));
+  assert.equal(usePages.getState().pages[h.tab], undefined);
+  assert.equal(usePages.getState().popover[h.tab], undefined);
+  const stays = setup(status({ popups: ["7"] }));
+  const here = useBrowser.getState().tabs[stays.tab].windowId;
+  forgetDepartedPage(stays.tab, here);
+  resetHostPage(stays.tab, "mount");
+  patchPage(stays.tab, { status: "remounted" });
+  useBrowser.setState((s) => ({ tabs: { ...s.tabs, [stays.tab]: { ...s.tabs[stays.tab], windowId: "elsewhere" } } }));
+  assert.equal(stays.page().status, "remounted");
+});
+
+test("a host tab view's unmount reaches forgetDepartedPage with this window's id", () => {
+  const departed = [];
+  setHostPageHooks({ reset() {}, applyTheme() {}, depart: (tabId) => departed.push(tabId) });
+  forgetHostPageState("t1");
+  assert.deepEqual(departed, ["t1"]);
+  const view = readFileSync(new URL("./shims/web/HostWebView.tsx", import.meta.url), "utf8");
+  const cleanup = view.slice(view.indexOf("return () => {"), view.indexOf("}, []);", view.indexOf("return () => {")));
+  assert.match(cleanup, /const tabId = latest\.current\.tabId;\n\s+if \(tabId\) forgetHostPageState\(tabId\);/);
+  const main = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+  assert.match(main, /depart: \(tabId\) => ardiaHost && forgetDepartedPage\(tabId, ardiaHost\.bootstrap\.windowId\)/);
 });

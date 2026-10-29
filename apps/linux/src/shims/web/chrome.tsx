@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { View, type ViewProps, type ViewStyle } from "react-native";
 import { useBrowser } from "../../../../browser/src/state/browser/store";
-import { ardiaHost, hostModuleMethod, reportHostError } from "../../host";
-import { watchWindowDrag } from "../../windowDrag";
+import { ardiaHost, hostModuleMethod, hostSupports, reportHostError } from "../../host";
+import { WINDOW_DRAG_ROUTES, watchWindowDrag, type WindowDragHost } from "../../windowDrag";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, SHADE_OUTSET, shadeMask, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
 
 type Style = ViewStyle & Record<string, unknown>;
@@ -243,6 +243,11 @@ export function OutsidePressArea({ onOutsidePress, ...props }: ViewProps & { onO
   return <View {...props} ref={(view) => void (node.current = view as unknown as HTMLElement | null)} />;
 }
 
+const windowDragHost = (): WindowDragHost | null => ardiaHost && WINDOW_DRAG_ROUTES.every((route) => hostSupports(route)) ? {
+  move: () => hostModuleMethod("ArdiaShell", "startWindowMove")(),
+  doubleClick: () => hostModuleMethod("ArdiaShell", "captionDoubleClick")(),
+} : null;
+
 export function WindowDragRegion({
   titleBarDoubleClick = true,
   clickable = false,
@@ -255,11 +260,8 @@ export function WindowDragRegion({
   latest.current = { titleBarDoubleClick, clickable, onRegionClick, onRegionDoubleClick };
   useEffect(() => {
     const element = node.current;
-    if (!element || !ardiaHost) return;
-    return watchWindowDrag(element, () => latest.current, {
-      move: () => hostModuleMethod("ArdiaShell", "startWindowMove")(),
-      doubleClick: () => hostModuleMethod("ArdiaShell", "captionDoubleClick")(),
-    }, reportHostError);
+    if (!element) return;
+    return watchWindowDrag(element, () => latest.current, windowDragHost(), reportHostError);
   }, []);
   return <View {...props} ref={(view) => void (node.current = view as unknown as HTMLElement | null)} />;
 }

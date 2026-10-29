@@ -16,18 +16,32 @@ FAKES = r'''
 #include <cstdio>
 #include <vector>
 namespace gfx { struct Rect {}; }
+enum ViewID { VIEW_ID_NONE, VIEW_ID_MINIMIZE_BUTTON, VIEW_ID_MAXIMIZE_BUTTON, VIEW_ID_RESTORE_BUTTON, VIEW_ID_CLOSE_BUTTON, VIEW_ID_OTHER };
 namespace views {
 class Widget {};
+struct ViewAccessibility {
+  bool ignored = false;
+  void SetIsIgnored(bool value) { ignored = value; }
+};
 class View {
  public:
   virtual ~View() = default;
   void SetBoundsRect(const gfx::Rect&) {}
   gfx::Rect GetLocalBounds() const { return {}; }
   void SetVisible(bool visible) { visible_ = visible; }
+  ViewAccessibility& GetViewAccessibility() { return accessibility_; }
+  View* GetViewByID(int id) {
+    if (id_ == id) return this;
+    for (View* child : children_) if (View* found = child->GetViewByID(id)) return found;
+    return nullptr;
+  }
   bool visible_ = true;
+  int id_ = 0;
+  std::vector<View*> children_;
+  ViewAccessibility accessibility_;
 };
 }
-struct BrowserFrameView {
+struct BrowserFrameView : views::View {
   std::vector<float> opacities;
   void SetCaptionButtonsOpacity(float opacity) { opacities.push_back(opacity); }
 };
@@ -66,12 +80,24 @@ int main() {
   browser.widget = &widget;
   host.LayoutOverlay();
   BrowserFrameView frame;
+  views::View minimize, maximize, restore, close, title;
+  minimize.id_ = VIEW_ID_MINIMIZE_BUTTON;
+  maximize.id_ = VIEW_ID_MAXIMIZE_BUTTON;
+  restore.id_ = VIEW_ID_RESTORE_BUTTON;
+  close.id_ = VIEW_ID_CLOSE_BUTTON;
+  title.id_ = VIEW_ID_OTHER;
+  frame.children_ = {&title, &minimize, &maximize, &restore};
   widget.frame = &frame;
   host.LayoutOverlay();
   EXPECT(frame.opacities == std::vector<float>{0.0f});
+  EXPECT(minimize.accessibility_.ignored && maximize.accessibility_.ignored && restore.accessibility_.ignored);
+  EXPECT(!title.accessibility_.ignored && !close.accessibility_.ignored);
+  frame.children_.push_back(&close);
+  close.accessibility_.ignored = false;
   host.LayoutOverlay();
   host.OnWidgetThemeChanged(nullptr);
   EXPECT((frame.opacities == std::vector<float>{0.0f, 0.0f, 0.0f}));
+  EXPECT(close.accessibility_.ignored);
   return 0;
 }
 '''
@@ -138,6 +164,13 @@ class CaptionButtonChromiumTests(unittest.TestCase):
         public = public[:public.index(' private:')] if ' private:' in public else public
         self.assertIn('BrowserFrameView* GetFrameView() const;', public)
         self.assertIn('BrowserWidget* browser_widget() const', (FRAME / 'browser_view.h').read_text())
+
+    def test_the_four_caption_buttons_carry_the_view_ids_the_host_looks_up(self):
+        opaque = (FRAME / 'opaque_browser_frame_view.cc').read_text()
+        init = extract(opaque, 'void OpaqueBrowserFrameView::InitViews()')
+        for view_id in ['VIEW_ID_MINIMIZE_BUTTON', 'VIEW_ID_MAXIMIZE_BUTTON', 'VIEW_ID_RESTORE_BUTTON', 'VIEW_ID_CLOSE_BUTTON']:
+            self.assertIn(f'IDS_ACCNAME_{view_id.split("_")[2]}, {view_id});', init)
+        self.assertIn('button->SetID(view_id);', extract(opaque, 'void OpaqueBrowserFrameView::InitWindowCaptionButton('))
 
     def test_only_zen_mode_restores_the_buttons(self):
         view = (FRAME / 'browser_view.cc').read_text()

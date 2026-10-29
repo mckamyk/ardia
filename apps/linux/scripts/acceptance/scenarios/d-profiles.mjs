@@ -4,6 +4,7 @@ import { clickTextIn, commandBarText, currentRect, desktopShot, desktopUnavailab
 import { clickDialogButton, clickNeutral, labelRect, openedWindow, removeExtensionInSettings, rowToggle, shellLines } from "../lib/desktopUi.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
+import { evaluate } from "../lib/cdp.mjs";
 import { openPrivateByKeys } from "./d-private.mjs";
 import { blockerAvailable, blockerReady, call, expectBlocked } from "./f06-site-controls.mjs";
 import { FIXTURE_NAME, listed, prepareExtension } from "./f09-extensions.mjs";
@@ -546,6 +547,31 @@ function headerChecks({ x11 }) {
       await desktopShot(t, desktop, `${label}-sidebar-drag`);
       if (!moves(result)) throw new Error(`the window moved by ${JSON.stringify(result.moved)} (#254)`);
       return result.moved;
+    });
+    await t.check(`${label}: right after a header drag the page gets hover and wheel input, not the header`, async () => {
+      const page = await app.pageSession((x) => x.url === t.fixtures.url.page(1), { label: "the dragged window's page" });
+      try {
+        await evaluate(page, `(() => { window.__afterDrag = { moves: 0, wheels: 0 }; addEventListener("mousemove", () => window.__afterDrag.moves++, true); addEventListener("wheel", () => window.__afterDrag.wheels++, { capture: true, passive: true }); return true; })()`, { userGesture: false });
+        await drag(HEADER.sidebar);
+        const box = await rect();
+        const shellMoves = await shell.eval(`(() => { window.__afterDragShell = 0; addEventListener("mousemove", () => window.__afterDragShell++, true); return true; })()`);
+        for (const [dx, dy] of [[500, 300], [560, 340], [620, 380], [680, 420]]) {
+          await desktop.pointerMove(box.x + dx, box.y + dy);
+          await delay(120);
+        }
+        for (let i = 0; i < 3; i++) {
+          if (x11) await desktop.xdotool(["click", "5"]);
+          else await desktop.scroll(3);
+          await delay(150);
+        }
+        await delay(500);
+        const seen = await evaluate(page, "window.__afterDrag", { userGesture: false });
+        const header = await shell.eval("window.__afterDragShell");
+        if (!seen.moves || !seen.wheels) throw new Error(`the page saw ${seen.moves} pointer moves and ${seen.wheels} wheel events after the drag; the shell saw ${header} moves${x11 ? " (#335: no synthetic release after the WM move)" : ""}`);
+        return { ...seen, shellMoves: header, armed: shellMoves };
+      } finally {
+        await page.close().catch(() => {});
+      }
     });
     if (x11) {
       await t.check("openbox: double-clicking the toolbar's empty strip maximizes the window and again restores it", async () => {
