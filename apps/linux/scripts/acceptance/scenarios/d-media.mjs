@@ -448,7 +448,7 @@ export const f17Desktop = {
       await delay(800);
       await dismissPopupPrompt(desktop, moved, newShell, tabB);
       const link = await screenPoint(desktop, moved, newShell, page, tabB, "document.getElementById('link')");
-      await desktop.pointerMove(link.x, link.y);
+      await desktop.pointerMove(link.rect.x + Math.min(40, link.rect.width / 2), link.y);
       const status = await until(async () => { const p = await pageStateOf(newShell, tabB); return p?.status?.includes("/page/5") ? p.status : false; }, { timeout: 5000, label: "pane B's hover status in the new window" });
       await shot(t, desktop, "moved-pane");
       const left = await pageStateOf(shell, tabB);
