@@ -1,6 +1,7 @@
 #include "ardia/linux/ac_linux_page_media.h"
 
 #include "ardia/linux/ac_linux_content_hooks.h"
+#include "ardia/linux/ac_linux_page_channel.h"
 
 #include <algorithm>
 
@@ -17,6 +18,7 @@
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/media_player_id.h"
 #include "content/public/browser/media_session.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -46,12 +48,10 @@ LinuxPageMedia::LinuxPageMedia(content::WebContents* contents, LinuxMediaReporte
   reporter_.SetAccess(Access());
   if (InPictureInPicture())
     reporter_.SetPictureInPicture({contents->HasPictureInPictureDocument() ? "document" : "video", true});
-  for (const auto& [id, playing] : content::ArdiaLinuxPlayedVideoPlayers(contents)) {
-    videos_.Started(id, true);
-    if (!playing) videos_.Stopped(id);
-  }
+  page_videos_ = LinuxPageChannel::GetOrCreate(contents)->AddPageVideoListener(
+      base::BindRepeating(&LinuxPageMedia::UpdateNowPlaying, base::Unretained(this)));
   ObserveSession(content::MediaSession::GetIfExists(contents));
-  if (videos_.Summary().present) UpdateNowPlaying();
+  if (PageVideo().present) UpdateNowPlaying();
 }
 
 LinuxPageMedia::~LinuxPageMedia() {
@@ -179,11 +179,23 @@ void LinuxPageMedia::UpdateNowPlaying() {
     session_.playback_rate = 1;
   }
   session_.now_ms = base::Time::Now().InMillisecondsFSinceUnixEpoch();
-  const LinuxPageVideo video = videos_.Summary();
+  const LinuxPageVideo video = PageVideo();
   session_.page_video = video.present;
   session_.page_video_playing = video.playing;
   session_.page_title = video.present && web_contents() ? web_contents()->GetTitle() : std::u16string();
   reporter_.SetNowPlaying(LinuxNowPlayingFromSession(session_));
+}
+
+LinuxPageVideo LinuxPageMedia::PageVideo() const {
+  LinuxPageVideo video;
+  content::WebContents* contents = web_contents();
+  if (!contents) return video;
+  contents->GetPrimaryMainFrame()->ForEachRenderFrameHost([&video](content::RenderFrameHost* frame) {
+    if (!frame->GetPage().IsPrimary() || !frame->IsRenderFrameLive()) return;
+    if (const auto* report = LinuxPageDocumentVideo::GetForCurrentDocument(frame))
+      video.Join(report->has_video, report->playing);
+  });
+  return video;
 }
 
 LinuxMediaAccess LinuxPageMedia::Access() const {
@@ -254,29 +266,20 @@ void LinuxPageMedia::RequestPictureInPicture(const base::ListValue& args, bool a
   if (!content::ArdiaLinuxRequestPictureInPicture(contents, *player)) FinishPictureInPicture();
 }
 
-void LinuxPageMedia::MediaStartedPlaying(const MediaPlayerInfo& info, const content::MediaPlayerId& id) {
-  content::WebContents* contents = web_contents();
-  if (!contents || id.frame_routing_id != contents->GetPrimaryMainFrame()->GetGlobalId()) return;
-  if (videos_.Started(id, info.has_video)) UpdateNowPlaying();
-}
-
-void LinuxPageMedia::MediaStoppedPlaying(const MediaPlayerInfo&, const content::MediaPlayerId& id,
-                                         MediaStoppedReason) {
-  if (videos_.Stopped(id)) UpdateNowPlaying();
-}
-
-void LinuxPageMedia::MediaMetadataChanged(const MediaPlayerInfo& info, const content::MediaPlayerId& id) {
-  if (videos_.Metadata(id, info.has_video)) UpdateNowPlaying();
-}
-
 void LinuxPageMedia::TitleWasSet(content::NavigationEntry*) {
   if (session_.page_video) UpdateNowPlaying();
 }
 
-void LinuxPageMedia::PrimaryPageChanged(content::Page& page) {
-  const content::GlobalRenderFrameHostId frame = page.GetMainDocument().GetGlobalId();
-  if (videos_.Retain([frame](const content::MediaPlayerId& id) { return id.frame_routing_id == frame; }))
-    UpdateNowPlaying();
+void LinuxPageMedia::PrimaryPageChanged(content::Page&) {
+  if (session_.page_video || PageVideo().present) UpdateNowPlaying();
+}
+
+void LinuxPageMedia::RenderFrameDeleted(content::RenderFrameHost*) {
+  if (session_.page_video) UpdateNowPlaying();
+}
+
+void LinuxPageMedia::DidFinishNavigation(content::NavigationHandle* navigation) {
+  if (session_.page_video && navigation->HasCommitted() && !navigation->IsSameDocument()) UpdateNowPlaying();
 }
 
 void LinuxPageMedia::MediaResized(const gfx::Size& size, const content::MediaPlayerId& id) {
@@ -285,7 +288,6 @@ void LinuxPageMedia::MediaResized(const gfx::Size& size, const content::MediaPla
 
 void LinuxPageMedia::MediaDestroyed(const content::MediaPlayerId& id) {
   video_sizes_.erase(id);
-  if (videos_.Destroyed(id)) UpdateNowPlaying();
 }
 
 void LinuxPageMedia::FinishPictureInPicture() {

@@ -91,24 +91,18 @@ void PageVideo() {
 }
 
 void PageVideos() {
-  LinuxPageVideos<int> videos;
-  assert(!videos.Summary().present && !videos.Summary().playing);
-  assert(!videos.Stopped(1) && !videos.Metadata(1, true));
-  assert(videos.Started(1, true) && videos.Started(2, true) && videos.Started(3, true));
-  assert(videos.Summary().present && videos.Summary().playing);
-  assert(!videos.Started(1, true));
-  assert(videos.Stopped(2) && videos.Stopped(3) && videos.Stopped(1));
-  assert(videos.Summary().present && !videos.Summary().playing);
-  assert(!videos.Stopped(1));
-  assert(videos.Started(4, false) && !videos.Summary().playing);
-  assert(videos.Metadata(4, true) && videos.Summary().playing);
-  assert(videos.Destroyed(4) && !videos.Destroyed(4) && !videos.Summary().playing);
-  assert(videos.Retain([](int id) { return id != 1; }) && videos.Summary().present);
-  assert(!videos.Retain([](int) { return true; }));
-  assert(videos.Destroyed(2) && videos.Destroyed(3) && !videos.Summary().present);
-  LinuxPageVideos<int> audio_only;
-  assert(audio_only.Started(5, false) && !audio_only.Summary().present);
-  assert(audio_only.Stopped(5) && !audio_only.Summary().present);
+  LinuxPageVideo page;
+  assert(!page.present && !page.playing);
+  page.Join(false, true);
+  assert(!page.present && !page.playing);
+  page.Join(true, false);
+  assert(page.present && !page.playing);
+  page.Join(false, true);
+  assert(page.present && !page.playing);
+  page.Join(true, true);
+  assert(page.present && page.playing);
+  page.Join(true, false);
+  assert(page.present && page.playing);
 }
 
 void Events() {

@@ -24,7 +24,8 @@ void Kinds() {
   Expect(LinuxPageMessageKindOf("peek") == LinuxPageMessageKind::kPeek, "peek kind");
   Expect(LinuxPageMessageKindOf("scroll") == LinuxPageMessageKind::kScroll, "scroll kind");
   Expect(LinuxPageMessageKindOf("linkDrop") == LinuxPageMessageKind::kLinkDrop, "link drop kind");
-  for (const char* refused : {"notification", "notificationClose", "displayMedia", "nowPlaying", "pipTrace", "result", "LinkDrop", "evaluate", "config", "", "Peek"})
+  Expect(LinuxPageMessageKindOf("nowPlaying") == LinuxPageMessageKind::kNowPlaying, "now playing kind");
+  for (const char* refused : {"notification", "notificationClose", "displayMedia", "NowPlaying", "pipTrace", "result", "LinkDrop", "evaluate", "config", "", "Peek"})
     Expect(!LinuxPageMessageKindOf(refused), refused);
   Expect(LinuxPageMessageEnvelopeFits("scroll", std::string(64 * 1024, 'x')), "64 KiB fits");
   Expect(!LinuxPageMessageEnvelopeFits("scroll", std::string(64 * 1024 + 1, 'x')), "oversized json refused");
@@ -43,6 +44,10 @@ void Senders() {
     Expect(!LinuxPageSenderAccepted(kind, child), "an iframe cannot drive scroll, selection or tint");
   }
   Expect(LinuxPageSenderAccepted(LinuxPageMessageKind::kPeek, child), "iframes may request peek");
+  Expect(LinuxPageSenderAccepted(LinuxPageMessageKind::kNowPlaying, main), "the main frame reports its video");
+  Expect(LinuxPageSenderAccepted(LinuxPageMessageKind::kNowPlaying, child), "an iframe reports its own video");
+  Expect(!LinuxPageSenderAccepted(LinuxPageMessageKind::kNowPlaying, cached), "a back-forward cached document reports nothing");
+  Expect(!LinuxPageSenderAccepted(LinuxPageMessageKind::kNowPlaying, prerender), "a prerendered document reports nothing");
   Expect(!LinuxPageSenderAccepted(LinuxPageMessageKind::kPeek, cached), "back-forward cached documents are silent");
   Expect(!LinuxPageSenderAccepted(LinuxPageMessageKind::kScroll, prerender), "prerendered documents are silent");
 }
@@ -52,6 +57,21 @@ void Normalization() {
   Expect(scroll && *scroll->data.GetDict().FindString("state") == "down" && scroll->data.GetDict().size() == 1, "scroll keeps only state");
   Expect(!NormalizeLinuxPageMessage(LinuxPageMessageKind::kScroll, Dict(base::DictValue().Set("state", "sideways"))), "unknown scroll state");
   Expect(!NormalizeLinuxPageMessage(LinuxPageMessageKind::kScroll, base::Value()), "scroll needs a dictionary");
+
+  auto video = NormalizeLinuxPageMessage(LinuxPageMessageKind::kNowPlaying, Dict(base::DictValue().Set("frame", "f")
+      .Set("title", "Clip").Set("playbackState", "playing").Set("hasVideo", true).Set("controllable", false)
+      .Set("actions", base::ListValue().Append("play"))));
+  Expect(video && video->data.GetDict().FindBool("hasVideo") == true && video->data.GetDict().FindBool("playing") == true &&
+         video->data.GetDict().size() == 2, "now playing keeps only whether a video is there and plays");
+  auto paused_video = NormalizeLinuxPageMessage(LinuxPageMessageKind::kNowPlaying, Dict(base::DictValue()
+      .Set("playbackState", "paused").Set("hasVideo", true)));
+  Expect(paused_video && paused_video->data.GetDict().FindBool("playing") == false, "a paused video is not playing");
+  auto audio = NormalizeLinuxPageMessage(LinuxPageMessageKind::kNowPlaying, Dict(base::DictValue()
+      .Set("playbackState", "playing").Set("hasVideo", 1)));
+  Expect(audio && audio->data.GetDict().FindBool("hasVideo") == false, "only a boolean true is a video");
+  auto gone = NormalizeLinuxPageMessage(LinuxPageMessageKind::kNowPlaying, base::Value());
+  Expect(gone && gone->data.is_none(), "null now playing clears the document's video");
+  Expect(!NormalizeLinuxPageMessage(LinuxPageMessageKind::kNowPlaying, base::Value("playing")), "now playing needs a dictionary or null");
 
   auto clear = NormalizeLinuxPageMessage(LinuxPageMessageKind::kSelection, base::Value());
   Expect(clear && clear->data.is_none(), "null selection clears");

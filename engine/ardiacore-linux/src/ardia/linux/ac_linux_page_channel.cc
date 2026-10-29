@@ -188,6 +188,13 @@ LinuxPageDocumentBudget::~LinuxPageDocumentBudget() = default;
 
 DOCUMENT_USER_DATA_KEY_IMPL(LinuxPageDocumentBudget);
 
+LinuxPageDocumentVideo::LinuxPageDocumentVideo(content::RenderFrameHost* frame)
+    : content::DocumentUserData<LinuxPageDocumentVideo>(frame) {}
+
+LinuxPageDocumentVideo::~LinuxPageDocumentVideo() = default;
+
+DOCUMENT_USER_DATA_KEY_IMPL(LinuxPageDocumentVideo);
+
 LinuxPageChannel::LinuxPageChannel(content::WebContents* contents)
     : content::WebContentsObserver(contents),
       content::WebContentsUserData<LinuxPageChannel>(*contents),
@@ -285,9 +292,9 @@ void LinuxPageChannel::PushOptions() {
 
 void LinuxPageChannel::Post(const std::string& kind, const std::string& json) {
   content::RenderFrameHost& frame = receivers_.CurrentTargetFrame();
-  if (!hooks_ || !LinuxPageMessageEnvelopeFits(kind, json)) return;
+  if (!LinuxPageMessageEnvelopeFits(kind, json)) return;
   const auto type = LinuxPageMessageKindOf(kind);
-  if (!type) return;
+  if (!type || (!hooks_ && *type != LinuxPageMessageKind::kNowPlaying)) return;
   const LinuxPageSender sender{frame.IsInPrimaryMainFrame(), frame.GetPage().IsPrimary(),
                                frame.IsActive() && frame.IsRenderFrameLive() && Scriptable(&frame)};
   if (!LinuxPageSenderAccepted(*type, sender)) return;
@@ -327,6 +334,8 @@ void LinuxPageChannel::Accept(content::RenderFrameHost& frame, LinuxPageMessage 
     }
     case LinuxPageMessageKind::kLinkDrop:
       return LinkDrop(*message.data.GetDict().FindString("url"));
+    case LinuxPageMessageKind::kNowPlaying:
+      return NoteVideo(frame, message.data);
     case LinuxPageMessageKind::kTheme: {
       std::optional<LinuxTheme::Sample> sample;
       if (const base::DictValue* dict = message.data.GetIfDict())
@@ -364,6 +373,21 @@ void LinuxPageChannel::Peek(content::RenderFrameHost& frame, const base::DictVal
   if (!hooks_) return;
   auto emit = hooks_->emit;
   emit.Run("openWindow", base::Value(std::move(open)));
+}
+
+base::CallbackListSubscription LinuxPageChannel::AddPageVideoListener(base::RepeatingClosure listener) {
+  return page_video_listeners_.Add(std::move(listener));
+}
+
+void LinuxPageChannel::NoteVideo(content::RenderFrameHost& frame, const base::Value& data) {
+  const base::DictValue* dict = data.GetIfDict();
+  const bool has_video = dict && dict->FindBool("hasVideo").value_or(false);
+  const bool playing = has_video && dict->FindBool("playing").value_or(false);
+  auto* video = LinuxPageDocumentVideo::GetOrCreateForCurrentDocument(&frame);
+  if (video->has_video == has_video && video->playing == playing) return;
+  video->has_video = has_video;
+  video->playing = playing;
+  page_video_listeners_.Notify();
 }
 
 void LinuxPageChannel::LinkDrop(const std::string& spec) {

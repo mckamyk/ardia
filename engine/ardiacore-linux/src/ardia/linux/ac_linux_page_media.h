@@ -9,6 +9,7 @@
 
 #include "ardia/linux/ac_linux_media.h"
 #include "ardia/linux/ac_linux_tab_policy.h"
+#include "base/callback_list.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
@@ -57,12 +58,10 @@ class LinuxPageMedia : public content::WebContentsObserver,
   void OnAudioStateChanged(bool audible) override;
   void DidUpdateAudioMutingState(bool muted) override;
   void MediaPictureInPictureChanged(bool active) override;
-  void MediaStartedPlaying(const MediaPlayerInfo& info, const content::MediaPlayerId& id) override;
-  void MediaStoppedPlaying(const MediaPlayerInfo& info, const content::MediaPlayerId& id,
-                           MediaStoppedReason reason) override;
-  void MediaMetadataChanged(const MediaPlayerInfo& info, const content::MediaPlayerId& id) override;
   void TitleWasSet(content::NavigationEntry* entry) override;
   void PrimaryPageChanged(content::Page& page) override;
+  void RenderFrameDeleted(content::RenderFrameHost* frame) override;
+  void DidFinishNavigation(content::NavigationHandle* navigation) override;
   void MediaResized(const gfx::Size& size, const content::MediaPlayerId& id) override;
   void MediaDestroyed(const content::MediaPlayerId& id) override;
   void MediaSessionCreated(content::MediaSession* session) override;
@@ -86,6 +85,7 @@ class LinuxPageMedia : public content::WebContentsObserver,
   void ObserveSession(content::MediaSession* session);
   void CaptureChanged(content::WebContents* contents);
   LinuxMediaAccess Access() const;
+  LinuxPageVideo PageVideo() const;
   void UpdateNowPlaying();
   void MediaCommand(const base::ListValue& args, Done done);
   void RequestPictureInPicture(const base::ListValue& args, bool activation, Done done);
@@ -100,7 +100,7 @@ class LinuxPageMedia : public content::WebContentsObserver,
   Done pending_picture_in_picture_;
   base::OneShotTimer picture_in_picture_timer_;
   base::flat_map<content::MediaPlayerId, gfx::Size> video_sizes_;
-  LinuxPageVideos<content::MediaPlayerId> videos_;
+  base::CallbackListSubscription page_videos_;
   base::WeakPtrFactory<LinuxPageMedia> weak_factory_{this};
 };
 
