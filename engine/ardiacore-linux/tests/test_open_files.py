@@ -30,14 +30,14 @@ class OpenFilesTests(unittest.TestCase):
         self.assertIn('urls.Append(net::FilePathToFileURL(file.path()).spec());', reply)
         self.assertLess(reply.index('Finish();'), reply.index('std::move(done).Run(true, base::Value(std::move(urls)));'))
 
-    def test_one_chooser_at_a_time_and_a_background_instance_answers_an_empty_list(self):
+    def test_one_chooser_per_window_and_a_background_instance_answers_an_empty_list(self):
         pick = method(self.files, 'void LinuxPickFiles(gfx::NativeWindow window, const base::ListValue& values, Done done) {')
         self.assertIn('ERR_FILES_REQUEST', pick)
         self.assertLess(pick.index('ardiacore::BackgroundInstance()'), pick.index('OpenFilesPicker::Start('))
         self.assertIn('std::move(done).Run(true, base::Value(base::ListValue()));', pick)
         self.assertLess(pick.index('ERR_FILE_PICKER_OPEN'), pick.index('OpenFilesPicker::Start('))
-        finishes = self.files.split('class OpenFilesPicker')[1]
-        self.assertIn('FilesPickerOpen() = false;', method(finishes, '  void Finish() {'))
+        finishes = self.files.split('class OpenFilesPicker :')[1]
+        self.assertIn('FilesPickers().Release(window_, this);', method(finishes, '  void Finish() {'))
 
 
 if __name__ == '__main__':
