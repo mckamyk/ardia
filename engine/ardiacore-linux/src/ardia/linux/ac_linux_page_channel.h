@@ -35,6 +35,7 @@ class LinuxPageDocumentBudget : public content::DocumentUserData<LinuxPageDocume
  public:
   ~LinuxPageDocumentBudget() override;
   LinuxPageMessageBudget budget;
+  LinuxPageMessageBudget now_playing;
 
  private:
   explicit LinuxPageDocumentBudget(content::RenderFrameHost* frame);

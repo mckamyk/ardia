@@ -27,13 +27,29 @@ class PageVideoTests(unittest.TestCase):
         post = body(self.channel, 'void LinuxPageChannel::Post(')
         self.assertIn('(!hooks_ && *type != LinuxPageMessageKind::kNowPlaying)', post)
         self.assertIn('LinuxPageSenderAccepted(*type, sender)', post)
-        self.assertIn('budget.Admit(', post)
+        self.assertIn('.Admit(Now(), kind.size() + json.size())', post)
         accept = body(self.channel, 'void LinuxPageChannel::Accept(')
         self.assertIn('case LinuxPageMessageKind::kNowPlaying:\n      return NoteVideo(frame, message.data);', accept)
         note = body(self.channel, 'void LinuxPageChannel::NoteVideo(')
         self.assertIn('LinuxPageDocumentVideo::GetOrCreateForCurrentDocument(&frame)', note)
         self.assertIn('page_video_listeners_.Notify()', note)
         self.assertNotIn('hooks_', note)
+
+    def test_the_agent_reduces_now_playing_before_its_size_check(self):
+        agent = (LINUX / 'renderer/ac_linux_page_agent.cc').read_text()
+        post = body(agent, '  void Post(gin::Arguments* args) {')
+        reduce = post.index('kLinuxNowPlayingBytesMax')
+        self.assertLess(reduce, post.index('ardiacore::kLinuxPageMessageBytesMax'))
+        self.assertIn('json = NowPlayingReport(isolate, value.As<v8::String>());', post)
+        report = body(agent, '  static std::string NowPlayingReport(')
+        self.assertIn('v8::TryCatch try_catch(isolate);', report)
+        self.assertIn('v8::JSON::Parse(', report)
+        self.assertIn('ardiacore::LinuxNowPlayingReport(', report)
+
+    def test_now_playing_has_its_own_budget(self):
+        post = body(self.channel, 'void LinuxPageChannel::Post(')
+        self.assertIn('LinuxPageDocumentBudget::GetOrCreateForCurrentDocument(&frame)', post)
+        self.assertIn('*type == LinuxPageMessageKind::kNowPlaying ? budget->now_playing : budget->budget', post)
 
     def test_the_tab_entry_follows_the_live_documents_of_the_primary_page(self):
         summary = body(self.media, 'LinuxPageVideo LinuxPageMedia::PageVideo() const')

@@ -214,13 +214,24 @@ LinuxTabProtection Idle() {
 }
 
 void PictureInPictureChoice() {
-  using P = LinuxPictureInPicturePlayer;
+  auto p = [](bool playing, int64_t area, bool muted = true, bool main_frame = true) {
+    LinuxPictureInPicturePlayer player;
+    player.playing = playing;
+    player.area = area;
+    player.muted = muted;
+    player.main_frame = main_frame;
+    return player;
+  };
   assert(!ChooseLinuxPictureInPicturePlayer({}));
-  assert(ChooseLinuxPictureInPicturePlayer({P{false, 100}}) == 0u);
-  assert(ChooseLinuxPictureInPicturePlayer({P{false, 900}, P{true, 100}, P{true, 400}}) == 2u);
-  assert(ChooseLinuxPictureInPicturePlayer({P{true, 0}, P{false, 1000}}) == 0u);
-  assert(ChooseLinuxPictureInPicturePlayer({P{false, 300}, P{false, 300}, P{false, 200}}) == 0u);
-  assert(ChooseLinuxPictureInPicturePlayer({P{false, 0}, P{false, 0}}) == 0u);
+  assert(ChooseLinuxPictureInPicturePlayer({p(false, 100)}) == 0u);
+  assert(ChooseLinuxPictureInPicturePlayer({p(false, 900), p(true, 100), p(true, 400)}) == 2u);
+  assert(ChooseLinuxPictureInPicturePlayer({p(true, 0), p(false, 1000)}) == 0u);
+  assert(ChooseLinuxPictureInPicturePlayer({p(false, 300), p(false, 300), p(false, 200)}) == 0u);
+  assert(ChooseLinuxPictureInPicturePlayer({p(false, 0), p(false, 0)}) == 0u);
+  assert(ChooseLinuxPictureInPicturePlayer({p(true, 900, true, false), p(false, 100, true, true)}) == 1u);
+  assert(ChooseLinuxPictureInPicturePlayer({p(true, 900, true, true), p(false, 100, false, false)}) == 1u);
+  assert(ChooseLinuxPictureInPicturePlayer({p(false, 900, false, false), p(false, 100, false, true)}) == 1u);
+  assert(ChooseLinuxPictureInPicturePlayer({p(false, 100, false, true), p(true, 100, false, true)}) == 1u);
 }
 
 void Protection() {

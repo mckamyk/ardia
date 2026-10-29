@@ -298,7 +298,8 @@ void LinuxPageChannel::Post(const std::string& kind, const std::string& json) {
   const LinuxPageSender sender{frame.IsInPrimaryMainFrame(), frame.GetPage().IsPrimary(),
                                frame.IsActive() && frame.IsRenderFrameLive() && Scriptable(&frame)};
   if (!LinuxPageSenderAccepted(*type, sender)) return;
-  if (!LinuxPageDocumentBudget::GetOrCreateForCurrentDocument(&frame)->budget.Admit(Now(), kind.size() + json.size()))
+  auto* budget = LinuxPageDocumentBudget::GetOrCreateForCurrentDocument(&frame);
+  if (!(*type == LinuxPageMessageKind::kNowPlaying ? budget->now_playing : budget->budget).Admit(Now(), kind.size() + json.size()))
     return;
   std::optional<base::Value> value = json == "null"
       ? std::optional<base::Value>(base::Value())

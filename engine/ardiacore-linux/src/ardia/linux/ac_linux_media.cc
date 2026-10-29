@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 #include "base/strings/utf_string_conversions.h"
 
@@ -257,7 +258,8 @@ std::optional<size_t> ChooseLinuxPictureInPicturePlayer(const std::vector<LinuxP
     }
     const auto& player = players[index];
     const auto& chosen = players[*best];
-    if (player.playing != chosen.playing ? player.playing : player.area > chosen.area) best = index;
+    const auto rank = [](const LinuxPictureInPicturePlayer& p) { return std::tuple(!p.muted, p.main_frame, p.playing, p.area); };
+    if (rank(player) > rank(chosen)) best = index;
   }
   return best;
 }
