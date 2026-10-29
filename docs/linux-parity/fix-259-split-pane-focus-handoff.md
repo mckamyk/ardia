@@ -33,3 +33,11 @@ Stored focus on the shell (a sidebar click) or on nothing is left as Chrome set 
 ## Needs the next build to confirm
 
 F01D's "clicking into the inactive split pane makes it active and gives its page keyboard focus" on sway, against a package built from this branch, plus the F01D shortcut checks that start by clicking a pane.
+
+## On the 148104a3 build: reattaching the viewports moved focus to the other pane
+
+F01D still failed on 148104a3. Under gdb (the package's unstripped `chrome`, breakpoints on `KeepPaneFocus`, `ChromeWebContentsViewFocusHelper::{Store,Restore}Focus`, `FocusManager::SetFocusedViewWithReason` and `TabBinding::OnWebContentsFocused`), `KeepPaneFocus` worked: Chrome's `RestoreFocus` focused pane A's viewport. Then `OnTabStripModelChanged` called `ReattachViewports`, which detached and reattached every visible viewport. `WebView::SetWebContents(nullptr)` on A's focused viewport runs `UpdateCrashedOverlayView` → `SetFocusBehavior(NEVER)` → `FocusManager::AdvanceFocusIfNecessary`, which hands focus to the next focusable view: pane B's viewport. B's page reported focus and the shell activated B.
+
+Making `AdvanceFocusIfNecessary` return at once under gdb on the same build fixed both directions (click A: A active with focus; click B: B active with focus), which confirms this was the remaining cause.
+
+`ReattachViewports` now reattaches only what needs it: the contents Chrome attached to its own `ContentsWebView` while activating, or a viewport holding the wrong contents. A viewport that has focus is cleared from the focus manager before the detach and focused again with `FocusFromHost` after the reattach, so focus never advances to the other pane. `test_pane_focus` now models Chrome attaching the new active contents to its own view and `WebView` advancing focus when its focused view loses its contents. `click`, `sidebar` and the new `reattach` case fail on the 148104a3 code and pass with the change.
