@@ -9,7 +9,7 @@ import * as index from "./settingsIndex.ts";
 import * as form from "./settingsForm.tsx";
 import * as engines from "./hostEngines.ts";
 
-const hidden = ["general.defaultBrowser", "general.openAtLogin", "appearance.pageScrollBars", "advanced.cliControl", "advanced.cliInstall"];
+const hidden = ["general.defaultBrowser", "general.openAtLogin", "appearance.pageScrollBars", "advanced.cliControl", "advanced.cliInstall", "tabs.videoUpscaling"];
 
 test("Settings navigation and search leave out the unavailable Engines pane and platform rows", () => {
   assert.ok(sharedIndex.PANES.some((pane) => pane.id === "engines"));

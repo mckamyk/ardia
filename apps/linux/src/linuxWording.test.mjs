@@ -49,6 +49,7 @@ test("the rows that describe those panes are reworded too", () => {
   assert.match(section(readFileSync(shared("components/settings/rows/generalRows.ts"), "utf8"), "pageScrollBars: {", "keywords"), /macOS/);
   assert.doesNotMatch(section(general, "pageScrollBars: {", "keywords"), MACOS);
   assert.match(section(general, "pageScrollBars: {", "keywords"), /Follow system/);
+  assert.match(section(general, "warnBeforeQuitting: {", "keywords"), /quits with Ctrl\+Shift\+Q\./);
   const privacy = linuxCopy("components/settings/rows/privacyRows.ts");
   assert.doesNotMatch(section(privacy, "whatsSent: {", "keywords"), MACOS);
 });
@@ -127,6 +128,7 @@ test("click modifiers read Shift-click, Alt-click and Alt+Shift-click on Linux, 
   const rows = linuxComponentCopy("components/settings/rows/generalRows.ts");
   assert.match(rows, /Ctrl\+Alt-click splits too, and so does Alt\+Shift-click when Alt-click is chosen/);
   assert.match(rows, /title: "Ctrl-clicking links creates tab groups"/);
+  assert.match(rows, /Asks before \$\{APP\} quits with Ctrl\+Shift\+Q\./);
   assert.match(linuxComponentCopy("components/onboarding/LayoutSteps.tsx"), /title: "Shift-click"/);
   assert.match(linuxComponentCopy("components/tabstrip/NewTabButton.tsx"), /New Tab \(Ctrl\+T\) — Alt-click to open in Split View/);
   assert.equal(linuxShortcutText(`"⇧⌘S" "⌘Z" "⌥⌘I" "⌃⇧Tab"`), `"Shift+Ctrl+S" "Ctrl+Z" "Alt+Ctrl+I" "Super+Shift+Tab"`);

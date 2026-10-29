@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { keyboardCombo, linuxBindings, linuxMenuShortcuts, linuxNativeBindings, recordableShortcut } from "./shortcuts.ts";
+import { keyboardCombo, linuxBindings, linuxMenuShortcuts, linuxNativeBindings, recordableShortcut, utilityBindings } from "./shortcuts.ts";
 
 const commandAt = (bindings, keyCode, modifiers) => bindings.find((binding) => binding.keyCode === keyCode && binding.modifiers === modifiers);
 const event = (code, modifiers = {}) => ({ code, key: "", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...modifiers });
@@ -91,6 +91,14 @@ test("displaced defaults remain registered to consume Chromium's accelerators", 
 test("utility windows consume browser shortcuts they cannot perform", () => {
   const active = linuxBindings().filter((binding) => ["closeTab", "openSettings", "findInPage"].includes(binding.command));
   assert.equal(commandAt(linuxNativeBindings(active), 84, 4)?.suppressed, true);
+});
+
+test("utility windows keep the help shortcuts a browser window plays, so Show Onboarding works from Settings", () => {
+  const combo = keyboardCombo(event("KeyO", { ctrlKey: true, altKey: true }));
+  const bindings = utilityBindings(linuxBindings({ showOnboarding: ["o", "command", "option"] }));
+  assert.equal(commandAt(bindings, combo.keyCode, combo.flags)?.command, "showOnboarding");
+  assert.equal(commandAt(utilityBindings(linuxBindings()), 84, 4), undefined);
+  assert.equal(commandAt(utilityBindings(linuxBindings()), 87, 4)?.command, "closeTab");
 });
 
 test("Ctrl+J dispatches the advertised Downloads command", () => {
