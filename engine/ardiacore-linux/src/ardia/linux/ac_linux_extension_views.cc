@@ -329,14 +329,6 @@ void LinuxExtensionSurfaces::Destroy(int id) {
   surfaces_.erase(found);
 }
 
-bool LinuxExtensionSurfaces::HostsContents(const content::WebContents* contents) const {
-  if (!contents) return false;
-  for (const auto& [id, surface] : surfaces_) {
-    if (surface->contents() == contents) return true;
-  }
-  return false;
-}
-
 void LinuxExtensionSurfaces::SurfaceClosed(int id, bool report) {
   if (!surfaces_.contains(id)) return;
   if (report) emit_.Run(id, base::DictValue().Set("type", "windowClose"));

@@ -1,5 +1,7 @@
 #include "ardia/linux/ac_linux_profiles.h"
 
+#include <algorithm>
+
 namespace ardiacore::linux_profiles {
 namespace {
 
@@ -115,6 +117,12 @@ bool WindowFocusableBy(const WindowAccess& window, const WindowRequester& reques
 bool WindowListedAsPrivate(const WindowAccess& window, const WindowRequester& requester) {
   const auto name = ParseProfileName(window.page_profile);
   return requester.host != 0 && requester.host != window.host && name && name->kind == ProfileKind::kPrivate;
+}
+
+int NextPrivateOrdinal(const std::vector<int>& taken) {
+  int ordinal = 1;
+  while (std::find(taken.begin(), taken.end(), ordinal) != taken.end()) ++ordinal;
+  return ordinal;
 }
 
 bool ProfileOpensWindow(const ProfileName& name, bool incognito, bool utility) {

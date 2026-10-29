@@ -885,6 +885,14 @@ class ShellHostView : public views::View,
     utility_ = std::move(request.utility);
     page_profile_ = std::move(request.page_profile);
     private_window_ = std::move(request.private_window);
+    if (const auto name = ardiacore::linux_profiles::ParseProfileName(page_profile_);
+        name && name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate) {
+      std::vector<int> taken;
+      for (const auto& [id, host] : Hosts()) {
+        if (host != this && host->private_ordinal_) taken.push_back(host->private_ordinal_);
+      }
+      private_ordinal_ = ardiacore::linux_profiles::NextPrivateOrdinal(taken);
+    }
     opener_host_ = request.opener_host;
     opener_generation_ = request.opener_generation;
   }
@@ -1110,19 +1118,6 @@ class ShellHostView : public views::View,
     }
     return fallback;
   }
-  bool OpenSurfacePrivateLink(content::WebContents* contents, const GURL& url) {
-    if (!extension_surfaces_ || !extension_surfaces_->HostsContents(contents)) return false;
-    Profile* page = page_profile();
-    const auto original = page ? ardiacore::LinuxProfileName(page->GetOriginalProfile()) : std::nullopt;
-    TabBinding* binding = PrivateLinkBinding();
-    if (!original || !binding) {
-      LOG(WARNING) << "[ardia] off-the-record link refused: its window has no live page to open a private window from";
-      return true;
-    }
-    binding->ReportPresentation("openWindow", base::DictValue()
-        .Set("url", url.spec()).Set("disposition", "incognito").Set("profile", *original));
-    return true;
-  }
   void NoteAutoPictureInPictureRequested(content::WebContents* contents) {
     for (const auto& [id, binding] : bindings_) {
       if (binding->contents() != contents) continue;
@@ -1275,6 +1270,7 @@ class ShellHostView : public views::View,
   base::WeakPtr<Profile> app_profile_;
   std::string page_profile_;
   base::DictValue private_window_;
+  int private_ordinal_ = 0;
   int opener_host_ = 0;
   uint64_t opener_generation_ = 0;
   raw_ptr<LinuxShellWebView> shell_ = nullptr;
@@ -4933,7 +4929,7 @@ void ShellHostView::Invoke(
     for (const auto& [id, host] : Hosts()) {
       if (!host->is_utility() && host->browser() &&
           ardiacore::linux_profiles::WindowListedAsPrivate(host->access(), requester())) {
-        windows.Append(base::DictValue().Set("id", host->window_id()));
+        windows.Append(base::DictValue().Set("id", host->window_id()).Set("ordinal", host->private_ordinal_));
       }
     }
     return std::move(done).Run(true, base::Value(std::move(windows)));
@@ -5626,15 +5622,6 @@ class HostRegistry : public BrowserCollectionObserver,
       observation_{this};
 };
 
-content::WebContents* PrivateLinkSource(content::WebContents* contents) {
-  for (int depth = 0; depth < 4 && contents; ++depth) {
-    DevToolsWindow* devtools = DevToolsWindow::AsDevToolsWindow(contents);
-    if (!devtools) return contents;
-    contents = devtools->GetInspectedWebContents();
-  }
-  return nullptr;
-}
-
 void EngineEvent(void*, const char* topic, const char* json) {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   if (!topic || !json) return;
@@ -5691,14 +5678,10 @@ void StartLinuxHost() {
   };
   g_ardia_linux_off_the_record_navigation = [](content::WebContents* contents, const GURL& url) {
     if (!contents || !url.is_valid()) return false;
-    content::WebContents* source = PrivateLinkSource(contents);
     for (const auto& [id, host] : Hosts()) {
-      if (source && host->OpenPrivateLink(source, url)) return true;
+      if (host->OpenPrivateLink(contents, url)) return true;
     }
-    for (const auto& [id, host] : Hosts()) {
-      if (host->OpenSurfacePrivateLink(source, url)) return true;
-    }
-    LOG(WARNING) << "[ardia] off-the-record link refused: its source is not an Ardia tab, extension view or DevTools window";
+    LOG(WARNING) << "[ardia] off-the-record link refused: the window's active tab has no live Ardia page";
     return true;
   };
   g_ardia_linux_devtools_opened_tab = [](content::WebContents* inspected, content::WebContents* opened, const GURL& url) {

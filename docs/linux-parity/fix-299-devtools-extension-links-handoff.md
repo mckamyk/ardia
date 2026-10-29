@@ -15,7 +15,7 @@ Issue: [#299](https://github.com/mckamyk/ardia/issues/299), a follow-up to #275 
 - `ac_linux_host.cc`:
   - `g_ardia_linux_devtools_opened_tab`: the inspected tab's binding first (#289). Otherwise the tab is adopted (`ReportOpened`, `adoptId: tab:<id>`) by a window of the tab's profile with a live page, preferring the window whose strip holds it (a popup's or side panel's own window). With no such window the tab is closed and the refusal logged.
   - `g_ardia_linux_devtools_open_url`: a window of the DevTools profile with a live page, the active one first, opens the URL as a foreground tab (`openWindow`, as a dropped link does). With none, the link is refused and logged; nothing is opened.
-  - The window and page are picked as for `OpenSurfacePrivateLink`: the presented binding, else any live one.
+  - The window and page are picked by `PrivateLinkBinding`: the presented binding, else any live one.
 - Private windows: the profile comparison is exact, so an off-the-record extension view's link opens in a private window of that profile, never in a regular one.
 
 ## Tests

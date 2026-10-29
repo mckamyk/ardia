@@ -50,7 +50,6 @@ class LinuxExtensionSurfaces {
   void SurfaceClosed(int id, bool report);
   void SurfaceEvent(int id, base::DictValue event);
   size_t size() const { return surfaces_.size(); }
-  bool HostsContents(const content::WebContents* contents) const;
 
  private:
   class Surface;

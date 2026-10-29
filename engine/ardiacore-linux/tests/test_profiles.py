@@ -388,6 +388,15 @@ void StartupProfilePinning() {
   std::puts("startup_pinned=ok");
 }
 
+void PrivateOrdinals() {
+  assert(NextPrivateOrdinal({}) == 1);
+  assert(NextPrivateOrdinal({1}) == 2);
+  assert(NextPrivateOrdinal({1, 2, 3}) == 4);
+  assert(NextPrivateOrdinal({3, 1}) == 2);
+  assert(NextPrivateOrdinal({2, 3}) == 1);
+  std::puts("private_ordinals=ok");
+}
+
 void PrivateWindowAccess() {
   const WindowAccess regular{"main", "", 1, 0, 0};
   const WindowAccess isolated{"w-work", "p-work", 2, 1, 4};
@@ -493,6 +502,7 @@ void OpeningLedgerBounds() {
 }
 
 int main() {
+  PrivateOrdinals();
   ChromeCreatedPrivateProfileIsObserved();
   PrivateWindowAccess();
   OpeningLedgerBounds();
@@ -523,7 +533,7 @@ class ProfileRegistryTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-            for marker in ('chrome_created_otr_observed=ok', 'private_window_access=ok', 'opening_ledger=ok', 'startup_pinned=ok', 'reopen_after_ending=ok', 'ending_bounded=ok', 'parsing=ok', 'no_fallback=ok', 'private_lifetime=ok', 'release_during_resolution=ok',
+            for marker in ('private_ordinals=ok', 'chrome_created_otr_observed=ok', 'private_window_access=ok', 'opening_ledger=ok', 'startup_pinned=ok', 'reopen_after_ending=ok', 'ending_bounded=ok', 'parsing=ok', 'no_fallback=ok', 'private_lifetime=ok', 'release_during_resolution=ok',
                            'delete_during_load=ok', 'reentrancy=ok', 'destruction=ok'):
                 self.assertIn(marker, run.stdout)
 
