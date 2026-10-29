@@ -159,7 +159,7 @@ describe("scenario catalogue", () => {
     assert.ok(scripts.includes(`'${PIP_PROBE}'`));
     assert.deepEqual(AUTOPLAY_ARGS, ["--autoplay-policy=no-user-gesture-required"]);
     const main = await readFile(new URL("../../../src/main.tsx", import.meta.url), "utf8");
-    for (const seam of ["webviews", "media: useMedia", "lifecycle: { state: useLifecycle, sleepTab }"]) assert.ok(main.includes(seam), seam);
+    for (const seam of ["webviews", "media: useMedia", "lifecycle: { state: useLifecycle }"]) assert.ok(main.includes(seam), seam);
     assert.deepEqual(selectScenarios(["#25", "F18"]).map((s) => s.id), ["F15", "F18", "F15D"]);
   });
 

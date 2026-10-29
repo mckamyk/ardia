@@ -70,7 +70,7 @@ test("real tile folder rename and bookmark folder creation use shell prompt", as
   f.respond(" New folder "); await rename;
   assert.equal(folderIn(state(), f.windowId, folder.folderId).name, "New folder");
   const before = Object.keys(state().bookmarks).length;
-  const bookmark = bookmarkTabs(f.windowId, [f.tab], "new");
+  const bookmark = bookmarkTabs(f.windowId, [f.tab], { kind: "newFolder" });
   await turn();
   assert.equal(f.requests.at(-1).args[0].options.confirmTitle, "Create");
   f.respond(null); await bookmark;

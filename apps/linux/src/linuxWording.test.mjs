@@ -13,7 +13,7 @@ const MACOS = /\bMacs?\b|macOS|iCloud|Keychain|keychain/;
 const SURFACES = [
   "state/extensions/actions.ts",
   "components/onboarding/SourceStep.tsx",
-  "components/onboarding/LayoutSteps.tsx",
+  "components/onboarding/LookStep.tsx",
   "components/settings/panes/Appearance.tsx",
   "components/settings/panes/Privacy.tsx",
   "state/telemetry/copy.ts",
@@ -128,6 +128,7 @@ test("click modifiers read Shift-click, Alt-click and Alt+Shift-click on Linux, 
   const rows = linuxComponentCopy("components/settings/rows/generalRows.ts");
   assert.match(rows, /Ctrl\+Alt-click splits too, and so does Alt\+Shift-click when Alt-click is chosen/);
   assert.match(rows, /title: "Ctrl-clicking links creates tab groups"/);
+  assert.match(linuxComponentCopy("components/settings/rows/privacyRows.ts"), /title: "Zoom with Ctrl and the mouse wheel"/);
   assert.match(rows, /Asks before \$\{APP\} quits with Ctrl\+Shift\+Q\./);
   assert.match(linuxComponentCopy("components/onboarding/LayoutSteps.tsx"), /title: "Shift-click"/);
   assert.match(linuxComponentCopy("components/tabstrip/NewTabButton.tsx"), /New Tab \(Ctrl\+T\) — Alt-click to open in Split View/);

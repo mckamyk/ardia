@@ -17,7 +17,7 @@ async function noticeCastUnavailable(args: string) {
   try { tabId = (JSON.parse(args) as { tabId?: unknown } | null)?.tabId; } catch { tabId = null; }
   const [{ useBrowser }, { showToast }] = await Promise.all([
     import("../../browser/src/state/browser/store"),
-    import("../../browser/src/state/splits/actions"),
+    import("../../browser/src/state/app/toasts"),
   ]);
   const s = useBrowser.getState();
   const tab = typeof tabId === "string" ? s.tabs[tabId] : undefined;

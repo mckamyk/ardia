@@ -5,7 +5,7 @@ import {
   TAB_POLICY_LOCK, isTabPolicyOwner, policyToastTarget, resetLinuxTabPoliciesForTests, sharedBatterySaver, startLinuxTabPolicies, watchHostInputActivity,
 } from "./hostPolicies.ts";
 import { showToast } from "./policyToasts.ts";
-import { useToasts } from "../../browser/src/state/splits/actions.ts";
+import { useToasts } from "../../browser/src/state/app/toasts.ts";
 
 const source = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -159,10 +159,10 @@ test("engine.batterySaver is applied by the owner and shared with the other wind
 
 test("the Linux build routes tabLifecycle's toasts and battery saver through the policy adapters", () => {
   const lifecycle = source("../../browser/src/state/tabs/tabLifecycle.ts");
-  assert.match(lifecycle, /import \{ showToast \} from "\.\.\/splits\/actions";/);
+  assert.match(lifecycle, /import \{ showToast \} from "\.\.\/app\/toasts";/);
   assert.match(lifecycle, /import \{[^}]*setBatterySaver[^}]*\} from "\.\.\/\.\.\/platform\/performance";/);
   const vite = source("../vite.config.ts");
-  assert.ok(vite.includes('[`${here("../browser/src/state/splits/actions.ts")}\\0${tabLifecycle}`, here("./src/policyToasts.ts")]'));
+  assert.ok(vite.includes('[`${here("../browser/src/state/app/toasts.ts")}\\0${tabLifecycle}`, here("./src/policyToasts.ts")]'));
   assert.ok(vite.includes('[`${here("../browser/src/platform/performance.ts")}\\0${tabLifecycle}`, here("./src/policyPerformance.ts")]'));
   const main = source("./main.tsx");
   for (const seam of ["windowId, locks: navigator.locks", "new BroadcastChannel(TAB_POLICY_CHANNEL)", "privateWindow: !!ardiaHost.bootstrap.privateWindow", "watchHostInputActivity(requireNativeModule(\"ArdiaEngine\"), listener)"]) {

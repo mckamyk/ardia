@@ -2,7 +2,7 @@ import type { Download } from "../../../packages/ardiacore/src/module";
 import type { ArdiaHost } from "./host";
 import { callHost, reportHostError } from "./host.ts";
 import { hostFiles } from "./hostFiles.ts";
-import { showToast } from "../../browser/src/state/splits/actions";
+import { showToast } from "../../browser/src/state/app/toasts";
 
 const DOWNLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STATES = new Set(["downloading", "finished", "failed", "cancelled"]);

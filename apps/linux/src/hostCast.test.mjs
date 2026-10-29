@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { CAST_UNAVAILABLE_TITLE, linuxMediaCall } from "./hostCast.ts";
 import { resolveHostModule } from "./hostModules.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
-import { useToasts } from "../../browser/src/state/splits/actions.ts";
+import { useToasts } from "../../browser/src/state/app/toasts.ts";
 
 function host(calls) {
   return {

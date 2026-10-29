@@ -87,11 +87,11 @@ function dropDeletedProfiles() {
   if (watchingProfiles) return;
   watchingProfiles = true;
   let last = useBrowser.getState().profiles;
-  let seen = new Set(Object.keys(last).map(engineProfile));
+  let seen = new Set(Object.keys(last).map((id) => engineProfile({ profiles: last }, id)));
   useBrowser.subscribe((state) => {
     if (state.profiles === last) return;
     last = state.profiles;
-    const live = new Set(Object.keys(last).map(engineProfile));
+    const live = new Set(Object.keys(last).map((id) => engineProfile({ profiles: last }, id)));
     if (live.size) {
       void heldLogins?.dropProfiles([...seen].filter((profile) => !live.has(profile))).catch((error: unknown) =>
         console.warn("[ardia linux] sync", error instanceof Error ? error.message : error),

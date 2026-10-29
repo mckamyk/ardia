@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { appInfo, docs } from "../../browser/src/test-native/index.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { useOnboarding, onboardingCompletedAt } from "../../browser/src/state/onboarding/onboarding.ts";
-import { useToasts } from "../../browser/src/state/splits/actions.ts";
+import { useToasts } from "../../browser/src/state/app/toasts.ts";
 import { APP_LAUNCH_LOCK, APP_LAUNCH_MARK, FRESH_PROFILE_DOCUMENT, LAUNCH_STEPS, UTILITY_APP_COMMANDS, claimAppLaunch, hostLaunchRecord, onboardingAction, recordFreshProfile, runAppCommand, runLaunchServices, serveUtilityCommands, startAppCommands } from "./appServices.ts";
 
 const capabilities = { defaultBrowser: false, launchAtLogin: false, thinScrollBars: false, webkit: false, cliControl: false, externalLinks: false, performanceRecording: false, taskManager: false };

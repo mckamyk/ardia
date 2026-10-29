@@ -1,7 +1,7 @@
 import type { ArdiaHost } from "./host";
 
 type InstallStore = {
-  getState(): { install: { prompt?: { requestId: string } } | null };
+  getState(): { install: { status: string; prompt?: { requestId: string } } | null };
   setState(patch: { install: null }): void;
 };
 

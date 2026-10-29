@@ -243,7 +243,9 @@ std::variant<ServiceRequest, Failure> PrepareServiceCall(std::string_view name,
     return ServiceRequest{"ac_site_settings_origins", base::DictValue()};
   }
   if (name == "sites.reset" || name == "sites.clearData") {
-    if (!OnlyKeys(args, {"origin"})) return Invalid("unexpected site arguments");
+    const bool known = name == "sites.reset" ? OnlyKeys(args, {"origin"}) : OnlyKeys(args, {"origin", "engine"});
+    if (!known) return Invalid("unexpected site arguments");
+    if (auto failure = CheckEngine(args)) return *failure;
     if (auto failure = RequireOrigin(args)) return *failure;
     return ServiceRequest{name == "sites.reset" ? "ac_site_settings_reset" : "ac_site_data_clear",
                           base::DictValue().Set("origin", *String(args, "origin"))};

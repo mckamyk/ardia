@@ -71,7 +71,7 @@ test("site permission calls reach the native sites domain with the profile and e
   assert.deepEqual(last(), { name: "sites.reset", profile: "default", args: { origin: "https://a.test" } });
   replies.set("sites.clearData", { value: { cookies: 3, storage: true } });
   assert.deepEqual(await sites.clearSiteData("default", "https://a.test"), { cookies: 3, storage: true });
-  assert.deepEqual(last(), { name: "sites.clearData", profile: "default", args: { origin: "https://a.test" } });
+  assert.deepEqual(last(), { name: "sites.clearData", profile: "default", args: { origin: "https://a.test", engine: "chromium" } });
 });
 
 test("clearing browsing data sends the chosen types and time range, and resolves only after the engine does", async () => {

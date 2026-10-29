@@ -100,7 +100,6 @@ const CALLERS = {
   "state/media/media.ts": { calls: 2, path: "the pictureInPictureState and exitPictureInPicture page commands" },
   "state/site/selection.ts": { calls: 4, path: "the pinned selection operations" },
   "state/site/translate.ts": { calls: 6, path: "translation, which is unavailable on Linux" },
-  "state/tabs/tabKeepAlive.ts": { calls: 1, path: "apps/linux/src/tabKeepAlive.ts, which replaces it" },
 };
 
 const sources = (dir) => readdirSync(sharedSource(dir), { recursive: true })
@@ -129,7 +128,6 @@ test("each accounted evaluation reaches the Linux path it is listed with", () =>
     assert.ok(hostPageScript(method, [script]), script.slice(0, 40));
   }
   assert.match(readFileSync(new URL("./shims/web/HostExtensionWebView.tsx", import.meta.url), "utf8"), /if \(property === "evaluate"\) return extensionViewEvaluate\(/);
-  assert.match(readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8"), /here\("\.\.\/browser\/src\/state\/tabs\/tabKeepAlive\.ts"\), here\("\.\/src\/tabKeepAlive\.ts"\)/);
   assert.match(readFileSync(new URL("./hostModules.ts", import.meta.url), "utf8"), /ArdiaTranslate: \{ available: false \}/);
   assert.match(readFileSync(new URL("../../../packages/shell/src/translation.ts", import.meta.url), "utf8"), /TranslationNative\.available \? TranslationNative : null/);
   const linuxSources = readdirSync(new URL(".", import.meta.url), { recursive: true }).filter((file) => /\.tsx?$/.test(file));

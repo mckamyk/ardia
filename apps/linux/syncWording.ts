@@ -25,8 +25,11 @@ export const SYNC_WORDING: readonly Wording[] = [
       ],
       ["No server and no account: your Macs meet in the sync folder.", "No server and no account: your devices meet in the sync folder."],
       [`title: "Show Sync Folder in Finder"`, `title: "Open Sync Folder"`],
-      [`description="Choose which profiles sync on this Mac. Each syncs on its own."`, `description="Choose which profiles sync on this computer. Each syncs on its own."`],
-      [`title="Add to This Mac"`, `title="Add to This Computer"`],
+      [
+        `"Choose which profiles sync on this Mac. Each syncs on its own. Profiles on your other devices can be added to this Mac."`,
+        `"Choose which profiles sync on this computer. Each syncs on its own. Profiles on your other devices can be added to this computer."`,
+      ],
+      [`: "Choose which profiles sync on this Mac. Each syncs on its own."`, `: "Choose which profiles sync on this computer. Each syncs on its own."`],
       ["`${d.name} (This Mac)`", "`${d.name} (This Computer)`"],
       [`title="Just this Mac so far"`, `title="Just this computer so far"`],
     ],
@@ -90,6 +93,13 @@ export const SYNC_WORDING: readonly Wording[] = [
         `...settingsType.lead, color: theme.textPrimary, fontFamily: "Menlo" }}`,
         `...settingsType.lead, color: theme.textPrimary, fontFamily: "monospace" }}`,
       ],
+      [`<Button title="Add to This Mac"`, `<Button title="Add to This Computer"`],
+      [
+        `"These profiles are on your other devices. Add them to this Mac to sync their pinned tabs, bookmarks, history and passwords here too."`,
+        `"These profiles are on your other devices. Add them to this computer to sync their pinned tabs, bookmarks, history and passwords here too."`,
+      ],
+      [`"Every profile on your other devices is on this Mac too."`, `"Every profile on your other devices is on this computer too."`],
+      [`<SheetTitle>This Mac Is Syncing</SheetTitle>`, `<SheetTitle>This Computer Is Syncing</SheetTitle>`],
       ["Recovery Kit. Everything on this Mac stays as it is.", "Recovery Kit. Everything on this computer stays as it is."],
       ["Your data on each Mac stays.", "Your data on each device stays."],
       [

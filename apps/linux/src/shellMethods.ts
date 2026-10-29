@@ -93,6 +93,7 @@ const LINUX_SHELL_METHODS: Record<string, ShellMethod> = {
   startDictation: unavailable("Dictation"),
   pickFiles: unavailable("Choosing files to open"),
   replyToTerminate: resolved,
+  readText: () => Promise.resolve(""),
 };
 
 export function linuxShellMethod(method: string): ShellMethod | undefined {

@@ -98,16 +98,15 @@ export default {
       if (requested !== false || taken !== false) throw new Error(`requested=${requested} taken=${taken}`);
       return { requested, taken };
     });
-    await t.check("a playing background tab is protected from sleep, discard and freeze", async () => {
+    await t.check("a playing background tab is protected from discard and freeze", async () => {
       const other = await shell.newTab(t.fixtures.url.page(1, run));
       await shell.waitTabUrl(other, (u) => u.startsWith(t.fixtures.url.page(1, "")));
       if (!(await shell.eval(`ardiaLinux.webviews.has(${js(tabId)})`))) throw new Error("the media tab is no longer mounted");
-      const slept = await shell.eval(`ardiaLinux.lifecycle.sleepTab(${js(tabId)})`);
       const discard = await viewCall(shell, tabId, "discard()");
       const frozen = await viewCall(shell, tabId, "setFrozen(true)");
-      if (slept !== false || discard !== "refused" || frozen !== false) throw new Error(`slept=${slept} discard=${discard} frozen=${frozen}`);
+      if (discard !== "refused" || frozen !== false) throw new Error(`discard=${discard} frozen=${frozen}`);
       if (!(await evaluate(page, "!document.getElementById('tone').paused"))) throw new Error("playback stopped");
-      return { slept, discard, frozen };
+      return { discard, frozen };
     });
     await t.check("navigating away clears the player", async () => {
       await navigateTab(shell, tabId, t.fixtures.url.page(2, run));

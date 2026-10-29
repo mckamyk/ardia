@@ -45,7 +45,17 @@ function delivery(value: unknown): value is PageDelivery | PageLifecycle {
 const leaseOf = (value: PageLeaseMetadata): PageLeaseMetadata =>
   ({ claim: value.claim, rendererGeneration: value.rendererGeneration, bindingGeneration: value.bindingGeneration, documentEpoch: value.documentEpoch });
 
-function appEvent(value: PageEvent): PageEvent {
+const SCROLL_STATES = new Set(["down", "up", "top"]);
+
+function typedPageMessage(data: unknown): PageEvent | null {
+  if (!record(data)) return null;
+  if (data.kind === "selection") return { name: "selection", data: { selection: record(data.data) ? data.data : null } };
+  if (data.kind === "scroll" && record(data.data) && typeof data.data.state === "string" && SCROLL_STATES.has(data.data.state)) return { name: "scroll", data: { state: data.data.state } };
+  return null;
+}
+
+function appEvent(value: PageEvent): PageEvent | null {
+  if (value.name === "pageMessage") return typedPageMessage(value.data);
   if (value.name !== "navigation" || !record(value.data)) return value;
   const data = value.data;
   return { ...value, data: { ...data,
@@ -198,7 +208,8 @@ export class HostPageEvents {
       }
       const presented = this.provisional && value.name === "navigation" && record(value.data)
         ? { ...value, data: { ...value.data, themeColor: null, themeColorSource: null } } : value;
-      deliverPageEvent(this.props(), appEvent(presented));
+      const typed = appEvent(presented);
+      if (typed) deliverPageEvent(this.props(), typed);
       if (this.active && presented.name === "navigation") this.applyTheme(presented.data as NavigationState);
     }
   }

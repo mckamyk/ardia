@@ -184,7 +184,9 @@ void ServiceValidation() {
   assert(Code(PrepareServiceCall("sites.origins", base::DictValue().Set("origin", "https://a.test"))) == "ERR_SITE_REQUEST");
   assert(std::get<ServiceRequest>(PrepareServiceCall("sites.reset", base::DictValue().Set("origin", "https://a.test"))).service == "ac_site_settings_reset");
   assert(std::get<ServiceRequest>(PrepareServiceCall("sites.clearData", base::DictValue().Set("origin", "http://a.test:81"))).service == "ac_site_data_clear");
-  assert(Code(PrepareServiceCall("sites.clearData", base::DictValue().Set("origin", "https://a.test").Set("engine", "chromium"))) == "ERR_SITE_REQUEST");
+  assert(std::get<ServiceRequest>(PrepareServiceCall("sites.clearData", base::DictValue().Set("origin", "https://a.test").Set("engine", "chromium"))).args.size() == 1);
+  assert(Code(PrepareServiceCall("sites.clearData", base::DictValue().Set("origin", "https://a.test").Set("engine", "webkit"))) == "ERR_UNKNOWN_CALL");
+  assert(Code(PrepareServiceCall("sites.reset", base::DictValue().Set("origin", "https://a.test").Set("engine", "chromium"))) == "ERR_SITE_REQUEST");
   assert(Code(PrepareServiceCall("sites.zoomLevels", base::DictValue())) == "ERR_UNKNOWN_CALL");
 
   auto error = CompleteServiceCall("sites.settings", base::Value(base::DictValue().Set("error", "origin must be an http(s) origin")));

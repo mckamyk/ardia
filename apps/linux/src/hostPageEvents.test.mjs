@@ -36,7 +36,8 @@ function setup() {
     onPopupBlocked: (value) => patchPage(tab, { popups: [...pageOf(tab).popups, value] }),
     onFindResult: (...args) => calls.push(["find", ...args]),
     onPageFocus: (...args) => calls.push(["focus", ...args]),
-    onPageMessage: (...args) => calls.push(["pageMessage", ...args]),
+    onScroll: (...args) => calls.push(["scroll", ...args]),
+    onSelection: (...args) => calls.push(["selection", ...args]),
     onFavicon: (...args) => calls.push(["favicon", ...args]),
   };
   const receiver = new HostPageEvents("claim", () => 7, () => props, (reason, replaced) => { calls.push(["reset", reason]); resetHostPage(tab, reason, replaced); }, (state)=>applyHostPageTheme(tab,state));
@@ -53,7 +54,12 @@ test("uses actual package dispatcher with exact find/focus and scalar/two-argume
   h.send(message(5, "status", { text: "https://target.test" }));
   h.send(message(6, "pageMessage", { kind: "scroll", data: { state: "down" } }));
   h.send(message(7, "favicon", { url: "icon", urls: ["icon", "other"] }));
-  assert.deepEqual(h.calls.slice(1), [["find", { count: 4, active: 2, final: true }], ["focus"], ["pageMessage", "scroll", { state: "down" }], ["favicon", "icon", ["icon", "other"]]]);
+  const selected = { text: "word", rect: { x: 1, y: 2, width: 3, height: 4 } };
+  h.send(message(8, "pageMessage", { kind: "selection", data: selected }));
+  h.send(message(9, "pageMessage", { kind: "selection", data: null }));
+  h.send(message(10, "pageMessage", { kind: "scroll", data: { state: "sideways" } }));
+  h.send(message(11, "pageMessage", { kind: "unknown", data: {} }));
+  assert.deepEqual(h.calls.slice(1), [["find", { count: 4, active: 2, final: true }], ["focus"], ["scroll", "down"], ["favicon", "icon", ["icon", "other"]], ["selection", selected], ["selection", null]]);
   assert.equal(pageOf(h.tab).fullscreen, true);
   assert.equal(pageOf(h.tab).status, "https://target.test");
 });
@@ -106,7 +112,7 @@ test("create snapshot watermark sorts bounded early controls and drops older or 
 test("same-URL document reset clears canonical security/theme/popup/status/crash/hung before new navigation", () => {
   const h = setup(); h.receiver.install(snapshot(1, [event("security", security)]));
   patchPage(h.tab, { crashed: { status: 1, code: 4, reason: "crashed" }, unresponsive: true, popups: [{ id: "old", url: "x", origin: "x" }], status: "old", themeColorSource: "meta" });
-  updateLive(h.tab, { themeColor: "old" }); setPopover(h.tab, "popups"); noteScroll(h.tab, { state: "down" });
+  updateLive(h.tab, { themeColor: "old" }); setPopover(h.tab, "popups"); noteScroll(h.tab, "down");
   h.props.onNavigationChange = (value) => {
     assert.equal(pageOf(h.tab).security, null); assert.equal(pageOf(h.tab).crashed, null);
     assert.equal(pageOf(h.tab).unresponsive, false); assert.equal(pageOf(h.tab).status, ""); assert.deepEqual(pageOf(h.tab).popups, []);
@@ -204,7 +210,7 @@ test("an aborted navigation keeps page state the restore snapshot does not repla
   const popup = { id: "kept", url: "https://popup.test", origin: "https://example.test" };
   const prompt = { state: "save", origin: "https://example.test", username: "u", passwordLength: 3, federation: "", usernames: [] };
   patchPage(h.tab, { popups: [popup], status: "https://hover.test", fullscreen: true, passwordPrompt: prompt, unresponsive: true });
-  setPopover(h.tab, "popups"); noteScroll(h.tab, { state: "down" });
+  setPopover(h.tab, "popups"); noteScroll(h.tab, "down");
   const kept = () => {
     assert.deepEqual(pageOf(h.tab).popups, [popup]); assert.equal(pageOf(h.tab).status, "https://hover.test");
     assert.equal(pageOf(h.tab).fullscreen, true); assert.deepEqual(pageOf(h.tab).passwordPrompt, prompt);

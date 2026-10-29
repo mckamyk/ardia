@@ -684,3 +684,12 @@ test("the sync authority owns the held-logins store only while it holds the leas
   assert.match(remote, /whileResettingHeldLogins\(\s*\(\) => engine\.enterRecoveryPhrase\(folder, text\),\s*\(result\) => begins && "ok" in result,\s*\(\) => engine\.stopSync\(\),?\s*\)/);
   assert.doesNotMatch(remote, /clearHeldLogins|\.clear\(\)/);
 });
+
+test("the shared sync scopes name this device with the Linux host's device name, never This Mac", async () => {
+  const host = fakeHost((method) => (method === "ArdiaSync.deviceName" ? "tux-desktop" : null));
+  globalThis.acTestNativeModules = { ...globalThis.acTestNativeModules, ArdiaSync: { deviceName: resolveHostModule(host, "ArdiaSync", "deviceName") } };
+  const { deviceName } = await import("../../browser/src/state/sync/scopeAdapters.ts");
+  assert.equal(await loadSyncDeviceName(host), "tux-desktop");
+  assert.equal(deviceName(), "tux-desktop");
+  assert.equal(syncDeviceName(), deviceName(), "the Linux sync engine and the shared scopes agree on the name");
+});

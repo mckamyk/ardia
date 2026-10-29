@@ -7,6 +7,8 @@ import { resolveHostModule } from "../hostModules";
 
 export type EventSubscription = { remove(): void };
 
+export const uuid = { v4: (): string => crypto.randomUUID() };
+
 type Listener = (event: unknown) => void;
 const events = createNativeEvents();
 

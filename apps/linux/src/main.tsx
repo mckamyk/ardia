@@ -7,13 +7,13 @@ import { emitCommand, menuShown, setWindowCloseDecider } from "@ardia/shell";
 import { WindowRoot } from "../../browser/src/App";
 import { startNativeSync } from "../../browser/src/state/app/nativeSync";
 import { startTabPages } from "../../browser/src/state/tabs/tabPages";
-import { sleepTab, startTabLifecycle, useLifecycle } from "../../browser/src/state/tabs/tabLifecycle";
+import { startTabLifecycle, useLifecycle } from "../../browser/src/state/tabs/tabLifecycle";
 import { useMedia } from "../../browser/src/state/media/media";
 import { useToolbarAutoHide } from "../../browser/src/state/windows/toolbarAutoHide";
 import { copyLinkToSelection, jumpToSelection, replaceInField, usePageSelection } from "../../browser/src/state/site/selection";
 import { webviews } from "../../browser/src/platform/webviews";
 import { startMemoryTrim } from "../../browser/src/state/tabs/memoryTrim";
-import { setNewTabPrewarm } from "../../browser/src/platform/preload";
+import { setNewTabPrewarm } from "../../browser/src/state/tabs/prewarm";
 import { setStoreBatching, useBrowser, type HydrateData } from "../../browser/src/state/browser/store";
 import { usePages } from "../../browser/src/state/tabs/pageState";
 import { useOnboarding } from "../../browser/src/state/onboarding/onboarding";
@@ -51,7 +51,7 @@ import { linuxLiveHooks } from "./liveHooks";
 import { connectCalendar, refreshCalendar, setCalendarHidden, useCalendar } from "../../browser/src/state/live/calendar";
 import { useMeetingAlert } from "../../browser/src/state/live/alerts";
 
-Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle, sleepTab }, sync: linuxSyncHooks, live: linuxLiveHooks, toolbar: useToolbarAutoHide, windowMenu: linuxWindowMenu, selection: { state: usePageSelection, jump: jumpToSelection, copyQuoteLink: copyLinkToSelection, replaceInField }, calendar: { state: useCalendar, connect: connectCalendar, refresh: refreshCalendar, hide: setCalendarHidden, alert: useMeetingAlert } } });
+Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle }, sync: linuxSyncHooks, live: linuxLiveHooks, toolbar: useToolbarAutoHide, windowMenu: linuxWindowMenu, selection: { state: usePageSelection, jump: jumpToSelection, copyQuoteLink: copyLinkToSelection, replaceInField }, calendar: { state: useCalendar, connect: connectCalendar, refresh: refreshCalendar, hide: setCalendarHidden, alert: useMeetingAlert } } });
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme, depart: (tabId) => ardiaHost && forgetDepartedPage(tabId, ardiaHost.bootstrap.windowId) });
 setWindowCloseDecider((windowId, reason, ask) => reason === "lastTab" ? decideLastTabClose(windowId, ask) : decideWindowClose(windowId, ask));
 

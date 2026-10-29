@@ -18,7 +18,7 @@ export const LINUX_WORDING: readonly Wording[] = [
     replacements: [[`<SectionLabel title="Found on this Mac" />`, `<SectionLabel title="Found on this computer" />`]],
   },
   {
-    file: "components/onboarding/LayoutSteps.tsx",
+    file: "components/onboarding/LookStep.tsx",
     replacements: [[`subtitle: "Light by day, dark by night, like your Mac"`, `subtitle: "Light or dark, following your desktop"`]],
   },
   {
@@ -49,7 +49,10 @@ export const LINUX_WORDING: readonly Wording[] = [
   },
   {
     file: "components/settings/rows/privacyRows.ts",
-    replacements: [[`description: "Every field, and what never leaves this Mac."`, `description: "Every field, and what never leaves this computer."`]],
+    replacements: [
+      [`description: "Every field, and what never leaves this Mac."`, `description: "Every field, and what never leaves this computer."`],
+      [`title: "Zoom with ⌘ and the mouse wheel"`, `title: "Zoom with Ctrl and the mouse wheel"`],
+    ],
   },
   {
     file: "state/telemetry/copy.ts",

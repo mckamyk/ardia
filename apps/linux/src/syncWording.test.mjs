@@ -20,10 +20,11 @@ test("the shared Sync pane and its sheets read as Linux, with no Mac, iCloud, Fi
   assert.match(pane, /Syncthing, Nextcloud or Dropbox/);
   assert.match(pane, /your devices meet in the sync folder/);
   assert.match(pane, /title: "Open Sync Folder"/);
-  assert.match(pane, /title="Add to This Computer"/);
   assert.match(pane, /<Button title="Choose…" onPress=\{\(\) => void chooseSyncFolder\(\)\} \/>\n {10}<\/Row>/);
   assert.doesNotMatch(pane, /Linking\.openURL/);
   const sheets = reworded("components/settings/panes/SyncSheets.tsx");
+  assert.match(sheets, /title="Add to This Computer"/);
+  assert.match(sheets, /This Computer Is Syncing/);
   assert.match(sheets, /system keyring/);
   assert.match(sheets, /your phone’s camera/);
   assert.match(sheets, /On your other device, open Ardia › Settings › Sync/);

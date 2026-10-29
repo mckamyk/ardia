@@ -58,7 +58,6 @@ function moduleMap(type) {
 }
 
 const REQUIRED = moduleMap("ShellNativeModules");
-const OPTIONAL = moduleMap("ShellOptionalNativeModules");
 const linuxExposes = (module) => advertised.some((capability) => capability === module || capability.startsWith(`${module}.`));
 
 const FORMERLY_TRACKED_IN_305 = [
@@ -93,7 +92,7 @@ const SHIM_SOURCES = ["./shims/shell.tsx", "./shims/shellBase.tsx", "./shortcuts
 const fromShim = (method) => new RegExp(`export (?:const|function|async function) ${method}\\b|export \\{[^}]*\\b${method}\\b[^}]*\\}|hostShellLocals[^\\n]*\\b${method}\\b|method === "${method}"`).test(SHIM_SOURCES);
 const nativelyImplemented = (method) => nativeHost.includes(`method == "ArdiaShell.${method}"`);
 
-function audit(modules = [...REQUIRED, ...OPTIONAL.filter(({ module }) => linuxExposes(module))]) {
+function audit(modules = REQUIRED) {
   const host = linuxHost();
   const missing = [];
   const unchecked = [];
@@ -108,13 +107,12 @@ function audit(modules = [...REQUIRED, ...OPTIONAL.filter(({ module }) => linuxE
   return { missing, unchecked };
 }
 
-test("the audited modules are read from packages/shell's native module map, optional ones included", () => {
+test("the audited modules are read from packages/shell's native module map", () => {
   assert.deepEqual(REQUIRED.map(({ module }) => module).filter((module) => ["ArdiaShell", "ArdiaApp", "ArdiaSystem", "ArdiaGlassEffect"].includes(module)), ["ArdiaShell", "ArdiaApp", "ArdiaSystem", "ArdiaGlassEffect"]);
-  assert.deepEqual(OPTIONAL.map(({ module }) => module), ["ArdiaCli", "ArdiaUserScripts"]);
+  for (const module of ["ArdiaCli", "ArdiaUserScripts"]) assert.ok(REQUIRED.some((found) => found.module === module), `${module} is a required module`);
   assert.deepEqual(REQUIRED.find(({ module }) => module === "ArdiaGlassEffect").methods, ["isLiquidGlass"]);
   const app = REQUIRED.find(({ module }) => module === "ArdiaApp").methods;
   for (const method of ["updaterState", "isInDock", "devCrash"]) assert.ok(app.includes(method), method);
-  for (const { module } of OPTIONAL) assert.equal(linuxExposes(module), false, `${module} is advertised, so its methods are audited`);
 });
 
 test("every shared native method resolves to a callable on Linux and reaches a Linux adapter, an advertised or routed native method, or the explicit allow-to-reject list", () => {
@@ -156,6 +154,18 @@ test("the Mac-only methods of #305 answer on Linux with a truthful value or ERR_
   }
 });
 
+test("the ardia command and the user-scripts folder answer on Linux as the modules were absent before they became required", async () => {
+  const host = linuxHost();
+  assert.equal(linuxExposes("ArdiaCli"), false);
+  assert.equal(linuxExposes("ArdiaUserScripts"), false);
+  assert.equal(resolveHostModule(host, "ArdiaCli", "installedVersion")(), null);
+  assert.equal((await resolveHostModule(host, "ArdiaCli", "install")().catch((error) => error)).code, "ERR_UNAVAILABLE");
+  assert.equal(resolveHostModule(host, "ArdiaUserScripts", "watch")(true), undefined);
+  assert.deepEqual(await resolveHostModule(host, "ArdiaUserScripts", "read")(), { state: "empty" });
+  assert.equal(await resolveHostModule(host, "ArdiaUserScripts", "readStatus")(), null);
+  assert.equal(await resolveHostModule(host, "ArdiaUserScripts", "writeStatus")("{}"), undefined);
+});
+
 test("an engine that advertises one of those methods is called instead of the Linux answer", async () => {
   const host = linuxHost();
   host.bootstrap.capabilities.push("ArdiaApp.postNotification");
@@ -169,6 +179,15 @@ test("every ArdiaShell method resolves to its Linux fallback while the native ho
   for (const name of ["watchLeftEdge", "setDragEscapeCapture", "saveKeyResponder", "raiseView", "animateWindowClose", "dragPreviewBegin"]) {
     assert.equal(resolveHostModule(olderEngine(`ArdiaShell.${name}`), "ArdiaShell", name), linuxShellMethod(name), name);
   }
+});
+
+test("reading the clipboard answers empty text on Linux until the native host advertises ArdiaShell.readText", async () => {
+  assert.equal(advertised.includes("ArdiaShell.readText"), false);
+  assert.equal(await resolveHostModule(linuxHost(), "ArdiaShell", "readText")(), "");
+  const host = linuxHost();
+  host.bootstrap.capabilities.push("ArdiaShell.readText");
+  host.invoke = async (method) => (method === "ArdiaShell.readText" ? "copied" : null);
+  assert.equal(await resolveHostModule(host, "ArdiaShell", "readText")(), "copied");
 });
 
 test("the native host captures a tab drag's Escape for every window, whatever has keyboard focus", async () => {

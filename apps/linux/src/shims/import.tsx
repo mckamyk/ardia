@@ -1,3 +1,4 @@
+import { ArdiaError } from "@ardia/core";
 import * as real from "@ardia-real/import";
 import { ardiaHost } from "../host";
 import { createHostImport, pendingPasswords } from "../hostImport";
@@ -6,7 +7,7 @@ import { setImportPasswordSink } from "../importApply";
 export * from "@ardia-real/import";
 export { pendingPasswords };
 
-const linux = ardiaHost ? createHostImport(ardiaHost, real.ImportError) : null;
+const linux = ardiaHost ? createHostImport(ardiaHost, ArdiaError) : null;
 if (linux) setImportPasswordSink({ pending: pendingPasswords, write: linux.writePasswords, discard: linux.discardPasswords });
 
 export const listBrowsers: typeof real.listBrowsers = linux ? linux.listBrowsers : real.listBrowsers;
@@ -27,6 +28,6 @@ export const chooseImportFile: typeof real.chooseImportFile = linux ? linux.choo
 export const readDiaTabs: typeof real.readDiaTabs = linux ? linux.readDiaTabs : real.readDiaTabs;
 
 export const writeImportedPasswords = (token: string, profile: string) =>
-  linux ? linux.writePasswords(token, profile) : Promise.reject(new real.ImportError("unsupported", "Password import needs the Linux host"));
+  linux ? linux.writePasswords(token, profile) : Promise.reject(new ArdiaError("unsupported", "Password import needs the Linux host"));
 
 export const discardImportedPasswords = (token: string) => linux?.discardPasswords(token);

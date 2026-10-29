@@ -30,7 +30,7 @@ test("production graph uses current Linux adapters and one canonical shared stat
   const singletons = [
     `${browser}state/browser/store.ts`,
     `${browser}state/settings/settingsWindows.ts`,
-    `${browser}platform/preload.ts`,
+    `${browser}state/tabs/prewarm.ts`,
     `${linux}settingsWindows.ts`,
     `${linux}menus.tsx`,
     `${linux}host.ts`,
@@ -92,6 +92,13 @@ test("production graph uses current Linux adapters and one canonical shared stat
   assert.deepEqual(ids.filter((id) => id.split("?")[0] === `${linux}LinuxUnlockStep.tsx`), [`${linux}LinuxUnlockStep.tsx`]);
   assert.deepEqual(graph.get(`${linux}LinuxUnlockStep.tsx`)?.importers, [`${browser}components/import/ImportWindow.tsx`]);
 
+  const syncDevice = [
+    [`${browser}state/sync/scopeAdapters.ts`, `${browser}platform/sync.ts`],
+    [`${browser}platform/sync.ts`, `${linux}shims/sync.tsx`],
+    [`${repo}packages/sync/src/native.ts`, `${linux}shims/expo-modules-core.ts`],
+  ];
+  for (const [importer, imported] of syncDevice) assert.ok(graph.get(importer)?.importedIds.includes(imported), `the sync device name reaches the Linux host: ${importer} imports ${imported}`);
+
   const coreSuggestFetcher = `${repo}packages/core/src/suggestFetcher.ts`;
   assert.deepEqual(graph.get(coreSuggestFetcher)?.importers, [`${linux}suggestFetcher.ts`]);
   assert.ok(graph.get(`${linux}suggestFetcher.ts`).importedIds.includes(`${linux}hostSuggestions.ts`));
@@ -138,5 +145,5 @@ test("production graph uses current Linux adapters and one canonical shared stat
   const chunks = outputs.flatMap((output) => output.output).filter((entry) => entry.type === "chunk");
   for (const id of singletons) assert.equal(chunks.filter((chunk) => id in chunk.modules).length, 1, id);
   assert.ok(graph.get(`${linux}main.tsx`).importedIds.includes(`${browser}state/browser/store.ts`));
-  assert.ok(graph.get(`${linux}main.tsx`).importedIds.includes(`${browser}platform/preload.ts`));
+  assert.ok(graph.get(`${linux}main.tsx`).importedIds.includes(`${browser}state/tabs/prewarm.ts`));
 });

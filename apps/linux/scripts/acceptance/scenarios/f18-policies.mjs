@@ -53,8 +53,8 @@ export default {
     await t.check("an idle background tab reports clean input and sleeps", async () => {
       const unsaved = await viewCall(shell, first, "unsavedInput()");
       if (unsaved !== false) throw new Error(`unsavedInput returned ${JSON.stringify(unsaved)}`);
-      const slept = await shell.eval(`ardiaLinux.lifecycle.sleepTab(${js(first)})`);
-      if (slept !== true) throw new Error("sleepTab refused an idle background tab");
+      const slept = await viewCall(shell, first, "discard()");
+      if (slept !== "discarded") throw new Error(`discarding an idle background tab returned ${slept}`);
       await until(() => discarded(shell, first), { timeout: 8000, label: "the shared sleeping state" });
       const again = await viewCall(shell, first, "discard()");
       if (again !== "already") throw new Error(`a second discard returned ${again}`);
@@ -78,11 +78,10 @@ export default {
       await page.send("Input.insertText", { text: "unsaved draft" });
       await until(async () => (await viewCall(shell, form, "unsavedInput()")) === true, { timeout: 8000, label: "native unsaved input" });
       await shell.state(`s.activate(${js(visible)}); return true;`);
-      const slept = await shell.eval(`ardiaLinux.lifecycle.sleepTab(${js(form)})`);
       const discard = await viewCall(shell, form, "discard()");
       const frozen = await viewCall(shell, form, "setFrozen(true)");
-      if (slept !== false || discard !== "refused" || frozen !== false) throw new Error(`slept=${slept} discard=${discard} frozen=${frozen}`);
-      return { slept, discard, frozen };
+      if (discard !== "refused" || frozen !== false) throw new Error(`discard=${discard} frozen=${frozen}`);
+      return { discard, frozen };
     });
     await t.check("an audible background tab is protected and stays playing", async () => {
       const mediaUrl = url.media(`${run}-tone`);

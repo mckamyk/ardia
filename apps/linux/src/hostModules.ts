@@ -18,6 +18,8 @@ const synchronousDefaults: Record<string, Record<string, unknown>> = {
 
 const synchronousMethods: Record<string, Record<string, unknown>> = {
   ArdiaGlassEffect: { isLiquidGlass: false },
+  ArdiaCli: { installedVersion: null },
+  ArdiaUserScripts: { watch: undefined },
 };
 
 const nativeFallthroughs = new WeakSet<object>();

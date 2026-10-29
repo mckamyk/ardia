@@ -4,8 +4,6 @@ import { test } from "node:test";
 import { HostPageEvents } from "./hostPageEvents.ts";
 import { resetHostPage } from "./hostPageLifecycle.ts";
 import { CLOSE_DOCUMENT_PICTURE_IN_PICTURE, PICTURE_IN_PICTURE_STATE, UNSAVED_WORK, hostPageScript } from "./hostPageScripts.ts";
-import { hasUnsavedInput, keepAliveReason, shownTabIds } from "./tabKeepAlive.ts";
-import * as sharedKeepAlive from "../../browser/src/state/tabs/tabKeepAlive.ts";
 import { startLinuxTabPolicies, watchInputIdle } from "./hostPolicies.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { pageOf, patchPage } from "../../browser/src/state/tabs/pageState.ts";
@@ -57,14 +55,13 @@ test("snapshot media state reaches the shared audio badge, player, capture and p
   assert.deepEqual(useMedia.getState().sessions[h.tab]?.actions, ["play", "pause", "nexttrack"]);
   assert.deepEqual(pageOf(h.tab).mediaAccess, { camera: true, microphone: false, screen: false });
   assert.equal(useMedia.getState().pipOpen[h.tab], "video");
-  assert.equal(keepAliveReason(useBrowser.getState(), h.tab), "playing audio");
   h.send(message(2, "media", { playing: false, muted: true }));
   h.send(message(3, "nowPlaying", { state: null }));
   h.send(message(4, "pictureInPicture", { kind: "video", active: false }));
   assert.equal(useBrowser.getState().live[h.tab]?.playingAudio, false);
   assert.equal(useMedia.getState().sessions[h.tab], undefined);
   assert.equal(useMedia.getState().pipOpen[h.tab], undefined);
-  assert.equal(keepAliveReason(useBrowser.getState(), h.tab), "capturing");
+  assert.deepEqual(pageOf(h.tab).mediaAccess, { camera: true, microphone: false, screen: false });
 });
 
 test("a playing video outside the media session offers the video controls but no player", () => {
@@ -127,21 +124,6 @@ test("known shared page scripts map to native commands and unknown scripts stay 
   const webView = source("./shims/web/HostWebView.tsx");
   assert.ok(webView.indexOf("hostPageScript(property, args)") < webView.indexOf("current.command(property, args)"));
   assert.ok(webView.includes("script.map ? current.command(script.command, script.args).then(script.map, () => (script.failed ? script.failed() : script.map!(null)))"), "a mapped page script treats a refused command as unknown unless it has its own failure handler");
-});
-
-test("the unsaved-input adapter asks the native host and treats anything else as unknown", async () => {
-  assert.equal(keepAliveReason, sharedKeepAlive.keepAliveReason);
-  assert.equal(shownTabIds, sharedKeepAlive.shownTabIds);
-  assert.equal(await hasUnsavedInput({ unsavedInput: async () => true }), true);
-  assert.equal(await hasUnsavedInput({ unsavedInput: async () => false }), false);
-  assert.equal(await hasUnsavedInput({ unsavedInput: async () => null }), null);
-  assert.equal(await hasUnsavedInput({ unsavedInput: async () => "false" }), null);
-  assert.equal(await hasUnsavedInput({ unsavedInput: async () => { throw new Error("stale"); } }), null);
-  assert.equal(await hasUnsavedInput({ unsavedInput: () => { throw new Error("sync"); } }), null);
-  assert.equal(await hasUnsavedInput({}), null);
-  assert.equal(await hasUnsavedInput({ unsavedInput: () => new Promise(() => {}) }, 10), null);
-  const vite = source("../vite.config.ts");
-  assert.match(vite, /\[here\("\.\.\/browser\/src\/state\/tabs\/tabKeepAlive\.ts"\), here\("\.\/src\/tabKeepAlive\.ts"\)\]/);
 });
 
 test("input idle tracks shell input and the policies start once with one inputIdleSeconds provider", () => {

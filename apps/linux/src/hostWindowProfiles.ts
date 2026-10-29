@@ -103,7 +103,7 @@ export function withPrivateWindow(host: ArdiaHost, session: HydrateData): Hydrat
   const { windowId, pageProfile, privateWindow } = host.bootstrap;
   if (!pageProfile || !isIncognitoProfile(pageProfile)) return undefined;
   const w = privateWindow?.window;
-  if (!w || w.id !== windowId || !w.incognito || !isIncognitoProfile(w.profileId) || engineProfile(w.profileId) !== pageProfile) {
+  if (!w || w.id !== windowId || !w.incognito || !isIncognitoProfile(w.profileId) || engineProfile({ profiles: session.profiles ?? {} }, w.profileId) !== pageProfile) {
     throw new Error("The private window state is unavailable");
   }
   const tabs = Object.fromEntries(Object.entries(privateWindow.tabs ?? {})
@@ -120,16 +120,16 @@ export function withPrivateWindow(host: ArdiaHost, session: HydrateData): Hydrat
 }
 
 const hostsOtherWindows = (w: BrowserWindow | undefined) => !!w && !w.incognito && w.kind !== "small";
-const crossesEngine = (windowProfile: string, profileId: string) => engineProfile(windowProfile) !== engineProfile(profileId);
+const crossesEngine = (s: Pick<BrowserState, "profiles">, windowProfile: string, profileId: string) => engineProfile(s, windowProfile) !== engineProfile(s, profileId);
 
 export function pagesInPlace(s: Pick<BrowserState, "windows" | "profiles">, windowId: string, profileId: string) {
   const w = s.windows[windowId];
-  return !hostsOtherWindows(w) || !s.profiles[profileId] || !crossesEngine(w!.profileId, profileId);
+  return !hostsOtherWindows(w) || !s.profiles[profileId] || !crossesEngine(s, w!.profileId, profileId);
 }
 
-export function profileWindowFor(s: Pick<BrowserState, "windows" | "windowOrder" | "ui">, profileId: string): string | undefined {
-  const engine = engineProfile(profileId);
-  return [...s.ui.focusOrder, ...s.windowOrder].find((id) => hostsOtherWindows(s.windows[id]) && engineProfile(s.windows[id]!.profileId) === engine);
+export function profileWindowFor(s: Pick<BrowserState, "windows" | "windowOrder" | "ui" | "profiles">, profileId: string): string | undefined {
+  const engine = engineProfile(s, profileId);
+  return [...s.ui.focusOrder, ...s.windowOrder].find((id) => hostsOtherWindows(s.windows[id]) && engineProfile(s, s.windows[id]!.profileId) === engine);
 }
 
 export function installProfileWindows(store: ProfileStore, focus: (windowId: string) => void, opened: (windowId: string) => Promise<boolean> = windowOpened) {
@@ -154,7 +154,7 @@ export function installProfileWindows(store: ProfileStore, focus: (windowId: str
       const s = store.getState();
       const tab = s.tabs[tabId];
       const w = tab && s.windows[tab.windowId];
-      if (!tab || !hostsOtherWindows(w) || !s.profiles[profileId] || !crossesEngine(w!.profileId, profileId)) return moveTabToProfile(tabId, profileId);
+      if (!tab || !hostsOtherWindows(w) || !s.profiles[profileId] || !crossesEngine(s, w!.profileId, profileId)) return moveTabToProfile(tabId, profileId);
       const url = tab.url ? { url: tab.url } : {};
       const target = profileWindowFor(s, profileId);
       if (target) {

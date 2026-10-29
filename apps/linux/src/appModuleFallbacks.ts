@@ -37,6 +37,8 @@ const MODULE_FALLBACKS: Record<string, Record<string, Fallback>> = {
   ArdiaInlineCompletion: { complete: refuse("Inline completion") },
   ArdiaDockSelection: { iconTheme: refuse("Icon themes") },
   ArdiaSystem: { menuShortcuts: refuse("The macOS menu bar"), recordShortcut: refuse("The native shortcut recorder"), cancelRecording: refuse("The native shortcut recorder") },
+  ArdiaCli: { install: refuse("The ardia command") },
+  ArdiaUserScripts: { read: answer({ state: "empty" }), readStatus: answer(null), writeStatus: answer(undefined) },
 };
 
 const DEVELOPER_MODULES = new Set(["ArdiaApp", "ArdiaMagnifyArea", "ArdiaFileDrop"]);

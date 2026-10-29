@@ -12,7 +12,7 @@ import { offerDefaultBrowserAgain } from "../../browser/src/state/onboarding/def
 import { openVideoTour, startToolTour, videoTourUrl } from "../../browser/src/state/onboarding/tour";
 import { trackAppVersion } from "../../browser/src/state/releaseNotes/releaseNotes";
 import { openReleaseNotesAfterUpdate, openReleaseNotesPage } from "../../browser/src/state/releaseNotes/releaseNotesPage";
-import { showToast } from "../../browser/src/state/splits/actions";
+import { showToast } from "../../browser/src/state/app/toasts";
 import { useBrowser } from "../../browser/src/state/browser/store";
 import type { LinuxCapabilities } from "./hostCapabilities.ts";
 import { ardiaHost, hostSupports, invokeHost, type ArdiaHost } from "./host.ts";

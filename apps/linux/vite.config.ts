@@ -29,7 +29,6 @@ const replacements = new Map([
   [here("../browser/src/components/settings/panes/Autofill.tsx"), here("./src/LinuxAutofillPane.tsx")],
   [here("../browser/src/state/import/apply.ts"), here("./src/importApply.ts")],
   [here("../browser/src/components/import/steps/UnlockStep.tsx"), here("./src/LinuxUnlockStep.tsx")],
-  [here("../browser/src/state/tabs/tabKeepAlive.ts"), here("./src/tabKeepAlive.ts")],
   [here("../browser/src/state/sync/engine.ts"), here("./src/syncEngine.ts")],
   [here("../browser/src/state/extensions/store.ts"), here("./src/extensionsStore.ts")],
   [here("../browser/src/state/live/sources.ts"), here("./src/liveSources.ts")],
@@ -43,7 +42,7 @@ const importedPasswordSave = {
 const tabLifecycle = here("../browser/src/state/tabs/tabLifecycle.ts");
 const importerReplacements = new Map([
   [`${here("../browser/src/components/sidebar/Sidebar.tsx")}\0${here("../browser/src/components/window/SidebarDock.tsx")}`, here("./src/SidebarPeekMark.tsx")],
-  [`${here("../browser/src/state/splits/actions.ts")}\0${tabLifecycle}`, here("./src/policyToasts.ts")],
+  [`${here("../browser/src/state/app/toasts.ts")}\0${tabLifecycle}`, here("./src/policyToasts.ts")],
   [`${here("../browser/src/platform/performance.ts")}\0${tabLifecycle}`, here("./src/policyPerformance.ts")],
   [`${here("../browser/src/state/site/webNotifications.ts")}\0${here("../browser/src/state/site/permissions.ts")}`, here("./src/notificationPermission.ts")],
   [`${lazyComponentId(here("../browser/src/components/extensions/ExtensionOverlays.tsx"))}\0${here("../browser/src/components/settings/panes/Extensions.tsx")}`, here("./src/SettingsInstallDialog.tsx")],
