@@ -11,34 +11,7 @@
  namespace content {
  
  namespace {
-@@ -82,10 +86,16 @@
-   void set_muted(bool muted) { muted_ = muted; }
- 
-   bool is_playing() const { return is_playing_; }
-+#if BUILDFLAG(IS_LINUX)
-+  bool has_played() const { return has_played_; }
-+#endif
- 
-   void SetIsPlaying() {
-     CHECK(!is_playing_, base::NotFatalUntil::M160);
-     is_playing_ = true;
-+#if BUILDFLAG(IS_LINUX)
-+    has_played_ = true;
-+#endif
- 
-     NotifyPlayerStarted();
-   }
-@@ -143,6 +153,9 @@
-   bool has_video_ = false;
-   bool muted_ = false;
-   bool is_playing_ = false;
-+#if BUILDFLAG(IS_LINUX)
-+  bool has_played_ = false;
-+#endif
- };
- 
- MediaWebContentsObserver::MediaWebContentsObserver(
-@@ -910,4 +923,79 @@
+@@ -910,4 +914,53 @@
  
  DOCUMENT_USER_DATA_KEY_IMPL(AudibilityBypassTracker);
  
@@ -58,20 +31,6 @@
 +  return candidates;
 +}
 +
-+std::vector<std::pair<MediaPlayerId, bool>>
-+MediaWebContentsObserver::ArdiaLinuxPlayedVideoPlayers(
-+    GlobalRenderFrameHostId frame) {
-+  std::vector<std::pair<MediaPlayerId, bool>> players;
-+  for (const auto& [id, info] : player_info_map_) {
-+    if (id.frame_routing_id != frame || !info->has_video() ||
-+        !info->has_played()) {
-+      continue;
-+    }
-+    players.emplace_back(id, info->is_playing());
-+  }
-+  return players;
-+}
-+
 +bool MediaWebContentsObserver::ArdiaLinuxRequestPictureInPicture(
 +    const MediaPlayerId& id) {
 +  const auto it = media_player_remotes_.find(id);
@@ -80,18 +39,6 @@
 +  }
 +  it->second->RequestEnterPictureInPicture(std::nullopt);
 +  return true;
-+}
-+
-+std::vector<std::pair<MediaPlayerId, bool>> ArdiaLinuxPlayedVideoPlayers(
-+    WebContents* contents) {
-+  auto* impl = static_cast<WebContentsImpl*>(contents);
-+  MediaWebContentsObserver* observer =
-+      impl ? impl->media_web_contents_observer() : nullptr;
-+  if (!observer) {
-+    return {};
-+  }
-+  return observer->ArdiaLinuxPlayedVideoPlayers(
-+      contents->GetPrimaryMainFrame()->GetGlobalId());
 +}
 +
 +std::vector<std::pair<MediaPlayerId, bool>>
@@ -129,15 +76,13 @@
  
  #include "base/containers/flat_map.h"
  #include "base/containers/flat_set.h"
-@@ -155,6 +157,14 @@
+@@ -155,6 +157,12 @@
    // Returns whether or not the given player id is active.
    bool IsPlayerActive(const MediaPlayerId& player_id) const;
  
 +#if BUILDFLAG(IS_LINUX)
 +  std::vector<std::pair<MediaPlayerId, bool>>
 +  ArdiaLinuxPictureInPictureCandidates(GlobalRenderFrameHostId frame);
-+  std::vector<std::pair<MediaPlayerId, bool>> ArdiaLinuxPlayedVideoPlayers(
-+      GlobalRenderFrameHostId frame);
 +  bool ArdiaLinuxRequestPictureInPicture(const MediaPlayerId& id);
 +#endif
 +

@@ -9,6 +9,7 @@
 #include "ardia/linux/ac_linux_page_messages.h"
 #include "ardia/linux/ac_linux_theme.h"
 #include "ardia/linux/mojom/page.mojom.h"
+#include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/functional/function_ref.h"
 #include "base/memory/weak_ptr.h"
@@ -41,6 +42,18 @@ class LinuxPageDocumentBudget : public content::DocumentUserData<LinuxPageDocume
   DOCUMENT_USER_DATA_KEY_DECL();
 };
 
+class LinuxPageDocumentVideo : public content::DocumentUserData<LinuxPageDocumentVideo> {
+ public:
+  ~LinuxPageDocumentVideo() override;
+  bool has_video = false;
+  bool playing = false;
+
+ private:
+  explicit LinuxPageDocumentVideo(content::RenderFrameHost* frame);
+  friend class content::DocumentUserData<LinuxPageDocumentVideo>;
+  DOCUMENT_USER_DATA_KEY_DECL();
+};
+
 struct LinuxPageChannelHooks {
   base::RepeatingCallback<bool()> visible;
   base::RepeatingCallback<bool(std::string name, base::Value data)> emit;
@@ -62,6 +75,7 @@ class LinuxPageChannel : public content::WebContentsObserver,
   void PushOptions();
   void RefreshPageConfig();
   void Post(const std::string& kind, const std::string& json) override;
+  base::CallbackListSubscription AddPageVideoListener(base::RepeatingClosure listener);
   void Bind(content::RenderFrameHost* frame,
             mojo::PendingAssociatedReceiver<ardia::linux_page::mojom::PageHost> receiver);
 
@@ -71,6 +85,7 @@ class LinuxPageChannel : public content::WebContentsObserver,
   void Accept(content::RenderFrameHost& frame, LinuxPageMessage message);
   void Peek(content::RenderFrameHost& frame, const base::DictValue& data);
   void LinkDrop(const std::string& spec);
+  void NoteVideo(content::RenderFrameHost& frame, const base::Value& data);
   friend void NoteLinuxDragEnded(base::FunctionRef<bool(content::WebContents*)> in_window);
   void Call(content::RenderFrameHost* frame, const std::string& kind, const std::string& json);
   void Greet(content::RenderFrameHost& frame);
@@ -95,6 +110,7 @@ class LinuxPageChannel : public content::WebContentsObserver,
   base::Value selection_;
   content::WeakDocumentPtr message_document_;
   base::WeakPtr<LinuxPageDropTrack> drop_track_;
+  base::RepeatingClosureList page_video_listeners_;
   base::WeakPtrFactory<LinuxPageChannel> weak_factory_{this};
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
