@@ -9,7 +9,7 @@ import { hostPageScript } from "../../hostPageScripts";
 import { HostTab, type HostPageFactory, type HostTabEvent } from "../../hostTab";
 import { extensionViewsSupported } from "../../hostExtensionView";
 import { HostExtensionWebView } from "./HostExtensionWebView";
-import { hostOverlayBlocked, watchTabViewport } from "../../hostViewport";
+import { backdropCovers, hostOverlayBlocked, watchTabViewport, type TabViewport } from "../../hostViewport";
 import { menuShown } from "../../menus";
 import { withPopupDismissal } from "../../popupDismissal";
 
@@ -93,6 +93,7 @@ const HostTabWebView = forwardRef<WebViewHandle, WebViewProps>(function HostTabW
     let revision = 0;
     let last = "";
     let backdrop: Promise<boolean> | null = null;
+    let captured: NonNullable<TabViewport["occlusions"]> = [];
     let retryAfter = 0;
     const stop = watchTabViewport(node, () => {
       const p = latest.current;
@@ -107,7 +108,9 @@ const HostTabWebView = forwardRef<WebViewHandle, WebViewProps>(function HostTabW
       const mine = ++revision;
       void (async () => {
         if (viewport.visible && viewport.occlusions?.length) {
+          if (backdrop && !backdropCovers(captured, viewport.occlusions)) backdrop = null;
           if (!backdrop) {
+            captured = viewport.occlusions;
             const capture: Promise<boolean> = current.command<string | null>("captureViewport").then(async (data) => {
               if (!data) return false;
               const image = new Image();
