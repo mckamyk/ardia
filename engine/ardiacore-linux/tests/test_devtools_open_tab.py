@@ -30,6 +30,7 @@ def added(patch):
 
 PRELUDE = r'''
 #include <cassert>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
@@ -47,6 +48,7 @@ struct GURL {
 };
 struct Profile {};
 namespace content {
+using BrowserContext = Profile;
 struct OpenURLParams { GURL url; };
 struct WebContents {
   WebContents* OpenURL(const OpenURLParams& params, int) {
@@ -105,14 +107,16 @@ class ShellHostView {
   Profile* page_profile() const { return profile_; }
   TabBinding* PrivateLinkBinding() { return bindings_.empty() ? nullptr : bindings_.begin()->second.get(); }
   bool StripHolds(content::WebContents* contents) const { return strip.contains(contents); }
-  bool WindowActive() const { return active; }
+  void FocusWindow() { ++focused; }
   std::set<content::WebContents*> strip;
-  bool active = false;
+  uint64_t activation_ = 0;
+  int focused = 0;
   ARDIA_REPORT_METHOD
  private:
   Profile* profile_;
   std::map<int, std::unique_ptr<TabBinding>> bindings_;
 };
+ARDIA_WINDOW_CHOICE
 void (*g_ardia_linux_devtools_opened_tab)(content::WebContents*, content::WebContents*, const GURL&) = nullptr;
 void (*g_ardia_linux_devtools_open_url)(Profile*, const GURL&) = nullptr;
 Profile* profile_ = nullptr;
@@ -133,9 +137,12 @@ int main() {
   Profile regular, other;
   content::WebContents first_page, second_page, opened, popup, stray;
   for (auto* contents : {&first_page, &second_page, &opened, &popup, &stray}) contents->profile = &regular;
-  ShellHostView first(1, &regular), second(2, &regular);
+  ShellHostView first(1, &regular), second(2, &regular), idle(3, &regular);
   TabBinding* a = first.Bind(7, &first_page);
   TabBinding* b = second.Bind(9, &second_page);
+  first.activation_ = 5;
+  second.activation_ = 3;
+  idle.activation_ = 50;
   InstallHook();
   assert(g_ardia_linux_devtools_opened_tab && g_ardia_linux_devtools_open_url);
   second_page.result = &opened;
@@ -152,13 +159,13 @@ int main() {
   popup.result = &stray;
   OpenInNewTab(&popup, {"https://example.test/popup"});
   assert(a->reports.empty() && b->reports.size() == 2 && b->reports[1].opened == &stray);
-  assert(closed.empty() && fallbacks == 0);
+  assert(second.focused == 1 && first.focused == 0 && closed.empty() && fallbacks == 0);
 
   content::WebContents loose;
   loose.profile = &regular;
   popup.result = &loose;
   OpenInNewTab(&popup, {"https://example.test/loose"});
-  assert(a->reports.size() == 1 && a->reports[0].opened == &loose && closed.empty());
+  assert(a->reports.size() == 1 && a->reports[0].opened == &loose && first.focused == 1 && closed.empty());
 
   content::WebContents foreign;
   foreign.profile = &other;
@@ -166,21 +173,29 @@ int main() {
   OpenInNewTab(&popup, {"https://example.test/foreign"});
   assert(closed.size() == 1 && closed[0] == &foreign && a->reports.size() == 1 && b->reports.size() == 2);
 
+  ShellHostView shower(4, &other);
+  shower.Bind(11, &foreign);
+  foreign.result = nullptr;
+  popup.result = &foreign;
+  OpenInNewTab(&popup, {"https://example.test/shown"});
+  assert(closed.size() == 1);
+
   second_page.result = nullptr;
   profile_ = &regular;
-  second.active = true;
   OpenInNewTab(&second_page, {"https://example.test/background"});
-  assert(fallbacks == 0 && a->presented.empty() && b->presented.size() == 1);
-  assert(b->presented[0].first == "openWindow" && b->presented[0].second.text["url"] == "https://example.test/background");
-  assert(b->presented[0].second.text["disposition"] == "foreground" && !b->presented[0].second.text.contains("adoptId"));
+  assert(fallbacks == 0 && b->presented.empty() && a->presented.size() == 1 && first.focused == 2);
+  assert(a->presented[0].first == "openWindow" && a->presented[0].second.text["url"] == "https://example.test/background");
+  assert(a->presented[0].second.text["disposition"] == "foreground" && !a->presented[0].second.text.contains("adoptId"));
+  second.activation_ = 9;
   OpenInNewTab(nullptr, {"https://example.test/worker"});
-  assert(fallbacks == 0 && b->presented.size() == 2);
-  second.active = false;
-  OpenInNewTab(nullptr, {"https://example.test/inactive"});
-  assert(fallbacks == 0 && a->presented.size() == 1);
+  assert(fallbacks == 0 && b->presented.size() == 1 && second.focused == 2 && a->presented.size() == 1);
   profile_ = &other;
+  shower.activation_ = 1;
+  OpenInNewTab(nullptr, {"https://example.test/other"});
+  assert(fallbacks == 0 && a->presented.size() == 1 && b->presented.size() == 1 && shower.focused == 1);
+  profile_ = nullptr;
   OpenInNewTab(nullptr, {"https://example.test/refused"});
-  assert(fallbacks == 0 && a->presented.size() == 1 && b->presented.size() == 2);
+  assert(fallbacks == 0 && a->presented.size() == 1 && b->presented.size() == 1 && idle.focused == 0);
 
   assert(!first.ReportDevToolsOpenedTab(nullptr, &opened, {"https://example.test"}));
   return 0;
@@ -240,11 +255,15 @@ class DevToolsOpenTabTests(unittest.TestCase):
             self.skipTest('C++ compiler unavailable')
         self.assertIn('extern void (*g_ardia_linux_devtools_opened_tab)(content::WebContents*, content::WebContents*, const GURL&);', self.host)
         self.assertIn('extern void (*g_ardia_linux_devtools_open_url)(Profile*, const GURL&);', self.host)
+        self.assertIn('void FocusWindow() { ActivateNativeWindow(browser_, WindowFocus().Focus(id_)); }', self.host)
+        self.assertIn('if (active) activation_ = ++ActivationClock();', block(self.host, 'void ShellHostView::OnWidgetActivationChanged('))
         report = '\n'.join(block(self.host, signature) for signature in
-                           ['  bool ReportDevToolsOpenedTab(', '  bool AdoptDevToolsTab(', '  bool OpenDevToolsLink('])
+                           ['  bool ReportDevToolsOpenedTab(', '  bool ShowsDevToolsLinks(', '  void AdoptDevToolsTab(',
+                            '  void OpenDevToolsLink(', '  bool BindsTab(', '  uint64_t activation() const'])
+        choice = block(self.host, 'ShellHostView* DevToolsLinkWindow(')
         hook = self.host[self.host.index('  g_ardia_linux_devtools_opened_tab = '):]
         hook = hook[:hook.index('\n  };\n', hook.index('g_ardia_linux_devtools_open_url = ')) + len('\n  };\n')]
-        code = (PRELUDE.replace('ARDIA_REPORT_METHOD', report).replace('ARDIA_HOOK', hook)
+        code = (PRELUDE.replace('ARDIA_REPORT_METHOD', report).replace('ARDIA_HOOK', hook).replace('ARDIA_WINDOW_CHOICE', choice)
                 .replace('ARDIA_OPEN_IN_NEW_TAB', self.linux_open_block())) + MAIN
         with tempfile.TemporaryDirectory(prefix='ardia-devtools-open-tab-') as scratch:
             path = pathlib.Path(scratch)

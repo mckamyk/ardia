@@ -246,15 +246,18 @@ void LinuxPageMedia::RequestPictureInPicture(const base::ListValue& args, bool a
       break;
     case LinuxPictureInPictureRoute::kElement: {
       const auto candidates = contents ? content::ArdiaLinuxPictureInPictureCandidates(contents)
-                                       : std::vector<std::pair<content::MediaPlayerId, bool>>();
+                                       : std::vector<content::ArdiaLinuxPictureInPictureCandidate>();
       std::vector<LinuxPictureInPicturePlayer> players;
-      for (const auto& [id, playing] : candidates) {
-        const auto size = video_sizes_.find(id);
-        players.push_back({playing, size == video_sizes_.end() ? 0 : int64_t{size->second.width()} * size->second.height()});
+      for (const auto& candidate : candidates) {
+        const auto size = video_sizes_.find(candidate.id);
+        players.push_back({candidate.playing,
+                           size == video_sizes_.end() ? 0 : int64_t{size->second.width()} * size->second.height(),
+                           candidate.muted,
+                           candidate.id.frame_routing_id == contents->GetPrimaryMainFrame()->GetGlobalId()});
       }
       const auto chosen = ChooseLinuxPictureInPicturePlayer(players);
       if (!chosen) return std::move(done).Run(true, base::Value(false));
-      player = candidates[*chosen].first;
+      player = candidates[*chosen].id;
       break;
     }
   }

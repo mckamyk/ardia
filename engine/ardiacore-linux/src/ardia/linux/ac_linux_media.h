@@ -141,6 +141,8 @@ LinuxPictureInPictureRoute RouteLinuxPictureInPicture(bool open, bool activation
 struct LinuxPictureInPicturePlayer {
   bool playing = false;
   int64_t area = 0;
+  bool muted = false;
+  bool main_frame = true;
 };
 
 std::optional<size_t> ChooseLinuxPictureInPicturePlayer(const std::vector<LinuxPictureInPicturePlayer>& players);

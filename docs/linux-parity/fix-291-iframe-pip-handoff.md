@@ -33,3 +33,11 @@ macOS's Chromium element route only looks at the main frame, so there the iframe
 ## Needs the next Chromium build
 
 A page with a muted, looping video in a cross-site iframe: the tab offers Picture in Picture, and pressing it opens the iframe's video without activating either document. F15D's log has no `media_session_controller.cc:192` check failures.
+
+## Follow-up: which video the press opens
+
+With candidates across every frame, "playing first, then largest" chose an autoplaying muted ad in a third-party iframe over the article's paused main-frame video. Each candidate now carries `muted` (`ArdiaLinuxPictureInPictureCandidate {id, playing, muted}`; the patch adds a Linux `PlayerInfo::muted()`). `ChooseLinuxPictureInPicturePlayer` ranks unmuted first, then main frame, then playing, then size. This is close to macOS's heard, playing, main-frame order.
+
+`ArdiaLinuxRequestPictureInPicture` now checks the same eligibility as the candidate list (`ArdiaLinuxPictureInPictureEligible`: has video, a bound remote, PiP available, in the primary page) instead of relying on the caller.
+
+Tests: `test_media_policy` `pip-choice` (muted iframe ad vs paused main-frame video, unmuted iframe over muted main frame, main frame over iframe, playing breaks ties), `test_element_picture_in_picture` 5. clang `-fsyntax-only` of the patched `media_web_contents_observer.cc` and `media_session_controllers_manager.cc` with `browser.ninja`'s flags passes.

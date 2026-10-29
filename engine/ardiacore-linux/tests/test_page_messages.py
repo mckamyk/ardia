@@ -46,6 +46,9 @@ class PageMessageTests(unittest.TestCase):
     def test_payloads_are_rebuilt_from_validated_fields(self):
         self.run_case('normalization')
 
+    def test_now_playing_is_reduced_to_video_and_state_before_any_limit(self):
+        self.run_case('now-playing-reports')
+
     def test_flooding_is_rate_limited_and_muted_per_document(self):
         self.run_case('budget')
 

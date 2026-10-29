@@ -48,3 +48,17 @@ The shared page script, the shared browser and macOS are unchanged.
 ## Needs the next Chromium build
 
 F15D's outside-session check, plus by hand: remove a playing muted video from the DOM (the control goes away); go back to a video page restored from the back/forward cache (the control is there and reads playing).
+
+## Follow-up: oversized reports
+
+The page script records `lastNowPlaying` before it sends, so a report that never arrives isn't sent again: the frame's entry froze. Two things dropped reports:
+
+- the Linux page agent refused any message over 64 KiB, and a `nowPlaying` with a large `data:` artwork or a long title can be bigger;
+- the per-document budget is shared with scroll, selection and the other kinds, and refuses on bytes as well as count.
+
+Now:
+
+- The agent (`renderer/ac_linux_page_agent.cc`) takes a `nowPlaying` of up to 1280 KiB, the macOS limit (`ac_page_limits.h`). Before any other check it reduces it to `{hasVideo, playbackState}` (`LinuxNowPlayingReport`; `playbackState` is `playing`, `paused` or `none`), so the browser only sees about 40 bytes. The parse runs under a `TryCatch`.
+- `nowPlaying` has its own per-document budget (`LinuxPageDocumentBudget::now_playing`), so other kinds can't use it up. The script throttles reports to one per 100 ms, below the budget's 32 per second.
+
+Tests: `test_page_messages` 11 (new `now-playing-reports`), `test_page_videos` 5 (agent reduces before its size check; separate budget). Syntax check of `ac_linux_page_agent.cc` and `ac_linux_page_channel.cc` passes.
