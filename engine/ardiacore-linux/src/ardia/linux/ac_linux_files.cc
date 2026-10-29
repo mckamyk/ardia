@@ -13,6 +13,7 @@
 
 #include "ardia/linux/ac_linux_download_service.h"
 #include "ardia/linux/ac_linux_downloads.h"
+#include "ardia/linux/ac_linux_picker_slots.h"
 #include "base/base64.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
@@ -22,6 +23,7 @@
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/nix/xdg_util.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/process/kill.h"
@@ -40,6 +42,7 @@
 #include "chrome/browser/icon_manager.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "components/download/public/common/download_item.h"
 #include "components/dbus/thread_linux/dbus_thread_linux.h"
 #include "components/dbus/utils/call_method.h"
@@ -463,17 +466,19 @@ void Open(base::WeakPtr<LinuxShellWebView> shell, std::string path, Done done, b
       }, std::move(done)));
 }
 
-bool& FolderPickerOpen() {
-  static bool open = false;
-  return open;
+class DownloadFolderPicker;
+
+linux_files::PickerSlots<gfx::NativeWindow, DownloadFolderPicker>& FolderPickers() {
+  static base::NoDestructor<linux_files::PickerSlots<gfx::NativeWindow, DownloadFolderPicker>> slots;
+  return *slots;
 }
 
 class DownloadFolderPicker : public ui::SelectFileDialog::Listener {
  public:
   static void Start(gfx::NativeWindow window, const base::FilePath& current, const std::u16string& title, Done done) {
-    FolderPickerOpen() = true;
-    auto* picker = new DownloadFolderPicker(std::move(done));
-    picker->dialog_ = ui::SelectFileDialog::Create(picker, nullptr);
+    auto* picker = new DownloadFolderPicker(window, std::move(done));
+    FolderPickers().Hold(window, picker);
+    picker->dialog_ = ui::SelectFileDialog::Create(picker, std::make_unique<ChromeSelectFilePolicy>(nullptr));
     if (!picker->dialog_) {
       Done failed = std::move(picker->done_);
       picker->Finish();
@@ -481,6 +486,12 @@ class DownloadFolderPicker : public ui::SelectFileDialog::Listener {
     }
     picker->dialog_->SelectFile(ui::SelectFileDialog::SELECT_FOLDER, title, current,
                                 nullptr, 0, base::FilePath::StringType(), window);
+  }
+
+  bool Showing(gfx::NativeWindow window) const { return dialog_ && dialog_->IsRunning(window); }
+
+  void Abandon() {
+    FileSelectionCanceled();
   }
 
   void FileSelected(const ui::SelectedFileInfo& file, int) override {
@@ -505,33 +516,35 @@ class DownloadFolderPicker : public ui::SelectFileDialog::Listener {
   ~DownloadFolderPicker() override = default;
 
  private:
-  explicit DownloadFolderPicker(Done done) : done_(std::move(done)) {}
+  DownloadFolderPicker(gfx::NativeWindow window, Done done) : window_(window), done_(std::move(done)) {}
 
   void Finish() {
     if (finished_) return;
     finished_ = true;
-    FolderPickerOpen() = false;
+    FolderPickers().Release(window_, this);
     if (dialog_) dialog_->ListenerDestroyed();
     base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
   }
 
+  gfx::NativeWindow window_;
   Done done_;
   bool finished_ = false;
   scoped_refptr<ui::SelectFileDialog> dialog_;
 };
 
+class OpenFilesPicker;
 
-bool& FilesPickerOpen() {
-  static bool open = false;
-  return open;
+linux_files::PickerSlots<gfx::NativeWindow, OpenFilesPicker>& FilesPickers() {
+  static base::NoDestructor<linux_files::PickerSlots<gfx::NativeWindow, OpenFilesPicker>> slots;
+  return *slots;
 }
 
 class OpenFilesPicker : public ui::SelectFileDialog::Listener {
  public:
   static void Start(gfx::NativeWindow window, Done done) {
-    FilesPickerOpen() = true;
-    auto* picker = new OpenFilesPicker(std::move(done));
-    picker->dialog_ = ui::SelectFileDialog::Create(picker, nullptr);
+    auto* picker = new OpenFilesPicker(window, std::move(done));
+    FilesPickers().Hold(window, picker);
+    picker->dialog_ = ui::SelectFileDialog::Create(picker, std::make_unique<ChromeSelectFilePolicy>(nullptr));
     if (!picker->dialog_) {
       Done failed = std::move(picker->done_);
       picker->Finish();
@@ -541,6 +554,12 @@ class OpenFilesPicker : public ui::SelectFileDialog::Listener {
                                 nullptr, 0, base::FilePath::StringType(), window);
   }
 
+  bool Showing(gfx::NativeWindow window) const { return dialog_ && dialog_->IsRunning(window); }
+
+  void Abandon() {
+    FileSelectionCanceled();
+  }
+
   void FileSelected(const ui::SelectedFileInfo& file, int) override { Reply({file}); }
   void MultiFilesSelected(const std::vector<ui::SelectedFileInfo>& files) override { Reply(files); }
   void FileSelectionCanceled() override { Reply({}); }
@@ -548,7 +567,7 @@ class OpenFilesPicker : public ui::SelectFileDialog::Listener {
   ~OpenFilesPicker() override = default;
 
  private:
-  explicit OpenFilesPicker(Done done) : done_(std::move(done)) {}
+  OpenFilesPicker(gfx::NativeWindow window, Done done) : window_(window), done_(std::move(done)) {}
 
   void Reply(const std::vector<ui::SelectedFileInfo>& files) {
     Done done = std::move(done_);
@@ -561,11 +580,12 @@ class OpenFilesPicker : public ui::SelectFileDialog::Listener {
   void Finish() {
     if (finished_) return;
     finished_ = true;
-    FilesPickerOpen() = false;
+    FilesPickers().Release(window_, this);
     if (dialog_) dialog_->ListenerDestroyed();
     base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
   }
 
+  gfx::NativeWindow window_;
   Done done_;
   bool finished_ = false;
   scoped_refptr<ui::SelectFileDialog> dialog_;
@@ -585,7 +605,17 @@ void LinuxPickFolder(gfx::NativeWindow window, const base::ListValue& values, Do
     LOG(INFO) << "Ardia background instance: folder picker requested";
     return std::move(done).Run(true, base::Value());
   }
-  if (FolderPickerOpen()) return Fail(std::move(done), "ERR_FOLDER_PICKER_OPEN", "A folder dialog is already open");
+  if (!ChromeSelectFilePolicy::FileSelectDialogsAllowed())
+    return Fail(std::move(done), "ERR_FILE_CHOOSER_DISABLED", "File choosers are disabled by policy");
+  switch (FolderPickers().Admit(window, [](const DownloadFolderPicker* picker, gfx::NativeWindow owner) { return picker->Showing(owner); })) {
+    case linux_files::PickerAdmission::kAlreadyShowing:
+      return Fail(std::move(done), "ERR_FOLDER_PICKER_OPEN", "A folder dialog is already open in this window");
+    case linux_files::PickerAdmission::kReplaceStale:
+      FolderPickers().Held(window)->Abandon();
+      break;
+    case linux_files::PickerAdmission::kOpen:
+      break;
+  }
   const std::u16string title = !prompt.empty() && prompt.size() <= 200 && base::IsStringUTF8(prompt)
                                    ? base::UTF8ToUTF16(prompt) : std::u16string(u"Choose a Download Folder");
   DownloadFolderPicker::Start(window, downloads::ValidLocalPath(current) ? base::FilePath(current) : base::FilePath(),
@@ -599,7 +629,17 @@ void LinuxPickFiles(gfx::NativeWindow window, const base::ListValue& values, Don
     LOG(INFO) << "Ardia background instance: file picker requested";
     return std::move(done).Run(true, base::Value(base::ListValue()));
   }
-  if (FilesPickerOpen()) return Fail(std::move(done), "ERR_FILE_PICKER_OPEN", "A file dialog is already open");
+  if (!ChromeSelectFilePolicy::FileSelectDialogsAllowed())
+    return Fail(std::move(done), "ERR_FILE_CHOOSER_DISABLED", "File choosers are disabled by policy");
+  switch (FilesPickers().Admit(window, [](const OpenFilesPicker* picker, gfx::NativeWindow owner) { return picker->Showing(owner); })) {
+    case linux_files::PickerAdmission::kAlreadyShowing:
+      return Fail(std::move(done), "ERR_FILE_PICKER_OPEN", "A file dialog is already open in this window");
+    case linux_files::PickerAdmission::kReplaceStale:
+      FilesPickers().Held(window)->Abandon();
+      break;
+    case linux_files::PickerAdmission::kOpen:
+      break;
+  }
   OpenFilesPicker::Start(window, std::move(done));
 }
 
