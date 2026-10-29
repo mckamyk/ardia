@@ -122,6 +122,7 @@ class ShellHostView {
   uint64_t renderer_generation_ = 2;
   int id_ = 41;
   std::map<int, std::unique_ptr<TabBinding>> bindings_;
+  std::map<int, bool> devtools_had_focus_;
   std::vector<Sent> sent;
   content::WebContents* shell() const { return shell_contents; }
   views::Widget* GetWidget() const { return widget; }
