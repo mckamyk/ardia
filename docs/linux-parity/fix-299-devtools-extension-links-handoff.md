@@ -29,3 +29,13 @@ Issue: [#299](https://github.com/mckamyk/ardia/issues/299), a follow-up to #275 
 ## Needs the next Chromium build
 
 Load an unpacked extension; from DevTools on its popup, its background page and its service worker, right-click a link (or an `href` in Elements) › Open in new tab: each opens as an Ardia tab in a window of the extension's profile, and no hidden tab is left (`chrome.tabs.query({})` lists only Ardia's tabs).
+
+## Follow-up: which window, and focus
+
+The "active window first" pass rarely matched, because the user is in the DevTools window. Links went to the first window of the profile by id, and that window wasn't raised.
+
+- `DevToolsLinkWindow` picks among windows of the profile with a live page. It takes the window whose strip holds the tab when there is one, otherwise the most recently activated window (`ShellHostView::activation_`, from a counter bumped in `OnWidgetActivationChanged`).
+- The chosen window is focused through `WindowFocus().Focus`, as `ArdiaShell.focusWindow` does, so background instances still only show inactive.
+- A tab that an Ardia window already shows as a tab is neither adopted again nor closed.
+
+Tests: `test_devtools_open_tab` 4; the compiled fake now covers the holder over a more recent window, the most recent window, a window without a live page being skipped, focus counts, and a shown tab of another profile left open. Syntax check of `ac_linux_host.cc` passes.

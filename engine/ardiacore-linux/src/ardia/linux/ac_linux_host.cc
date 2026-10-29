@@ -414,6 +414,11 @@ std::map<int, ShellHostView*>& Hosts() {
   return *hosts;
 }
 
+uint64_t& ActivationClock() {
+  static uint64_t clock = 0;
+  return clock;
+}
+
 int& Revision() {
   static int rev = 0;
   return rev;
@@ -1082,25 +1087,29 @@ class ShellHostView : public views::View,
     }
     return false;
   }
-  bool AdoptDevToolsTab(content::WebContents* opened, const GURL& url, bool holder_only) {
-    if (!opened || opened->GetBrowserContext() != page_profile() || (holder_only && !StripHolds(opened))) return false;
-    TabBinding* binding = PrivateLinkBinding();
-    if (!binding) return false;
-    binding->ReportOpened(opened, url, "foreground");
-    return true;
+  bool ShowsDevToolsLinks(content::BrowserContext* profile) {
+    return profile && profile == page_profile() && PrivateLinkBinding();
   }
-  bool OpenDevToolsLink(Profile* profile, const GURL& url, bool active_only) {
-    if (!profile || profile != page_profile() || (active_only && !WindowActive())) return false;
-    TabBinding* binding = PrivateLinkBinding();
-    if (!binding) return false;
-    binding->ReportPresentation("openWindow", base::DictValue()
+  void AdoptDevToolsTab(content::WebContents* opened, const GURL& url) {
+    PrivateLinkBinding()->ReportOpened(opened, url, "foreground");
+    FocusWindow();
+  }
+  void OpenDevToolsLink(const GURL& url) {
+    PrivateLinkBinding()->ReportPresentation("openWindow", base::DictValue()
         .Set("url", url.spec()).Set("disposition", "foreground").Set("userGesture", true));
-    return true;
+    FocusWindow();
   }
+  bool BindsTab(content::WebContents* contents) const {
+    for (const auto& [id, binding] : bindings_) {
+      if (contents && binding->contents() == contents) return true;
+    }
+    return false;
+  }
+  uint64_t activation() const { return activation_; }
+  void FocusWindow() { ActivateNativeWindow(browser_, WindowFocus().Focus(id_)); }
   bool StripHolds(content::WebContents* contents) const {
     return browser_ && contents && browser_->GetTabStripModel()->GetIndexOfWebContents(contents) != TabStripModel::kNoTab;
   }
-  bool WindowActive() { return GetWidget() && GetWidget()->IsActive(); }
   TabBinding* PrivateLinkBinding() {
     TabBinding* fallback = nullptr;
     for (const auto& [id, binding] : bindings_) {
@@ -1344,6 +1353,7 @@ class ShellHostView : public views::View,
   bool output_forgotten_ = false;
   base::RepeatingTimer output_watch_;
   bool presented_ = false;
+  uint64_t activation_ = 0;
   base::OneShotTimer typeahead_timer_;
   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
@@ -2907,6 +2917,16 @@ void BroadcastWindowEvent(const base::DictValue& event) {
   }
 }
 
+ShellHostView* DevToolsLinkWindow(content::BrowserContext* profile, content::WebContents* holding) {
+  ShellHostView* chosen = nullptr;
+  for (const auto& [id, host] : Hosts()) {
+    if (!host->ShowsDevToolsLinks(profile)) continue;
+    if (holding && host->StripHolds(holding)) return host;
+    if (!chosen || host->activation() > chosen->activation()) chosen = host;
+  }
+  return chosen;
+}
+
 void ReturnUnrequestedActivation(int window) {
   const auto keep = WindowFocus().Unrequested(window, FocusClockMs());
   if (!keep) return;
@@ -2931,6 +2951,7 @@ void ShellHostView::OnDidPresentCompositorFrame(ui::Compositor*, uint32_t, const
 }
 
 void ShellHostView::OnWidgetActivationChanged(views::Widget*, bool active) {
+  if (active) activation_ = ++ActivationClock();
   if (active) FocusShellOnActivation();
   const bool changed = WindowFocus().Observe(id_, active);
   if (active) ReturnUnrequestedActivation(id_);
@@ -5705,20 +5726,16 @@ void StartLinuxHost() {
     for (const auto& [id, host] : Hosts()) {
       if (host->ReportDevToolsOpenedTab(inspected, opened, url)) return;
     }
-    for (const bool holder_only : {true, false}) {
-      for (const auto& [id, host] : Hosts()) {
-        if (host->AdoptDevToolsTab(opened, url, holder_only)) return;
-      }
+    if (!opened) return;
+    for (const auto& [id, host] : Hosts()) {
+      if (host->BindsTab(opened)) return;
     }
+    if (ShellHostView* host = DevToolsLinkWindow(opened->GetBrowserContext(), opened)) return host->AdoptDevToolsTab(opened, url);
     LOG(WARNING) << "[ardia] DevTools link refused: no Ardia window of its profile can show it";
     CloseDevToolsTab(opened);
   };
   g_ardia_linux_devtools_open_url = [](Profile* profile, const GURL& url) {
-    for (const bool active_only : {true, false}) {
-      for (const auto& [id, host] : Hosts()) {
-        if (host->OpenDevToolsLink(profile, url, active_only)) return;
-      }
-    }
+    if (ShellHostView* host = DevToolsLinkWindow(profile, nullptr)) return host->OpenDevToolsLink(url);
     LOG(WARNING) << "[ardia] DevTools link refused: no Ardia window of its profile can show it";
   };
   ardiacore::InstallLinuxAutoplayPolicy();
