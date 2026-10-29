@@ -33,6 +33,9 @@
 #include "url/origin.h"
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-function.h"
+#include "v8/include/v8-exception.h"
+#include "v8/include/v8-json.h"
+#include "v8/include/v8-object.h"
 #include "v8/include/v8-isolate.h"
 #include "v8/include/v8-local-handle.h"
 #include "v8/include/v8-persistent-handle.h"
@@ -157,16 +160,37 @@ class LinuxPageAgent : public content::RenderFrameObserver,
         !FitsUtf8(isolate, kind_value.As<v8::String>(), ardiacore::kLinuxPageMessageKindMax)) {
       return;
     }
+    const std::string kind = gin::V8ToString(isolate, kind_value);
     std::string json = "null";
     v8::Local<v8::Value> value;
-    if (args->GetNext(&value) && value->IsString()) {
+    if (args->GetNext(&value) && value->IsString() && kind == "nowPlaying") {
+      if (!FitsUtf8(isolate, value.As<v8::String>(), ardiacore::kLinuxNowPlayingBytesMax)) return;
+      json = NowPlayingReport(isolate, value.As<v8::String>());
+    } else if (!value.IsEmpty() && value->IsString()) {
       if (!FitsUtf8(isolate, value.As<v8::String>(), ardiacore::kLinuxPageMessageBytesMax)) return;
       json = gin::V8ToString(isolate, value);
     }
-    const std::string kind = gin::V8ToString(isolate, kind_value);
     if (!ardiacore::LinuxPageMessageKindOf(kind)) return;
     if (!host_.is_bound()) render_frame()->GetRemoteAssociatedInterfaces()->GetInterface(&host_);
     host_->Post(kind, json);
+  }
+
+  static std::string NowPlayingReport(v8::Isolate* isolate, v8::Local<v8::String> json) {
+    v8::TryCatch try_catch(isolate);
+    v8::Local<v8::Context> context = isolate->GetCurrentContext();
+    v8::Local<v8::Value> parsed;
+    if (context.IsEmpty() || !v8::JSON::Parse(context, json).ToLocal(&parsed) || !parsed->IsObject())
+      return ardiacore::LinuxNowPlayingReport(false, false, "");
+    v8::Local<v8::Object> state = parsed.As<v8::Object>();
+    v8::Local<v8::Value> has_video;
+    v8::Local<v8::Value> playback_state;
+    const bool video = state->Get(context, gin::StringToV8(isolate, "hasVideo")).ToLocal(&has_video) && has_video->IsTrue();
+    std::string playback;
+    if (state->Get(context, gin::StringToV8(isolate, "playbackState")).ToLocal(&playback_state) &&
+        playback_state->IsString() && playback_state.As<v8::String>()->Length() <= 8) {
+      playback = gin::V8ToString(isolate, playback_state);
+    }
+    return ardiacore::LinuxNowPlayingReport(true, video, playback);
   }
 
   mojo::AssociatedReceiverSet<linux_page::mojom::PageAgent> receivers_;

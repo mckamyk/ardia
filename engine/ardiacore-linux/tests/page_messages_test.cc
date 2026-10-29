@@ -398,6 +398,16 @@ void Evaluation() {
 
 }
 
+void NowPlayingReports() {
+  Expect(kLinuxNowPlayingBytesMax == 1280 * 1024, "a page's now playing report may be as large as on macOS");
+  Expect(LinuxNowPlayingReport(false, true, "playing") == "null", "no state is null");
+  Expect(LinuxNowPlayingReport(true, true, "playing") == R"({"hasVideo":true,"playbackState":"playing"})", "a playing video");
+  Expect(LinuxNowPlayingReport(true, false, "paused") == R"({"hasVideo":false,"playbackState":"paused"})", "paused audio");
+  Expect(LinuxNowPlayingReport(true, true, "none") == R"({"hasVideo":true,"playbackState":"none"})", "no session state");
+  Expect(LinuxNowPlayingReport(true, true, "\"},\"x\":\"") == R"({"hasVideo":true,"playbackState":"none"})", "unknown states are none");
+  Expect(LinuxNowPlayingReport(true, true, "playing").size() < 64, "the reduced report is tiny");
+}
+
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
   const std::string name = argv[1];
@@ -411,6 +421,7 @@ int main(int argc, char** argv) {
   else if (name == "link-drops") LinkDrops();
   else if (name == "drag-over") DragOver();
   else if (name == "activity") Activity();
+  else if (name == "now-playing-reports") NowPlayingReports();
   else return 2;
   return 0;
 }

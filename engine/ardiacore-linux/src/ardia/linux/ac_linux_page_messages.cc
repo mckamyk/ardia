@@ -145,6 +145,13 @@ bool IsLinuxPageHttpUrl(std::string_view url) {
   return (lower.starts_with("http://") && url.size() > 7) || (lower.starts_with("https://") && url.size() > 8);
 }
 
+std::string LinuxNowPlayingReport(bool present, bool has_video, std::string_view playback_state) {
+  if (!present) return "null";
+  const std::string_view state = OneOf(playback_state, {"playing", "paused"}) ? playback_state : "none";
+  return std::string(R"({"hasVideo":)") + (has_video ? "true" : "false") + R"(,"playbackState":")" +
+         std::string(state) + R"("})";
+}
+
 std::optional<LinuxPageMessage> NormalizeLinuxPageMessage(LinuxPageMessageKind kind, const base::Value& value) {
   if (Depth(value) > kLinuxPageMessageDepthMax) return std::nullopt;
   const base::DictValue* dict = value.GetIfDict();

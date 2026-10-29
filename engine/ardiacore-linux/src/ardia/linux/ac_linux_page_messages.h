@@ -14,6 +14,7 @@ namespace ardiacore {
 
 inline constexpr size_t kLinuxPageMessageKindMax = 32;
 inline constexpr size_t kLinuxPageMessageBytesMax = 64 * 1024;
+inline constexpr size_t kLinuxNowPlayingBytesMax = 1280 * 1024;
 inline constexpr size_t kLinuxPageMessageDepthMax = 4;
 inline constexpr size_t kLinuxPageUrlMax = 8192;
 inline constexpr size_t kLinuxSelectionTextMax = 4000;
@@ -49,6 +50,7 @@ bool LinuxPageMessageEnvelopeFits(std::string_view kind, std::string_view json);
 bool LinuxPageSenderAccepted(LinuxPageMessageKind kind, const LinuxPageSender& sender);
 std::optional<LinuxPageMessage> NormalizeLinuxPageMessage(LinuxPageMessageKind kind, const base::Value& value);
 bool IsLinuxPageHttpUrl(std::string_view url);
+std::string LinuxNowPlayingReport(bool present, bool has_video, std::string_view playback_state);
 
 class LinuxPageMessageBudget {
  public:
