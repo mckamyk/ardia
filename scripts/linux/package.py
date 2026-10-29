@@ -4,12 +4,17 @@ import json
 import os
 import pathlib
 import shutil
+import sys
 import tarfile
 import tempfile
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import runtime_files
+
 BRIDGE = pathlib.Path(__file__).resolve().parents[2] / 'engine/ardiacore-linux/content-blocker'
 BRIDGE_SCRIPTS = ('js/vapi.js', 'js/vapi-common.js', 'js/vapi-client.js')
-REQUIRED = ('chrome', 'chrome_crashpad_handler', 'icudtl.dat', 'resources.pak', 'chrome_100_percent.pak', 'chrome_200_percent.pak', 'locales', 'v8_context_snapshot.bin')
+REQUIRED = runtime_files.REQUIRED
 
 
 def check_content_blocker(source):
@@ -25,7 +30,7 @@ def check_content_blocker(source):
 
 
 def package(output, ui, destination, content_blocker=None):
-    missing = [name for name in REQUIRED if not (output / name).exists()]
+    missing = runtime_files.missing(output)
     if missing:
         raise ValueError('missing Linux build outputs: ' + ', '.join(missing))
     if not (ui / 'index.html').is_file():
@@ -39,14 +44,7 @@ def package(output, ui, destination, content_blocker=None):
         root = pathlib.Path(scratch) / 'ardia'
         runtime = root / 'lib/ardia'
         runtime.mkdir(parents=True)
-        names = set(REQUIRED)
-        names.update(path.name for pattern in ('*.so', '*.so.*', '*snapshot*.bin', '*icd*.json', 'chrome_sandbox', 'swiftshader') for path in output.glob(pattern))
-        for name in sorted(names):
-            source = output / name
-            if source.is_dir():
-                shutil.copytree(source, runtime / name)
-            else:
-                shutil.copy2(source, runtime / name)
+        runtime_files.copy(output, runtime)
         shutil.copytree(ui, runtime / 'ardia-ui')
         if content_blocker is not None:
             check_content_blocker(content_blocker)
