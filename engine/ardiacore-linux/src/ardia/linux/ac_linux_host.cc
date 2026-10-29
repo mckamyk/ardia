@@ -418,6 +418,11 @@ int& Revision() {
   return rev;
 }
 
+std::optional<int>& DragEscapeOwner() {
+  static std::optional<int> owner;
+  return owner;
+}
+
 uint64_t NextPageBindingGeneration() {
   static uint64_t generation = 0;
   return ++generation;
@@ -970,6 +975,7 @@ class ShellHostView : public views::View,
     utility_ready_ = false;
     switcher_capture_ = false;
     switcher_source_.reset();
+    ReleaseDragEscape();
     if (focus_manager_ && shortcut_recording_) {
       focus_manager_->set_shortcut_handling_suspended(false);
       shortcut_recording_ = false;
@@ -1158,6 +1164,8 @@ class ShellHostView : public views::View,
   void FocusShell();
   void FocusShellOnActivation();
   void OnKeyEvent(ui::KeyEvent* event) override;
+  bool ForwardDragEscape(const ui::KeyEvent& event);
+  void ReleaseDragEscape();
   void ReplayTypeahead(bool field);
   bool RunHeldShortcut(const ui::KeyEvent& event);
   bool SwitcherReleasedInHold(const std::vector<ui::KeyEvent>& held, size_t index) const;
@@ -1809,6 +1817,7 @@ void ForgetOpenerHost(int host) {
 }
 
 ShellHostView::~ShellHostView() {
+  ReleaseDragEscape();
   ForgetOpenerHost(id_);
   LinuxImportWindowClosed(window_id_);
   WindowFocus().Forget(id_);
@@ -1934,6 +1943,7 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Append("ArdiaShell.commandsReady")
       .Append("ArdiaShell.restoreFullScreen")
       .Append("ArdiaShell.downloadsInProgress")
+      .Append("ArdiaShell.setDragEscapeCapture")
       .Append("ArdiaShell.quit");
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
   for (const auto& route : ardiacore::linux_contract::kRoutes)
@@ -2127,7 +2137,22 @@ ui::Accelerator ShellHostView::KeyAccelerator(const ui::KeyEvent& event) {
   return ui::Accelerator(physical == ui::VKEY_UNKNOWN ? event.key_code() : physical, event.flags());
 }
 
+bool ShellHostView::ForwardDragEscape(const ui::KeyEvent& event) {
+  constexpr int modifiers = ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN;
+  if (!DragEscapeOwner() || event.type() != ui::EventType::kKeyPressed ||
+      event.key_code() != ui::VKEY_ESCAPE || (event.flags() & modifiers) || !OwnsKeyboardEvent(event)) return false;
+  const auto owner = Hosts().find(*DragEscapeOwner());
+  if (owner == Hosts().end()) return false;
+  owner->second->Event("ArdiaShell", "onAppEvent", base::Value(base::DictValue().Set("type", "dragEscape")));
+  return true;
+}
+
+void ShellHostView::ReleaseDragEscape() {
+  if (DragEscapeOwner() == id_) DragEscapeOwner().reset();
+}
+
 void ShellHostView::OnKeyEvent(ui::KeyEvent* event) {
+  if (ForwardDragEscape(*event)) return event->StopPropagation();
   if (!CanHandleAccelerators() || !OwnsKeyboardEvent(*event) || !focus_manager_ || shortcut_recording_ ||
       focus_manager_->shortcut_handling_suspended() ||
       event->type() != ui::EventType::kKeyPressed) return;
@@ -4582,6 +4607,14 @@ void ShellHostView::Invoke(
       shortcuts.emplace(ui::Accelerator(static_cast<ui::KeyboardCode>(key), flags), binding.Clone());
     }
     shortcuts_ = std::move(shortcuts);
+    return std::move(done).Run(true, base::Value());
+  }
+  if (method == "ArdiaShell.setDragEscapeCapture") {
+    if (values.size() != 1 || !values[0].is_bool()) {
+      return std::move(done).Run(false, base::Value("A drag escape capture flag is required"));
+    }
+    if (values[0].GetBool()) DragEscapeOwner() = id_;
+    else ReleaseDragEscape();
     return std::move(done).Run(true, base::Value());
   }
   if (method == "ArdiaShell.setShortcutRecording" || method == "ArdiaShell.setSwitcherCapture") {
