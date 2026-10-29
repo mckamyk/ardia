@@ -61,65 +61,26 @@ const REQUIRED = moduleMap("ShellNativeModules");
 const OPTIONAL = moduleMap("ShellOptionalNativeModules");
 const linuxExposes = (module) => advertised.some((capability) => capability === module || capability.startsWith(`${module}.`));
 
-const DEV_HOOKS = [
-  "ArdiaApp.devRenderIntroMusic",
-  "ArdiaApp.devRunAppleScript",
-  "ArdiaApp.devSnapshotWindow",
-  "ArdiaApp.devSetPointer",
-  "ArdiaApp.devSetMouseButtons",
-  "ArdiaApp.devLeftEdgePointer",
-  "ArdiaApp.devLeftEdgeStats",
-  "ArdiaApp.devHoverStats",
-  "ArdiaApp.devMenuCommand",
-  "ArdiaApp.devTypeKeys",
-  "ArdiaApp.devKeyEquivalent",
-  "ArdiaApp.devClick",
-  "ArdiaApp.devCrash",
-  "ArdiaMagnifyArea.devMagnify",
-  "ArdiaFileDrop.devDrag",
-  "ArdiaFileDrop.devLastFileDrag",
+const FORMERLY_TRACKED_IN_305 = [
+  "ArdiaApp.updaterState", "ArdiaApp.checkForUpdates", "ArdiaApp.setAutomaticUpdateChecks", "ArdiaApp.setAutomaticUpdateDownloads",
+  "ArdiaApp.setUpdateChannel", "ArdiaApp.setWindowActivity", "ArdiaApp.share", "ArdiaApp.shareVia", "ArdiaApp.isInDock", "ArdiaApp.addToDock",
+  "ArdiaApp.appIcons", "ArdiaApp.appIcon", "ArdiaApp.setAppIcon", "ArdiaApp.notificationPermission", "ArdiaApp.requestNotificationPermission",
+  "ArdiaApp.postNotification", "ArdiaApp.removeNotifications", "ArdiaApp.openNotificationSettings", "ArdiaApp.setScriptState",
+  "ArdiaApp.replyToScript", "ArdiaApp.crashReports", "ArdiaSystem.menuShortcuts", "ArdiaSystem.recordShortcut", "ArdiaSystem.cancelRecording",
+  "ArdiaKeychain.get", "ArdiaKeychain.set", "ArdiaKeychain.delete", "ArdiaDockSelection.iconTheme", "ArdiaInlineCompletion.complete",
+  "ArdiaTranslate.userLanguages", "ArdiaTranslate.languageName", "ArdiaTranslate.detect", "ArdiaTranslate.status",
+  "ArdiaTranslate.supportedLanguages", "ArdiaTranslate.prepare", "ArdiaTranslate.translate", "ArdiaTranslate.translateBlocks",
+  "ArdiaApp.devCrash", "ArdiaApp.devClick", "ArdiaMagnifyArea.devMagnify", "ArdiaFileDrop.devDrag", "ArdiaFileDrop.devLastFileDrag",
 ];
-const TRACKED_IN_305 = [
-  "ArdiaApp.updaterState",
-  "ArdiaApp.checkForUpdates",
-  "ArdiaApp.setAutomaticUpdateChecks",
-  "ArdiaApp.setAutomaticUpdateDownloads",
-  "ArdiaApp.setUpdateChannel",
-  "ArdiaApp.setWindowActivity",
-  "ArdiaApp.share",
-  "ArdiaApp.shareVia",
-  "ArdiaApp.isInDock",
-  "ArdiaApp.addToDock",
-  "ArdiaApp.appIcons",
-  "ArdiaApp.appIcon",
-  "ArdiaApp.setAppIcon",
-  "ArdiaApp.notificationPermission",
-  "ArdiaApp.requestNotificationPermission",
-  "ArdiaApp.postNotification",
-  "ArdiaApp.removeNotifications",
-  "ArdiaApp.openNotificationSettings",
-  "ArdiaApp.setScriptState",
-  "ArdiaApp.replyToScript",
-  "ArdiaApp.systemInfo",
-  "ArdiaApp.crashReports",
-  "ArdiaSystem.menuShortcuts",
-  "ArdiaSystem.recordShortcut",
-  "ArdiaSystem.cancelRecording",
-  "ArdiaKeychain.get",
-  "ArdiaKeychain.set",
-  "ArdiaKeychain.delete",
-  "ArdiaDockSelection.iconTheme",
-  "ArdiaInlineCompletion.complete",
-  "ArdiaTranslate.userLanguages",
-  "ArdiaTranslate.languageName",
-  "ArdiaTranslate.detect",
-  "ArdiaTranslate.status",
-  "ArdiaTranslate.supportedLanguages",
-  "ArdiaTranslate.prepare",
-  "ArdiaTranslate.translate",
-  "ArdiaTranslate.translateBlocks",
-];
-const ALLOWED_TO_REJECT = new Set([...DEV_HOOKS, ...TRACKED_IN_305]);
+const ANSWERED = {
+  "ArdiaApp.updaterState": { available: false },
+  "ArdiaApp.appIcons": [],
+  "ArdiaApp.crashReports": [],
+  "ArdiaApp.postNotification": null,
+  "ArdiaApp.removeNotifications": undefined,
+};
+const SYSTEM_INFO = ["ArdiaApp.systemInfo"];
+const ALLOWED_TO_REJECT = new Set(SYSTEM_INFO);
 
 const linuxHost = () => ({
   bootstrap: { windowId: "main", profileId: "default", capabilities: [...advertised] },
@@ -181,6 +142,28 @@ const olderEngine = (...missing) => {
   host.bootstrap.capabilities = host.bootstrap.capabilities.filter((capability) => !missing.includes(capability));
   return host;
 };
+
+test("the Mac-only methods of #305 answer on Linux with a truthful value or ERR_UNAVAILABLE, never as an unsupported host method", async () => {
+  const host = linuxHost();
+  for (const name of FORMERLY_TRACKED_IN_305) {
+    const [module, method] = name.split(".");
+    const resolved = resolveHostModule(host, module, method);
+    assert.equal(typeof resolved, "function", name);
+    assert.equal(reachesNativeHostUnchecked(resolved), false, name);
+    const outcome = await resolved().then((value) => ({ value }), (error) => ({ error }));
+    if (Object.hasOwn(ANSWERED, name)) assert.deepEqual(outcome, { value: ANSWERED[name] }, name);
+    else assert.equal(outcome.error?.code, "ERR_UNAVAILABLE", name);
+  }
+});
+
+test("an engine that advertises one of those methods is called instead of the Linux answer", async () => {
+  const host = linuxHost();
+  host.bootstrap.capabilities.push("ArdiaApp.postNotification");
+  const calls = [];
+  host.invoke = async (method) => { calls.push(method); return "n1"; };
+  assert.equal(await resolveHostModule(host, "ArdiaApp", "postNotification")({ title: "x" }), "n1");
+  assert.deepEqual(calls, ["ArdiaApp.postNotification"]);
+});
 
 test("every ArdiaShell method resolves to its Linux fallback while the native host doesn't advertise it", () => {
   for (const name of ["watchLeftEdge", "setDragEscapeCapture", "saveKeyResponder", "raiseView", "animateWindowClose", "dragPreviewBegin"]) {
