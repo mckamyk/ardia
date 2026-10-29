@@ -6,12 +6,22 @@ JS only, in `apps/linux`. macOS, the shared browser and the demo are unchanged.
 
 macOS has one JS runtime: `startOnboarding("settings")` resolves the id to the frontmost browser window (`resolveWindowId`). On Linux each window has its own renderer, so a command the host sends with `windowId: "settings"` reached only the Settings renderer, whose `startAppCommands` handled only `UTILITY_APP_COMMANDS` and dropped the rest. On top of that, `startLinuxShortcuts` bound only Close, Settings, Find and Quit in utility windows, so a Show Onboarding shortcut (F27D records Ctrl+Alt+O) never fired there.
 
-- `browserCommandRoute.ts`: `BROWSER_WINDOW_COMMANDS` (Show Onboarding, Tool Tour, Video Tour, Release Notes, Send Feedback) are handed over a `BroadcastChannel` (`ardia-browser-commands`, same origin and storage partition as the regular profile's renderers). The utility posts `find`; every browser renderer answers with the time it last took focus; after 150 ms the utility sends `run` to the most recent one, which acknowledges, focuses its window (`ArdiaShell.focusWindow`) and runs the command through `runAppCommand`. No answer, or no acknowledgement within 1.5 s, shows "No browser window to show this in" in the utility window instead of doing nothing.
-- `startAppCommands` routes those commands from utility windows; `startLinuxAppServices` serves them in browser windows.
+- `browserCommandRoute.ts`: `BROWSER_WINDOW_COMMANDS` (Show Onboarding, Tool Tour, Video Tour, Release Notes, Send Feedback) are handed over a `BroadcastChannel` (`ardia-browser-commands`).
+  - **Target.** The utility posts `find`. Every serving browser renderer answers with its id and its `regularFocusOrder`: the store's `ui.focusOrder`, then `windowOrder`, kept to regular, non-Little-Ardia windows, as `hostWindowProfiles.ts` does. Browser renderers follow every window's activation through the host's `focus` window event, so a click into a page counts. The utility's own `ui.focusOrder` can't be used: the host broadcasts window events to browser windows only, and the session sync carries no focus. After 150 ms the utility picks the first window in that order that answered, and sends it `run`.
+  - **One answer.** The chosen window answers `claim` and runs only on the utility's `go`. The utility sends `go` and reports success only if the claim arrives within 1.5 s. Otherwise it shows "No browser window to show this in" and never sends `go`, and the window drops its claim after 1.5 s. So a late window never runs a command Settings has already reported as failed. On `go` the window focuses itself (`ArdiaShell.focusWindow`) and runs the command through `runAppCommand`.
+  - **Private windows never serve.** Every window's shell document lives in the regular app profile (`chrome://ardia` refuses OTR profiles), so private shells share the channel; `startLinuxAppServices` therefore skips `serveUtilityCommands` when `bootstrap.privateWindow` is set, as `hostPolicies.ts` does for the tab-policy channel. With only private windows open, Settings says there's no browser window.
+- `startAppCommands` routes those commands from utility windows; `startLinuxAppServices` serves them in regular browser windows.
 - `shortcuts.ts` `utilityBindings`/`UTILITY_SHORTCUT_COMMANDS`: utility windows keep the help shortcuts and the utility app commands (diagnostics, performance recording, Task Manager) besides Close, Settings, Find and Quit.
-- Private windows use another storage partition, so they don't answer; with only private windows open the utility says there's no browser window.
 
-Tests: `browserCommandRoute.test.mjs` (3) with real Node `BroadcastChannel`s: the most recently focused of three windows runs the command once and is focused, no window answers null, non-help commands are refused. `appServices.test.mjs`: Show Onboarding from Settings plays in the browser window and is focused; with no browser window the toast shows. `shortcuts.test.mjs`: Ctrl+Alt+O for Show Onboarding stays bound in utility windows. Harness F27D on the 148104a3 engine with this UI: 7 of 7 pass (it failed "nothing played after Ctrl+Alt+O in Settings" before).
+Tests: `browserCommandRoute.test.mjs` (7) with real Node `BroadcastChannel`s:
+- the first window of the focus order runs the command once and is focused, and a changed order changes the target;
+- a focused window that doesn't serve is skipped;
+- the order drops private and Little Ardia windows;
+- no window answers null;
+- non-help commands are refused;
+- a late claim never gets `go`, and an unanswered claim runs nothing.
+
+`appServices.test.mjs`: Show Onboarding from Settings plays in the most recently focused of two windows, which is focused; private windows don't serve; with no browser window the toast shows. `shortcuts.test.mjs`: Ctrl+Alt+O for Show Onboarding stays bound in utility windows. Harness F27D on the 148104a3 engine with this UI: 7 of 7 pass (it failed "nothing played after Ctrl+Alt+O in Settings" before).
 
 ## Video upscaling row (#306)
 

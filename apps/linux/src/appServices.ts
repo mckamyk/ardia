@@ -13,10 +13,11 @@ import { openVideoTour, startToolTour, videoTourUrl } from "../../browser/src/st
 import { trackAppVersion } from "../../browser/src/state/releaseNotes/releaseNotes";
 import { openReleaseNotesAfterUpdate, openReleaseNotesPage } from "../../browser/src/state/releaseNotes/releaseNotesPage";
 import { showToast } from "../../browser/src/state/splits/actions";
+import { useBrowser } from "../../browser/src/state/browser/store";
 import type { LinuxCapabilities } from "./hostCapabilities.ts";
 import { ardiaHost, hostSupports, invokeHost, type ArdiaHost } from "./host.ts";
 import { QUIT_COMMAND, createHostQuit, type QuitOutcome } from "./quit.ts";
-import { BROWSER_COMMAND_CHANNEL, BROWSER_WINDOW_COMMANDS, routeToBrowserWindow, serveBrowserCommands, type RouteChannel } from "./browserCommandRoute.ts";
+import { BROWSER_COMMAND_CHANNEL, BROWSER_WINDOW_COMMANDS, regularFocusOrder, routeToBrowserWindow, serveBrowserCommands, type RouteChannel } from "./browserCommandRoute.ts";
 
 export const APP_LAUNCH_LOCK = "ardia.linux.app-launch";
 export const APP_LAUNCH_MARK = "ardia.linux.app-launch";
@@ -241,12 +242,22 @@ export function startAppCommands(windowId: string, capabilities: LinuxCapabiliti
   });
 }
 
-export function serveUtilityCommands(windowId: string, capabilities: LinuxCapabilities, channel: RouteChannel | null = routeChannel(), focus = (id: string) => invokeHost("ArdiaShell.focusWindow", { args: [id] })) {
-  if (!channel || typeof window === "undefined") return null;
+export function serveUtilityCommands(options: {
+  windowId: string;
+  capabilities: LinuxCapabilities;
+  privateWindow: boolean;
+  channel?: () => RouteChannel | null;
+  focus?: (id: string) => Promise<unknown>;
+}) {
+  if (options.privateWindow) return null;
+  const channel = (options.channel ?? routeChannel)();
+  if (!channel) return null;
   return serveBrowserCommands({
-    windowId, channel, focus,
-    target: { addEventListener: (type, listener) => window.addEventListener(type, listener), hasFocus: () => document.hasFocus() },
-    run: (id, command) => runAppCommand(id, command, capabilities),
+    windowId: options.windowId,
+    channel,
+    focus: options.focus ?? ((id) => invokeHost("ArdiaShell.focusWindow", { args: [id] })),
+    order: () => regularFocusOrder(useBrowser.getState()),
+    run: (id, command) => runAppCommand(id, command, options.capabilities),
   });
 }
 
@@ -260,7 +271,7 @@ export function startLinuxAppServices(options: {
 }) {
   const { host, windowId, savedSession, capabilities, locks, marks } = options;
   const commands = startAppCommands(windowId, capabilities);
-  serveUtilityCommands(windowId, capabilities);
+  serveUtilityCommands({ windowId, capabilities, privateWindow: !!host.bootstrap.privateWindow });
   const record = hostLaunchRecord(host);
   const launch = claimAppLaunch({
     locks,

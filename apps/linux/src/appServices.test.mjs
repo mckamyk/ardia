@@ -268,32 +268,37 @@ test("utility windows run only the app commands that need no browser window", ()
   assert.equal(toast(first), undefined);
 });
 
-test("Show Onboarding pressed in Settings plays in the browser window, not in Settings", async () => {
-  const { first } = twoWindows();
+test("Show Onboarding pressed in Settings plays in the most recently focused regular browser window, not in Settings", async () => {
+  const { first, second } = twoWindows();
+  useBrowser.setState((s) => ({ ui: { ...s.ui, focusOrder: [second, first] } }));
   const name = `app-route-${process.pid}`;
-  const browserChannel = new BroadcastChannel(name);
-  const settingsChannel = new BroadcastChannel(name);
+  const channels = [new BroadcastChannel(name), new BroadcastChannel(name), new BroadcastChannel(name)];
   const focused = [];
-  globalThis.window = { addEventListener() {} };
-  globalThis.document = { hasFocus: () => true };
-  const served = serveUtilityCommands(first, capabilities, browserChannel, async (id) => focused.push(id));
+  const served = [first, second].map((windowId, index) => serveUtilityCommands({ windowId, capabilities, privateWindow: false, channel: () => channels[index], focus: async (id) => focused.push(id) }));
   const listeners = [];
-  startAppCommands("settings", capabilities, (listener) => (listeners.push(listener), { remove() {} }), UTILITY_APP_COMMANDS, () => settingsChannel);
+  startAppCommands("settings", capabilities, (listener) => (listeners.push(listener), { remove() {} }), UTILITY_APP_COMMANDS, () => channels[2]);
   try {
     useToasts.setState({ toasts: {} });
     listeners[0]({ command: "showOnboarding", windowId: "settings" });
     for (let i = 0; i < 100 && !useOnboarding.getState().windowId; i++) await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.equal(useOnboarding.getState().windowId, first);
-    assert.deepEqual(focused, [first]);
+    assert.equal(useOnboarding.getState().windowId, second);
+    assert.deepEqual(focused, [second]);
     assert.equal(toast("settings"), undefined);
   } finally {
-    served.remove();
-    browserChannel.close();
-    settingsChannel.close();
-    delete globalThis.window;
-    delete globalThis.document;
+    served.forEach((entry) => entry.remove());
+    channels.forEach((channel) => channel.close());
   }
 });
+
+test("private browser windows never serve Settings' help commands", () => {
+  const { first } = twoWindows();
+  let opened = 0;
+  assert.equal(serveUtilityCommands({ windowId: first, capabilities, privateWindow: true, channel: () => (opened++, null) }), null);
+  assert.equal(opened, 0);
+  const source = readFileSync(new URL("./appServices.ts", import.meta.url), "utf8");
+  assert.match(source, /serveUtilityCommands\(\{ windowId, capabilities, privateWindow: !!host\.bootstrap\.privateWindow \}\)/);
+});
+
 
 test("a browser-window command from Settings with no browser window says so", async () => {
   twoWindows();

@@ -6,9 +6,10 @@ export const BROWSER_WINDOW_COMMANDS: ReadonlySet<string> = new Set(["showOnboar
 type Command = CommandEvent["command"];
 type RouteMessage =
   | { type: "find"; request: string }
-  | { type: "here"; request: string; windowId: string; focusedAt: number }
+  | { type: "here"; request: string; windowId: string; order: string[] }
   | { type: "run"; request: string; windowId: string; command: Command }
-  | { type: "ran"; request: string; windowId: string };
+  | { type: "claim"; request: string; windowId: string }
+  | { type: "go"; request: string; windowId: string };
 
 export type RouteChannel = {
   postMessage(message: RouteMessage): void;
@@ -16,32 +17,52 @@ export type RouteChannel = {
   removeEventListener(type: "message", listener: (event: { data: RouteMessage }) => void): void;
 };
 
-type FocusTarget = {
-  addEventListener(type: "focus", listener: () => void): void;
-  hasFocus(): boolean;
+type FocusState = {
+  ui: { focusOrder: readonly string[] };
+  windowOrder: readonly string[];
+  windows: Record<string, { incognito?: boolean; kind?: string } | undefined>;
 };
+
+export function regularFocusOrder(state: FocusState): string[] {
+  const regular = (id: string) => { const w = state.windows[id]; return !!w && !w.incognito && w.kind !== "small"; };
+  return [...new Set([...state.ui.focusOrder, ...state.windowOrder])].filter(regular);
+}
 
 export function serveBrowserCommands(options: {
   windowId: string;
   channel: RouteChannel;
-  target: FocusTarget;
+  order: () => string[];
   run: (windowId: string, command: Command) => void;
   focus: (windowId: string) => Promise<unknown>;
-  now?: () => number;
+  claimMs?: number;
 }) {
-  const { windowId, channel, target, run, focus } = options;
-  const now = options.now ?? Date.now;
-  let focusedAt = target.hasFocus() ? now() : 0;
-  target.addEventListener("focus", () => { focusedAt = now(); });
+  const { windowId, channel, order, run, focus } = options;
+  const claimMs = options.claimMs ?? 1500;
+  const claimed = new Map<string, { command: Command; timer: ReturnType<typeof setTimeout> }>();
   const listener = ({ data }: { data: RouteMessage }) => {
-    if (data?.type === "find") channel.postMessage({ type: "here", request: data.request, windowId, focusedAt });
-    if (data?.type !== "run" || data.windowId !== windowId || !BROWSER_WINDOW_COMMANDS.has(data.command)) return;
-    channel.postMessage({ type: "ran", request: data.request, windowId });
-    void focus(windowId).catch(() => {});
-    run(windowId, data.command);
+    if (data?.type === "find") channel.postMessage({ type: "here", request: data.request, windowId, order: order() });
+    if (data?.type === "find" || data?.windowId !== windowId) return;
+    if (data.type === "run" && BROWSER_WINDOW_COMMANDS.has(data.command) && !claimed.has(data.request)) {
+      claimed.set(data.request, { command: data.command, timer: setTimeout(() => claimed.delete(data.request), claimMs) });
+      channel.postMessage({ type: "claim", request: data.request, windowId });
+    }
+    if (data.type === "go") {
+      const pending = claimed.get(data.request);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      claimed.delete(data.request);
+      void focus(windowId).catch(() => {});
+      run(windowId, pending.command);
+    }
   };
   channel.addEventListener("message", listener);
-  return { remove: () => channel.removeEventListener("message", listener) };
+  return {
+    remove: () => {
+      channel.removeEventListener("message", listener);
+      for (const { timer } of claimed.values()) clearTimeout(timer);
+      claimed.clear();
+    },
+  };
 }
 
 export function routeToBrowserWindow(options: {
@@ -56,24 +77,30 @@ export function routeToBrowserWindow(options: {
   const gatherMs = options.gatherMs ?? 150;
   const answerMs = options.answerMs ?? 1500;
   return new Promise((resolve) => {
-    const candidates: { windowId: string; focusedAt: number }[] = [];
+    const replies: { windowId: string; order: string[] }[] = [];
     let chosen: string | null = null;
+    let settled = false;
     let timer: ReturnType<typeof setTimeout>;
     const finish = (windowId: string | null) => {
+      settled = true;
       clearTimeout(timer);
       channel.removeEventListener("message", listener);
       resolve(windowId);
     };
     const listener = ({ data }: { data: RouteMessage }) => {
-      if (data?.request !== request) return;
-      if (data.type === "here" && !chosen) candidates.push({ windowId: data.windowId, focusedAt: data.focusedAt });
-      if (data.type === "ran" && data.windowId === chosen) finish(chosen);
+      if (settled || data?.request !== request) return;
+      if (data.type === "here" && !chosen) replies.push({ windowId: data.windowId, order: Array.isArray(data.order) ? data.order : [] });
+      if (data.type === "claim" && data.windowId === chosen) {
+        channel.postMessage({ type: "go", request, windowId: chosen });
+        finish(chosen);
+      }
     };
     channel.addEventListener("message", listener);
     timer = setTimeout(() => {
-      const best = candidates.reduce<{ windowId: string; focusedAt: number } | null>((top, next) => !top || next.focusedAt > top.focusedAt ? next : top, null);
-      if (!best) return finish(null);
-      chosen = best.windowId;
+      const serving = new Set(replies.map((reply) => reply.windowId));
+      const order = replies.find((reply) => reply.order.length)?.order ?? [];
+      chosen = order.find((id) => serving.has(id)) ?? null;
+      if (!chosen) return finish(null);
       timer = setTimeout(() => finish(null), answerMs);
       channel.postMessage({ type: "run", request, windowId: chosen, command });
     }, gatherMs);
