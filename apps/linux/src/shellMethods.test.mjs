@@ -176,10 +176,28 @@ test("the allow-to-reject list names only methods that still reach the native ho
   assert.deepEqual(stale, []);
 });
 
+const olderEngine = (...missing) => {
+  const host = linuxHost();
+  host.bootstrap.capabilities = host.bootstrap.capabilities.filter((capability) => !missing.includes(capability));
+  return host;
+};
+
 test("every ArdiaShell method resolves to its Linux fallback while the native host doesn't advertise it", () => {
   for (const name of ["watchLeftEdge", "setDragEscapeCapture", "saveKeyResponder", "raiseView", "animateWindowClose", "dragPreviewBegin"]) {
-    assert.equal(resolveHostModule(linuxHost(), "ArdiaShell", name), linuxShellMethod(name), name);
+    assert.equal(resolveHostModule(olderEngine(`ArdiaShell.${name}`), "ArdiaShell", name), linuxShellMethod(name), name);
   }
+});
+
+test("the native host captures a tab drag's Escape for every window, whatever has keyboard focus", async () => {
+  assert.ok(advertised.includes("ArdiaShell.setDragEscapeCapture"));
+  const host = linuxHost();
+  const calls = [];
+  host.invoke = async (method, args) => { calls.push([method, args]); return null; };
+  const capture = resolveHostModule(host, "ArdiaShell", "setDragEscapeCapture");
+  assert.notEqual(capture, linuxShellMethod("setDragEscapeCapture"));
+  await capture(true);
+  await capture(false);
+  assert.deepEqual(calls, [["ArdiaShell.setDragEscapeCapture", { args: [true] }], ["ArdiaShell.setDragEscapeCapture", { args: [false] }]]);
 });
 
 test("a method the native host advertises wins over the Linux fallback", async () => {
@@ -270,10 +288,10 @@ test("hiding the sidebar watches the left edge without a native watcher, and a p
   events.remove();
 });
 
-test("a tab drag captures a bare Escape as dragEscape and releases it when the drag ends", async () => {
+test("on an engine without the native capture, a tab drag captures a bare Escape in the shell as dragEscape and releases it when the drag ends", async () => {
   const dom = installDom();
   const events = shellEvents("onAppEvent");
-  const capture = resolveHostModule(linuxHost(), "ArdiaShell", "setDragEscapeCapture");
+  const capture = resolveHostModule(olderEngine("ArdiaShell.setDragEscapeCapture"), "ArdiaShell", "setDragEscapeCapture");
   await capture(true);
   const escape = (extra = {}) => {
     const event = { key: "Escape", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, prevented: false, stopped: false, ...extra };

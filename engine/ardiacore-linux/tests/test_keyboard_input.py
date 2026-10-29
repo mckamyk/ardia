@@ -102,6 +102,8 @@ struct ShellHostView {
     last_reserved = reserved_by_ardia;
     return extension_consumes && !reserved_by_ardia;
   }
+  bool forwards_escape = false;
+  bool ForwardDragEscape(const ui::KeyEvent&) const { return forwards_escape; }
   void OnKeyEvent(ui::KeyEvent* event);
   static ui::Accelerator KeyAccelerator(const ui::KeyEvent& event);
 };
@@ -160,6 +162,12 @@ int main() {
   host.ready = true;
   host.OnKeyEvent(&event);
   assert(event.stopped && host.dispatches == 3);
+  host.forwards_escape = true;
+  host.ready = false;
+  host.modal = true;
+  event.stopped = false;
+  host.OnKeyEvent(&event);
+  assert(event.stopped && host.dispatches == 3 && host.extension_dispatches == 3);
 }
 '''
         with tempfile.TemporaryDirectory(prefix='ardia-keyboard-input-') as scratch:
@@ -167,6 +175,145 @@ int main() {
             cpp.write_text(prelude + method + checks)
             binary = Path(scratch) / 'keyboard'
             built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Werror', '-I', str(Path(__file__).resolve().parents[1] / 'src'), str(cpp), '-o', str(binary)], capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            subprocess.run([str(binary)], check=True)
+
+
+    def test_escape_cancels_a_tab_drag_from_any_window_and_any_focus(self):
+        compiler = shutil.which('clang++') or shutil.which('c++')
+        if compiler is None:
+            self.skipTest('C++ compiler is unavailable')
+        source = (Path(__file__).resolve().parents[1] / 'src/ardia/linux/ac_linux_host.cc').read_text()
+        owner_start = source.index('std::optional<int>& DragEscapeOwner() {')
+        owner = source[owner_start:source.index('\n}\n', owner_start) + 3]
+        forward_start = source.index('bool ShellHostView::ForwardDragEscape(const ui::KeyEvent& event) {')
+        forward = source[forward_start:source.index('\n}\n', forward_start) + 3]
+        on_key_start = source.index('void ShellHostView::OnKeyEvent(')
+        on_key_body = source[source.index('{', on_key_start) + 1:source.index('\n', source.index('{', on_key_start) + 2)]
+        self.assertIn('ForwardDragEscape(*event)', on_key_body, 'Escape must be checked before any shortcut condition')
+        capture_start = source.index('if (method == "ArdiaShell.setDragEscapeCapture") {')
+        capture = source[capture_start:source.index('\n  }\n', capture_start) + 4]
+        self.assertIn('.Append("ArdiaShell.setDragEscapeCapture")', source)
+        reset_start = source.index('    switcher_capture_ = false;\n    switcher_source_.reset();')
+        self.assertIn('ReleaseDragEscape();', source[reset_start:reset_start + 400])
+        release_start = source.index('void ShellHostView::ReleaseDragEscape() {')
+        release = source[release_start:source.index('\n}\n', release_start) + 3]
+        self.assertIn('ReleaseDragEscape();', source[source.index('ShellHostView::~ShellHostView()'):source.index('ShellHostView::~ShellHostView()') + 600])
+        prelude = r"""
+#include <cassert>
+#include <functional>
+#include <map>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+namespace base {
+struct DictValue {
+  std::map<std::string, std::string> values;
+  DictValue&& Set(std::string_view key, std::string_view value) && { values[std::string(key)] = std::string(value); return std::move(*this); }
+};
+struct Value {
+  DictValue dict;
+  bool flag = false;
+  bool boolean = false;
+  explicit Value(DictValue value) : dict(std::move(value)) {}
+  explicit Value(bool value) : flag(value), boolean(true) {}
+  Value(const char*) {}
+  Value() = default;
+  bool is_bool() const { return boolean; }
+  bool GetBool() const { return flag; }
+};
+}
+namespace ui {
+constexpr int VKEY_ESCAPE = 27;
+constexpr int EF_SHIFT_DOWN = 1 << 1;
+constexpr int EF_CONTROL_DOWN = 1 << 2;
+constexpr int EF_ALT_DOWN = 1 << 3;
+constexpr int EF_COMMAND_DOWN = 1 << 4;
+enum class EventType { kKeyPressed, kKeyReleased };
+struct KeyEvent {
+  EventType event_type = EventType::kKeyPressed;
+  int key = VKEY_ESCAPE;
+  int modifiers = 0;
+  EventType type() const { return event_type; }
+  int key_code() const { return key; }
+  int flags() const { return modifiers; }
+};
+}
+struct ShellHostView;
+std::map<int, ShellHostView*>& Hosts() {
+  static std::map<int, ShellHostView*> hosts;
+  return hosts;
+}
+struct ShellHostView {
+  int id_;
+  bool modal = false;
+  std::vector<std::string> events;
+  explicit ShellHostView(int id) : id_(id) { Hosts()[id] = this; }
+  ~ShellHostView() { ReleaseDragEscape(); Hosts().erase(id_); }
+  bool OwnsKeyboardEvent(const ui::KeyEvent&) const { return !modal; }
+  void Event(std::string_view module, std::string_view event, base::Value payload) {
+    events.push_back(std::string(module) + "." + std::string(event) + ":" + payload.dict.values["type"]);
+  }
+  bool ForwardDragEscape(const ui::KeyEvent& event);
+  void ReleaseDragEscape();
+  void Capture(std::vector<base::Value> values, std::function<void(bool, base::Value)> done);
+};
+"""
+        capture_method = 'void ShellHostView::Capture(std::vector<base::Value> values, std::function<void(bool, base::Value)> done) {\n  const std::string method = "ArdiaShell.setDragEscapeCapture";\n  ' + capture.replace('std::move(done).Run(', 'done(') + '}\n'
+        checks = r"""
+int main() {
+  bool ok = false;
+  const auto done = [&](bool result, base::Value) { ok = result; };
+  ShellHostView source(1);
+  {
+    ShellHostView other(2);
+    ui::KeyEvent escape;
+    assert(!source.ForwardDragEscape(escape) && !other.ForwardDragEscape(escape));
+    std::vector<base::Value> on;
+    on.emplace_back(true);
+    source.Capture(std::move(on), done);
+    assert(ok);
+    assert(other.ForwardDragEscape(escape));
+    assert(source.events.size() == 1 && source.events[0] == "ArdiaShell.onAppEvent:dragEscape" && other.events.empty());
+    assert(source.ForwardDragEscape(escape) && source.events.size() == 2);
+    ui::KeyEvent shifted;
+    shifted.modifiers = ui::EF_SHIFT_DOWN;
+    assert(!other.ForwardDragEscape(shifted));
+    ui::KeyEvent released;
+    released.event_type = ui::EventType::kKeyReleased;
+    assert(!other.ForwardDragEscape(released));
+    ui::KeyEvent letter;
+    letter.key = 65;
+    assert(!other.ForwardDragEscape(letter));
+    other.modal = true;
+    assert(!other.ForwardDragEscape(escape));
+    other.modal = false;
+    std::vector<base::Value> off;
+    off.emplace_back(false);
+    other.Capture(std::move(off), done);
+    assert(ok && other.ForwardDragEscape(escape) && source.events.size() == 3);
+    std::vector<base::Value> bad;
+    other.Capture(std::move(bad), done);
+    assert(!ok);
+    std::vector<base::Value> released_capture;
+    released_capture.emplace_back(false);
+    source.Capture(std::move(released_capture), done);
+    assert(ok && !other.ForwardDragEscape(escape) && source.events.size() == 3);
+    std::vector<base::Value> again;
+    again.emplace_back(true);
+    other.Capture(std::move(again), done);
+  }
+  ui::KeyEvent escape;
+  assert(!source.ForwardDragEscape(escape) && source.events.size() == 3);
+}
+"""
+        with tempfile.TemporaryDirectory(prefix='ardia-drag-escape-') as scratch:
+            cpp = Path(scratch) / 'escape.cc'
+            cpp.write_text(prelude + owner + forward + release + capture_method + checks)
+            binary = Path(scratch) / 'escape'
+            built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Werror', str(cpp), '-o', str(binary)], capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stderr)
             subprocess.run([str(binary)], check=True)
 
