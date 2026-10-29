@@ -97,7 +97,7 @@ async function liveIds(app) {
   return (await app.shells()).map((s) => s.windowId);
 }
 
-function focusChecks({ x11, open, label: named }) {
+function focusChecks({ x11, open, label: named, backgroundWindow = true }) {
   const label = named ?? (x11 ? "X11" : "sway");
   return async (t) => {
     const desktop = open ? await open(t) : await openDesktop(t, { x11 });
@@ -138,7 +138,7 @@ function focusChecks({ x11, open, label: named }) {
       return { typed: typed.active };
     });
     await desktopShot(t, desktop, `${label}-ctrl-n`);
-    await t.check(`${label}: a window the app opens in the background takes no focus`, async () => {
+    if (backgroundWindow) await t.check(`${label}: a window the app opens in the background takes no focus`, async () => {
       await clickedIntoFocus(desktop, created);
       const before = await desktop.focused();
       const known = await desktop.windows();
@@ -187,6 +187,7 @@ function focusChecks({ x11, open, label: named }) {
 
 const MANUAL_LINK = { name: "A link from another app doesn't steal focus", steps: ["With another app focused, open a link in Ardia from it (xdg-open).", "Ardia opens the link without taking focus, unless it needs a new foreground window."], reason: "needs a second desktop application handing Ardia a link through its own activation token" };
 const MANUAL_IMPORT = { name: "Import comes to the front", steps: ["With a browser window focused, open File › Import.", "It opens in front and has keyboard focus."], reason: "Import has no keyboard route to drive, only a menu row" };
+const MANUAL_HYPRLAND_BACKGROUND_WINDOW = { name: "Hyprland: a window the app opens in the background takes no focus", steps: ["On the logged-in Hyprland, focus an Ardia window and have it open a window in the background (the store's createWindow({ background: true }), as F22D does).", "Expected on Hyprland: the compositor may focus the new window when it maps. Record where keyboard focus ends up; on sway and X11 it stays in the window you were using."], reason: "Hyprland focuses every newly mapped toplevel and a Wayland client can't refuse it, so this isn't asserted live; F22D and F22X check it on sway and X11" };
 
 function focusScenario({ id, x11 }) {
   return {
@@ -219,14 +220,14 @@ export const f22Hyprland = {
   live: true,
   title: "New windows take focus and keyboard input on the logged-in Hyprland (workspace 9, private buses)",
   deadline: 300000,
-  manual: [MANUAL_LINK],
+  manual: [MANUAL_LINK, MANUAL_IMPORT, MANUAL_HYPRLAND_BACKGROUND_WINDOW],
   async run(t) {
     const request = liveRequest();
     if (!request) {
       t.manual("Hyprland: new windows take focus and typing", ["On Hyprland, press Ctrl+N and type 'abc' at once: the new window is in front and holds 'abc'.", "A restored back window stays behind, a background instance never activates, and Settings opens in front with keyboard focus."], LIVE_REASON);
       return;
     }
-    await focusChecks({ open: (t2) => openLiveHyprland(t2, request), label: "Hyprland" })(t);
+    await focusChecks({ open: (t2) => openLiveHyprland(t2, request), label: "Hyprland", backgroundWindow: false })(t);
   },
 };
 

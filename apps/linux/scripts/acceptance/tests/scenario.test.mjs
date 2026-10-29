@@ -111,6 +111,9 @@ describe("scenario runner", () => {
       assert.deepEqual(scenario.manual.map((item) => item.name), ["A link from another app doesn't steal focus", "Import comes to the front"]);
     }
     assert.deepEqual(selectScenarios(["#32"], SCENARIOS).map((scenario) => scenario.id), ["F22D", "F22X", "F22H"]);
+    const live = SCENARIOS.find((candidate) => candidate.id === "F22H");
+    assert.deepEqual(live.manual.map((item) => item.name), ["A link from another app doesn't steal focus", "Import comes to the front", "Hyprland: a window the app opens in the background takes no focus"]);
+    assert.match(live.manual[2].reason, /Hyprland focuses every newly mapped toplevel/);
   });
 });
 

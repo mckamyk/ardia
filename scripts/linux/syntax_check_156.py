@@ -120,7 +120,9 @@ def series_reproduces_tree(rel):
         patch = ROOT / "engine/patches" / name
         if not any(path == rel for path, _ in file_sections(patch.read_text(errors="surrogateescape"))):
             continue
-        if run(["git", "apply", "--whitespace=nowarn", f"--include={rel}", patch], root, check=False).returncode:
+        applied = subprocess.run(["git", "apply", "--whitespace=nowarn", f"--include={rel}", str(patch)], cwd=root,
+                                 env=dict(os.environ, GIT_CEILING_DIRECTORIES=str(root.parent)), capture_output=True)
+        if applied.returncode:
             return False
     same = target.read_bytes() == (SRC / rel).read_bytes()
     shutil.rmtree(root, ignore_errors=True)

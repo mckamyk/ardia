@@ -35,6 +35,12 @@ def pristine(relative):
     return result.stdout if result.returncode == 0 else None
 
 
+def apply_files(patch, files, directory):
+    environment = dict(os.environ, GIT_CEILING_DIRECTORIES=str(pathlib.Path(directory).resolve().parent))
+    return subprocess.run(['git', 'apply', '--whitespace=nowarn', *(f'--include={f}' for f in files), str(patch)],
+                          cwd=directory, env=environment, capture_output=True, text=True)
+
+
 def materialize_before(name, relatives, directory):
     patches = linux_patches()
     if name not in patches:
@@ -51,8 +57,7 @@ def materialize_before(name, relatives, directory):
         files = sorted(touched(earlier) & set(relatives))
         if not files:
             continue
-        result = subprocess.run(['git', 'apply', '--whitespace=nowarn', *(f'--include={f}' for f in files), str(PATCHES / earlier)],
-                                cwd=directory, capture_output=True, text=True)
+        result = apply_files(PATCHES / earlier, files, directory)
         if result.returncode != 0:
             raise AssertionError(f'{earlier}, earlier in the series, does not apply: {result.stderr}')
 
