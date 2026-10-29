@@ -1,14 +1,14 @@
 import os
 import pathlib
-import shutil
 import subprocess
 import tempfile
 import unittest
 
+from chromium_series import applied
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LINUX = ROOT / 'src/ardia/linux'
 PATCH = ROOT.parents[0] / 'patches/chromium-linux-web-store-uninstall.patch'
-CHROMIUM = pathlib.Path.home() / 'ardia-linux-build-156/chromium_git/chromium/src'
 DELEGATE = 'chrome/browser/extensions/api/management/chrome_management_api_delegate.cc'
 
 
@@ -122,16 +122,8 @@ class WebStoreWiringTests(unittest.TestCase):
         self.assertIn('g_ardia_linux_store_uninstall', added)
         self.assertIn('#if BUILDFLAG(IS_LINUX)', added)
         self.assertNotRegex(added, r'(?m)^\+\s*(//|/\*)')
-        source = CHROMIUM / DELEGATE
-        if not source.exists() or shutil.which('patch') is None:
-            self.skipTest('Chromium 156 source is unavailable')
-        with tempfile.TemporaryDirectory(prefix='ardia-web-store-patch-') as directory:
-            target = pathlib.Path(directory) / DELEGATE
-            target.parent.mkdir(parents=True)
-            target.write_text(source.read_text())
-            result = subprocess.run(['patch', '-p1', '-F0', '-i', str(PATCH)], cwd=directory, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            delegate = body(target.read_text(), 'ChromeManagementAPIDelegate::UninstallFunctionDelegate(')
+        with applied(PATCH.name, DELEGATE) as directory:
+            delegate = body((directory / DELEGATE).read_text(), 'ChromeManagementAPIDelegate::UninstallFunctionDelegate(')
             self.assertLess(delegate.index('g_ardia_linux_store_uninstall(function, target_extension)'),
                             delegate.index('std::make_unique<ManagementUninstallFunctionUninstallDialogDelegate>'))
 

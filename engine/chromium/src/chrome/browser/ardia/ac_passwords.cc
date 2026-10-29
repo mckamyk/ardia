@@ -22,6 +22,7 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate_factory.h"
+#include "chrome/browser/ardia/ac_passwords_internal.h"
 #include "chrome/browser/ardia/ac_reauth.h"
 #include "chrome/browser/ardia/ac_sensitive_args.h"
 #include "chrome/common/extensions/api/passwords_private.h"
@@ -37,6 +38,7 @@ namespace ardia {
 namespace {
 
 using extensions::PasswordsPrivateDelegate;
+using passwords_internal::WithoutSlash;
 namespace pp = extensions::api::passwords_private;
 using Entries = PasswordsPrivateDelegate::UiEntries;
 
@@ -44,13 +46,6 @@ constexpr int kSettleChecks = 20;
 constexpr size_t kMaxSecretArgsBytes = 64 * 1024;
 constexpr base::TimeDelta kSettleStep = base::Milliseconds(50);
 constexpr base::TimeDelta kIdle = base::Seconds(60);
-
-std::string WithoutSlash(std::string realm) {
-  if (base::EndsWith(realm, "/")) {
-    realm.pop_back();
-  }
-  return realm;
-}
 
 std::string OriginOf(const pp::PasswordUiEntry& entry) {
   return entry.affiliated_domains.empty()
@@ -70,11 +65,6 @@ const pp::PasswordUiEntry* Find(const Entries& entries,
   return nullptr;
 }
 
-std::string ExceptionOrigin(const pp::ExceptionEntry& entry) {
-  return WithoutSlash(entry.urls.signon_realm.empty() ? entry.urls.link
-                                                      : entry.urls.signon_realm);
-}
-
 const char* StatusName(password_manager::ExportProgressStatus status) {
   switch (status) {
     case password_manager::ExportProgressStatus::kNotStarted:
@@ -89,6 +79,19 @@ const char* StatusName(password_manager::ExportProgressStatus status) {
       return "writeFailed";
   }
   return "unknown";
+}
+
+}
+
+namespace passwords_internal {
+
+using extensions::PasswordsPrivateDelegate;
+
+std::string WithoutSlash(std::string realm) {
+  if (base::EndsWith(realm, "/")) {
+    realm.pop_back();
+  }
+  return realm;
 }
 
 class PasswordsState : public ProfileState {
@@ -180,14 +183,13 @@ class PasswordsState : public ProfileState {
   base::WeakPtrFactory<PasswordsState> weak_factory_{this};
 };
 
-struct Session {
-  base::WeakPtr<PasswordsState> state;
-  base::WeakPtr<PasswordsPrivateDelegate> delegate;
-  base::ScopedClosureRunner busy;
+bool Session::alive() const {
+  return state && delegate;
+}
 
-  bool alive() const { return state && delegate; }
-  Profile* profile() const { return state->profile(); }
-};
+Profile* Session::profile() const {
+  return state->profile();
+}
 
 std::optional<Session> Open(const Call& call) {
   PasswordsState& state = StateFor<PasswordsState>(call.profile());
@@ -199,6 +201,12 @@ std::optional<Session> Open(const Call& call) {
   session.delegate = delegate->AsWeakPtr();
   return session;
 }
+
+}
+
+namespace {
+
+using passwords_internal::Session;
 
 using Then = base::OnceCallback<void(Session, Reply, const Entries&)>;
 
@@ -308,19 +316,7 @@ Check Gone(std::string origin, std::string username) {
 using ardia::Call;
 using ardia::Entries;
 using ardia::Reply;
-using ardia::Session;
-
-#define AC_PASSWORDS_OPEN_WITH(json)                         \
-  Call call(profile_dir, json, reply, context);              \
-  if (!call) {                                               \
-    return;                                                  \
-  }                                                          \
-  std::optional<Session> session = ardia::Open(call);        \
-  if (!session) {                                            \
-    return call.TakeReply().Error("no password manager");    \
-  }
-
-#define AC_PASSWORDS_OPEN() AC_PASSWORDS_OPEN_WITH(args_json)
+using ardia::passwords_internal::Session;
 
 #define AC_PASSWORDS_SENSITIVE_ARGS(args)                                   \
   ardia::SensitiveArgs args(args_json, ardia::kMaxSecretArgsBytes);         \
@@ -528,50 +524,6 @@ AC_ENGINE_CALL(ac_passwords_remove) {
                               ardia::kSettleChecks);
           },
           call.String("origin"), call.String("username")));
-}
-
-AC_ENGINE_CALL(ac_passwords_exceptions) {
-  AC_PASSWORDS_OPEN();
-  base::WeakPtr<extensions::PasswordsPrivateDelegate> delegate =
-      session->delegate;
-  delegate->GetPasswordExceptionsList(base::BindOnce(
-      [](Session, Reply reply,
-         const extensions::PasswordsPrivateDelegate::ExceptionEntries&
-             exceptions) {
-        base::ListValue origins;
-        for (const auto& exception : exceptions) {
-          std::string origin = ardia::ExceptionOrigin(exception);
-          if (!origin.empty()) {
-            origins.Append(std::move(origin));
-          }
-        }
-        reply.Send(base::DictValue().Set("origins", std::move(origins)));
-      },
-      std::move(*session), call.TakeReply()));
-}
-
-AC_ENGINE_CALL(ac_passwords_allow) {
-  AC_PASSWORDS_OPEN();
-  base::WeakPtr<extensions::PasswordsPrivateDelegate> delegate =
-      session->delegate;
-  delegate->GetPasswordExceptionsList(base::BindOnce(
-      [](std::string origin, Session session, Reply reply,
-         const extensions::PasswordsPrivateDelegate::ExceptionEntries&
-             exceptions) {
-        std::vector<int> ids;
-        for (const auto& exception : exceptions) {
-          if (ardia::ExceptionOrigin(exception) == origin) {
-            ids.push_back(exception.id);
-          }
-        }
-        for (int id : ids) {
-          if (session.alive()) {
-            session.delegate->RemovePasswordException(id);
-          }
-        }
-        reply.Ok();
-      },
-      call.String("origin"), std::move(*session), call.TakeReply()));
 }
 
 AC_ENGINE_CALL(ac_passwords_export) {

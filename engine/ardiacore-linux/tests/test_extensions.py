@@ -1,11 +1,10 @@
 import json
 import pathlib
 import re
-import shutil
-import subprocess
 import tempfile
 import unittest
 
+from chromium_series import applied
 from test_downloads import compile_and_run
 from test_renderer_contract import method
 from test_session_merge import VALUES
@@ -344,15 +343,8 @@ int main() {
         text = patch.read_text()
         self.assertIn('g_ardia_open_action_popup', text)
         self.assertNotRegex('\n'.join(line for line in text.splitlines() if line.startswith('+')), r'^\+\s*(//|/\*)')
-        source = pathlib.Path.home() / 'ardia-linux-build-156/chromium_git/chromium/src/chrome/browser/extensions/api/extension_action/extension_action_api.cc'
-        if not source.exists() or shutil.which('patch') is None:
-            self.skipTest('Chromium 156 source is unavailable')
-        with tempfile.TemporaryDirectory(prefix='ardia-action-popup-patch-') as directory:
-            target = pathlib.Path(directory) / 'chrome/browser/extensions/api/extension_action/extension_action_api.cc'
-            target.parent.mkdir(parents=True)
-            target.write_text(source.read_text())
-            result = subprocess.run(['patch', '-p1', '--dry-run', '-F0', '-i', str(patch)], cwd=directory, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with applied(patch.name, 'chrome/browser/extensions/api/extension_action/extension_action_api.cc') as directory:
+            self.assertIn('g_ardia_open_action_popup', (directory / 'chrome/browser/extensions/api/extension_action/extension_action_api.cc').read_text())
 
 
 if __name__ == '__main__':

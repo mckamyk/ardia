@@ -1,13 +1,13 @@
 import pathlib
-import shutil
 import subprocess
 import tempfile
 import unittest
 
+from chromium_series import applied
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LINUX = ROOT / 'src/ardia/linux'
 PATCH = ROOT.parents[0] / 'patches/chromium-linux-autoplay-policy.patch'
-SOURCE = pathlib.Path.home() / 'ardia-linux-build-156/chromium_git/chromium/src/chrome/browser/chrome_content_browser_client.cc'
 
 
 def body(source, signature):
@@ -74,15 +74,8 @@ class AutoplayPolicyTests(unittest.TestCase):
         self.assertIn('bool (*g_ardia_linux_autoplay_blocked)(content::WebContents* contents) = nullptr;', added)
         self.assertIn('return blink::mojom::AutoplayPolicy::kDocumentUserActivationRequired;', added)
         self.assertNotRegex(added, r'(?m)^\+\s*(//|/\*)')
-        if not SOURCE.exists() or shutil.which('patch') is None:
-            self.skipTest('Chromium 156 source is unavailable')
-        with tempfile.TemporaryDirectory(prefix='ardia-autoplay-patch-') as directory:
-            target = pathlib.Path(directory) / 'chrome/browser/chrome_content_browser_client.cc'
-            target.parent.mkdir(parents=True)
-            target.write_text(SOURCE.read_text())
-            result = subprocess.run(['patch', '-p1', '-F0', '-i', str(PATCH)], cwd=directory, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            patched = target.read_text()
+        with applied(PATCH.name, 'chrome/browser/chrome_content_browser_client.cc') as directory:
+            patched = (directory / 'chrome/browser/chrome_content_browser_client.cc').read_text()
             policy = body(patched, 'blink::mojom::AutoplayPolicy GetAutoplayPolicyForWebContents(')
             self.assertLess(policy.index('g_ardia_linux_autoplay_blocked(web_contents)'), policy.index('DetermineWebContentsAutoplayPolicy('))
             self.assertLess(patched.index('bool (*g_ardia_linux_autoplay_blocked)'), patched.index('namespace {\n\nconst char kAIManagerUserDataKey'))

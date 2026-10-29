@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
-#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -59,14 +58,12 @@ Connection::~Connection() {
   }
 }
 
-std::optional<std::string> HyprlandSocketPath() {
-  const char* runtime = std::getenv("XDG_RUNTIME_DIR");
-  const char* signature = std::getenv("HYPRLAND_INSTANCE_SIGNATURE");
-  if (!runtime || runtime[0] != '/' || !signature ||
-      !SafeComponent(signature)) {
+std::optional<std::string> HyprlandSocketPath(const std::string& runtime,
+                                              const std::string& signature) {
+  if (runtime.empty() || runtime[0] != '/' || !SafeComponent(signature)) {
     return std::nullopt;
   }
-  return std::string(runtime) + "/hypr/" + signature + "/.socket.sock";
+  return runtime + "/hypr/" + signature + "/.socket.sock";
 }
 
 Connection ConnectHyprland(const std::string& path) {

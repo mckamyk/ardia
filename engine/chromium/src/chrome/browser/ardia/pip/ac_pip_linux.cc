@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include "ardia/core/ac_launch_switches.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
@@ -268,7 +269,9 @@ void PrepareArdiaPictureInPicture(views::Widget* widget,
           .supports_global_screen_coordinates) {
     return;
   }
-  auto socket = ardia::pip_linux::HyprlandSocketPath();
+  auto socket = ardia::pip_linux::HyprlandSocketPath(
+      ardiacore::InstanceValue("hyprland-runtime-dir").value_or(""),
+      ardiacore::InstanceValue("hyprland-instance").value_or(""));
   if (!socket) {
     return;
   }

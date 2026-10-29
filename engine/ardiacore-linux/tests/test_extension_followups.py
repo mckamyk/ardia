@@ -1,10 +1,9 @@
 import pathlib
 import re
-import shutil
-import subprocess
 import tempfile
 import unittest
 
+from chromium_series import applied
 from test_downloads import compile_and_run
 from test_renderer_contract import method
 
@@ -20,16 +19,9 @@ def added_lines(patch):
     return '\n'.join(line for line in patch.splitlines() if line.startswith('+') and not line.startswith('+++'))
 
 
-def dry_run(test, patch, *relatives):
-    if any(not (CHROMIUM / relative).exists() for relative in relatives) or shutil.which('patch') is None:
-        test.skipTest('Chromium 156 source is unavailable')
-    with tempfile.TemporaryDirectory(prefix='ardia-followup-patch-') as directory:
-        for relative in relatives:
-            target = pathlib.Path(directory) / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text((CHROMIUM / relative).read_text())
-        result = subprocess.run(['patch', '-p1', '--dry-run', '-F0', '-i', str(patch)], cwd=directory, capture_output=True, text=True)
-        test.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+def dry_run(patch, *relatives):
+    with applied(patch.name, *relatives):
+        pass
 
 
 class ExtensionFollowupHelperTests(unittest.TestCase):
@@ -145,7 +137,7 @@ class ExtensionFollowupPatchTests(unittest.TestCase):
         second = second[second.index('+#if !BUILDFLAG(IS_LINUX)'):]
         self.assertLess(second.index('settings->startup_pages'), second.index('+#endif'))
         self.assertLess(second.index('+#endif'), second.index('settings->search_engine'))
-        dry_run(self, patch, 'chrome/common/extensions/api/_manifest_features.json',
+        dry_run(patch, 'chrome/common/extensions/api/_manifest_features.json',
                 'chrome/browser/extensions/api/settings_overrides/settings_overrides_api.cc')
 
     def test_chromium_extension_accelerators_are_not_registered_on_linux(self):
@@ -158,7 +150,7 @@ class ExtensionFollowupPatchTests(unittest.TestCase):
         action = text[text.index('+++ b/chrome/browser/ui/views/extensions/extension_action_delegate_desktop.cc'):]
         register = action[action.index('ExtensionActionDelegateDesktop::RegisterCommand() {'):]
         self.assertTrue(register.split('\n')[1] == '+#if !BUILDFLAG(IS_LINUX)', register[:200])
-        dry_run(self, patch, 'chrome/browser/ui/views/extensions/extension_keybinding_registry_views.cc',
+        dry_run(patch, 'chrome/browser/ui/views/extensions/extension_keybinding_registry_views.cc',
                 'chrome/browser/ui/views/extensions/extension_action_delegate_desktop.cc')
 
     def test_native_messaging_patch_adds_a_linux_lookup_hook_the_host_installs(self):
@@ -180,7 +172,7 @@ class ExtensionFollowupPatchTests(unittest.TestCase):
         self.assertLess(start.index('g_ardia_native_messaging_manifest = &NativeMessagingManifest;'), start.index('StartLinuxExtensions('))
         self.assertLess(text.index('DIR_CHROME_USER_NATIVE_MESSAGING'), text.index('g_ardia_native_messaging_manifest(host_name)'))
         self.assertLess(text.index('g_ardia_native_messaging_manifest(host_name)'), text.index('DIR_NATIVE_MESSAGING, host_name'))
-        dry_run(self, patch, 'chrome/browser/extensions/api/messaging/launch_context_posix.cc')
+        dry_run(patch, 'chrome/browser/extensions/api/messaging/launch_context_posix.cc')
 
 
 class ExtensionFollowupSourceRules(unittest.TestCase):

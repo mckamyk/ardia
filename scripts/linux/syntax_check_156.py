@@ -1,4 +1,5 @@
 import concurrent.futures
+import functools
 import os
 import pathlib
 import re
@@ -14,6 +15,7 @@ PATCHED = WORK / "overlay"
 LINUX = ROOT / "engine/ardiacore-linux/src"
 ENGINE = ROOT / "engine/chromium/src"
 ARDIA = ENGINE / "chrome/browser/ardia"
+BASE = pathlib.Path(os.environ.get("AC_SERIES_BASE", SRC.parent.parent.parent / "series-base-linux-x64"))
 LAYER_HEADERS = ["ac_hooks.h", "ac_content_hooks.h", "ac_launch_switches.h"]
 GIT_HEADER = ("diff --git", "index ", "new file mode", "deleted file mode", "old mode", "new mode", "similarity", "rename ")
 
@@ -105,6 +107,28 @@ def added_lines_present(section, path):
     return all(l in content for l in added if l)
 
 
+@functools.lru_cache(maxsize=None)
+def series_reproduces_tree(rel):
+    if not (BASE / rel).is_file() or not (SRC / rel).is_file():
+        return False
+    root = WORK / "series-check"
+    shutil.rmtree(root, ignore_errors=True)
+    target = root / rel
+    target.parent.mkdir(parents=True)
+    shutil.copy2(BASE / rel, target)
+    for name in linux_patches():
+        patch = ROOT / "engine/patches" / name
+        if not any(path == rel for path, _ in file_sections(patch.read_text(errors="surrogateescape"))):
+            continue
+        applied = subprocess.run(["git", "apply", "--whitespace=nowarn", f"--include={rel}", str(patch)], cwd=root,
+                                 env=dict(os.environ, GIT_CEILING_DIRECTORIES=str(root.parent)), capture_output=True)
+        if applied.returncode:
+            return False
+    same = target.read_bytes() == (SRC / rel).read_bytes()
+    shutil.rmtree(root, ignore_errors=True)
+    return same
+
+
 def build_overlay():
     gaps, conflicts = {}, {}
     scratch = WORK / "section.patch"
@@ -122,7 +146,7 @@ def build_overlay():
             if run(base + ["--forward", "--dry-run"], PATCHED, check=False).returncode == 0:
                 run(base + ["--forward"], PATCHED)
                 gaps.setdefault(name, []).append(rel)
-            elif not added_lines_present(section, copy):
+            elif not added_lines_present(section, copy) and not series_reproduces_tree(rel):
                 conflicts.setdefault(name, []).append(rel)
     scratch.unlink(missing_ok=True)
     return gaps, conflicts

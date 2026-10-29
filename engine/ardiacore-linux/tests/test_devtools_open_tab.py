@@ -6,11 +6,12 @@ import subprocess
 import tempfile
 import unittest
 
+from chromium_series import applied
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REPO = ROOT.parents[1]
 PATCH = REPO / 'engine/patches/chromium-linux-devtools-open-tab.patch'
 HOST = ROOT / 'src/ardia/linux/ac_linux_host.cc'
-TREE = pathlib.Path(os.environ.get('ARDIA_CHROMIUM_156_SRC', pathlib.Path.home() / 'ardia-linux-build-156/chromium_git/chromium/src'))
 
 
 def block(source, signature):
@@ -233,19 +234,8 @@ class DevToolsOpenTabTests(unittest.TestCase):
                         series.index('chromium chromium-linux-devtools-open-tab.patch linux'))
 
     def test_the_patch_applies_to_the_156_tree(self):
-        name = 'chrome/browser/devtools/devtools_window.cc'
-        clean = subprocess.run(['git', '-C', str(TREE), 'show', f'HEAD:{name}'], capture_output=True, text=True) \
-            if TREE.is_dir() else None
-        if not clean or clean.returncode != 0 or not shutil.which('patch'):
-            self.skipTest('Chromium 156 tree or GNU patch unavailable')
-        with tempfile.TemporaryDirectory(prefix='ardia-devtools-open-tab-') as scratch:
-            copy = pathlib.Path(scratch) / name
-            copy.parent.mkdir(parents=True)
-            copy.write_text(clean.stdout)
-            result = subprocess.run(['patch', '-p1', '--forward', '--batch', '-i', str(PATCH)], cwd=scratch,
-                                    capture_output=True, text=True, timeout=30)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            patched = copy.read_text()
+        with applied(PATCH.name, 'chrome/browser/devtools/devtools_window.cc') as scratch:
+            patched = (scratch / 'chrome/browser/devtools/devtools_window.cc').read_text()
             self.assertIn('g_ardia_linux_devtools_opened_tab(inspected_web_contents, linux_opened,', patched)
             self.assertIn('g_ardia_linux_devtools_open_url(profile_, fixed_url);', patched)
 

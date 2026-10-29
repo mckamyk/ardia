@@ -6,7 +6,6 @@ import { after, before, describe, it } from "node:test";
 import { buildReport, exitCode, formatLine, scenarioStatus } from "../lib/report.mjs";
 import { runScenario } from "../lib/scenario.mjs";
 import { SCENARIOS, selectScenarios } from "../scenarios/index.mjs";
-import f22 from "../scenarios/f22-focus.mjs";
 
 const exists = (path) => access(path).then(() => true, () => false);
 
@@ -103,17 +102,18 @@ describe("scenario runner", () => {
     assert.equal(seen.background, true);
   });
 
-  it("marks focus checks manual when no nested compositor is installed", async () => {
-    const path = process.env.PATH;
-    process.env.PATH = join(root, "empty-bin");
-    try {
-      const result = await run(f22).promise;
-      assert.equal(result.status, "manual");
-      assert.equal(result.manual.length, 3);
-      assert.ok(result.manual.every((m) => /no nested Wayland compositor/.test(m.reason)));
-    } finally {
-      process.env.PATH = path;
+  it("checks focus only in the private desktop sessions, which carry F22's manual steps", () => {
+    const ids = SCENARIOS.map((scenario) => scenario.id);
+    assert.ok(!ids.includes("F22"));
+    for (const id of ["F22D", "F22X"]) {
+      const scenario = SCENARIOS.find((candidate) => candidate.id === id);
+      assert.equal(scenario.issue, 32);
+      assert.deepEqual(scenario.manual.map((item) => item.name), ["A link from another app doesn't steal focus", "Import comes to the front"]);
     }
+    assert.deepEqual(selectScenarios(["#32"], SCENARIOS).map((scenario) => scenario.id), ["F22D", "F22X", "F22H"]);
+    const live = SCENARIOS.find((candidate) => candidate.id === "F22H");
+    assert.deepEqual(live.manual.map((item) => item.name), ["A link from another app doesn't steal focus", "Import comes to the front", "Hyprland: a window the app opens in the background takes no focus"]);
+    assert.match(live.manual[2].reason, /Hyprland focuses every newly mapped toplevel/);
   });
 });
 
@@ -141,9 +141,11 @@ describe("report", () => {
 describe("scenario catalogue", () => {
   it("covers every issue #81 names and the later feature issues, once each", () => {
     const headless = SCENARIOS.filter((s) => !s.desktop);
-    assert.deepEqual(headless.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 32, 33, 34, 35, 36, 37, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 88, 89, 92, 97, 98, 99, 100, 101, 102, 104, 105, 106, 107, 108, 109, 110, 111, 114, 137, 148, 149, 150, 156, 172, 173, 221]);
+    const desktopOnly = [32];
+    assert.deepEqual(headless.map((s) => s.issue).sort((a, b) => a - b), [11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 33, 34, 35, 36, 37, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 88, 89, 92, 97, 98, 99, 100, 101, 102, 104, 105, 106, 107, 108, 109, 110, 111, 114, 137, 148, 149, 150, 156, 172, 173, 221]);
     assert.equal(new Set(SCENARIOS.map((s) => s.id)).size, SCENARIOS.length);
-    for (const s of SCENARIOS.filter((x) => x.desktop)) assert.ok(headless.some((h) => h.issue === s.issue), `${s.id} adds desktop checks to an issue the headless suite covers`);
+    for (const s of SCENARIOS.filter((x) => x.desktop)) assert.ok(desktopOnly.includes(s.issue) || headless.some((h) => h.issue === s.issue), `${s.id} adds desktop checks to an issue the headless suite covers`);
+    for (const issue of desktopOnly) assert.ok(SCENARIOS.some((s) => s.desktop && s.issue === issue) && !headless.some((h) => h.issue === issue), `#${issue} is checked in desktop sessions only`);
     for (const s of SCENARIOS) {
       assert.equal(typeof s.run, "function", s.id);
       for (const m of s.manual ?? []) assert.ok(m.name && m.steps?.length, `${s.id} manual steps`);
