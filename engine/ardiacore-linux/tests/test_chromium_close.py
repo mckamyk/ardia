@@ -370,7 +370,7 @@ class ChromiumCloseSourceTests(unittest.TestCase):
         mac = series.read_series('mac')
         linux = series.read_series('linux')
         names = '\n'.join(step.kind + ' ' + step.name for step in mac)
-        self.assertEqual(hashlib.sha256(names.encode()).hexdigest(), 'e6f2ad406ba68e22abe80fa0e46d239de1920ffc4eef2539164788808c0f2798')
+        self.assertEqual(hashlib.sha256(names.encode()).hexdigest(), '5021b9ba6f4631144c963e50828b727e461d97f2d7d800ffc45bc98b8a584db3')
         self.assertNotIn(PATCH.name, [step.name for step in mac])
         step = next(step for step in linux if step.name == PATCH.name)
         self.assertEqual(series.phase_of(step), 'chromium')

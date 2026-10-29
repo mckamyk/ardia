@@ -125,7 +125,7 @@ std::optional<base::DictValue> Configuration(const base::DictValue& input) {
   for (auto it = options->begin(); it != options->end(); ++it) {
     const std::string& key = (*it).first;
     const base::Value& value = (*it).second;
-    if (key == "pinned" || key == "fileAccess" || key == "incognito") {
+    if (key == "pinned" || key == "fileAccess" || key == "incognito" || key == "userScripts") {
       if (!value.is_bool()) return std::nullopt;
     } else if (key == "siteAccess") {
       if (!value.is_string() ||

@@ -18,10 +18,10 @@ class ExtensionContractTests(unittest.TestCase):
             self.skipTest('C++ compiler is unavailable')
         loader = ROOT / 'apps/linux/scripts/host-contract-loader.mjs'
         probe = ROOT / 'apps/linux/scripts/host-contract-extension.mjs'
-        result = subprocess.run(['node', '--experimental-strip-types', '--import', str(loader), str(probe), '{"pinned":true,"fileAccess":true,"siteAccess":"onClick"}'], capture_output=True, text=True, check=True)
+        result = subprocess.run(['node', '--experimental-strip-types', '--import', str(loader), str(probe), '{"pinned":true,"fileAccess":true,"siteAccess":"onClick","userScripts":true}'], capture_output=True, text=True, check=True)
         payload = json.loads(result.stdout)
         extension = 'a' * 32
-        self.assertEqual(payload, {'id': extension, 'options': {'pinned': True, 'fileAccess': True, 'siteAccess': 'onClick'}})
+        self.assertEqual(payload, {'id': extension, 'options': {'pinned': True, 'fileAccess': True, 'siteAccess': 'onClick', 'userScripts': True}})
         helper = (ROOT / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_extensions.cc').read_text()
         transform = ('#include <algorithm>\n#include <string_view>\n' + method(helper, 'bool ValidExtensionId(') + '\n' +
                      method(helper, 'std::optional<base::DictValue> Configuration(') +
@@ -82,6 +82,7 @@ base::DictValue args;
 bool pinned = false;
 bool files = false;
 bool withheld = false;
+bool scripts = false;
 bool ok = false;
 std::string error;
 struct Reply {
@@ -104,6 +105,14 @@ struct PermissionsManager {
   static PermissionsManager* Get(Profile*) { static PermissionsManager value; return &value; }
   bool CanAffectExtension(const Extension&) { return true; }
   bool HasBroadGrantedHostPermissions(const Extension&) { return false; }
+};
+struct UserScriptManager {
+  static bool IsUserScriptsAPIPermissionAvailable(const Extension&) { return true; }
+  void SetUserScriptPrefEnabled(const std::string&, bool value) { scripts = value; }
+};
+struct ExtensionSystem {
+  static ExtensionSystem* Get(Profile*) { static ExtensionSystem value; return &value; }
+  UserScriptManager* user_script_manager() { static UserScriptManager value; return &value; }
 };
 struct ScriptingPermissionsModifier {
   ScriptingPermissionsModifier(Profile*, const Extension*) {}
@@ -129,11 +138,13 @@ int main() {
   args = *prepared;
   Backend();
   assert(ok && error.empty());
-  assert(pinned && files && withheld);
+  assert(pinned && files && withheld && scripts);
   base::DictValue invalid;
   invalid.Set("id", std::string(32, 'a')).Set("options", base::DictValue().Set("future", true));
   assert(!ExtensionConfiguration(invalid));
   invalid.Set("options", base::DictValue().Set("pinned", "true"));
+  assert(!ExtensionConfiguration(invalid));
+  invalid.Set("options", base::DictValue().Set("userScripts", "on"));
   assert(!ExtensionConfiguration(invalid));
   invalid.Set("options", base::DictValue().Set("siteAccess", "unknown"));
   assert(!ExtensionConfiguration(invalid));
