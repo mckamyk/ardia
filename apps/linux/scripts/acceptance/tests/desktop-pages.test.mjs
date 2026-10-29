@@ -7,7 +7,7 @@ import { inflateSync } from "node:zlib";
 import { pcm16, rms, WIREPLUMBER_HEADLESS } from "../lib/desktopAudio.mjs";
 import { colorDistance, differingFraction, fractionNear, hueDistance, hueOf, meanColor, parseHex, toHex, towards } from "../lib/desktopPixels.mjs";
 import { ICON_COLOR, solidPng } from "../lib/pageFixtures.mjs";
-import { popoverBeside } from "../scenarios/d-gestures.mjs";
+import { popoverVerdict } from "../scenarios/d-gestures.mjs";
 import { certificateFacts, compareCertificate, dockVerdict, panelFacts } from "../scenarios/d-pages.mjs";
 
 const run = promisify(execFile);
@@ -84,14 +84,16 @@ test("certificate details are compared field by field, the fingerprint by its sh
   assert.equal(compareCertificate(served, { ...shown, sha256: "FF 30 D9 14 AE 7B D0 0C…" }).length, 1);
 });
 
-test("a popover is a change beside the selection, not the selection's own highlight", () => {
+test("a popover counts as drawn where the shell put it, and fails when the page around it is blanked", () => {
+  const bar = { x: 60, y: 60, width: 160, height: 32 };
   const before = image(400, 200, () => [255, 255, 255]);
-  const after = image(400, 200, (x, y) => (x >= 50 && x < 250 && y >= 100 && y < 130 ? [80, 120, 220] : x >= 60 && x < 220 && y >= 40 && y < 80 ? [30, 30, 30] : [255, 255, 255]));
-  const found = popoverBeside(before, after, { x: 50, y: 100, width: 200, height: 30 });
-  assert.ok(found.near, JSON.stringify(found.all));
-  assert.ok(found.near.y < 100);
-  const highlightOnly = image(400, 200, (x, y) => (x >= 50 && x < 250 && y >= 100 && y < 130 ? [80, 120, 220] : [255, 255, 255]));
-  assert.equal(popoverBeside(before, highlightOnly, { x: 50, y: 100, width: 200, height: 30 }).near, null);
+  const drawn = image(400, 200, (x, y) => (x >= 60 && x < 220 && y >= 60 && y < 92 ? [30, 30, 30] : [255, 255, 255]));
+  assert.ok(popoverVerdict(before, drawn, bar).onScreen > 0.9);
+  assert.ok(popoverVerdict(before, drawn, bar).around < 0.01);
+  assert.ok(popoverVerdict(before, before, bar).onScreen < 0.01);
+  const blanked = image(400, 200, (x, y) => (x >= 28 && x < 252 && y >= 28 && y < 124 ? [62, 62, 95] : [255, 255, 255]));
+  assert.ok(popoverVerdict(before, blanked, bar).around > 0.9);
+  assert.equal(popoverVerdict(before, drawn, { ...bar, y: 2 }).around, 0);
 });
 
 test("the portal backend returns the chosen save filter from the request's own filters", { skip: false, timeout: 30000 }, async (t) => {

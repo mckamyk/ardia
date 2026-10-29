@@ -11,6 +11,11 @@ let overlayBlocked = (_key: string | undefined) => false;
 export const hostOverlayBlocked = (key: string | undefined) => overlayBlocked(key);
 export const setHostOverlayCheck = (check: typeof overlayBlocked) => void (overlayBlocked = check);
 
+export function backdropCovers(captured: readonly Bounds[], occlusions: readonly Bounds[]) {
+  return occlusions.every((next) => captured.some((taken) =>
+    next.x < taken.x + taken.width && next.x + next.width > taken.x && next.y < taken.y + taken.height && next.y + next.height > taken.y));
+}
+
 export function tabViewport(rect: Bounds, viewport: { width: number; height: number }, visible: boolean): TabViewport {
   const finite = [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite);
   const intersects = finite && rect.width > 0 && rect.height > 0 && rect.x < viewport.width && rect.y < viewport.height && rect.x + rect.width > 0 && rect.y + rect.height > 0;

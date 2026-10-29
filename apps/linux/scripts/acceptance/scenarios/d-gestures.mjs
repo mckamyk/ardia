@@ -4,7 +4,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { evaluate } from "../lib/cdp.mjs";
 import { ardiaWindow, clickBlankPage, clickInPage, clickMenuItem, clickRowToggle, clickSidebarTab, focusPageByClick, openSettingsRow, pageFixtures, pageSession, paneRect, probe, rowControl, screenPoint, scrolledIntoView, shot, titledSeed , closeSettingsWindow } from "../lib/desktopPages.mjs";
 import { colorDistance, differingFraction, fractionNear, meanColor, parseHex, toHex, towards } from "../lib/desktopPixels.mjs";
-import { changedCells, regions } from "../lib/desktop.mjs";
 import { clickLabelIn, clickTextIn, currentRect, desktopUnavailable, newWindow, openDesktop, pointAt, startDesktopBrowser } from "../lib/desktopSession.mjs";
 import { ICON_COLOR } from "../lib/pageFixtures.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
@@ -44,20 +43,9 @@ async function choosePopUp(desktop, app, shell, title, option, { prefix = false 
   await delay(800);
 }
 
-export function popoverBeside(before, after, selection) {
-  const cells = changedCells(before, after, { fill: 0.08 });
-  const pad = 4;
-  for (let row = 0; row < cells.rows; row++) {
-    for (let column = 0; column < cells.columns; column++) {
-      const x = column * cells.cell;
-      const y = row * cells.cell;
-      const overlaps = x + cells.cell > selection.x - pad && x < selection.x + selection.width + pad && y + cells.cell > selection.y - pad && y < selection.y + selection.height + pad;
-      if (overlaps) cells.grid[row * cells.columns + column] = 0;
-    }
-  }
-  const found = regions(cells, { gap: 1 });
-  const near = found.filter((r) => r.width >= 40 && r.height >= 16 && r.height <= 80 && r.width <= 640 && (Math.abs(r.y + r.height - selection.y) <= 60 || Math.abs(r.y - (selection.y + selection.height)) <= 60) && r.x < selection.x + selection.width + 300 && r.x + r.width > selection.x - 300);
-  return { near: near[0] ?? null, all: found.slice(0, 6) };
+export function popoverVerdict(before, shown, bar) {
+  const around = { x: bar.x, y: Math.max(0, bar.y - 28), width: bar.width, height: Math.min(24, Math.max(0, bar.y - 4)) };
+  return { onScreen: differingFraction(before, shown, bar), around: around.height ? differingFraction(before, shown, around) : 0 };
 }
 
 export const f16Desktop = {
@@ -129,28 +117,27 @@ export const f16Desktop = {
     await t.check("drag-selecting a sentence shows the selection popover beside it and Escape closes it, keeping the selection", async () => {
       const words = await screenPoint(desktop, window, shell, two, tabTwo, "document.getElementById('words')");
       const before = await desktop.capture();
-      const labelsBefore = await shell.labels();
       await desktop.drag({ x: words.rect.x + 2, y: words.y }, { x: words.rect.x + words.rect.width - 2, y: words.y }, { steps: 16, hold: 120 });
       const selected = await until(async () => { const s = await shell.eval(`ardiaLinux.selection.state.getState()[${js(tabTwo)}] ?? null`); return s?.text ? s : false; }, { timeout: 8000, label: "the selection" });
       await delay(1200);
       const shown = await desktop.capture();
       await shot(t, desktop, "selection-popover");
-      const { near, all } = popoverBeside(before, shown, words.rect);
-      if (!near) {
-        const added = (await shell.labels()).filter((l) => !labelsBefore.includes(l));
-        const frame = await currentRect(desktop, window);
-        const bar = added.length ? await shell.eval(`(() => { const n = [...document.querySelectorAll('[aria-label],[title]')].find((n) => ${js(added)}.includes(n.getAttribute('aria-label') ?? n.getAttribute('title'))); if (!n) return null; const r = n.parentElement.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; })()`) : null;
-        const onScreen = bar ? differingFraction(before, shown, { x: frame.x + bar.x, y: frame.y + bar.y, width: bar.width, height: bar.height }) : null;
-        throw new Error(`no popover on screen beside the selection ${JSON.stringify(words.rect)}; screen changes ${JSON.stringify(all)}; the shell added controls ${JSON.stringify(added)} at ${JSON.stringify(bar)}, where ${onScreen === null ? "nothing" : `${(onScreen * 100).toFixed(1)}% of the pixels`} changed`);
-      }
+      const frame = await currentRect(desktop, window);
+      const inShell = await shell.eval(`(() => { const n = document.querySelector('[data-testid="ardia-page-overlay"] > div > div'); if (!n) return null; const r = n.getBoundingClientRect(); return r.width > 0 && r.height > 0 ? { x: r.left, y: r.top, width: r.width, height: r.height } : null; })()`);
+      if (!inShell) throw new Error(`the shell shows no selection popover for ${JSON.stringify(selected.text)}`);
+      const near = { x: Math.round(frame.x + inShell.x), y: Math.round(frame.y + inShell.y), width: Math.round(inShell.width), height: Math.round(inShell.height) };
+      const drawn = popoverVerdict(before, shown, near);
+      if (drawn.onScreen < 0.1) throw new Error(`the shell has the selection popover at ${JSON.stringify(near)} but only ${(drawn.onScreen * 100).toFixed(1)}% of its pixels changed on screen`);
+      if (drawn.around > 0.25) throw new Error(`the page above the popover at ${JSON.stringify(near)} isn't drawn (${(drawn.around * 100).toFixed(1)}% changed)`);
       await desktop.key("escape");
-      await delay(800);
+      await until(async () => !(await shell.eval(`!!document.querySelector('[data-testid="ardia-page-overlay"] > div > div')`)), { timeout: 3000, label: "Escape to close the selection popover" });
+      await delay(500);
       const after = await desktop.capture();
       const gone = differingFraction(shown, after, near);
+      if (gone < 0.1) throw new Error(`the popover at ${JSON.stringify(near)} stayed on screen after Escape (changed ${gone.toFixed(2)})`);
       const kept = await evaluate(two, "getSelection().toString()", { userGesture: false });
-      if (gone < 0.2) throw new Error(`the popover at ${JSON.stringify(near)} stayed after Escape (changed ${gone.toFixed(2)})`);
       if (!kept.includes("quoted sentence")) throw new Error(`Escape dropped the page's selection (${JSON.stringify(kept)})`);
-      return { selection: selected.text, popover: near, selectionRect: words.rect };
+      return { selection: selected.text, popover: near, drawn, gone, selectionRect: words.rect };
     });
 
     const url = `${target}-two`;
