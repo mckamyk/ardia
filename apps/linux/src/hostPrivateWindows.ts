@@ -7,12 +7,14 @@ const WINDOW_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 export function privateWindowEntries(reply: unknown, own: string): PrivateWindowEntry[] {
   if (!Array.isArray(reply)) return [];
-  const ids = new Set<string>();
+  const ids = new Map<string, number | null>();
   for (const entry of reply) {
-    const id = entry && typeof entry === "object" ? (entry as { id?: unknown }).id : undefined;
-    if (typeof id === "string" && WINDOW_ID.test(id) && id !== own) ids.add(id);
+    const { id, ordinal } = entry && typeof entry === "object" ? entry as { id?: unknown; ordinal?: unknown } : {};
+    if (typeof id === "string" && WINDOW_ID.test(id) && id !== own && !ids.has(id))
+      ids.set(id, Number.isSafeInteger(ordinal) && (ordinal as number) > 0 ? ordinal as number : null);
   }
-  return [...ids].map((id, index) => ({ id, title: index ? `Private Window ${index + 1}` : "Private Window" }));
+  const label = (ordinal: number) => ordinal > 1 ? `Private Window ${ordinal}` : "Private Window";
+  return [...ids].map(([id, ordinal], index) => ({ id, title: label(ordinal ?? index + 1) }));
 }
 
 export function watchHostPrivateWindows(host: ArdiaHost, onChange: (windows: PrivateWindowEntry[]) => void) {

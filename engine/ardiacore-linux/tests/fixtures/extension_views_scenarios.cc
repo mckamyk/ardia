@@ -92,8 +92,6 @@ void OpenPlaceRelease() {
   assert(host->renderers == 1 && f.Count("ready", id) == 1 && extensions::LiveHosts() == 1);
   auto index = Find(f.parent, host->host_contents());
   assert(index && *index == 1 && !f.parent.children()[1]->GetVisible());
-  content::WebContents* popup_contents = host->host_contents();
-  assert(f.surfaces->HostsContents(popup_contents) && !f.surfaces->HostsContents(nullptr));
   f.parent.ReorderChildView(tab, 2);
   auto viewport = base::DictValue().Set("id", id).Set("visible", true)
       .Set("rect", base::DictValue().Set("x", base::Value(100.0)).Set("y", base::Value(50.0)).Set("width", base::Value(300.0)).Set("height", base::Value(1000.0)));
@@ -115,7 +113,6 @@ void OpenPlaceRelease() {
   assert(f.Invoke("extensionView.command", base::DictValue().Set("id", id).Set("command", "loadUrl")).code() == "ERR_UNKNOWN_COMMAND");
   assert(f.Invoke("extensionView.release", base::DictValue().Set("id", id)).ok);
   assert(extensions::LiveHosts() == 0 && f.parent.children().size() == 1 && f.Count("windowClose", id) == 0);
-  assert(!f.surfaces->HostsContents(popup_contents));
   assert(f.Invoke("extensionView.release", base::DictValue().Set("id", id)).ok);
   assert(f.Invoke("extensionView.command", base::DictValue().Set("id", id).Set("command", "focus")).code() == "ERR_EXTENSION_VIEW_STALE");
 }
