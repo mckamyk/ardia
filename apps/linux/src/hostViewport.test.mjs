@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { watchTabViewport } from "./hostViewport.ts";
+import { backdropCovers, watchTabViewport } from "./hostViewport.ts";
 
 test("viewport observation tracks transforms, scroll, visual zoom, overlays, and document visibility", () => {
   const previous = Object.fromEntries(["window", "document", "getComputedStyle", "ResizeObserver", "requestAnimationFrame", "cancelAnimationFrame"].map((key) => [key, globalThis[key]]));
@@ -156,4 +156,15 @@ test("a selection popover over the page and an open extension popup are both cut
       else globalThis[key] = value;
     }
   }
+});
+
+test("a backdrop is reused while its occluders move or grow and retaken when a new occluder appears beside them", () => {
+  const card = { x: 192, y: 64, width: 264, height: 126, paintOutset: 32 };
+  const bar = { x: 977, y: 209, width: 87, height: 32, paintOutset: 32 };
+  assert.equal(backdropCovers([], [card]), false);
+  assert.equal(backdropCovers([card], [card]), true);
+  assert.equal(backdropCovers([card], [{ ...card, y: 70, height: 130 }]), true);
+  assert.equal(backdropCovers([{ ...bar, x: 980, width: 81 }], [bar]), true);
+  assert.equal(backdropCovers([card], [card, bar]), false);
+  assert.equal(backdropCovers([card, bar], [bar]), true);
 });
