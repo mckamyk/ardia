@@ -13,7 +13,7 @@ Linux has no menu bar, so the Window menu opens from the window controls: right-
   - Merge All Windows, enabled under the shared rule: at least two regular, non-small windows.
   - The window list, as AppKit's `windowsMenu` adds it.
 - **Not carried over.** Arrange in Front and Keep Window on Top have no Linux implementation, so they're left out. The Profiles submenu is left out too; profiles have their own menu.
-- **Window list.** The menu's own window comes first, ticked, under its own title. Next come the other regular windows from the shared store, titled with `windowTitle`; utility and Little Ardia windows are left out. Last are the private windows from `ArdiaShell.privateWindows`, which are bare ids labelled "Private Window", "Private Window 2" and so on by `privateWindowEntries`.
+- **Window list.** The menu's own window comes first, ticked, under its own title. Next come the other regular windows from the shared store, titled with `windowTitle`; utility and Little Ardia windows are left out. Last are the private windows from `ArdiaShell.privateWindows`: ids with the ordinal each private window took when it was configured (the lowest free one, `NextPrivateOrdinal`). `privateWindowEntries` labels them "Private Window", "Private Window 2" and so on from that ordinal, so every window shows the same label for the same private window (#232).
 - **Private titles.** A regular window never takes a private window's title, even if its store held one. A private window's own entry uses its own title.
 - **Freshness.** The private-window directory is read each time the menu opens, so the list is never stale. If that read fails, the menu still opens with the regular windows.
 - **Choices.** Choosing a window calls `ArdiaShell.focusWindow`, which #89 already allows for private windows. Commands go through the shared command path (`emitCommand`). Minimize and Maximize call the host's window methods. Any other id is ignored.
@@ -25,12 +25,7 @@ Linux has no menu bar, so the Window menu opens from the window controls: right-
 
 ## #150 Incognito links from popups, side panels and DevTools
 
-The Linux hook from #71 (`g_ardia_linux_off_the_record_navigation`, still only for browser-initiated navigations with a user gesture) now resolves its source in this order:
-
-1. **DevTools.** `PrivateLinkSource` follows `DevToolsWindow::AsDevToolsWindow` to the inspected contents, at most 4 levels deep.
-2. **Ardia tab.** The source tab's page opens the private window, as before.
-3. **Extension popup or side panel.** If the source belongs to a window's `LinuxExtensionSurfaces` (`HostsContents`), that window opens the private window, sending it through its presented page, or any live page it has. The profile is the original of the window's page profile.
-4. **Anything else.** The navigation is refused with a `[ardia] off-the-record link refused: …` warning. Chrome no longer opens an unmanaged window for it. The same refusal applies when a surface's window has no live page.
+The Linux hook from #71 (`g_ardia_linux_off_the_record_navigation`, still only for browser-initiated navigations with a user gesture) needs no separate path for these sources. `Browser::OpenURL` passes a null source to `OpenURLFromTab`, so the navigator hands the hook the window's active tab. An extension popup or side panel opens its links through the browser, and DevTools forwards page links to its inspected tab (`DevToolsWindow::OpenURLFromInspectedTab`). Both therefore arrive as an Ardia tab, and that tab's page opens the private window. The extension-surface path and the DevTools unwrapping added for #150 never ran and were removed in #232. If the window's active tab has no live Ardia page, the navigation is refused with `[ardia] off-the-record link refused: the window's active tab has no live Ardia page`. Chrome never opens an unmanaged window for it.
 
 ## #172 Private download removals
 
@@ -57,8 +52,8 @@ The new tests failed before their fixes:
 
 - `test_private_downloads.py`: removal routing and the engine's Linux-only tag.
 - `downloads_scenarios.cc`: `DeliversRemoval`.
-- `test_private_links.py`: surfaces, DevTools and the refusal.
-- `extension_views_scenarios.cc`: `HostsContents`.
+- `test_private_links.py`: the hook compiled against fakes (the owning tab opens, a pageless or unknown source is refused), plus the Chromium source facts it relies on.
+- `test_engine_event_routing.py` (#232): `EngineEvent` compiled against fakes, covering private removals and downloads routed only to the private windows that own them.
 - `windowMenu.test.mjs` and `extensionsStore.test.mjs`.
 
 `test_auto_pip_profiles.py` and `test_private_extension_actions.py` pin behaviour that was already right. See the PR for the full run.

@@ -76,6 +76,7 @@ std::string ProfileDirectoryName(std::string_view isolated_id);
 std::string_view ProfileErrorCode(ProfileError error);
 std::string_view ProfileErrorMessage(ProfileError error);
 bool ProfileOpensWindow(const ProfileName& name, bool incognito, bool utility);
+int NextPrivateOrdinal(const std::vector<int>& taken);
 
 template <class Done>
 class OpeningLedger {
