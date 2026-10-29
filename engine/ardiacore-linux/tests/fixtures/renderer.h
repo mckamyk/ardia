@@ -134,6 +134,8 @@ struct ShellHostView {
   bool shortcut_recording_ = false;
   int detached = 0;
   int closed = 0;
+  int released_drag_escapes = 0;
+  void ReleaseDragEscape() { ++released_drag_escapes; }
   content::WebContents* shell() const { return const_cast<content::WebContents*>(&contents_); }
   bool RetireDocuments() { return true; }
   void DetachViewports() { ++detached; }

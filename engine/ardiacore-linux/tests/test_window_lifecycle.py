@@ -634,6 +634,7 @@ struct ExclusiveAccessManager {
     return browser ? &managers[browser] : nullptr;
   }
 };
+uint64_t& ActivationClock() { static uint64_t clock = 0; return clock; }
 struct ShellHostView {
   ShellHostView(int id, std::string window_id, BrowserWindowInterface* browser, std::string kind = "")
       : id_(id), window_id_(std::move(window_id)), kind_(std::move(kind)), browser_(browser) {
@@ -652,6 +653,7 @@ struct ShellHostView {
   bool utility_ready_ = false;
   bool utility_close_pending_ = false;
   bool startup_ = false;
+  uint64_t activation_ = 0;
   linux_window::GeometryLedger geometry_{GlobalScreenCoordinates()};
   base::OneShotTimer frame_timer_;
   std::vector<base::DictValue> events;

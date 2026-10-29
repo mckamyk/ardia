@@ -80,6 +80,7 @@ struct TabBinding {
   FocusManager* focus_manager_ = nullptr;
   bool shortcut_recording_ = false;
   void DetachViewports() {}
+  void ReleaseDragEscape() {}
   TabBinding* Binding(int id) { return bindings_.contains(id) ? bindings_[id].get() : nullptr; }
   bool DisposeTemporary(TabBinding* binding) { binding->live = false; return true; }
   bool Trusted(content::WebUI*) const;
