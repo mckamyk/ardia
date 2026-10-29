@@ -135,6 +135,33 @@ test("entry identity uses completed item.id; deletion intent does not serialize 
   assert.deepEqual(projectLiveIntent(before, deleted).completed, {});
 });
 
+test("dismissed Now badges and the countdown lead travel as narrow intents and round-trip", () => {
+  const occurrence = `calendar-${"x".repeat(200)}/uid@1700000000`;
+  const before = { ...initial(), calendar: { ...initial().calendar, countdownLead: 60 }, dismissedNow: { expired: 1 } };
+  const after = { ...before, calendar: { ...before.calendar, countdownLead: 15 }, dismissedNow: { [occurrence]: 1700000600000 } };
+  const operations = captureLiveIntent(before, after, { incarnations: {} });
+  assert.deepEqual(operations, [
+    { type: "field", target: "calendar", field: "countdownLead", expected: 60, value: 15 },
+    { type: "field", target: "dismissedNow", id: "expired", field: "value", expected: 1, value: null },
+    { type: "field", target: "dismissedNow", id: occurrence, field: "value", expected: null, value: 1700000600000 },
+  ]);
+  const projected = projectLiveIntent(before, operations);
+  assert.deepEqual(projected.dismissedNow, after.dismissedNow);
+  assert.equal(projected.calendar.countdownLead, 15);
+  const legacy = { ...initial() };
+  assert.deepEqual(projectLiveIntent(legacy, captureLiveIntent({ ...legacy, dismissedNow: {} }, { ...legacy, dismissedNow: { a: 2 } }, { incarnations: {} })).dismissedNow, { a: 2 });
+});
+
+test("renderers dismissing different Now badges converge on the canonical record", async () => {
+  const native = authority(), a = bind(native.connect("a")), b = bind(native.connect("b"));
+  await Promise.all([a.client.reconnect(), b.client.reconnect()]);
+  a.edit({ dismissedNow: { "cal/uid@1": 5000 } });
+  b.edit({ dismissedNow: { "cal/uid@2": 6000 } });
+  await Promise.all([a.client.flush(), b.client.flush()]);
+  assert.deepEqual(native.payload.dismissedNow, { "cal/uid@1": 5000, "cal/uid@2": 6000 });
+  for (const renderer of [a, b]) assert.deepEqual(renderer.state().dismissedNow, native.payload.dismissedNow);
+});
+
 test("generic document failures do not update read cache and reserved files reject", async () => {
   let fail = true;
   const documents = createHostDocuments({ bootstrap: { documents: { "opaque.nns": "old", "live.canonical.json": "internal" } }, async invoke() { if (fail) throw new Error("Storage failure"); } });

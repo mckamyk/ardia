@@ -9,6 +9,10 @@
 namespace ardia {
 
 inline constexpr int kLinuxLiveMaxGeneration = 2147483000;
+inline constexpr size_t kLinuxLiveMaxDismissedNow = 50;
+inline constexpr size_t kLinuxLiveMaxOccurrence = 1024;
+inline constexpr int kLinuxLiveDefaultCountdownLead = 60;
+inline constexpr int kLinuxLiveMaxCountdownLead = 1440;
 bool AdvanceLinuxLiveGeneration(base::DictValue& generations, std::string_view id, int floor = 0);
 bool ValidLinuxLiveOperations(const base::ListValue& operations);
 std::optional<base::DictValue> NormalizeLinuxLive(const base::DictValue& payload);

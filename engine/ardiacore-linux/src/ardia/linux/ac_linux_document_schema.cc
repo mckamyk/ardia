@@ -4,6 +4,8 @@
 #include <cmath>
 #include <set>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace ardia {
 namespace {
@@ -51,6 +53,32 @@ bool Fields(const base::DictValue& value, std::string_view strings,
     if (numbers.find(token) != std::string_view::npos && !entry.is_int() && !entry.is_double() && !entry.is_none()) return false;
   }
   return true;
+}
+
+bool Number(const base::Value& value) {
+  return (value.is_int() || value.is_double()) && std::isfinite(value.GetDouble());
+}
+
+bool CountdownLead(const base::Value& value) {
+  return Number(value) && value.GetDouble() > 0 && value.GetDouble() <= kLinuxLiveMaxCountdownLead;
+}
+
+bool DismissedNowEnd(const base::Value& value) {
+  return Number(value) && value.GetDouble() >= 0;
+}
+
+std::optional<base::DictValue> DismissedNow(const base::DictValue& dismissed) {
+  std::vector<std::pair<double, std::string>> ends;
+  for (const auto& [occurrence, end] : dismissed) {
+    if (occurrence.empty() || occurrence.size() > kLinuxLiveMaxOccurrence || !DismissedNowEnd(end)) return std::nullopt;
+    ends.emplace_back(end.GetDouble(), std::string(occurrence));
+  }
+  if (ends.size() <= kLinuxLiveMaxDismissedNow) return dismissed.Clone();
+  std::sort(ends.begin(), ends.end(), [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
+  base::DictValue kept;
+  for (size_t index = 0; index < kLinuxLiveMaxDismissedNow; ++index)
+    kept.Set(ends[index].second, dismissed.Find(ends[index].second)->Clone());
+  return kept;
 }
 
 bool Item(const base::Value& entry) {
@@ -106,12 +134,12 @@ int LinuxDocumentInteger(const base::DictValue& value, std::string_view key,
 std::optional<base::DictValue> NormalizeLinuxLive(const base::DictValue& payload) {
   int version = LinuxDocumentInteger(payload, "version", 0);
   if (version < 0 || version > 1 || (payload.Find("version") && !payload.Find("version")->is_int()) ||
-      !Shape(payload, "|version|folders|folderOrder|items|known|unread|hidden|completed|expandedStacks|accounts|config|calendar|meetingGroups|dismissedAlerts|")) return std::nullopt;
+      !Shape(payload, "|version|folders|folderOrder|items|known|unread|hidden|completed|expandedStacks|accounts|config|calendar|meetingGroups|dismissedAlerts|dismissedNow|")) return std::nullopt;
   size_t nodes = 0;
   if (!JsonSafe(base::Value(payload.Clone()), 0, nodes)) return std::nullopt;
   base::DictValue result;
   result.Set("version", base::Value(1));
-  for (auto key : {"folders", "items", "known", "unread", "hidden", "completed", "expandedStacks", "accounts", "config", "calendar", "meetingGroups"}) {
+  for (auto key : {"folders", "items", "known", "unread", "hidden", "completed", "expandedStacks", "accounts", "config", "calendar", "meetingGroups", "dismissedNow"}) {
     if (payload.Find(key) && !payload.FindDict(key)) return std::nullopt;
     result.Set(key, payload.FindDict(key) ? payload.FindDict(key)->Clone() : base::DictValue());
   }
@@ -158,6 +186,9 @@ std::optional<base::DictValue> NormalizeLinuxLive(const base::DictValue& payload
     if (!entry.is_dict() || !Shape(entry.GetDict(), "|groupId|callTabId|occurrence|title|start|end|endedAt|") ||
         !Fields(entry.GetDict(), "|groupId|callTabId|occurrence|title|", "", "|start|end|endedAt|")) return std::nullopt;
   }
+  auto dismissed = DismissedNow(*result.FindDict("dismissedNow"));
+  if (!dismissed) return std::nullopt;
+  result.Set("dismissedNow", std::move(*dismissed));
   auto config = result.FindDict("config")->Clone();
   if (!Shape(config, "|githubClientId|bitbucketUser|confluenceSite|confluenceEmail|googleClientId|")) return std::nullopt;
   for (auto field : {"githubClientId", "bitbucketUser", "confluenceSite", "confluenceEmail", "googleClientId"}) {
@@ -166,9 +197,11 @@ std::optional<base::DictValue> NormalizeLinuxLive(const base::DictValue& payload
   }
   result.Set("config", std::move(config));
   auto calendar = result.FindDict("calendar")->Clone();
-  if (!Shape(calendar, "|alertLead|alertCondition|showPreview|showTimeToNext|hiddenCalendarIds|prompted|") ||
+  if (!Shape(calendar, "|alertLead|alertCondition|showPreview|showTimeToNext|countdownLead|hiddenCalendarIds|prompted|") ||
       !Fields(calendar, "|alertLead|alertCondition|", "|showPreview|showTimeToNext|prompted|", "")) return std::nullopt;
   if (calendar.Find("hiddenCalendarIds") && !Strings(*calendar.Find("hiddenCalendarIds"))) return std::nullopt;
+  if (calendar.Find("countdownLead") && !CountdownLead(*calendar.Find("countdownLead"))) return std::nullopt;
+  if (!calendar.Find("countdownLead")) calendar.Set("countdownLead", base::Value(kLinuxLiveDefaultCountdownLead));
   if (!calendar.Find("hiddenCalendarIds")) calendar.Set("hiddenCalendarIds", base::Value(base::ListValue()));
   if (!calendar.Find("alertLead")) calendar.Set("alertLead", "1");
   if (!calendar.Find("alertCondition")) calendar.Set("alertCondition", "always");
@@ -213,12 +246,14 @@ bool FieldValue(const std::string& target, const std::string& field,
   }
   if (target == "calendar") {
     if (field == "alertLead") return value.is_string();
+    if (field == "countdownLead") return CountdownLead(value);
     if (field == "alertCondition") return value.is_string() && (value.GetString() == "always" || value.GetString() == "activeOnly");
     return std::set<std::string>{"showPreview", "showTimeToNext", "prompted"}.contains(field) && value.is_bool();
   }
   if (target == "config") return std::set<std::string>{"githubClientId", "bitbucketUser", "confluenceSite", "confluenceEmail", "googleClientId"}.contains(field) && value.is_string();
   if (field != "value" || id.empty()) return false;
   if (target == "expandedStack") return value.is_none() || value.is_bool();
+  if (target == "dismissedNow") return value.is_none() || DismissedNowEnd(value);
   if (target != "account" && target != "meetingGroup") return false;
   if (value.is_none()) return true;
   base::DictValue payload;
@@ -266,7 +301,7 @@ bool Operation(const base::DictValue& op, bool nested) {
       if (op.size() != 7 || !Identifier(op, "id", 128) || !Identifier(op, "incarnation")) return false;
     } else if (*target == "calendar" || *target == "config") {
       if (op.size() != 5) return false;
-    } else if (op.size() != 6 || !Identifier(op, "id", 128)) return false;
+    } else if (op.size() != 6 || !Identifier(op, "id", *target == "dismissedNow" ? kLinuxLiveMaxOccurrence : 128)) return false;
     return FieldValue(*target, *field, id ? *id : "", *value) &&
            (expected->is_none() || FieldValue(*target, *field, id ? *id : "", *expected));
   }

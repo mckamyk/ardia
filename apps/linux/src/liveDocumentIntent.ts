@@ -43,7 +43,7 @@ export function captureLiveIntent(before: LiveProjection, after: LiveProjection,
       for (const key of new Set([...left.keys(), ...right.keys()])) if (!equalDocumentValue(left.get(key), right.get(key))) operations.push({ type: "entry", target, id, incarnation: incarnation(id), key, expected: value(left.get(key)), value: value(right.get(key)) });
     }
   }
-  for (const [key, target] of [["accounts", "account"], ["meetingGroups", "meetingGroup"], ["expandedStacks", "expandedStack"]] as const) {
+  for (const [key, target] of [["accounts", "account"], ["meetingGroups", "meetingGroup"], ["expandedStacks", "expandedStack"], ["dismissedNow", "dismissedNow"]] as const) {
     const a = record(before[key]), b = record(after[key]);
     for (const id of new Set([...Object.keys(a), ...Object.keys(b)])) {
       if (equalDocumentValue(a[id], b[id])) continue;
@@ -98,7 +98,7 @@ export function projectLiveIntent(payload: LiveProjection, operations: DocumentO
     if (op.type === "field") {
       const target = op.target === "folder" ? (result.folders ??= {})[op.id!] : op.target === "account" ? result.accounts ??= {} : op.target === "meetingGroup" ? result.meetingGroups ??= {} : op.target === "expandedStack" ? result.expandedStacks ??= {} : result[op.target] ??= {};
       if (!target) continue;
-      const key = ["account", "meetingGroup", "expandedStack"].includes(op.target) ? op.id! : op.field;
+      const key = ["account", "meetingGroup", "expandedStack", "dismissedNow"].includes(op.target) ? op.id! : op.field;
       if (key.startsWith("filters.")) (target.filters ??= {})[key.slice(8)] = op.value;
       else if (op.value === null) delete target[key]; else target[key] = op.value;
     }

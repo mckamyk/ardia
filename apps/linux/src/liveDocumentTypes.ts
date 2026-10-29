@@ -11,7 +11,7 @@ export type DocumentSnapshot = {
   incarnations: Record<string, string>;
   generations: Record<string, number>;
 };
-export type FieldOperation = { type: "field"; target: "folder" | "calendar" | "config" | "account" | "meetingGroup" | "expandedStack"; id?: string; incarnation?: string; field: string; expected: unknown; value: unknown };
+export type FieldOperation = { type: "field"; target: "folder" | "calendar" | "config" | "account" | "meetingGroup" | "expandedStack" | "dismissedNow"; id?: string; incarnation?: string; field: string; expected: unknown; value: unknown };
 export type DocumentOperation = FieldOperation
   | { type: "create"; id: string; incarnation: string; value: unknown }
   | { type: "delete"; id: string; incarnation: string }

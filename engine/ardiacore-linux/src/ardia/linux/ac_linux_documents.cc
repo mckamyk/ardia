@@ -42,9 +42,11 @@ LinuxDocumentResult LinuxDocuments::Load() {
   if (stored.state == LinuxDocumentRead::State::kError)
     return Error("ERR_DOCUMENT_STORAGE", "Cannot read canonical document");
   if (stored.state == LinuxDocumentRead::State::kFound) {
-    if (!ValidLinuxLiveEnvelope(stored.value) || !Fits(stored.value))
-      return Error("ERR_DOCUMENT_DATA", "Invalid canonical document");
     auto next = stored.value.Clone();
+    if (const auto* payload = next.FindDict("payload"))
+      if (auto current = NormalizeLinuxLive(*payload)) next.Set("payload", std::move(*current));
+    if (!ValidLinuxLiveEnvelope(next) || !Fits(next))
+      return Error("ERR_DOCUMENT_DATA", "Invalid canonical document");
     next.Set("epoch", epoch_);
     auto generations = next.FindDict("generations")->Clone();
     for (const auto& [id, owner] : *next.FindDict("owners"))

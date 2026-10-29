@@ -27,7 +27,7 @@ globalThis.window = { __ardiaHost: {
     return JSON.stringify({ status: "committed", requestId: args.requestId, snapshot: snapshot() });
   },
 } };
-const { live, setLive, createFolder, updateCalendarSettings } = await import("../../browser/src/state/live/store.ts");
+const { live, setLive, createFolder, updateCalendarSettings, dismissNowBadge } = await import("../../browser/src/state/live/store.ts");
 const { flushLinuxDocuments } = await import("./documentFlush.ts");
 
 test("Linux binding uses the canonical shared store, suppresses write echoes and preserves transient state", async () => {
@@ -53,4 +53,22 @@ test("Linux binding uses the canonical shared store, suppresses write echoes and
     assert.ok(ids.every((id) => /^lf-[a-f0-9-]{36}$/.test(id)));
     await flushLinuxDocuments();
   } finally { Date.now = oldNow; }
+});
+
+test("Linux binding persists dismissed Now badges and the countdown lead through canonical intents", async () => {
+  await new Promise((resolve) => setImmediate(resolve));
+  const now = 1_700_000_000_000;
+  updateCalendarSettings({ countdownLead: 15 });
+  dismissNowBadge({ occurrence: "calendar/uid@1700000000", end: now + 600_000 }, now);
+  await flushLinuxDocuments();
+  assert.equal(payload.calendar.countdownLead, 15);
+  assert.deepEqual(payload.dismissedNow, { "calendar/uid@1700000000": now + 600_000 });
+  dismissNowBadge({ occurrence: "calendar/uid@1700003600", end: now + 4_200_000 }, now + 700_000);
+  await flushLinuxDocuments();
+  assert.deepEqual(payload.dismissedNow, { "calendar/uid@1700003600": now + 4_200_000 });
+  payload = { ...payload, dismissedNow: { "peer/uid@1": now + 9_000_000 }, calendar: { ...payload.calendar, countdownLead: 30 } };
+  revision++;
+  for (const listener of listeners) listener("ArdiaDocuments", "documents", { name: "documents.changed", data: { snapshot: snapshot(), clientId: "peer", requestId: "peer:2" } });
+  assert.deepEqual(live().dismissedNow, { "peer/uid@1": now + 9_000_000 });
+  assert.equal(live().calendar.countdownLead, 30);
 });

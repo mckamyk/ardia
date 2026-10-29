@@ -244,6 +244,9 @@ int main() {
   assert(!events.empty());
 }
 '''
+        self.run_main(compiler, main)
+
+    def run_main(self, compiler, main):
         with tempfile.TemporaryDirectory(prefix='ardia-documents-') as scratch:
             root = pathlib.Path(scratch)
             (root / 'base/json').mkdir(parents=True)
@@ -256,6 +259,98 @@ int main() {
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             result = subprocess.run([str(binary)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_meeting_badge_state(self):
+        compiler = shutil.which('clang++') or shutil.which('c++')
+        self.assertIsNotNone(compiler)
+        occurrence = 'calendar-' + 'x' * 400 + '/uid@1700000000'
+        dismiss = lambda key, expected, value: {'type': 'field', 'target': 'dismissedNow', 'id': key, 'field': 'value', 'expected': expected, 'value': value}
+        lead = lambda expected, value: {'type': 'field', 'target': 'calendar', 'field': 'countdownLead', 'expected': expected, 'value': value}
+        operations = {
+            'countdown': [lead(60, 15)],
+            'countdown_zero': [lead(15, 0)],
+            'countdown_text': [lead(15, 'soon')],
+            'countdown_huge': [lead(15, 100000)],
+            'dismiss': [dismiss(occurrence, None, 1700000600000.0)],
+            'dismiss_stale': [dismiss(occurrence, None, 1700000700000.0)],
+            'undismiss': [dismiss(occurrence, 1700000600000.0, None)],
+            'dismiss_text': [dismiss('cal/uid@1', None, 'later')],
+            'dismiss_negative': [dismiss('cal/uid@1', None, -1.0)],
+            'dismiss_long': [dismiss('x' * 1025, None, 1.0)],
+            'dismiss_many': [dismiss(f'cal/uid@{index:03}', None, float(1000 + index)) for index in range(55)],
+        }
+        main = r'''
+#include <cassert>
+#include <optional>
+#include "ardia/linux/ac_linux_documents.h"
+#include "ardia/linux/ac_linux_document_reducer.h"
+using namespace ardia;
+int main() {
+  std::optional<base::DictValue> disk;
+  auto read = [&](std::string_view name) {
+    LinuxDocumentRead result;
+    if (name == kLinuxLiveEnvelope && disk) { result.state = LinuxDocumentRead::State::kFound; result.value = disk->Clone(); }
+    return result;
+  };
+  auto write = [&](const base::DictValue& value) { disk = value.Clone(); return true; };
+  LinuxDocumentClient a{"a", "scope", true, true};
+'''
+        main += '\n'.join(f'  auto {name} = {cpp_value(value)};' for name, value in operations.items())
+        main += r'''
+  {
+    LinuxDocuments service("scope", "epoch", read, write);
+    assert(service.Watch(a, [](auto) {}).ok());
+    int sequence = 0;
+    auto commit = [&](const base::Value& operations) {
+      base::DictValue request;
+      request.Set("document", "live.json"); request.Set("epoch", "epoch");
+      request.Set("requestId", "a:" + std::to_string(sequence + 1));
+      request.Set("observedRevision", base::Value(0));
+      request.Set("operations", operations.Clone());
+      auto result = service.Commit(a, request);
+      if (result.ok() && *result.value.FindString("status") == "committed") ++sequence;
+      return result;
+    };
+    auto* payload = disk->FindDict("payload");
+    assert(payload->FindDict("dismissedNow") && payload->FindDict("dismissedNow")->size() == 0);
+    assert(payload->FindDict("calendar")->Find("countdownLead")->GetDouble() == 60);
+    assert(commit(countdown).ok());
+    assert(disk->FindDict("payload")->FindDict("calendar")->Find("countdownLead")->GetDouble() == 15);
+    for (const auto* invalid : {&countdown_zero, &countdown_text, &countdown_huge, &dismiss_text, &dismiss_negative, &dismiss_long})
+      assert(commit(*invalid).code == "ERR_DOCUMENT_REQUEST");
+    assert(commit(dismiss).ok());
+    assert(disk->FindDict("payload")->FindDict("dismissedNow")->Find(*dismiss.GetList()[0].GetDict().FindString("id"))->GetDouble() == 1700000600000.0);
+    assert(*commit(dismiss_stale).value.FindString("status") == "conflict");
+    assert(commit(undismiss).ok());
+    assert(disk->FindDict("payload")->FindDict("dismissedNow")->size() == 0);
+    assert(commit(dismiss_many).ok());
+    const auto* kept = disk->FindDict("payload")->FindDict("dismissedNow");
+    assert(kept->size() == 50u);
+    for (int index = 0; index < 5; ++index) assert(!kept->Find("cal/uid@00" + std::to_string(index)));
+    assert(kept->Find("cal/uid@054"));
+  }
+  auto legacy = disk->Clone();
+  auto payload = legacy.FindDict("payload")->Clone();
+  payload.Remove("dismissedNow");
+  auto calendar = payload.FindDict("calendar")->Clone();
+  calendar.Remove("countdownLead");
+  payload.Set("calendar", std::move(calendar));
+  legacy.Set("payload", std::move(payload));
+  disk = legacy.Clone();
+  LinuxDocuments upgraded("scope", "next-epoch", read, write);
+  assert(upgraded.Watch(a, [](auto) {}).ok());
+  assert(disk->FindDict("payload")->FindDict("dismissedNow")->size() == 0);
+  assert(disk->FindDict("payload")->FindDict("calendar")->Find("countdownLead")->GetDouble() == 60);
+  auto corrupt = legacy.Clone();
+  auto bad = corrupt.FindDict("payload")->Clone();
+  bad.Set("dismissedNow", base::Value("malformed"));
+  corrupt.Set("payload", std::move(bad));
+  disk = corrupt.Clone();
+  LinuxDocuments rejected("scope", "third-epoch", read, write);
+  assert(rejected.Watch(a, [](auto) {}).code == "ERR_DOCUMENT_DATA");
+}
+'''
+        self.run_main(compiler, main)
 
 
 if __name__ == '__main__':

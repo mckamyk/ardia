@@ -164,6 +164,7 @@ std::string ApplyOne(base::DictValue& envelope, const base::DictValue& op,
         if (*target == "account") key = "accounts";
         else if (*target == "meetingGroup") key = "meetingGroups";
         else if (*target == "expandedStack") key = "expandedStacks";
+        else if (*target == "dismissedNow") key = "dismissedNow";
         else return "invalid";
       }
       auto record = payload.FindDict(key)->Clone();
