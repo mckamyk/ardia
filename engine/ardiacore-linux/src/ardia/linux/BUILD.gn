@@ -172,6 +172,8 @@ source_set("linux") {
     "ac_linux_media.h",
     "ac_linux_memory_pressure.cc",
     "ac_linux_memory_pressure.h",
+    "ac_linux_memory_saver.cc",
+    "ac_linux_memory_saver.h",
     "ac_linux_native_messaging.cc",
     "ac_linux_native_messaging.h",
     "ac_linux_navigation_hold.cc",

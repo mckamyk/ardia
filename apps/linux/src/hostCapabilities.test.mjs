@@ -94,6 +94,64 @@ test("the native bootstrap advertises the intercepted site zoom routes from the 
   for (const route of routes) assert.ok(!contractRoutes().includes(route));
 });
 
+const listedRoutes = (path, list) => {
+  const source = nativeSource(path);
+  const start = source.indexOf(`${list}[]`);
+  return [...source.slice(start, source.indexOf(";", start)).matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+};
+
+test("the native bootstrap advertises the Memory Saver routes from the list the dispatcher intercepts", () => {
+  const host = nativeSource("ac_linux_host.cc");
+  const bootstrap = host.slice(host.indexOf("base::DictValue ShellHostView::Bootstrap() const {"), host.indexOf("void ShellHostView::LayoutOverlay()"));
+  assert.match(bootstrap, /for \(const char\* route : ardiacore::kLinuxMemorySaverRoutes\)\s*capabilities\.Append\(route\);/);
+  assert.match(host, /if \(ardiacore::IsLinuxMemorySaverRoute\(name\)\) \{/);
+  assert.match(host, /if \(ardiacore::IsLinuxMemorySaverRoute\(reply->name\)\) \{/);
+  const routes = listedRoutes("ac_linux_memory_saver.h", "kLinuxMemorySaverRoutes");
+  assert.deepEqual(routes, ["engine.memorySaver", "engine.validateKeepActiveSite"]);
+  for (const route of routes) assert.ok(!contractRoutes().includes(route));
+});
+
+test("Memory Saver settings and kept-active site checks reach the host as engine calls for the window's profile", async () => {
+  const calls = [];
+  const replies = { "engine.memorySaver": { state: "off", aggressiveness: "maximum", active: false, sites: ["youtube.com"], invalid: [] }, "engine.validateKeepActiveSite": { valid: true } };
+  const host = {
+    bootstrap: { windowId: "w1", profileId: "work", capabilities: ["engine.memorySaver", "engine.validateKeepActiveSite"] },
+    invoke: async (method) => { throw new Error(`Unknown host method ${method}`); },
+    call: async (name, profile, args) => { calls.push([name, profile, JSON.parse(args)]); return JSON.stringify(replies[name]); },
+    onEvent: () => () => {},
+  };
+  const engineCall = resolveHostModule(host, "ArdiaEngine", "call");
+  const request = { state: "off", aggressiveness: "maximum", sites: ["youtube.com"] };
+  assert.deepEqual(JSON.parse(await engineCall("memorySaver", "", JSON.stringify(request))), replies["engine.memorySaver"]);
+  assert.deepEqual(JSON.parse(await engineCall("validateKeepActiveSite", "", JSON.stringify({ site: "youtube.com" }))), { valid: true });
+  assert.deepEqual(calls, [["engine.memorySaver", "work", request], ["engine.validateKeepActiveSite", "work", { site: "youtube.com" }]]);
+});
+
+test("every engine call behind the shared performance module is advertised by the Linux host or gated by a Linux capability", () => {
+  const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
+  const exported = new Set([...read("../../browser/src/platform/performance.ts").matchAll(/^\s+(\w+),$/gm)].map((match) => match[1]));
+  const engineCalls = new Map();
+  for (const path of ["../../../packages/ardiacore/src/performance.ts", "../../../packages/ardiacore/src/module.ts"]) {
+    for (const [, name, call] of read(path).matchAll(/export const (\w+) = [^\n]*?call\("(engine\.\w+)"/g)) engineCalls.set(name, call);
+  }
+  const used = [...exported].filter((name) => engineCalls.has(name)).map((name) => engineCalls.get(name));
+  for (const call of ["engine.memorySaver", "engine.validateKeepActiveSite", "engine.batterySaver", "engine.trimMemory", "engine.tasks", "engine.systemState"]) assert.ok(used.includes(call), call);
+  const host = nativeSource("ac_linux_host.cc");
+  const advertised = new Set([
+    ...contractRoutes(),
+    ...listedRoutes("ac_linux_history_zoom.h", "kLinuxZoomDomainRoutes"),
+    ...listedRoutes("ac_linux_memory_saver.h", "kLinuxMemorySaverRoutes"),
+    ...[...host.matchAll(/capabilities\.Append\("(engine\.\w+)"\)/g)].map((match) => match[1]),
+  ]);
+  const gated = { "engine.beginTracing": "performanceRecording", "engine.endTracing": "performanceRecording", "engine.isTracing": "performanceRecording" };
+  const none = linuxCapabilities(fakeHost().host);
+  for (const call of used) {
+    if (advertised.has(call)) continue;
+    assert.ok(gated[call], `${call} is neither advertised by the Linux host nor gated`);
+    assert.equal(none[gated[call]], false);
+  }
+});
+
 test("Task Manager and tracing follow the advertised contract rather than the mere presence of a host", () => {
   assert.equal(linuxCapabilities(fakeHost().host).taskManager, false);
   assert.equal(linuxCapabilities(fakeHost(["engine.openTaskManager"]).host).taskManager, true);

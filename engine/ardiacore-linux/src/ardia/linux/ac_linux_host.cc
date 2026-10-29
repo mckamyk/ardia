@@ -44,6 +44,7 @@
 #include "ardia/linux/ac_linux_launch_config.h"
 #include "ardia/linux/ac_linux_page_channel.h"
 #include "ardia/linux/ac_linux_page_commands.h"
+#include "ardia/linux/ac_linux_memory_saver.h"
 #include "ardia/linux/ac_linux_page_media.h"
 #include "ardia/linux/ac_linux_power.h"
 #include "ardia/linux/ac_linux_tab_policy.h"
@@ -1477,6 +1478,12 @@ class HostMessageHandler : public content::WebUIMessageHandler,
       if (!completed) return reply->handler->Fail(reply->id, "ERR_BAD_REPLY", "Malformed site zoom reply");
       return reply->handler->Resolve(reply->id, std::move(*completed));
     }
+    if (ardiacore::IsLinuxMemorySaverRoute(reply->name)) {
+      auto completed = value->is_dict()
+          ? ardiacore::CompleteLinuxMemorySaver(reply->name, value->GetDict()) : std::nullopt;
+      if (!completed) return reply->handler->Fail(reply->id, "ERR_BAD_REPLY", "Malformed Memory Saver reply");
+      return reply->handler->Resolve(reply->id, base::Value(std::move(*completed)));
+    }
     const auto* route = ardiacore::linux_contract::FindRoute(reply->name);
     if (route && route->field == "null") value = base::Value();
     else if (route && !route->field.empty()) {
@@ -1731,6 +1738,29 @@ class HostMessageHandler : public content::WebUIMessageHandler,
               const std::string* message = result.is_dict() ? result.GetDict().FindString("message") : nullptr;
               handler->Fail(id, code ? *code : "ERR_ENGINE", message ? *message : "Credential request failed");
             }, weak_factory_.GetWeakPtr(), id));
+      }
+      if (ardiacore::IsLinuxMemorySaverRoute(name)) {
+        if (profile_name->kind == ardiacore::linux_profiles::ProfileKind::kPrivate) {
+          return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateService);
+        }
+        const auto prepared = ardiacore::PrepareLinuxMemorySaver(name, input);
+        if (!prepared) return Fail(id, "ERR_ENGINE", "Invalid Memory Saver request");
+        const auto serialized = base::WriteJson(*prepared);
+        if (!serialized) return Fail(id, "ERR_BAD_REPLY", "Memory Saver arguments are not JSON");
+        ardiacore::ResolveLinuxProfile(profile, base::BindOnce(
+            [](base::WeakPtr<HostMessageHandler> handler, std::string name, std::string id,
+               std::string json, Profile* resolved, ardiacore::linux_profiles::ProfileError error) {
+              using ardiacore::linux_profiles::ProfileError;
+              if (!handler) return;
+              if (!resolved || resolved->IsOffTheRecord()) {
+                return handler->ProfileFail(id, resolved ? ProfileError::kPrivateService
+                                                : error == ProfileError::kNone ? ProfileError::kUnavailable : error);
+              }
+              const std::string path = resolved->GetPath().value();
+              ac_engine_call(ardiacore::kLinuxMemorySaverService, path.c_str(), json.c_str(), Replied,
+                             new EngineReply{name, handler, id, path});
+            }, weak_factory_.GetWeakPtr(), name, id, *serialized));
+        return;
       }
       const auto* route = ardiacore::linux_contract::FindRoute(name);
       if (!route) return Fail(id, "ERR_UNKNOWN_CALL", "This call is unavailable on Linux");
@@ -1994,6 +2024,8 @@ base::DictValue ShellHostView::Bootstrap() const {
   for (const auto& route : ardiacore::linux_contract::kRoutes)
     capabilities.Append(route.name);
   for (const char* route : ardiacore::kLinuxZoomDomainRoutes)
+    capabilities.Append(route);
+  for (const char* route : ardiacore::kLinuxMemorySaverRoutes)
     capabilities.Append(route);
   for (const char* capability : linux_credentials::kCapabilities) capabilities.Append(capability);
   for (const char* capability : linux_extensions::kSurfaceCapabilities) capabilities.Append(capability);
