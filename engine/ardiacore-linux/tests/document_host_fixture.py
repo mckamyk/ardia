@@ -330,7 +330,7 @@ struct ShellHostView {
   std::string window_id_ = "settings";
   std::string kind_;
   bool is_utility() const { return !kind_.empty(); }
-  struct Observation { void Reset() {} } close_observation_;
+  struct Observation { void Reset() {} } close_observation_, pane_focus_observation_;
   std::vector<std::tuple<std::string, std::string, base::Value>> events;
   ShellHostView() {
     native.widget.owner = this;

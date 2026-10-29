@@ -6,9 +6,11 @@ export type WindowDragOptions = {
 };
 export type WindowDragHost = { move(): Promise<unknown>; doubleClick(): Promise<unknown> };
 
+export const WINDOW_DRAG_ROUTES = ["ArdiaShell.startWindowMove", "ArdiaShell.captionDoubleClick"] as const;
+
 const DRAG_DISTANCE = 3;
 
-export function watchWindowDrag(element: HTMLElement, options: () => WindowDragOptions, host: WindowDragHost, report: (error: unknown) => void) {
+export function watchWindowDrag(element: HTMLElement, options: () => WindowDragOptions, host: WindowDragHost | null, report: (error: unknown) => void) {
   let press: { x: number; y: number } | null = null;
   const end = () => {
     press = null;
@@ -20,7 +22,7 @@ export function watchWindowDrag(element: HTMLElement, options: () => WindowDragO
     if (!(event.buttons & 1)) return end();
     if (Math.hypot(event.screenX - press.x, event.screenY - press.y) < DRAG_DISTANCE) return;
     end();
-    void host.move().catch(report);
+    if (host) void host.move().catch(report);
   };
   const up = (event: MouseEvent) => {
     if (!press || event.button !== 0) return;
@@ -36,7 +38,7 @@ export function watchWindowDrag(element: HTMLElement, options: () => WindowDragO
     event.preventDefault();
     end();
     if (!clickable && event.detail === 2) {
-      if (titleBarDoubleClick) void host.doubleClick().catch(report);
+      if (titleBarDoubleClick) { if (host) void host.doubleClick().catch(report); }
       else onRegionDoubleClick?.();
       return;
     }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -19,12 +20,18 @@ class FocusManager {
   void AdvanceFocusIfNecessary();
   View* focused = nullptr;
   std::vector<WebView*> order;
+  std::function<void(View*, View*)> changed;
 };
 inline FocusManager focus_manager;
 class View {
  public:
   virtual ~View() = default;
-  virtual void RequestFocus() { if (IsFocusable()) focus_manager.focused = this; }
+  virtual void RequestFocus() {
+    if (!IsFocusable()) return;
+    View* before = focus_manager.focused;
+    focus_manager.focused = this;
+    if (focus_manager.changed) focus_manager.changed(before, this);
+  }
   virtual bool IsFocusable() const { return visible; }
   bool GetVisible() const { return visible; }
   void SetVisible(bool value) { visible = value; }
@@ -113,9 +120,11 @@ class ShellHostView {
   void KeepPaneFocus(TabBinding* activating);
   void ReattachViewports();
   void LayoutPane(TabBinding*) { layouts++; }
+  void OnDidChangeFocus(views::View* before, views::View* now);
   BrowserView* browser_view_ = &browser_view;
   BrowserView browser_view;
   std::map<int, std::unique_ptr<TabBinding>> bindings_;
+  std::map<int, bool> devtools_had_focus_;
   int layouts = 0;
 };
 

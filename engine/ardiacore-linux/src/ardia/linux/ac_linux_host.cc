@@ -123,6 +123,7 @@
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
@@ -875,6 +876,7 @@ class ShellHostView : public views::View,
                       public views::WidgetObserver,
                       public aura::WindowObserver,
                       public ui::CompositorObserver,
+                      public views::FocusChangeListener,
                       public TabStripModelObserver {
  public:
   METADATA_HEADER(ShellHostView, views::View)
@@ -1020,6 +1022,7 @@ class ShellHostView : public views::View,
   void HideDevToolsViewport(TabBinding* binding);
   void LayoutPane(TabBinding* binding);
   void KeepPaneFocus(TabBinding* activating);
+  void OnDidChangeFocus(views::View* before, views::View* now) override;
   void QueueTransaction(std::optional<int> command);
   void EngineEvent(std::string_view topic, const base::DictValue& payload);
   bool ReceivesPrivateDownload(const base::DictValue& download);
@@ -1363,6 +1366,8 @@ class ShellHostView : public views::View,
   base::ScopedObservation<views::Widget, views::WidgetObserver> close_observation_{this};
   base::ScopedObservation<aura::Window, aura::WindowObserver> input_observation_{this};
   base::ScopedObservation<ui::Compositor, ui::CompositorObserver> presentation_observation_{this};
+  base::ScopedObservation<views::FocusManager, views::FocusChangeListener> pane_focus_observation_{this};
+  std::map<int, bool> devtools_had_focus_;
   base::CallbackListSubscription system_state_subscription_;
   base::CallbackListSubscription calendar_subscription_;
   base::WeakPtrFactory<ShellHostView> weak_factory_{this};
@@ -1887,6 +1892,7 @@ void ShellHostView::Initialize() {
   RestoreFullScreenNow();
   ArmWindowClose();
   focus_manager_ = GetFocusManager();
+  if (focus_manager_) pane_focus_observation_.Observe(focus_manager_);
   aura::Window* input_window = GetWidget()->GetNativeWindow()->GetRootWindow();
   input_observation_.Observe(input_window);
   input_handler_ = std::make_unique<WindowKeyboardHandler>(
@@ -1981,7 +1987,9 @@ base::DictValue ShellHostView::Bootstrap() const {
       .Append("ArdiaShell.restoreFullScreen")
       .Append("ArdiaShell.downloadsInProgress")
       .Append("ArdiaShell.setDragEscapeCapture")
-      .Append("ArdiaShell.quit");
+      .Append("ArdiaShell.quit")
+      .Append("ArdiaShell.startWindowMove")
+      .Append("ArdiaShell.captionDoubleClick");
   for (const char* capability : linux_downloads::kFileCapabilities) capabilities.Append(capability);
   for (const auto& route : ardiacore::linux_contract::kRoutes)
     capabilities.Append(route.name);
@@ -2027,7 +2035,12 @@ void ShellHostView::LayoutOverlay() {
 
 void ShellHostView::HideCaptionButtons() {
   if (!browser_view_ || !browser_view_->browser_widget()) return;
-  if (BrowserFrameView* frame = browser_view_->browser_widget()->GetFrameView()) frame->SetCaptionButtonsOpacity(0.0f);
+  BrowserFrameView* frame = browser_view_->browser_widget()->GetFrameView();
+  if (!frame) return;
+  frame->SetCaptionButtonsOpacity(0.0f);
+  for (int id : {VIEW_ID_MINIMIZE_BUTTON, VIEW_ID_MAXIMIZE_BUTTON, VIEW_ID_RESTORE_BUTTON, VIEW_ID_CLOSE_BUTTON}) {
+    if (views::View* button = frame->GetViewByID(id)) button->GetViewAccessibility().SetIsIgnored(true);
+  }
 }
 
 void ShellHostView::OnWidgetThemeChanged(views::Widget*) {
@@ -2930,6 +2943,7 @@ void ShellHostView::OnWidgetClosing(views::Widget*) {
 
 void ShellHostView::OnWidgetDestroying(views::Widget*) {
   close_observation_.Reset();
+  pane_focus_observation_.Reset();
 }
 
 void BroadcastWindowEvent(const base::DictValue& event) {
@@ -3561,7 +3575,9 @@ void ShellHostView::KeepPaneFocus(TabBinding* activating) {
     if (!stored || stored == binding->viewport() || stored == binding->devtools_viewport()) continue;
     for (const auto& [other_id, other] : bindings_) {
       if (stored == other->viewport() || stored == other->devtools_viewport()) {
-        helper->SetStoredFocusView(binding->viewport());
+        const auto tools = devtools_had_focus_.find(id);
+        const bool keep_tools = tools != devtools_had_focus_.end() && tools->second && binding->devtools_viewport();
+        helper->SetStoredFocusView(keep_tools ? binding->devtools_viewport() : binding->viewport());
         break;
       }
     }
@@ -3572,6 +3588,16 @@ void ShellHostView::KeepPaneFocus(TabBinding* activating) {
       (focused != activating->viewport() && focused != activating->devtools_viewport())) return;
   if (auto* helper = ChromeWebContentsViewFocusHelper::FromWebContents(activating->contents())) {
     helper->SetStoredFocusView(focused);
+  }
+}
+
+void ShellHostView::OnDidChangeFocus(views::View*, views::View* now) {
+  if (!now) return;
+  for (const auto& [id, binding] : bindings_) {
+    if (now == binding->viewport() || now == binding->devtools_viewport()) {
+      devtools_had_focus_[id] = now == binding->devtools_viewport();
+      return;
+    }
   }
 }
 
@@ -3718,6 +3744,7 @@ void ShellHostView::ReplaceTabContents(content::WebContents* old_contents,
   if (id != old_id) {
     auto owned = std::move(bindings_[old_id]);
     bindings_.erase(old_id);
+    devtools_had_focus_.erase(old_id);
     owned->replaced_ids.push_back(old_id);
     if (owned->replaced_ids.size() > 4) owned->replaced_ids.erase(owned->replaced_ids.begin());
     bindings_[id] = std::move(owned);
@@ -3847,6 +3874,7 @@ void ShellHostView::CreateTab(
       app_operation_ = true;
       auto moved = std::move(source->bindings_[id]);
       source->bindings_.erase(id);
+      source->devtools_had_focus_.erase(id);
       moved->MoveTo(this);
       auto contents = source_model->DetachWebContentsAtForInsertion(index);
       model->InsertWebContentsAt(model->count(), std::move(contents), AddTabTypes::ADD_NONE);
