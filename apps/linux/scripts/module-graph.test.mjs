@@ -68,6 +68,11 @@ test("production graph uses current Linux adapters and one canonical shared stat
     assert.ok(graph.get(id).importedIds.includes(original));
   }
 
+  const permissions = graph.get(`${browser}state/site/permissions.ts`);
+  assert.ok(permissions.importedIds.includes(`${linux}notificationPermission.ts`), "accepting a notification prompt goes through the Linux permission adapter");
+  assert.ok(!permissions.importedIds.includes(`${browser}state/site/webNotifications.ts`));
+  assert.ok(graph.get(`${linux}notificationPermission.ts`).importedIds.includes(`${browser}state/site/webNotifications.ts`));
+
   const dock = graph.get(`${browser}components/window/SidebarDock.tsx`);
   assert.ok(dock.importedIds.includes(`${linux}SidebarPeekMark.tsx`), "the docked sidebar marks a peek for the page viewport");
   assert.ok(!dock.importedIds.includes(`${browser}components/sidebar/Sidebar.tsx`));
