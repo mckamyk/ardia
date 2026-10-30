@@ -48,8 +48,7 @@ import { startLinuxShortcuts } from "./shortcutsRuntime";
 import { linuxWindowMenu, TrafficLights } from "./TrafficLights";
 import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setSessionDeparture, setSessionFlush } from "./session";
 import { startUtility } from "./utility";
-import { installProfileWindows } from "./hostWindowProfiles";
-import { focus } from "../../browser/src/state/browser/actions";
+import { watchActiveProfile } from "./hostWindowProfiles";
 import { announceCommandsReady, announceTypeaheadReady, windowExpectsField } from "./typeahead";
 import { linuxSyncHooks, startLinuxSync } from "./syncEngine";
 import { linuxLiveHooks } from "./liveHooks";
@@ -92,7 +91,7 @@ async function start() {
     await startUtility(ardiaHost);
   } else {
     if (!ardiaHost.bootstrap.privateWindow) useBrowser.setState(adoptParkedPins(useBrowser.getState(), windowId, profileId));
-    installProfileWindows(useBrowser, focus);
+    watchActiveProfile(ardiaHost, useBrowser);
     startHostData();
     startHostTabLifecycle(ardiaHost, useBrowser);
     setHostOverlayCheck((key) => {
