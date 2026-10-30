@@ -5,6 +5,7 @@ import { contentScriptFixture, installed, workerOf } from "./w-profile-paging.mj
 import { clickDialogButton, clickNeutral, labelRect, openedWindow, removeExtensionInSettings, rowToggle, shellLines } from "../lib/desktopUi.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
+import { changedRegion } from "../lib/desktop.mjs";
 import { evaluate } from "../lib/cdp.mjs";
 import { openPrivateByKeys } from "./d-private.mjs";
 import { blockerAvailable, blockerReady, call, expectBlocked } from "./f06-site-controls.mjs";
@@ -489,9 +490,9 @@ export const swipeDesktop = {
   },
 };
 
-async function hiddenBrowserChecks(t, desktop, app, shell, window, workProfile) {
+async function hiddenBrowserChecks(t, desktop, app, shell, window, workProfile, label = "") {
   const ours = async () => (await desktop.windows()).filter((w) => (w.pid && w.pid === window.pid) || /ardia/i.test(w.appId ?? ""));
-  await t.check("an isolated profile's extension restoring, focusing, minimizing, maximizing, fullscreening or resizing its window never maps the hidden Browser", async () => {
+  await t.check(`an isolated profile's extension restoring, focusing, minimizing, maximizing, fullscreening or resizing its window never maps the hidden Browser${label}`, async () => {
     const fixture = await contentScriptFixture(await t.scratch("hidden-browser-fixture"));
     const id = await installed(shell, fixture, workProfile);
     if ((await shell.state("return s.windows[windowId]?.profileId;")) !== workProfile) {
@@ -514,6 +515,7 @@ async function hiddenBrowserChecks(t, desktop, app, shell, window, workProfile) 
         await desktopShot(t, desktop, `companion-${name}`);
         throw new Error(`after windows.update ${name} the compositor has ${JSON.stringify(mapped.map((w) => ({ id: w.id, title: w.title, focused: w.focused })))}`);
       }
+      await waitFocused(desktop, (w) => w.id === before[0].id, { timeout: 5000, label: `the visible window focused after windows.update ${name}` });
     }
     const created = await evaluate(sw, `chrome.tabs.create({ windowId: ${target[0].id}, url: ${js(t.fixtures.url.page(3))}, active: true }).then(() => true).catch((error) => String(error))`);
     await delay(1500);
@@ -524,12 +526,66 @@ async function hiddenBrowserChecks(t, desktop, app, shell, window, workProfile) 
   });
 }
 
+async function closeWarnings(t, desktop, { name, flags = [], download, tabs }) {
+  const { app, shell } = await startDesktopBrowser(t, desktop, { name, extraArgs: flags, session: sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }] }) });
+  const window = await windowTitled(desktop, "Acceptance page 1");
+  const ours = async () => (await desktop.windows()).filter((w) => w.pid && w.pid === window.pid);
+  await shell.state("s.updateSettings({ warnBeforeClosingWindow: false, warnBeforeClosingLastTab: false }); return true;");
+  const work = await shell.state("return s.createProfile({ name: 'Work' });");
+  await shell.state(`s.switchProfile(windowId, ${js(work)}); return true;`);
+  for (let index = 0; index < tabs; index++) {
+    const url = t.fixtures.url.page(10 + index, name);
+    const tab = await shell.state(`return s.newTab(windowId, { url: ${js(url)} });`);
+    await shell.waitTabUrl(tab, (current) => current === url, { timeout: 20000 });
+  }
+  await shell.state("s.switchProfile(windowId, 'default'); return true;");
+  let slow = null;
+  if (download) {
+    slow = `${name}-${nonce("dl")}.bin`;
+    const tab = await shell.state(`return Object.values(s.tabs).find((tab) => tab.windowId === windowId && tab.profileId === 'default')?.id ?? null;`);
+    await shell.navigate(tab, t.fixtures.url.slow(slow, 8 << 20));
+    await until(async () => (await shell.state("return s.downloads ?? [];")).find((d) => d.filename?.endsWith(slow) && d.state === "downloading" && d.received > 0) ?? false,
+      { timeout: 30000, label: "the download to start" });
+  }
+  const frame = (await ours()).find((w) => w.id === window.id)?.rect ?? window.rect;
+  const inWindow = (region) => region && region.x >= frame.x && region.y >= frame.y &&
+    region.x + region.width <= frame.x + frame.width + 16 && region.y + region.height <= frame.y + frame.height + 16;
+  const dialogSized = (region) => inWindow(region) && region.width >= 300 && region.height >= 100;
+  const faint = { threshold: 6, fill: 0.02, gap: 3 };
+  await delay(1000);
+  const quiet = await desktop.capture();
+  const request = await shell.invoke("ArdiaShell.closeWindow", { args: [shell.windowId] });
+  if (!request.ok) throw new Error(`the close request was refused: ${request.code} ${request.message}`);
+  const shown = await until(async () => {
+    if (app.exited) throw new Error("the browser quit without a warning");
+    const now = await desktop.capture();
+    const region = changedRegion(quiet, now, faint);
+    return dialogSized(region) ? { now, region } : false;
+  }, { timeout: 15000, label: "Chromium's warning dialog drawn in the visible window", abort: () => app.exitReason() }).catch(async (error) => {
+    await desktopShot(t, desktop, `${name}-no-warning`);
+    throw new Error(`${error.message}; exited ${app.exited}`);
+  });
+  await desktopShot(t, desktop, `${name}-warning`);
+  await desktop.key("Escape");
+  await until(async () => !dialogSized(changedRegion(quiet, await desktop.capture(), faint)) || false,
+    { timeout: 10000, label: "the warning to close after Escape" });
+  await delay(1500);
+  if (app.exited) throw new Error("cancelling the warning still closed the browser");
+  const left = await ours();
+  if (!left.some((w) => w.id === window.id)) throw new Error(`cancelling the warning left ${JSON.stringify(left.map((w) => w.title))}`);
+  const downloading = download ? (await shell.state("return s.downloads ?? [];")).find((d) => d.filename?.endsWith(slow))?.state : null;
+  if (download && downloading !== "downloading") throw new Error(`after cancelling, the download is ${downloading}`);
+  if (slow) t.fixtures.release(slow);
+  await t.stop(app);
+  return { warning: shown.region, downloading };
+}
+
 export const hiddenBrowserX11 = {
   id: "W70X",
   issue: 70,
   desktop: true,
-  title: "An isolated profile's hidden Browser never maps a window on Xvfb + openbox, whatever its extension asks",
-  deadline: 240000,
+  title: "An isolated profile's hidden Browser never maps a window on Xvfb + openbox, and closing a window that holds its tabs warns once in that window",
+  deadline: 480000,
   async run(t) {
     const missing = await desktopUnavailable({ x11: true });
     if (missing) {
@@ -537,11 +593,17 @@ export const hiddenBrowserX11 = {
       return;
     }
     const desktop = await openDesktop(t, { x11: true });
-    const { app, shell } = await startDesktopBrowser(t, desktop, { name: "hidden-x11", extensions: true, session: sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }] }) });
-    const window = await windowTitled(desktop, "Acceptance page 1");
-    const work = await shell.state("return s.createProfile({ name: 'Work' });");
-    await hiddenBrowserChecks(t, desktop, app, shell, window, work);
-    await t.stop(app);
+    for (const [label, flags] of [["", []], [" (asynchronous fullscreen)", ["--enable-features=AsyncFullscreenWindowState"]]]) {
+      const { app, shell } = await startDesktopBrowser(t, desktop, { name: label ? "hidden-x11-async" : "hidden-x11", extensions: true, extraArgs: flags, session: sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }] }) });
+      const window = await windowTitled(desktop, "Acceptance page 1");
+      const work = await shell.state("return s.createProfile({ name: 'Work' });");
+      await hiddenBrowserChecks(t, desktop, app, shell, window, work, label);
+      await t.stop(app);
+    }
+    await t.check("closing the only window during a download shows the download warning in that window, with an isolated profile's tabs in it, and Escape keeps the window and the download", async () =>
+      closeWarnings(t, desktop, { name: "close-download", download: true, tabs: 2 }));
+    await t.check("with --close-confirmation=last, closing the only window counts its isolated profile's tabs: one tab of its own and two isolated tabs warn, and Escape keeps it", async () =>
+      closeWarnings(t, desktop, { name: "close-multitab", flags: ["--close-confirmation=last"], tabs: 2 }));
   },
 };
 

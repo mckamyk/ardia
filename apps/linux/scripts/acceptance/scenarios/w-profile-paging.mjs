@@ -286,9 +286,15 @@ async function extensionsPerProfile(t) {
 const popupFor = (id, profile) => ({ kind: "popup", url: `chrome-extension://${id}/popup.html`, profile });
 
 async function reloaded(app, shell) {
-  await shell.eval("setTimeout(() => location.reload(), 0), true");
+  await shell.eval("globalThis.__w70Reloading = true");
+  await shell.session.send("Page.reload");
   await delay(1500);
-  return app.shell(shell.windowId, { timeout: 25000 });
+  return until(async () => {
+    const next = await app.shell(shell.windowId, { timeout: 5000 }).catch(() => null);
+    if (!next) return false;
+    const fresh = await next.eval("globalThis.__w70Reloading === undefined && !!document.querySelector('[data-ardia-linux-window]')").catch(() => false);
+    return fresh ? next : false;
+  }, { timeout: 25000, label: "the reloaded shell" });
 }
 
 async function popupOpens(shell, id, profile) {
@@ -312,7 +318,12 @@ async function closingFamilies(t) {
   t.fixtures.route(UNLOAD_PAGE, ({ url, html }) => html("Unload fixture", `<h1>Unload ${url.searchParams.get("who") ?? ""}</h1><script>
     const who = ${JSON.stringify("")} + new URLSearchParams(location.search).get("who");
     addEventListener("pagehide", () => navigator.sendBeacon("${BEACON}?event=pagehide&who=" + who));
-    addEventListener("unload", () => navigator.sendBeacon("${BEACON}?event=unload&who=" + who));
+    addEventListener("unload", () => {
+      navigator.sendBeacon("${BEACON}?event=unload&who=" + who);
+      const until = performance.now() + 200;
+      while (performance.now() < until) {}
+      navigator.sendBeacon("${BEACON}?event=late&who=" + who);
+    });
   </script>`));
   t.fixtures.route(BEACON, ({ send }) => send(204, "text/plain", ""));
   const isolation = (label) => `${t.fixtures.url.isolation("isolation.ardia.test")}?p=${label}-${run}`;
@@ -325,7 +336,7 @@ async function closingFamilies(t) {
   const fixture = await contentScriptFixture(await t.scratch("close-fixture"));
   const workId = await installed(state.shell, fixture, profiles.work);
 
-  await t.check("after the shell reloads, the window still follows its engine profile: the isolated profile's popup opens", async () => {
+  await t.check("after the shell reloads, the window still follows its engine profile, and a selection the old shell left pending can't win", async () => {
     for (let round = 0; round < 3; round++) {
       await switchTo(state.shell, profiles.work);
       await switchTo(state.shell, "default");
@@ -334,16 +345,20 @@ async function closingFamilies(t) {
     await openTab(state.app, state.shell, isolation("reload-work"));
     const before = await popupOpens(state.shell, workId, profiles.work);
     if (!before.ok) throw new Error(`the popup didn't open before the reload: ${before.code} ${before.message}`);
-    await switchTo(state.shell, "default");
+    const late = await state.shell.state("return s.createProfile({ name: 'Late' });");
+    await state.shell.eval("globalThis.__w70Renderer = 'old', true");
+    await state.shell.eval(`(__ardiaHost.invoke("ArdiaShell.setActiveProfile", { args: [${js(late)}, 1000] }).catch(() => null), true)`);
     state.shell = await reloaded(state.app, state.shell);
+    const fresh = await state.shell.eval("globalThis.__w70Renderer === undefined");
+    if (!fresh) throw new Error("the shell did not reload");
     await switchTo(state.shell, profiles.work);
-    const after = await until(async () => {
-      const view = await popupOpens(state.shell, workId, profiles.work);
-      return view.ok ? view : false;
-    }, { timeout: 10000, label: "the isolated profile's popup after the reload" }).catch(async () => popupOpens(state.shell, workId, profiles.work));
-    if (!after.ok) throw new Error(`after the reload the window refuses the isolated profile's popup: ${after.code} ${after.message}`);
+    const selected = await state.shell.invoke("ArdiaShell.setActiveProfile", { args: [profiles.work, 50] });
+    if (!selected.ok || selected.value !== true) throw new Error(`the reloaded shell's selection was refused: ${JSON.stringify(selected)}`);
+    await delay(3000);
+    const after = await popupOpens(state.shell, workId, profiles.work);
+    if (!after.ok) throw new Error(`after the reload the window no longer follows the isolated profile: ${after.code} ${after.message}`);
     await switchTo(state.shell, "default");
-    return { before: before.value.id, after: after.value.id };
+    return { before: before.value.id, selected: selected.value, after: after.value.id };
   });
 
   await t.check("closing a window runs the unload handlers of its isolated-profile tabs and records no hidden window in that profile's recently closed", async () => {
@@ -357,9 +372,14 @@ async function closingFamilies(t) {
     const request = await state.shell.invoke("ArdiaShell.closeWindow", { args: [second] });
     if (!request.ok) throw new Error(`the native close request was refused: ${request.code} ${request.message}`);
     await until(async () => !(await state.shell.windowIds()).includes(second), { timeout: 20000, label: "the second window to close" });
-    const fired = await until(async () => (beacons("default").length && beacons("isolated").length ? { default: beacons("default"), isolated: beacons("isolated") } : false),
-      { timeout: 10000, label: "pagehide or unload beacons from both profiles' tabs" }).catch(() => ({ default: beacons("default"), isolated: beacons("isolated") }));
-    if (!fired.isolated.length) throw new Error(`the isolated tab's unload handlers never ran: ${JSON.stringify(fired)}`);
+    const expected = ["pagehide", "unload", "late"];
+    const complete = (who) => expected.every((event) => beacons(who).includes(event));
+    const fired = await until(async () => (complete("default") && complete("isolated") ? { default: beacons("default"), isolated: beacons("isolated") } : false),
+      { timeout: 10000, label: "pagehide, unload and the late unload beacon from both profiles' tabs" }).catch(() => ({ default: beacons("default"), isolated: beacons("isolated") }));
+    for (const who of ["default", "isolated"]) {
+      const missing = expected.filter((event) => !fired[who].includes(event));
+      if (missing.length) throw new Error(`the ${who} tab's unload sequence didn't complete (missing ${missing.join(", ")}): ${JSON.stringify(fired)}`);
+    }
     await switchTo(state.shell, profiles.work);
     const entries = await recentlyClosed(state.app, state.shell, workId, profiles.work, run, "window-close");
     const hidden = entries.filter((entry) => entry.window);
@@ -426,6 +446,9 @@ async function closingFamilies(t) {
       await t.stop(running.app);
     }
     if (!outcomes["no-download"].exited) throw new Error(`closing the only window without a download didn't quit, so the check can't tell: ${JSON.stringify(outcomes)}`);
+    for (const [label, outcome] of Object.entries(outcomes)) {
+      if (!outcome.request) throw new Error(`the ${label} close request was refused: ${JSON.stringify(outcomes)}`);
+    }
     const kept = (outcome) => !outcome.exited && Array.isArray(outcome.windows) && outcome.windows.includes("main");
     if (!kept(outcomes.control)) throw new Error(`without a companion the window closed without the download warning: ${JSON.stringify(outcomes)}`);
     if (!kept(outcomes["with-companion"])) throw new Error(`with an isolated-profile tab the only window closed without the download warning: ${JSON.stringify(outcomes)}`);
