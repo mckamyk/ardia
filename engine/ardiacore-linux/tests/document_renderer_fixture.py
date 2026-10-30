@@ -85,6 +85,8 @@ struct TabBinding {
   bool DisposeTemporary(TabBinding* binding) { binding->live = false; return true; }
   bool Trusted(content::WebUI*) const;
   void DetachBrowser();
+  int closed_companions = 0;
+  void CloseCompanions() { ++closed_companions; }
   void UnregisterAccelerators() {}
   struct Factory {
     ShellHostView* owner;

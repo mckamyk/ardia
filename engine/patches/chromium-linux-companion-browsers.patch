@@ -1,0 +1,112 @@
+A Linux window can show tabs of several engine profiles. Chromium needs a tab's Browser to have the tab's profile, so
+the Ardia host keeps one hidden companion Browser per other profile beside the window's own (ac_linux_host.cc). A
+companion's widget is never shown: BrowserView::Show, ShowInactive and Activate hand the request to the host, which
+focuses the visible window instead, and tab-modal dialogs and permission prompts of a companion's tabs are hosted by
+the visible window's BrowserView. Both hooks are null outside the Linux host and return null or false for every
+browser that is not a companion.
+
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -435,6 +435,11 @@ using content::WebContents;
+ using input::NativeWebKeyboardEvent;
+ using web_modal::WebContentsModalDialogHost;
+ 
++BrowserWindowInterface* (*g_ardia_linux_companion_owner)(
++    const BrowserWindowInterface*) = nullptr;
++bool (*g_ardia_linux_present_companion)(BrowserWindowInterface*,
++                                        bool activate) = nullptr;
++
+ namespace {
+ 
+ bool ArdiaLinuxBackgroundInstance() {
+@@ -2291,6 +2296,11 @@ void BrowserView::Show() {
+     return;
+   }
+ 
++  if (g_ardia_linux_present_companion &&
++      g_ardia_linux_present_companion(browser_.get(), true)) {
++    return;
++  }
++
+   if (auto* manager = InitialWebUIManager::From(browser())) {
+     if (manager->RequestDeferShow(base::BindOnce(
+             &BrowserView::Show, weak_ptr_factory_.GetWeakPtr()))) {
+@@ -2365,6 +2375,10 @@ void BrowserView::Show() {
+ }
+ 
+ void BrowserView::ShowInactive() {
++  if (g_ardia_linux_present_companion &&
++      g_ardia_linux_present_companion(browser_.get(), false)) {
++    return;
++  }
+   if (!browser_widget_->IsVisible()) {
+     browser_widget_->ShowInactive();
+   }
+@@ -2410,6 +2424,11 @@ void BrowserView::Activate() {
+     return;
+   }
+ 
++  if (g_ardia_linux_present_companion &&
++      g_ardia_linux_present_companion(browser_.get(), true)) {
++    return;
++  }
++
+   if (auto* manager = InitialWebUIManager::From(browser())) {
+     if (manager->RequestDeferShow(base::BindOnce(
+             &BrowserView::Activate, weak_ptr_factory_.GetWeakPtr()))) {
+@@ -4133,11 +4152,30 @@ std::unique_ptr<FindBar> BrowserView::CreateFindBar() {
+ }
+ 
+ WebContentsModalDialogHost* BrowserView::GetWebContentsModalDialogHost() {
++  if (BrowserWindowInterface* owner =
++          g_ardia_linux_companion_owner
++              ? g_ardia_linux_companion_owner(browser_.get())
++              : nullptr) {
++    if (BrowserView* view = GetBrowserViewForBrowser(owner);
++        view && view != this) {
++      return view->GetWebContentsModalDialogHost();
++    }
++  }
+   return GetBrowserViewLayout()->GetWebContentsModalDialogHost();
+ }
+ 
+ WebContentsModalDialogHost* BrowserView::GetWebContentsModalDialogHostFor(
+     content::WebContents* web_contents) {
++  if (BrowserWindowInterface* owner =
++          g_ardia_linux_companion_owner
++              ? g_ardia_linux_companion_owner(browser_.get())
++              : nullptr) {
++    if (BrowserView* view = GetBrowserViewForBrowser(owner);
++        view && view != this) {
++      return view->GetActiveContentsContainerView()
++          ->web_contents_modal_dialog_host();
++    }
++  }
+   ContentsContainerView* const contents_container_view =
+       multi_contents_view_->GetContentsContainerViewFor(web_contents);
+   // `contents_container_view` can be null in cases where a modal dialog is
+--- a/chrome/browser/ui/views/permissions/permission_prompt_base_view.cc
++++ b/chrome/browser/ui/views/permissions/permission_prompt_base_view.cc
+@@ -35,6 +35,9 @@
+ #include "ui/views/widget/widget.h"
+ #include "ui/views/window/dialog_client_view.h"
+ 
++extern BrowserWindowInterface* (*g_ardia_linux_companion_owner)(
++    const BrowserWindowInterface*);
++
+ namespace {
+ 
+ constexpr UrlIdentity::TypeSet allowed_types = {
+@@ -276,6 +279,12 @@ BrowserWindowInterface* PermissionPromptBaseView::GetBrowser() {
+ 
+ gfx::NativeWindow PermissionPromptBaseView::GetNativeWindow() {
+   BrowserWindowInterface* browser = GetBrowser();
++  if (BrowserWindowInterface* owner =
++          browser && g_ardia_linux_companion_owner
++              ? g_ardia_linux_companion_owner(browser)
++              : nullptr) {
++    browser = owner;
++  }
+   if (browser && browser->GetWindow()) {
+     return browser->GetWindow()->GetNativeWindow();
+   }

@@ -229,8 +229,15 @@ struct Browser {
   std::function<void(base::UnguessableToken)> on_cancel;
   views::Widget widget;
   views::Widget* GetWindow() { return &widget; }
+  struct Unload {
+    int resets = 0;
+    void ResetBeforeUnloadForShutdown() { ++resets; }
+  } unload;
 };
 using BrowserWindowInterface = Browser;
+struct UnloadController {
+  static Browser::Unload* From(Browser* browser) { return &browser->unload; }
+};
 namespace ardia {
 enum class LinuxCloseStage { kPrepare, kBeginTeardown, kDestroy };
 enum class LinuxCloseAdmission { kRejected, kRetryPreflight, kCommitted };
@@ -261,6 +268,13 @@ ARDIA_DIALOGS
 #include "ardia/linux/ac_linux_profiles.h"
 struct ShellHostView {
   Browser native;
+  std::vector<base::WeakPtr<BrowserWindowInterface>> companions_;
+  bool companions_proceed = true;
+  int companion_confirmations = 0;
+  void ConfirmCompanions(base::OnceCallback<void(bool)> done) {
+    ++companion_confirmations;
+    std::move(done).Run(companions_proceed);
+  }
   std::string page_profile_;
   int reach_id_ = 0;
   int opener_host_ = 0;

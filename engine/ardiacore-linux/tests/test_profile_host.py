@@ -200,9 +200,11 @@ class ProfilePageCommandTests(unittest.TestCase):
     def test_page_commands_and_devtools_use_the_window_page_profile(self):
         host = HOST.read_text()
         page = method(host, 'ardiacore::LinuxPageCommands* ShellHostView::EnsurePageCommands(')
-        self.assertIn('binding->contents(), page_profile(),', page)
+        self.assertIn('binding->contents(), ProfileOf(binding->contents()->GetBrowserContext()),', page)
+        self.assertIn('authority.host->OwnerOf(authority.contents.get())', page)
         self.assertNotIn('binding->contents(), profile(),', page)
-        self.assertIn('tools = AddChildView(std::make_unique<ViewportView>(page_profile()));', host)
+        self.assertIn('tools = AddChildView(std::make_unique<ViewportView>(ProfileOf(contents->GetBrowserContext())));', host)
+        self.assertIn('binding->SetViewport(AddChildView(std::make_unique<ViewportView>(ProfileOf(binding->contents()->GetBrowserContext()))));', host)
         self.assertNotIn('ViewportView>(profile())', host)
 
 

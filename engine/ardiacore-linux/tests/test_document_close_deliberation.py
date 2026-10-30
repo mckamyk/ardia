@@ -149,6 +149,23 @@ int main(int argc, char** argv) {
     assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()))->ok);
     Drain(); assert(host.native.widget.IsClosed() && acknowledged == 2);
   }
+  if (mode == "companion-stay") {
+    ShellHostView host; Watch(host); host.ArmWindowClose();
+    hosts[1] = &host;
+    host.companions_proceed = false;
+    const auto request = host.RequestWindowClose();
+    assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()))->ok);
+    host.AcknowledgeWindowClose(Ack(request, 0), Ignore);
+    Drain();
+    assert(host.companion_confirmations == 1 && !host.native.widget.IsClosed());
+    assert(host.close_.phase() == LinuxClose::Phase::kCancelled && Named(host, "shell.closeCancelled") == 1);
+    host.companions_proceed = true;
+    const auto again = host.RequestWindowClose();
+    assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(again.Clone()))->ok);
+    host.AcknowledgeWindowClose(Ack(again, 0), Ignore);
+    Drain();
+    assert(host.companion_confirmations == 2 && host.native.widget.IsClosed());
+  }
   if (mode == "deadline") {
     ShellHostView host; Watch(host); host.ArmWindowClose();
     hosts[1] = &host;
@@ -456,6 +473,9 @@ class CloseDeliberationTests(unittest.TestCase):
 
     def test_seal_requires_the_draining_phase_and_keeps_watermark_idempotency(self):
         self.run_mode('drain', 'seal-gate')
+
+    def test_a_companion_page_that_stays_cancels_the_whole_window_close(self):
+        self.run_mode('drain', 'companion-stay')
 
     def test_drain_deadline_starts_at_drain_checks_identity_and_ends_at_seal(self):
         self.run_mode('drain', 'deadline')
