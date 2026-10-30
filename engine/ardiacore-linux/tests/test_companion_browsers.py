@@ -10,6 +10,8 @@ PATCH = REPO / 'engine/patches/chromium-linux-companion-browsers.patch'
 HOST = ROOT / 'src/ardia/linux/ac_linux_host.cc'
 BROWSER_VIEW = 'chrome/browser/ui/views/frame/browser_view.cc'
 PERMISSION = 'chrome/browser/ui/views/permissions/permission_prompt_base_view.cc'
+UNLOAD = 'chrome/browser/ui/unload_controller.cc'
+DELEGATE = 'chrome/browser/ui/browser_tab_strip_model_delegate.cc'
 
 
 def method(source, signature):
@@ -38,9 +40,29 @@ class CompanionPatchTests(unittest.TestCase):
         self.assertNotRegex(added, r'(^|\s)//|/\*')
 
     def test_a_companion_never_shows_and_hosts_its_dialogs_in_the_visible_window(self):
-        with applied(PATCH.name, BROWSER_VIEW, PERMISSION) as scratch:
+        with applied(PATCH.name, BROWSER_VIEW, PERMISSION, UNLOAD, DELEGATE) as scratch:
             view = (scratch / BROWSER_VIEW).read_text()
             prompt = (scratch / PERMISSION).read_text()
+            unload = (scratch / UNLOAD).read_text()
+            delegate = (scratch / DELEGATE).read_text()
+        for signature in ['void BrowserView::Restore() {', 'void BrowserView::Maximize() {', 'void BrowserView::Minimize() {',
+                          'void BrowserView::SetBounds(const gfx::Rect& bounds) {', 'void BrowserView::Deactivate() {',
+                          'void BrowserView::FlashFrame(bool flash) {',
+                          'void BrowserView::ProcessFullscreen(bool fullscreen, const int64_t display_id) {']:
+            body = method(view, signature)
+            hook = 'g_ardia_linux_present_companion(browser_.get(), false)'
+            self.assertIn(hook, body, signature)
+            first = min(index for index in (body.find('browser_widget_->'), body.find('in_process_fullscreen_'),
+                                            body.find('BrowserWindowFullscreenController')) if index >= 0)
+            self.assertLess(body.index(hook), first, signature)
+        last = method(unload, 'std::pair<bool, bool> IsLastWindow(const BrowserWindowInterface* browser) {')
+        self.assertIn('g_ardia_linux_is_companion(other_browser)', last)
+        closing = method(unload, 'void UnloadController::OnWindowClosing() {')
+        self.assertLess(closing.index('g_ardia_linux_is_companion(browser_.get())'), closing.index('tab_restore_service->BrowserClosing('))
+        self.assertIn('g_ardia_linux_is_companion(browser)', method(unload, 'bool UnloadController::CanCloseWithMultipleTabs() {'))
+        historical = method(delegate, 'std::optional<SessionID> BrowserTabStripModelDelegate::CreateHistoricalTab(')
+        self.assertLess(historical.index('UnloadController::From(browser_)->is_attempting_to_close_browser()'),
+                        historical.index('service->CreateHistoricalTab('))
         for signature, activate, before in [('void BrowserView::Show() {', 'true', 'InitialWebUIManager::From'),
                                             ('void BrowserView::ShowInactive() {', 'false', 'browser_widget_->IsVisible()'),
                                             ('void BrowserView::Activate() {', 'true', 'InitialWebUIManager::From')]:
@@ -67,7 +89,8 @@ class CompanionHostTests(unittest.TestCase):
         for needle in ['params.omit_from_session_restore = true;', 'params.should_trigger_session_restore = false;',
                        'private_window()', 'closing()', 'browser_shutdown::IsTryingToQuit()',
                        'GetBrowserWindowCreationStatusForProfile(*profile) != BrowserWindowInterface::CreationStatus::kOk',
-                       'CompanionOwners()[created->GetSessionID().id()] = id_;', 'StartLinuxContentBlocker(this->profile(), profile);']:
+                       'CompanionOwners()[created->GetSessionID().id()] = id_;', 'StartLinuxContentBlocker(this->profile(), profile);',
+                       'LinuxDownloadsCall(profile, "downloads.list", base::DictValue(), base::DoNothing());']:
             self.assertIn(needle, ensure)
         self.assertNotRegex(ensure, r'->Show(Inactive)?\(|Activate\(')
         self.assertLess(ensure.index('CompanionOwners()[created->GetSessionID().id()] = id_;'), ensure.index('return created;'))
@@ -111,7 +134,11 @@ class CompanionHostTests(unittest.TestCase):
         detach = method(self.host, 'void ShellHostView::DetachBrowser() {')
         self.assertIn('CloseCompanions();', detach)
         close = method(self.host, 'void ShellHostView::CloseCompanions() {')
-        self.assertIn('DetachAndDeleteWebContentsAt', close)
+        self.assertNotIn('DetachAndDeleteWebContentsAt', close)
+        self.assertIn('set_force_skip_warning_user_on_close(true)', close)
+        self.assertIn('RunBeforeUnloadForShutdown(true, base::DoNothing())', close)
+        self.assertIn('companion->GetWindow()->Close()', close)
+        self.assertIn('g_ardia_linux_is_companion = [](const BrowserWindowInterface* browser) { return IsCompanion(browser); };', self.host)
         self.assertIn('RemoveObserver(this)', close)
         keeps = self.host[self.host.index('  g_ardia_keeps_window_without_tabs = '):]
         keeps = keeps[:keeps.index('\n  };\n')]

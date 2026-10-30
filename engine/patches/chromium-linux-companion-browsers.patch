@@ -1,13 +1,80 @@
 A Linux window can show tabs of several engine profiles. Chromium needs a tab's Browser to have the tab's profile, so
 the Ardia host keeps one hidden companion Browser per other profile beside the window's own (ac_linux_host.cc). A
 companion's widget is never shown: BrowserView::Show, ShowInactive and Activate hand the request to the host, which
-focuses the visible window instead, and tab-modal dialogs and permission prompts of a companion's tabs are hosted by
-the visible window's BrowserView. Both hooks are null outside the Linux host and return null or false for every
-browser that is not a companion.
+focuses the visible window instead, and Restore, Maximize, Minimize, SetBounds, Deactivate, FlashFrame and
+fullscreen are dropped, since DesktopWindowTreeHostPlatform::Restore (and Maximize from minimized) show the window
+themselves. Tab-modal dialogs and permission prompts of a companion's tabs are hosted by the visible window's
+BrowserView. A companion is not a window of its own for closing: UnloadController's last-window and multi-tab
+counts skip it, so closing the only visible window still asks about downloads, and neither its window close nor
+the tabs it closes while closing (on quit too) reach TabRestoreService, so restoring never opens it as a window. The
+hooks are null outside the Linux host and answer null or false for every browser that is not a companion.
 
+--- a/chrome/browser/ui/browser_tab_strip_model_delegate.cc
++++ b/chrome/browser/ui/browser_tab_strip_model_delegate.cc
+@@ -92,6 +92,8 @@ void TabGroupsDialogTimingToSource(
+ 
+ }  // namespace
+ 
++extern bool (*g_ardia_linux_is_companion)(const BrowserWindowInterface*);
++
+ namespace chrome {
+ 
+ ////////////////////////////////////////////////////////////////////////////////
+@@ -231,6 +233,10 @@ std::optional<SessionID> BrowserTabStripModelDelegate::CreateHistoricalTab(
+   if (!BrowserSupportsHistoricalEntries()) {
+     return std::nullopt;
+   }
++  if (g_ardia_linux_is_companion && g_ardia_linux_is_companion(browser_) &&
++      UnloadController::From(browser_)->is_attempting_to_close_browser()) {
++    return std::nullopt;
++  }
+ 
+   sessions::TabRestoreService* service =
+       TabRestoreServiceFactory::GetForProfile(browser_->GetProfile());
+--- a/chrome/browser/ui/unload_controller.cc
++++ b/chrome/browser/ui/unload_controller.cc
+@@ -68,6 +68,8 @@
+ 
+ DEFINE_USER_DATA(UnloadController);
+ 
++extern bool (*g_ardia_linux_is_companion)(const BrowserWindowInterface*);
++
+ namespace {
+ 
+ // Returns a pair [last_window, last_window_for_profile] indicating if `browser`
+@@ -82,7 +84,8 @@ std::pair<bool, bool> IsLastWindow(const BrowserWindowInterface* browser) {
+         // closing. Window closing may be delayed, and windows that are in the
+         // process of closing don't count against our totals.
+         if (other_browser == browser ||
+-            other_browser->capabilities()->IsAttemptingToCloseBrowser()) {
++            other_browser->capabilities()->IsAttemptingToCloseBrowser() ||
++            (g_ardia_linux_is_companion && g_ardia_linux_is_companion(other_browser))) {
+           return true;
+         }
+ 
+@@ -230,7 +233,8 @@ void UnloadController::OnWindowClosing() {
+       (browser_type == BrowserWindowInterface::Type::TYPE_APP_POPUP);
+ #endif
+ 
+-  if (tab_restore_service && notify_restore_service) {
++  if (tab_restore_service && notify_restore_service &&
++      !(g_ardia_linux_is_companion && g_ardia_linux_is_companion(browser_.get()))) {
+     tab_restore_service->BrowserClosing(BrowserLiveTabContext::From(browser_));
+   }
+ 
+@@ -1373,7 +1377,8 @@ bool UnloadController::CanCloseWithMultipleTabs() {
+     // Don't count this browser window or any other in the process of closing.
+     // Window closing may be delayed, and windows that are in the process of
+     // closing don't count against our totals.
+-    if (browser != browser_ && !browser->capabilities()->IsAttemptingToCloseBrowser()) {
++    if (browser != browser_ && !browser->capabilities()->IsAttemptingToCloseBrowser() &&
++        !(g_ardia_linux_is_companion && g_ardia_linux_is_companion(browser))) {
+       total_window_count++;
+     }
+     return true;
 --- a/chrome/browser/ui/views/frame/browser_view.cc
 +++ b/chrome/browser/ui/views/frame/browser_view.cc
-@@ -435,6 +435,11 @@ using content::WebContents;
+@@ -435,6 +435,12 @@ using content::WebContents;
  using input::NativeWebKeyboardEvent;
  using web_modal::WebContentsModalDialogHost;
  
@@ -15,11 +82,12 @@ browser that is not a companion.
 +    const BrowserWindowInterface*) = nullptr;
 +bool (*g_ardia_linux_present_companion)(BrowserWindowInterface*,
 +                                        bool activate) = nullptr;
++bool (*g_ardia_linux_is_companion)(const BrowserWindowInterface*) = nullptr;
 +
  namespace {
  
  bool ArdiaLinuxBackgroundInstance() {
-@@ -2291,6 +2296,11 @@ void BrowserView::Show() {
+@@ -2291,6 +2297,11 @@ void BrowserView::Show() {
      return;
    }
  
@@ -31,7 +99,7 @@ browser that is not a companion.
    if (auto* manager = InitialWebUIManager::From(browser())) {
      if (manager->RequestDeferShow(base::BindOnce(
              &BrowserView::Show, weak_ptr_factory_.GetWeakPtr()))) {
-@@ -2365,6 +2375,10 @@ void BrowserView::Show() {
+@@ -2365,6 +2376,10 @@ void BrowserView::Show() {
  }
  
  void BrowserView::ShowInactive() {
@@ -42,7 +110,18 @@ browser that is not a companion.
    if (!browser_widget_->IsVisible()) {
      browser_widget_->ShowInactive();
    }
-@@ -2410,6 +2424,11 @@ void BrowserView::Activate() {
+@@ -2379,6 +2394,10 @@ bool BrowserView::IsVisible() const {
+ }
+ 
+ void BrowserView::SetBounds(const gfx::Rect& bounds) {
++  if (g_ardia_linux_present_companion &&
++      g_ardia_linux_present_companion(browser_.get(), false)) {
++    return;
++  }
+   if (BrowserWindowFullscreenController::From(browser())->IsForceFullscreen()) {
+     return;
+   }
+@@ -2410,6 +2429,11 @@ void BrowserView::Activate() {
      return;
    }
  
@@ -54,7 +133,56 @@ browser that is not a companion.
    if (auto* manager = InitialWebUIManager::From(browser())) {
      if (manager->RequestDeferShow(base::BindOnce(
              &BrowserView::Activate, weak_ptr_factory_.GetWeakPtr()))) {
-@@ -4133,11 +4152,30 @@ std::unique_ptr<FindBar> BrowserView::CreateFindBar() {
+@@ -2428,6 +2452,10 @@ void BrowserView::Activate() {
+ }
+ 
+ void BrowserView::Deactivate() {
++  if (g_ardia_linux_present_companion &&
++      g_ardia_linux_present_companion(browser_.get(), false)) {
++    return;
++  }
+   browser_widget_->Deactivate();
+ }
+ 
+@@ -2436,6 +2464,10 @@ bool BrowserView::IsActive() const {
+ }
+ 
+ void BrowserView::FlashFrame(bool flash) {
++  if (g_ardia_linux_present_companion &&
++      g_ardia_linux_present_companion(browser_.get(), false)) {
++    return;
++  }
+   browser_widget_->FlashFrame(flash);
+ }
+ 
+@@ -2916,14 +2948,26 @@ bool BrowserView::IsMinimized() const {
+ }
+ 
+ void BrowserView::Maximize() {
++  if (g_ardia_linux_present_companion &&
++      g_ardia_linux_present_companion(browser_.get(), false)) {
++    return;
++  }
+   browser_widget_->Maximize();
+ }
+ 
+ void BrowserView::Minimize() {
++  if (g_ardia_linux_present_companion &&
++      g_ardia_linux_present_companion(browser_.get(), false)) {
++    return;
++  }
+   browser_widget_->Minimize();
+ }
+ 
+ void BrowserView::Restore() {
++  if (g_ardia_linux_present_companion &&
++      g_ardia_linux_present_companion(browser_.get(), false)) {
++    return;
++  }
+   browser_widget_->Restore();
+ }
+ 
+@@ -4133,11 +4177,30 @@ std::unique_ptr<FindBar> BrowserView::CreateFindBar() {
  }
  
  WebContentsModalDialogHost* BrowserView::GetWebContentsModalDialogHost() {
@@ -85,6 +213,17 @@ browser that is not a companion.
    ContentsContainerView* const contents_container_view =
        multi_contents_view_->GetContentsContainerViewFor(web_contents);
    // `contents_container_view` can be null in cases where a modal dialog is
+@@ -6313,6 +6376,10 @@ void BrowserView::PrepareFullscreen(bool fullscreen) {
+ 
+ void BrowserView::ProcessFullscreen(bool fullscreen, const int64_t display_id) {
+   CHECK(!base::FeatureList::IsEnabled(features::kAsyncFullscreenWindowState));
++  if (g_ardia_linux_present_companion &&
++      g_ardia_linux_present_companion(browser_.get(), false)) {
++    return;
++  }
+ 
+   if (in_process_fullscreen_) {
+     return;
 --- a/chrome/browser/ui/views/permissions/permission_prompt_base_view.cc
 +++ b/chrome/browser/ui/views/permissions/permission_prompt_base_view.cc
 @@ -35,6 +35,9 @@

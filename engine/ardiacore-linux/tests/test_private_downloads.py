@@ -71,7 +71,8 @@ class PrivateDownloadHostTests(unittest.TestCase):
         files = files[:files.index('\n  }\n') + 4]
         self.assertIn('page_profile()->ShutdownStarted()', files)
         self.assertNotIn('IsOffTheRecord', files)
-        self.assertIn('LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done))', files)
+        self.assertIn('for (BrowserWindowInterface* member : Members()) {', files)
+        self.assertIn('LinuxFilesInvoke(profiles, shell_, method, values, std::move(done))', files)
 
     def test_the_service_lists_only_the_private_session_own_downloads(self):
         self.assertNotIn('RegularDownloads', self.files)

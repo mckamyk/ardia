@@ -141,7 +141,8 @@ int main() {
         invoke = method(self.source, 'void ShellHostView::Invoke(')
         files = invoke[invoke.index('if (LinuxFilesHandles(method)) {'):]
         files = files[:files.index('\n  }\n') + 4]
-        self.assertIn('LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done))', files)
+        self.assertIn('for (BrowserWindowInterface* member : Members()) {', files)
+        self.assertIn('LinuxFilesInvoke(profiles, shell_, method, values, std::move(done))', files)
 
     def test_site_zoom_resolves_named_profiles_and_routes_private_sessions_off_the_record(self):
         request = method(self.source, '  void Request(const base::ListValue& arguments) {')

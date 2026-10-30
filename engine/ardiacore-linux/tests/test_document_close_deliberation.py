@@ -152,19 +152,50 @@ int main(int argc, char** argv) {
   if (mode == "companion-stay") {
     ShellHostView host; Watch(host); host.ArmWindowClose();
     hosts[1] = &host;
-    host.companions_proceed = false;
+    Browser first, second, empty;
+    first.strip.tabs = 1; first.unload.handlers = true;
+    second.strip.tabs = 2; second.unload.handlers = true;
+    host.companions_ = {first.GetWeakPtr(), second.GetWeakPtr(), empty.GetWeakPtr()};
     const auto request = host.RequestWindowClose();
     assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()))->ok);
     host.AcknowledgeWindowClose(Ack(request, 0), Ignore);
     Drain();
-    assert(host.companion_confirmations == 1 && !host.native.widget.IsClosed());
-    assert(host.close_.phase() == LinuxClose::Phase::kCancelled && Named(host, "shell.closeCancelled") == 1);
-    host.companions_proceed = true;
+    assert(first.unload.prompts == 1 && second.unload.prompts == 0 && !host.native.widget.IsClosed());
+    first.unload.Answer(true);
+    Drain();
+    assert(second.unload.prompts == 1 && first.unload.state == Browser::Unload::State::kConfirmed);
+    second.unload.Answer(false);
+    Drain();
+    assert(!host.native.widget.IsClosed() && host.close_.phase() == LinuxClose::Phase::kCancelled);
+    assert(Named(host, "shell.closeCancelled") == 1);
+    assert(first.unload.state == Browser::Unload::State::kIdle && second.unload.state == Browser::Unload::State::kIdle);
+    assert(empty.unload.prompts == 0);
     const auto again = host.RequestWindowClose();
     assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(again.Clone()))->ok);
     host.AcknowledgeWindowClose(Ack(again, 0), Ignore);
     Drain();
-    assert(host.companion_confirmations == 2 && host.native.widget.IsClosed());
+    assert(first.unload.prompts == 2 && !host.native.widget.IsClosed());
+    first.unload.Answer(true);
+    Drain();
+    second.unload.Answer(true);
+    Drain();
+    assert(host.native.widget.IsClosed());
+  }
+  if (mode == "companion-stay-first") {
+    ShellHostView host; Watch(host); host.ArmWindowClose();
+    hosts[1] = &host;
+    Browser first, second;
+    first.strip.tabs = 1; first.unload.handlers = true;
+    second.strip.tabs = 1; second.unload.handlers = true;
+    host.companions_ = {first.GetWeakPtr(), second.GetWeakPtr()};
+    const auto request = host.RequestWindowClose();
+    assert(Invoke(host, "ArdiaShell.beginWindowCloseDrain", base::Value(request.Clone()))->ok);
+    host.AcknowledgeWindowClose(Ack(request, 0), Ignore);
+    Drain();
+    first.unload.Answer(false);
+    Drain();
+    assert(second.unload.prompts == 0 && !host.native.widget.IsClosed());
+    assert(host.close_.phase() == LinuxClose::Phase::kCancelled && Named(host, "shell.closeCancelled") == 1);
   }
   if (mode == "deadline") {
     ShellHostView host; Watch(host); host.ArmWindowClose();
@@ -474,8 +505,11 @@ class CloseDeliberationTests(unittest.TestCase):
     def test_seal_requires_the_draining_phase_and_keeps_watermark_idempotency(self):
         self.run_mode('drain', 'seal-gate')
 
-    def test_a_companion_page_that_stays_cancels_the_whole_window_close(self):
+    def test_stay_on_a_later_companion_after_an_earlier_one_accepted_cancels_the_whole_close(self):
         self.run_mode('drain', 'companion-stay')
+
+    def test_stay_on_the_first_companion_cancels_before_asking_the_next(self):
+        self.run_mode('drain', 'companion-stay-first')
 
     def test_drain_deadline_starts_at_drain_checks_identity_and_ends_at_seal(self):
         self.run_mode('drain', 'deadline')

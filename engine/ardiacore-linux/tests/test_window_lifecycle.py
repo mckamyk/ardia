@@ -655,6 +655,7 @@ struct ShellHostView {
   std::string kind_;
   BrowserWindowInterface* browser_;
   BrowserWindowInterface* ActiveMember() const { return browser_; }
+  void ActivateMember(BrowserWindowInterface*) {}
   bool member_active_ = false;
   Profile profile_;
   views::Widget widget;

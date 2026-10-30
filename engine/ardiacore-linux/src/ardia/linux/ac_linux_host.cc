@@ -76,6 +76,7 @@
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
@@ -237,6 +238,7 @@ extern base::FilePath (*g_ardia_native_messaging_manifest)(const std::string& ho
 
 extern BrowserWindowInterface* (*g_ardia_linux_companion_owner)(const BrowserWindowInterface*);
 extern bool (*g_ardia_linux_present_companion)(BrowserWindowInterface*, bool activate);
+extern bool (*g_ardia_linux_is_companion)(const BrowserWindowInterface*);
 
 namespace ardia {
 namespace {
@@ -1036,6 +1038,7 @@ class ShellHostView : public views::View,
   }
   BrowserWindowInterface* EnsureMember(Profile* profile);
   void SelectProfile(Profile* profile);
+  void ActivateMember(BrowserWindowInterface* member);
   void CompanionClosed(BrowserWindowInterface* companion);
   void CloseCompanions();
   void ConfirmCompanions(base::OnceCallback<void(bool)> done);
@@ -1411,6 +1414,7 @@ class ShellHostView : public views::View,
   std::vector<base::WeakPtr<BrowserWindowInterface>> companions_;
   base::WeakPtr<Profile> active_profile_;
   uint64_t active_profile_sequence_ = 0;
+  uint64_t active_profile_generation_ = 0;
   bool member_active_ = false;
   std::vector<std::shared_ptr<base::RepeatingCallback<void()>>> confirmation_steps_;
   base::WeakPtr<Profile> app_profile_;
@@ -2288,6 +2292,7 @@ BrowserWindowInterface* ShellHostView::EnsureMember(Profile* profile) {
   companions_.push_back(created->GetWeakPtr());
   created->GetTabStripModel()->AddObserver(this);
   StartLinuxContentBlocker(this->profile(), profile);
+  LinuxDownloadsCall(profile, "downloads.list", base::DictValue(), base::DoNothing());
   return created;
 }
 
@@ -2299,12 +2304,16 @@ void ShellHostView::SelectProfile(Profile* profile) {
   if (before == after) return;
   extension_surfaces_.reset();
   extension_keybindings_.reset();
-  if (member_active_ && before && before != browser_) BrowserActiveStateManager::From(before)->DidBecomeInactive();
-  member_active_ = false;
-  if (after && after != browser_ && GetWidget() && GetWidget()->IsActive()) {
-    BrowserActiveStateManager::From(after)->DidBecomeActive();
-    member_active_ = true;
+  if (GetWidget() && GetWidget()->IsActive()) ActivateMember(after);
+}
+
+void ShellHostView::ActivateMember(BrowserWindowInterface* member) {
+  if (!member || member->IsDeleteScheduled()) return;
+  for (BrowserWindowInterface* other : Members()) {
+    if (other != member) BrowserActiveStateManager::From(other)->DidBecomeInactive();
   }
+  BrowserActiveStateManager::From(member)->DidBecomeActive();
+  member_active_ = member != browser_;
 }
 
 void ShellHostView::CompanionClosed(BrowserWindowInterface* companion) {
@@ -2332,9 +2341,12 @@ void ShellHostView::CloseCompanions() {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce([](std::vector<base::WeakPtr<BrowserWindowInterface>> companions) {
         for (const auto& companion : companions) {
-          if (!companion || browser_shutdown::IsTryingToQuit()) continue;
-          TabStripModel* strip = companion->GetTabStripModel();
-          while (companion && strip->count() > 0) strip->DetachAndDeleteWebContentsAt(strip->count() - 1);
+          if (!companion || companion->IsDeleteScheduled() || browser_shutdown::IsTryingToQuit()) continue;
+          UnloadController* unload = UnloadController::From(companion.get());
+          unload->set_force_skip_warning_user_on_close(true);
+          if (!unload->is_attempting_to_close_browser()) {
+            unload->RunBeforeUnloadForShutdown(true, base::DoNothing());
+          }
           if (companion && !companion->IsDeleteScheduled()) companion->GetWindow()->Close();
         }
       }, std::move(companions)));
@@ -2356,13 +2368,14 @@ void ShellHostView::ConfirmCompanions(base::OnceCallback<void(bool)> done) {
   confirmation->browsers = std::move(waiting);
   confirmation->done = std::move(done);
   auto finish = [](std::shared_ptr<Confirmation> confirmation, bool proceed) {
-    if (!confirmation->done) return;
+    base::OnceCallback<void(bool)> done = std::move(confirmation->done);
+    if (!done) return;
     if (!proceed) {
       for (const auto& browser : confirmation->browsers) {
         if (browser) UnloadController::From(browser.get())->ResetBeforeUnloadForShutdown();
       }
     }
-    std::move(confirmation->done).Run(proceed);
+    std::move(done).Run(proceed);
   };
   auto step = std::make_shared<base::RepeatingCallback<void()>>();
   *step = base::BindRepeating(
@@ -3530,9 +3543,9 @@ void ShellHostView::OnWidgetActivationChanged(views::Widget*, bool active) {
             [](base::WeakPtr<ShellHostView> host, base::WeakPtr<BrowserWindowInterface> member, bool active) {
               if (!host || !member || host->ActiveMember() != member.get() || !host->GetWidget() ||
                   host->GetWidget()->IsActive() != active || member->IsDeleteScheduled()) return;
-              if (active) BrowserActiveStateManager::From(member.get())->DidBecomeActive();
-              else if (host->member_active_) BrowserActiveStateManager::From(member.get())->DidBecomeInactive();
-              host->member_active_ = active;
+              if (active) return host->ActivateMember(member.get());
+              if (host->member_active_) BrowserActiveStateManager::From(member.get())->DidBecomeInactive();
+              host->member_active_ = false;
             }, GetWeakPtr(), member->GetWeakPtr(), active));
   }
   if (active) activation_ = ++ActivationClock();
@@ -5150,7 +5163,11 @@ void ShellHostView::Invoke(
     if (!page_profile() || page_profile()->ShutdownStarted()) {
       return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kUnavailable));
     }
-    return LinuxFilesInvoke(page_profile(), shell_, method, values, std::move(done));
+    std::vector<Profile*> profiles;
+    for (BrowserWindowInterface* member : Members()) {
+      if (!member->GetProfile()->ShutdownStarted()) profiles.push_back(member->GetProfile());
+    }
+    return LinuxFilesInvoke(profiles, shell_, method, values, std::move(done));
   }
   if (LinuxCredentialsInvokes(method)) {
     return LinuxCredentialsInvoke(!page_profile() || page_profile()->IsOffTheRecord(), shell_, method, values, std::move(done));
@@ -5336,6 +5353,10 @@ void ShellHostView::Invoke(
     if (values.size() != 2 || !values[0].is_string() || !values[1].is_int() || values[1].GetInt() < 0)
       return std::move(done).Run(false, base::Value("A profile and a selection sequence are required"));
     const uint64_t sequence = static_cast<uint64_t>(values[1].GetInt());
+    if (active_profile_generation_ != renderer_generation_) {
+      active_profile_generation_ = renderer_generation_;
+      active_profile_sequence_ = 0;
+    }
     if (sequence < active_profile_sequence_) return std::move(done).Run(true, base::Value(false));
     active_profile_sequence_ = sequence;
     const std::string requested = values[0].GetString();
@@ -5346,10 +5367,11 @@ void ShellHostView::Invoke(
       return std::move(done).Run(true, base::Value(HostsProfile(requested)));
     }
     ardiacore::ResolveLinuxProfile(requested, base::BindOnce(
-        [](base::WeakPtr<ShellHostView> host, uint64_t sequence,
+        [](base::WeakPtr<ShellHostView> host, uint64_t generation, uint64_t sequence,
            base::OnceCallback<void(bool, base::Value)> done, Profile* resolved,
            ardiacore::linux_profiles::ProfileError error) {
-          if (!host || host->active_profile_sequence_ != sequence) return std::move(done).Run(true, base::Value(false));
+          if (!host || host->renderer_generation_ != generation || host->active_profile_generation_ != generation ||
+              host->active_profile_sequence_ != sequence) return std::move(done).Run(true, base::Value(false));
           if (!resolved || resolved->IsOffTheRecord()) {
             return std::move(done).Run(false, ProfileFailure(
                 error == ardiacore::linux_profiles::ProfileError::kNone
@@ -5358,7 +5380,7 @@ void ShellHostView::Invoke(
           if (!host->EnsureMember(resolved)) return std::move(done).Run(true, base::Value(false));
           host->SelectProfile(resolved);
           std::move(done).Run(true, base::Value(true));
-        }, GetWeakPtr(), sequence, std::move(done)));
+        }, GetWeakPtr(), renderer_generation_, sequence, std::move(done)));
     return;
   }
   if (method == "ArdiaTabs.claimLaunchTab") return ClaimLaunchTab(values, std::move(done));
@@ -6482,6 +6504,7 @@ void StartLinuxHost() {
     ShellHostView* host = IsCompanion(browser) ? MemberHost(browser) : nullptr;
     return host ? host->browser() : nullptr;
   };
+  g_ardia_linux_is_companion = [](const BrowserWindowInterface* browser) { return IsCompanion(browser); };
   g_ardia_linux_present_companion = [](BrowserWindowInterface* browser, bool activate) {
     if (!IsCompanion(browser)) return false;
     ShellHostView* host = MemberHost(browser);

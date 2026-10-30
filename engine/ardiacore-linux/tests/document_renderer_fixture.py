@@ -1,4 +1,4 @@
-from document_host_fixture import ROOT, PRELUDE, HANDLER, host_methods
+from document_host_fixture import ROOT, PRELUDE_WITHOUT_REPEATING as PRELUDE, HANDLER, host_methods
 from test_renderer_contract import method
 
 
@@ -185,7 +185,7 @@ void SendAck(HostMessageHandler& handler, const base::DictValue& identity, int w
   handler.Request(arguments);
 }
 '''
-    return prelude + support + '\n'.join(handlers) + prefix + method(source, 'bool ShellHostView::Trusted(') + method(source, 'void ShellHostView::Event(') + host_methods() + method(source, 'void ShellHostView::DetachBrowser(') + r'''
+    return prelude + support + '\n'.join(handlers) + prefix + method(source, 'bool ShellHostView::Trusted(') + method(source, 'void ShellHostView::Event(') + host_methods(real_companions=False) + method(source, 'void ShellHostView::DetachBrowser(') + r'''
 void ShellHostView::CloseInvoke(std::string method, const base::DictValue& args,
                                 base::OnceCallback<void(bool, base::Value)> done) {
   const base::ListValue empty;
