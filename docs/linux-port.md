@@ -133,8 +133,12 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
     during quit and when Chromium refuses a window for the profile. Its tabs stay in its own `TabStripModel`; the
     visible window shows them in its own viewports exactly like its own tabs.
   - A companion is a stock `BrowserView` whose widget is never shown. `chromium-linux-companion-browsers.patch` hands
-    its `Show`, `ShowInactive` and `Activate` to the host, which focuses the visible window instead, and hosts its
-    tab-modal dialogs and permission prompts in the visible window's `BrowserView`. A widgetless `BrowserWindow` (as
+    its `Show`, `ShowInactive` and `Activate` to the host, which focuses the visible window instead, drops its
+    `Restore`, `Maximize`, `Minimize`, `SetBounds`, `Deactivate`, `FlashFrame` and fullscreen (Aura's `Restore`, and
+    `Maximize` from minimized, show the window themselves), and hosts its tab-modal dialogs and permission prompts in
+    the visible window's `BrowserView`. W70X checks on Xvfb and openbox, and W70D in sway, that no extension call
+    (`chrome.windows.update` with any state, focus or bounds, `chrome.tabs.create`) ever maps a second toplevel. A
+    widgetless `BrowserWindow` (as
     macOS's `ACBrowserWindow`) was the alternative; on Linux it would need the `BrowserWindowCreateParams::window`
     `CHECK_IS_TEST` lifted and the viewless accommodations `engine/ardiacore/apply.sh` makes for the Mac in about ten
     Chromium files, and `BrowserView::GetBrowserViewForBrowser` would resolve an adapter to the wrong Browser.
@@ -151,8 +155,11 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
 - **The window's active engine profile.** The Linux shell tells the host which engine profile the window shows
   (`ArdiaShell.setActiveProfile`, sent by `watchActiveProfile` in `hostWindowProfiles.ts` whenever the window's engine
   profile changes, with a sequence number so a late reply can't win). The extension toolbar, popups, side panels and
-  extension shortcuts follow it, and the companion of the active profile is marked active in Chromium while the window
-  is active, as macOS's `SetActiveProfile` does. A switch between profiles that share data leaves them unchanged.
+  extension shortcuts follow it. While the window is active, the member Browser of the active profile is the one
+  Chromium sees as active and every other member is told it isn't, the window's own Browser included, as macOS's
+  `ActivateExclusively` does; switching back to the window's own profile makes its Browser the last active one again.
+  The sequence belongs to one shell renderer: a reloaded shell starts again from 1, and a profile that resolves after
+  the renderer changed is dropped. A switch between profiles that share data leaves all of this unchanged.
 - **Extensions per engine profile.** Chromium scopes the extension APIs by profile, so an isolated profile's extensions
   see only that profile's tabs of the window and never the other profile's tabs. Companions are not hidden from
   extensions (`g_ardia_hidden_from_extensions` would also stop tab events, webNavigation and tab lookups for the
@@ -161,11 +168,18 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   a tab an extension opens in it is offered to the visible window with its engine profile
   (`ArdiaTabs.unclaimed` carries `profile`; `unclaimedTabs.ts` adopts it into a profile of that engine).
 - **Closing.** The window's close covers its whole family. After the document seal, each companion's beforeunload
-  handlers run (`UnloadController::RunBeforeUnloadForShutdown`, in turn); Stay cancels the window's close and resets
-  the companions, and a later cancellation resets them too. When the visible Browser closes, its companions' tabs are
-  closed without a second prompt or a closed-window entry, then the companions themselves. On quit Chromium's
-  `BrowserCloseManager` drains every Browser, companions included. Companions are looked up by id at every use, so a
-  closed one leaves no pointer behind.
+  handlers run (`UnloadController::RunBeforeUnloadForShutdown`, in turn); Stay on any of them cancels the window's
+  close and resets every companion, including ones that already said Leave. When the visible Browser closes, each
+  companion is closed through Chromium's own unload path, so its tabs' `pagehide` and `unload` handlers run, without a
+  second prompt and without its own download warning. On quit Chromium's `BrowserCloseManager` drains every Browser,
+  companions included. Companions are looked up by id at every use, so a closed one leaves no pointer behind.
+  - Chromium's last-window and multi-tab counts skip companions, so closing the only visible window during a download
+    asks once, in that window, for the whole family.
+  - A companion never reaches `TabRestoreService`: neither its window nor the tabs it closes while closing, on a
+    window close or on quit, so the profile's recently closed list never holds a hidden window that would reopen as a
+    separate one. Ardia's own closed windows keep every profile's tabs.
+- **Downloaded files.** Opening, showing, status and icons of a download accept a path of any profile the window
+  shows; a private window still accepts only its own.
 - **Private ids.** A private window is `incognito:<window>@<original>`, which resolves to the original profile's
   primary off-the-record profile.
 - **Private refusals.** These calls are refused for private windows: credentials, history, bookmarks, favicons,
@@ -691,10 +705,13 @@ These were open at the time of the PR.
   - a page's own fullscreen in a companion's tab makes only its viewport fullscreen, not the window;
   - Chrome's own download bubble and other toolbar-anchored bubbles of a companion have no visible anchor (Ardia's
     downloads panel lists them); the downloads list a window loads at start comes from its own profile, while later
-    downloads and controls reach the window from every profile it shows;
+    downloads, controls and file operations reach the window from every profile it shows;
   - a window Chrome itself creates for an isolated profile (`chrome.windows.create` from that profile's extension)
     is still a plain Chrome window, as before;
-  - closing a companion's last tab inside a closing window doesn't run its `unload` handlers.
+  - a shell renderer may send a strip command for another window's strip, which that window's host refuses
+    (`The strip is not owned by this window`); the owning window's renderer keeps its own strips in order;
+  - Wayland mapping is checked in sway (W70D), which this build machine's desktop kills at start, so only the X11
+    check (W70X) has run here.
 - **Tab drags across windows.** There is no floating drag preview; in-window drags show the ghost row. On Wayland,
   where windows have no global coordinates, tearing a tab off or dropping it on another window does nothing. On X11 a
   tab dropped on another window is appended rather than placed at the pointer's row.

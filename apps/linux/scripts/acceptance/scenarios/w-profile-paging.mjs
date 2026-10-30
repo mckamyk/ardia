@@ -48,6 +48,7 @@ export const w70 = {
   async run(t) {
     await paging(t);
     await extensionsPerProfile(t);
+    await closingFamilies(t);
   },
 };
 
@@ -165,10 +166,13 @@ async function contentScriptFixture(dir) {
   const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8"));
   manifest.content_scripts = [{ matches: ["http://isolation.ardia.test/*"], js: ["mark.js"], run_at: "document_end" }];
   manifest.host_permissions = ["http://isolation.ardia.test/*"];
+  manifest.permissions = [...new Set([...(manifest.permissions ?? []), "sessions"])];
   await writeFile(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2));
   await writeFile(join(dir, "mark.js"), "document.documentElement.dataset.ardiaFixture = chrome.runtime.id;\n");
   return dir;
 }
+
+export { contentScriptFixture, installed, workerOf, openTab, switchTo };
 
 async function installed(shell, path, profile) {
   const reply = await shell.call("extensions.install", { path }, profile);
@@ -244,7 +248,11 @@ async function extensionsPerProfile(t) {
     if (current.error) throw new Error(`windows.getLastFocused failed: ${current.error}`);
     if (current.urls.some((tabUrl) => tabUrl.includes(`home-${run}`) || tabUrl.includes(`other-${run}`))) throw new Error(`the extension's window lists default tabs: ${JSON.stringify(current)}`);
     if (currentTabs.some((tabUrl) => tabUrl.includes(`home-${run}`) || tabUrl.includes(`other-${run}`))) throw new Error(`lastFocusedWindow tabs include default tabs: ${JSON.stringify(currentTabs)}`);
-    await evaluate(sw, `chrome.windows.update(${current.id}, { focused: true, drawAttention: true }).then(() => true).catch(() => false)`);
+    const updates = {};
+    for (const [name, change] of Object.entries({ focused: { focused: true, drawAttention: true }, minimized: { state: "minimized" }, maximized: { state: "maximized" }, normal: { state: "normal" } })) {
+      updates[name] = await evaluate(sw, `chrome.windows.update(${current.id}, ${JSON.stringify(change)}).then((w) => ({ id: w.id, state: w.state })).catch((error) => ({ error: String(error) }))`);
+      if (updates[name].error || updates[name].id !== current.id) throw new Error(`windows.update ${name} on the isolated profile's window: ${JSON.stringify(updates[name])}`);
+    }
     await evaluate(sw, `chrome.tabs.create({ windowId: ${current.id}, url: ${js(url("from-extension"))}, active: false }).then(() => true)`);
     const adopted = await shell.waitState(`return Object.values(s.tabs).find((tab) => tab.url === ${js(url("from-extension"))}) ?? null;`, { timeout: 20000, label: "the extension's tab in this window" });
     if (adopted.windowId !== shell.windowId || adopted.profileId !== profiles.work) throw new Error(`the extension's tab landed as ${JSON.stringify({ windowId: adopted.windowId, profileId: adopted.profileId })}`);
@@ -252,7 +260,7 @@ async function extensionsPerProfile(t) {
     if (JSON.stringify(windowsAfter) !== JSON.stringify(windowsBefore)) throw new Error(`windows changed from ${JSON.stringify(windowsBefore)} to ${JSON.stringify(windowsAfter)}`);
     const { bounds } = await app.browser.send("Browser.getWindowBounds", { windowId: current.id });
     await switchTo(shell, "default");
-    return { tabs: all.length, current: current.id, companionState: bounds.windowState, adopted: adopted.id };
+    return { tabs: all.length, current: current.id, companionState: bounds.windowState, adopted: adopted.id, updates };
   });
 
   await t.check("an extension of the default profile is shared by the profile sharing its data and sees both profiles' tabs, with no Browser of their own", async () => {
@@ -273,4 +281,154 @@ async function extensionsPerProfile(t) {
     return { sharedId, tabs: all.length };
   });
   await t.stop(app);
+}
+
+const popupFor = (id, profile) => ({ kind: "popup", url: `chrome-extension://${id}/popup.html`, profile });
+
+async function reloaded(app, shell) {
+  await shell.eval("setTimeout(() => location.reload(), 0), true");
+  await delay(1500);
+  return app.shell(shell.windowId, { timeout: 25000 });
+}
+
+async function popupOpens(shell, id, profile) {
+  const view = await shell.invoke("extensionView.create", popupFor(id, profile));
+  if (view.ok) await shell.invoke("extensionView.release", { id: view.value.id });
+  return view;
+}
+
+async function recentlyClosed(app, shell, id, profile, run, label) {
+  const page = await openTab(app, shell, `chrome-extension://${id}/opened.html#${label}-${run}`, profile);
+  const entries = await evaluate(page.session, "chrome.sessions.getRecentlyClosed().then((items) => items.map((item) => item.window ? { window: item.window.tabs.map((tab) => tab.url) } : { tab: item.tab?.url ?? null }))");
+  await shell.state(`s.closeTabs([${js(page.tabId)}]); return true;`);
+  return entries;
+}
+
+const UNLOAD_PAGE = "/w70-unload";
+const BEACON = "/w70-beacon";
+
+async function closingFamilies(t) {
+  const run = nonce("w70c");
+  t.fixtures.route(UNLOAD_PAGE, ({ url, html }) => html("Unload fixture", `<h1>Unload ${url.searchParams.get("who") ?? ""}</h1><script>
+    const who = ${JSON.stringify("")} + new URLSearchParams(location.search).get("who");
+    addEventListener("pagehide", () => navigator.sendBeacon("${BEACON}?event=pagehide&who=" + who));
+    addEventListener("unload", () => navigator.sendBeacon("${BEACON}?event=unload&who=" + who));
+  </script>`));
+  t.fixtures.route(BEACON, ({ send }) => send(204, "text/plain", ""));
+  const isolation = (label) => `${t.fixtures.url.isolation("isolation.ardia.test")}?p=${label}-${run}`;
+  const unloadUrl = (who) => `http://isolation.ardia.test:${t.fixtures.ports.http}${UNLOAD_PAGE}?who=${who}-${run}`;
+  const beacons = (who) => t.fixtures.requests.filter((request) => request.path === BEACON && request.query.who === `${who}-${run}`).map((request) => request.query.event);
+  const quiet = "s.updateSettings({ warnBeforeClosingWindow: false, warnBeforeClosingLastTab: false }); return true;";
+  let state = await startBrowser(t, { name: "paging-close", extensions: true });
+  await state.shell.state(quiet);
+  const profiles = await state.shell.state("return { work: s.createProfile({ name: 'Work' }) };");
+  const fixture = await contentScriptFixture(await t.scratch("close-fixture"));
+  const workId = await installed(state.shell, fixture, profiles.work);
+
+  await t.check("after the shell reloads, the window still follows its engine profile: the isolated profile's popup opens", async () => {
+    for (let round = 0; round < 3; round++) {
+      await switchTo(state.shell, profiles.work);
+      await switchTo(state.shell, "default");
+    }
+    await switchTo(state.shell, profiles.work);
+    await openTab(state.app, state.shell, isolation("reload-work"));
+    const before = await popupOpens(state.shell, workId, profiles.work);
+    if (!before.ok) throw new Error(`the popup didn't open before the reload: ${before.code} ${before.message}`);
+    await switchTo(state.shell, "default");
+    state.shell = await reloaded(state.app, state.shell);
+    await switchTo(state.shell, profiles.work);
+    const after = await until(async () => {
+      const view = await popupOpens(state.shell, workId, profiles.work);
+      return view.ok ? view : false;
+    }, { timeout: 10000, label: "the isolated profile's popup after the reload" }).catch(async () => popupOpens(state.shell, workId, profiles.work));
+    if (!after.ok) throw new Error(`after the reload the window refuses the isolated profile's popup: ${after.code} ${after.message}`);
+    await switchTo(state.shell, "default");
+    return { before: before.value.id, after: after.value.id };
+  });
+
+  await t.check("closing a window runs the unload handlers of its isolated-profile tabs and records no hidden window in that profile's recently closed", async () => {
+    const second = await state.shell.state("return s.createWindow({});");
+    await until(async () => (await state.shell.windowIds()).includes(second), { timeout: 20000, label: "the second native window" });
+    const other = await state.app.shell(second, { timeout: 25000 });
+    await openTab(state.app, other, unloadUrl("default"));
+    await switchTo(other, profiles.work);
+    await openTab(state.app, other, unloadUrl("isolated"));
+    await openTab(state.app, other, isolation("second-isolated"));
+    const request = await state.shell.invoke("ArdiaShell.closeWindow", { args: [second] });
+    if (!request.ok) throw new Error(`the native close request was refused: ${request.code} ${request.message}`);
+    await until(async () => !(await state.shell.windowIds()).includes(second), { timeout: 20000, label: "the second window to close" });
+    const fired = await until(async () => (beacons("default").length && beacons("isolated").length ? { default: beacons("default"), isolated: beacons("isolated") } : false),
+      { timeout: 10000, label: "pagehide or unload beacons from both profiles' tabs" }).catch(() => ({ default: beacons("default"), isolated: beacons("isolated") }));
+    if (!fired.isolated.length) throw new Error(`the isolated tab's unload handlers never ran: ${JSON.stringify(fired)}`);
+    await switchTo(state.shell, profiles.work);
+    const entries = await recentlyClosed(state.app, state.shell, workId, profiles.work, run, "window-close");
+    const hidden = entries.filter((entry) => entry.window);
+    if (hidden.length) throw new Error(`the isolated profile's recently closed holds a hidden window: ${JSON.stringify(hidden)}`);
+    await switchTo(state.shell, "default");
+    return { fired, entries };
+  });
+
+  await t.check("after quitting, the isolated profile's recently closed holds no hidden window", async () => {
+    await switchTo(state.shell, profiles.work);
+    await openTab(state.app, state.shell, isolation("quit-isolated"));
+    await switchTo(state.shell, "default");
+    await delay(2500);
+    state = await restartBrowser(t, state, { extensions: true });
+    await switchTo(state.shell, profiles.work);
+    const entries = await recentlyClosed(state.app, state.shell, workId, profiles.work, run, "after-quit");
+    const hidden = entries.filter((entry) => entry.window);
+    if (hidden.length) throw new Error(`after quitting the isolated profile's recently closed holds a hidden window: ${JSON.stringify(hidden)}`);
+    await switchTo(state.shell, "default");
+    return { entries };
+  });
+
+  await t.check("a finished download of the isolated profile can be checked and shown from the window", async () => {
+    await switchTo(state.shell, profiles.work);
+    const page = await openTab(state.app, state.shell, isolation("download-work"));
+    const name = `w70-isolated-${run}.bin`;
+    await state.shell.navigate(page.tabId, t.fixtures.url.download(name, 4096));
+    const download = await until(async () => (await state.shell.state("return s.downloads ?? [];")).find((d) => d.filename?.endsWith(name) && d.state === "finished" && d.path) ?? false,
+      { timeout: 30000, label: "the isolated profile's download to finish" }).catch(async (error) => {
+      throw new Error(`${error.message}; downloads ${JSON.stringify(await state.shell.state("return (s.downloads ?? []).map((d) => ({ filename: d.filename, state: d.state, path: d.path, profile: d.profile }));"))}`);
+    });
+    const status = await state.shell.invoke("ArdiaSystem.fileStatus", { args: [[download.path]] });
+    const icon = await state.shell.invoke("ArdiaSystem.fileIcon", { args: [download.path, 32] });
+    await switchTo(state.shell, "default");
+    if (!status.ok || status.value?.[0] !== true) throw new Error(`fileStatus for the isolated download: ${JSON.stringify(status)}`);
+    if (!icon.ok) throw new Error(`fileIcon for the isolated download: ${icon.code} ${icon.message}`);
+    return { path: download.path, status: status.value };
+  });
+  await t.stop(state.app);
+
+  await t.check("closing the only window during a download warns, whichever profiles its tabs use", async () => {
+    const outcomes = {};
+    for (const [label, companion, downloading] of [["no-download", true, false], ["control", false, true], ["with-companion", true, true]]) {
+      const running = await startBrowser(t, { name: `paging-download-${label}` });
+      await running.shell.state(quiet);
+      const work = companion ? await running.shell.state("return s.createProfile({ name: 'Work' });") : null;
+      if (work) {
+        await switchTo(running.shell, work);
+        await openTab(running.app, running.shell, isolation(`download-${label}`));
+        await switchTo(running.shell, "default");
+      }
+      const page = await openTab(running.app, running.shell, isolation(`slow-${label}`));
+      const name = `w70-slow-${label}-${run}.bin`;
+      if (downloading) {
+        await running.shell.navigate(page.tabId, t.fixtures.url.slow(name, 8 << 20));
+        await until(async () => (await running.shell.state("return s.downloads ?? [];")).find((d) => d.filename?.endsWith(name) && d.state === "downloading" && d.received > 0) ?? false,
+          { timeout: 30000, label: `the ${label} download to start` });
+      }
+      const request = await running.shell.invoke("ArdiaShell.closeWindow", { args: [running.shell.windowId] });
+      await until(() => running.app.exited || false, { timeout: 8000, label: `${label} to quit` }).catch(() => null);
+      const shown = running.app.exited ? null : await running.shell.windowIds().catch(() => null);
+      outcomes[label] = { request: request.ok, exited: !!running.app.exited, windows: shown };
+      t.fixtures.release(name);
+      await t.stop(running.app);
+    }
+    if (!outcomes["no-download"].exited) throw new Error(`closing the only window without a download didn't quit, so the check can't tell: ${JSON.stringify(outcomes)}`);
+    const kept = (outcome) => !outcome.exited && Array.isArray(outcome.windows) && outcome.windows.includes("main");
+    if (!kept(outcomes.control)) throw new Error(`without a companion the window closed without the download warning: ${JSON.stringify(outcomes)}`);
+    if (!kept(outcomes["with-companion"])) throw new Error(`with an isolated-profile tab the only window closed without the download warning: ${JSON.stringify(outcomes)}`);
+    return outcomes;
+  });
 }

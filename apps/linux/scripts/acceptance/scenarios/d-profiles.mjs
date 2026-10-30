@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { startPolkit, startPortal } from "../lib/desktopServices.mjs";
 import { clickTextIn, commandBarText, currentRect, desktopShot, desktopUnavailable, openDesktop, settledRect, startDesktopBrowser, waitFocused } from "../lib/desktopSession.mjs";
+import { contentScriptFixture, installed, workerOf } from "./w-profile-paging.mjs";
 import { clickDialogButton, clickNeutral, labelRect, openedWindow, removeExtensionInSettings, rowToggle, shellLines } from "../lib/desktopUi.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
 import { js, nonce, until } from "../lib/util.mjs";
@@ -444,7 +445,7 @@ export const swipeDesktop = {
       return;
     }
     const desktop = await openDesktop(t);
-    const { app, shell } = await startDesktopBrowser(t, desktop, { name: "swipe", session: sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }] }) });
+    const { app, shell } = await startDesktopBrowser(t, desktop, { name: "swipe", extensions: true, session: sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }] }) });
     const profiles = await shell.state("return { side: s.createProfile({ name: 'Side', shareWith: 'default' }), work: s.createProfile({ name: 'Work' }) };");
     const order = await shell.state("return s.profileOrder;");
     if (order.join() !== ["default", profiles.side, profiles.work].join()) throw new Error(`profile order ${JSON.stringify(order)}`);
@@ -483,6 +484,63 @@ export const swipeDesktop = {
       if ((await desktop.windows()).length !== 1) throw new Error("a window appeared");
       return { current };
     });
+    await hiddenBrowserChecks(t, desktop, app, shell, window, profiles.work);
+    await t.stop(app);
+  },
+};
+
+async function hiddenBrowserChecks(t, desktop, app, shell, window, workProfile) {
+  const ours = async () => (await desktop.windows()).filter((w) => (w.pid && w.pid === window.pid) || /ardia/i.test(w.appId ?? ""));
+  await t.check("an isolated profile's extension restoring, focusing, minimizing, maximizing, fullscreening or resizing its window never maps the hidden Browser", async () => {
+    const fixture = await contentScriptFixture(await t.scratch("hidden-browser-fixture"));
+    const id = await installed(shell, fixture, workProfile);
+    if ((await shell.state("return s.windows[windowId]?.profileId;")) !== workProfile) {
+      await shell.state(`s.switchProfile(windowId, ${js(workProfile)}); return true;`);
+    }
+    const tab = await shell.state(`return s.newTab(windowId, { url: ${js(t.fixtures.url.page(4))} });`);
+    await shell.waitTabUrl(tab, (url) => url === t.fixtures.url.page(4), { timeout: 20000 });
+    const sw = await workerOf(app, id);
+    const target = await evaluate(sw, "chrome.windows.getAll({ populate: true }).then((all) => all.map((w) => ({ id: w.id, urls: w.tabs.map((tab) => tab.url) })))");
+    if (target.length !== 1) throw new Error(`the isolated profile's extension sees ${JSON.stringify(target)}`);
+    const before = await ours();
+    if (before.length !== 1) throw new Error(`before the extension acts the compositor has ${JSON.stringify(before.map((w) => w.title))}`);
+    const results = {};
+    for (const [name, change] of Object.entries({ normal: { state: "normal" }, focused: { focused: true, drawAttention: true }, minimized: { state: "minimized" }, maximized: { state: "maximized" }, again: { state: "normal" }, fullscreen: { state: "fullscreen" }, back: { state: "normal" }, bounds: { left: 10, top: 10, width: 640, height: 480 }, unfocused: { focused: false } })) {
+      results[name] = await evaluate(sw, `chrome.windows.update(${target[0].id}, ${JSON.stringify(change)}).then((w) => ({ state: w.state })).catch((error) => ({ error: String(error) }))`);
+      if (results[name].error) throw new Error(`windows.update ${name}: ${results[name].error}`);
+      await delay(700);
+      const mapped = await ours();
+      if (mapped.length !== 1 || mapped[0].id !== before[0].id) {
+        await desktopShot(t, desktop, `companion-${name}`);
+        throw new Error(`after windows.update ${name} the compositor has ${JSON.stringify(mapped.map((w) => ({ id: w.id, title: w.title, focused: w.focused })))}`);
+      }
+    }
+    const created = await evaluate(sw, `chrome.tabs.create({ windowId: ${target[0].id}, url: ${js(t.fixtures.url.page(3))}, active: true }).then(() => true).catch((error) => String(error))`);
+    await delay(1500);
+    const after = await ours();
+    if (created !== true || after.length !== 1) throw new Error(`tabs.create on the hidden window: ${created}; toplevels ${JSON.stringify(after.map((w) => w.title))}`);
+    await waitFocused(desktop, (w) => w.id === before[0].id, { timeout: 8000, label: "the visible window focused" });
+    return { results, toplevels: after.length };
+  });
+}
+
+export const hiddenBrowserX11 = {
+  id: "W70X",
+  issue: 70,
+  desktop: true,
+  title: "An isolated profile's hidden Browser never maps a window on Xvfb + openbox, whatever its extension asks",
+  deadline: 240000,
+  async run(t) {
+    const missing = await desktopUnavailable({ x11: true });
+    if (missing) {
+      t.manual("A hidden Browser never maps", ["On X11, with tabs of an isolated profile in a window, have its extension restore, focus, minimize, maximize and fullscreen its window: no second window appears."], missing);
+      return;
+    }
+    const desktop = await openDesktop(t, { x11: true });
+    const { app, shell } = await startDesktopBrowser(t, desktop, { name: "hidden-x11", extensions: true, session: sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1)] }] }) });
+    const window = await windowTitled(desktop, "Acceptance page 1");
+    const work = await shell.state("return s.createProfile({ name: 'Work' });");
+    await hiddenBrowserChecks(t, desktop, app, shell, window, work);
     await t.stop(app);
   },
 };
@@ -618,4 +676,4 @@ export const headerX11 = {
   },
 };
 
-export default [profilesDesktop, privateCredentialsDesktop, isolatedSitePanelDesktop, swipeDesktop, headerSway, headerX11];
+export default [profilesDesktop, privateCredentialsDesktop, isolatedSitePanelDesktop, swipeDesktop, hiddenBrowserX11, headerSway, headerX11];
