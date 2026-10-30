@@ -435,7 +435,7 @@ export const swipeDesktop = {
   id: "W70D",
   issue: 70,
   desktop: true,
-  title: "Two-finger swipes over the sidebar (finger-source horizontal scroll through the compositor) page to a shared profile in place and bring an isolated profile's own window forward (sway)",
+  title: "Two-finger swipes over the sidebar (finger-source horizontal scroll through the compositor) page to a shared and an isolated profile in place, and no hidden Browser ever maps (sway)",
   deadline: 240000,
   async run(t) {
     const missing = await desktopUnavailable({ needs: ["grim"] });
@@ -463,30 +463,25 @@ export const swipeDesktop = {
       if ((await desktop.windows()).length !== 1) throw new Error("the swipe opened a window");
       return { current };
     }, { critical: true });
-    let workWindow;
-    await t.check("swiping on toward the isolated profile never shows it in this window and brings its own window forward", async () => {
-      await shell.eval(`(() => { globalThis.__w70 = []; globalThis.__w70Stop?.(); const tick = () => { globalThis.__w70.push(ardiaLinux.store.getState().windows[${js(shell.windowId)}]?.profileId); globalThis.__w70Timer = setTimeout(tick, 16); }; tick(); globalThis.__w70Stop = () => clearTimeout(globalThis.__w70Timer); return true; })()`);
-      const known = await desktop.windows();
-      const shells = await liveShells(app);
-      await swipe(150);
-      const opened = await openedWindow(desktop, app, known, shells, { label: "the isolated profile's window" });
-      workWindow = opened.window;
-      await waitFocused(desktop, (w) => w.id === opened.window.id, { label: "the isolated profile's window focused" });
-      const seen = await shell.eval("globalThis.__w70Stop(), [...new Set(globalThis.__w70)]");
-      if (seen.includes(profiles.work)) throw new Error(`this window showed the isolated profile: ${JSON.stringify(seen)}`);
-      const own = await shell.state("return s.windows[windowId]?.profileId;");
-      if (own !== profiles.side) throw new Error(`this window ended on ${own}`);
-      if (opened.shell.pageProfile !== profiles.work) throw new Error(`the new window hosts ${opened.shell.pageProfile}`);
-      await desktopShot(t, desktop, "swipe-isolated");
-      return { seen, opened: opened.shell.windowId };
-    });
-    await t.check("swiping toward it again focuses the existing isolated window instead of opening another", async () => {
+    await t.check("swiping on toward the isolated profile pages to it in this window and maps no other window", async () => {
       const count = (await desktop.windows()).length;
       await swipe(150);
-      await waitFocused(desktop, (w) => w.id === workWindow.id, { timeout: 8000, label: "the existing isolated window focused" });
+      const current = await shell.waitState(`return s.windows[windowId]?.profileId === ${js(profiles.work)} || null;`, { timeout: 6000, label: "the isolated profile in place" }).catch(async (error) => {
+        throw new Error(`${error.message}; the window is on ${await shell.state("return s.windows[windowId]?.profileId;")}`);
+      });
+      const tab = await shell.state(`return s.newTab(windowId, { url: ${js(t.fixtures.url.page(2))} });`);
+      await shell.waitTabUrl(tab, (url) => url === t.fixtures.url.page(2), { timeout: 20000 });
       await delay(1500);
-      if ((await desktop.windows()).length !== count) throw new Error("a second isolated window opened");
-      return { windows: count };
+      await desktopShot(t, desktop, "swipe-isolated");
+      const after = await desktop.windows();
+      if (after.length !== count) throw new Error(`the isolated profile mapped another toplevel: ${JSON.stringify(after.map((w) => w.title))}`);
+      return { current, windows: after.length };
+    });
+    await t.check("swiping back returns to the shared profile in this window", async () => {
+      await swipe(-150);
+      const current = await shell.waitState(`return s.windows[windowId]?.profileId === ${js(profiles.side)} || null;`, { timeout: 6000, label: "back on the shared profile" });
+      if ((await desktop.windows()).length !== 1) throw new Error("a window appeared");
+      return { current };
     });
     await t.stop(app);
   },
