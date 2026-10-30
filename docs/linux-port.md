@@ -316,7 +316,15 @@ pnpm --filter @ardia/linux acceptance -- <extracted>/ardia/bin/ardia
   Double-clicking it runs the desktop's titlebar action.
 - **Outer frame.** The host overlays Chromium's client view and doesn't replace its frame. Without the Wayland
   decoration protocol, Chromium draws its custom frame.
-- **Settings and Import.** Each opens in its own utility window and reuses an open one.
+- **Menu button.** Linux has no global menu bar, so a hamburger in the header stands in for the Mac one. It lists
+  Ardia, File, Edit, View, Tabs, Bookmarks, History, Extensions, Window and Help as submenus built from the same menu
+  state the Mac menu bar uses (checks, disabled commands, dynamic titles, bookmarks, recently closed entries, profiles
+  and extensions), labelled with the effective Linux shortcuts (`apps/linux/src/appMenu.ts`). Items run through the
+  shared command path; Close Window, Minimize and Maximize call the native window operations. Mac-only entries
+  (Services, Hide, Spelling, Substitutions, Speech, Transformations, the WebKit page engine, JavaScript from Apple
+  Events, Keep on Top, Full Screen and the native text-editing selectors) are left out.
+- **Settings and Import.** Each opens in its own utility window and reuses an open one. Settings
+  opens from Ardia › Settings… in the menu or Ctrl+comma.
   - Settings starts at 820×640 with a 720×480 minimum.
   - Import starts at 640×600 and doesn't resize.
   - They never create browser tabs or windows. A utility close waits for its pending session writes.
