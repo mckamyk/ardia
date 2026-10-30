@@ -40,9 +40,9 @@ import { refreshExtensionsAfterChange } from "../../browser/src/state/extensions
 import { provideNativeModuleProvider, requireNativeModule } from "./shims/expo-modules-core";
 import { setHostPageHooks } from "./hostPageHooks";
 import { applyHostPageTheme, forgetDepartedPage, resetHostPage } from "./hostPageLifecycle";
-import { setHostOverlayCheck } from "./hostViewport";
+import { refreshTabViewports, setHostOverlayCheck } from "./hostViewport";
 import { setPopupDismissal } from "./popupDismissal";
-import { MenuHost } from "./menus";
+import { MenuHost, watchMenus } from "./menus";
 import { startPopoverEscape } from "./popoverEscape";
 import { startLinuxShortcuts } from "./shortcutsRuntime";
 import { linuxWindowMenu, TrafficLights } from "./TrafficLights";
@@ -103,6 +103,9 @@ async function start() {
       const page = key ? pages.pages[key] : undefined;
       return !!(ui?.panel.open || ui?.downloadsOpen || menuShown() || page?.permission || page?.passwordPrompt || page?.autofillPrompt || page?.externalApp || key && pages.popover[key]);
     });
+    useBrowser.subscribe(refreshTabViewports);
+    usePages.subscribe(refreshTabViewports);
+    watchMenus(refreshTabViewports);
     setPopupDismissal({ popup: () => useExtensions.getState().popup, windowOf: (tabId) => useBrowser.getState().tabs[tabId]?.windowId, close: () => useExtensions.setState({ popup: null }) });
     startPopoverEscape({ target: window, windowId, menuShown, activeElement: () => document.activeElement });
     const persistence = startHostPersistence(ardiaHost, useBrowser, saved ?? {});

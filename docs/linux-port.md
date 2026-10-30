@@ -67,6 +67,14 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   only an explicit close ends the tab. Moving or remounting a UI view never closes its tab.
 - **Placement.** Rectangles arrive in CSS viewport coordinates and the host converts them. Native pages hide beneath
   browser overlays and clip themselves.
+- **Tracking.** `watchTabViewport` measures a page's rectangle, overlays and coverage only when something changes: a
+  DOM mutation, a resize, scroll or visibility change, a CSS transition or animation, or a change to the stores the
+  overlay check reads (`refreshTabViewports`). It measures at most once per animation frame. It keeps measuring each
+  frame only while a running animation targets the page's ancestors or an overlay. Idle windows run no measuring code;
+  the earlier version polled every frame and used about 5% of a core. Mutation-triggered measures run in the next
+  frame rather than in a later task, so a React commit and the animated transform that offsets it are never seen
+  apart. Each tab keeps at most one `tab.viewport` request in flight; later rectangles replace the queued one, so a
+  busy browser thread can't build up a backlog of stale positions.
 - **Hover cards.** These report their bounds separately from modal overlays. Native viewports cut those bounds out of
   painting and input (Views and Aura hit testing) instead of detaching the page. Before a card shows, the host takes a
   short-lived page snapshot for the card's fade, corners and shadow.
