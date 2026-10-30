@@ -239,6 +239,7 @@ extern base::FilePath (*g_ardia_native_messaging_manifest)(const std::string& ho
 extern BrowserWindowInterface* (*g_ardia_linux_companion_owner)(const BrowserWindowInterface*);
 extern bool (*g_ardia_linux_present_companion)(BrowserWindowInterface*, bool activate);
 extern bool (*g_ardia_linux_is_companion)(const BrowserWindowInterface*);
+extern int (*g_ardia_linux_window_tab_count)(const BrowserWindowInterface*);
 
 namespace ardia {
 namespace {
@@ -2304,7 +2305,9 @@ void ShellHostView::SelectProfile(Profile* profile) {
   if (before == after) return;
   extension_surfaces_.reset();
   extension_keybindings_.reset();
-  if (GetWidget() && GetWidget()->IsActive()) ActivateMember(after);
+  if (GetWidget() && GetWidget()->IsActive()) return ActivateMember(after);
+  if (before && before != after) BrowserActiveStateManager::From(before)->DidBecomeInactive();
+  member_active_ = false;
 }
 
 void ShellHostView::ActivateMember(BrowserWindowInterface* member) {
@@ -2343,7 +2346,6 @@ void ShellHostView::CloseCompanions() {
         for (const auto& companion : companions) {
           if (!companion || companion->IsDeleteScheduled() || browser_shutdown::IsTryingToQuit()) continue;
           UnloadController* unload = UnloadController::From(companion.get());
-          unload->set_force_skip_warning_user_on_close(true);
           if (!unload->is_attempting_to_close_browser()) {
             unload->RunBeforeUnloadForShutdown(true, base::DoNothing());
           }
@@ -6505,6 +6507,13 @@ void StartLinuxHost() {
     return host ? host->browser() : nullptr;
   };
   g_ardia_linux_is_companion = [](const BrowserWindowInterface* browser) { return IsCompanion(browser); };
+  g_ardia_linux_window_tab_count = [](const BrowserWindowInterface* browser) {
+    ShellHostView* host = MemberHost(browser);
+    if (!host || host->browser() != browser) return -1;
+    int count = 0;
+    for (BrowserWindowInterface* member : host->Members()) count += member->GetTabStripModel()->count();
+    return count;
+  };
   g_ardia_linux_present_companion = [](BrowserWindowInterface* browser, bool activate) {
     if (!IsCompanion(browser)) return false;
     ShellHostView* host = MemberHost(browser);

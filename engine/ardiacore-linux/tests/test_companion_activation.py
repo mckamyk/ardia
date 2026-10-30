@@ -23,6 +23,7 @@ def method(source, signature):
 
 PRELUDE = r'''
 #include <cassert>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -43,6 +44,7 @@ struct BrowserWindowInterface {
   bool IsDeleteScheduled() const { return deleting; }
 };
 std::vector<std::string> activity;
+std::map<std::string, bool> active;
 struct BrowserActiveStateManager {
   BrowserWindowInterface* browser;
   static BrowserActiveStateManager* From(BrowserWindowInterface* browser) {
@@ -50,8 +52,16 @@ struct BrowserActiveStateManager {
     managers.push_back(std::make_unique<BrowserActiveStateManager>(BrowserActiveStateManager{browser}));
     return managers.back().get();
   }
-  void DidBecomeActive() { activity.push_back("+" + browser->name); }
-  void DidBecomeInactive() { activity.push_back("-" + browser->name); }
+  void DidBecomeActive() {
+    if (active[browser->name]) return;
+    active[browser->name] = true;
+    activity.push_back("+" + browser->name);
+  }
+  void DidBecomeInactive() {
+    if (!active[browser->name]) return;
+    active[browser->name] = false;
+    activity.push_back("-" + browser->name);
+  }
 };
 struct Widget {
   bool active = true;
@@ -110,7 +120,8 @@ int main() {
   host.widget.active = false;
   activity.clear();
   host.SelectProfile(&home);
-  assert(activity.empty());
+  assert(activity.size() == 1 && activity[0] == "-other");
+  for (const auto& entry : activity) assert(entry[0] != '+');
   host.widget.active = true;
   host.SelectProfile(&work);
   assert(activity.back() == "+companion");
@@ -120,6 +131,24 @@ int main() {
   companion.deleting = true;
   host.SelectProfile(&home);
   for (const auto& entry : activity) assert(entry != "+companion");
+  companion.deleting = false;
+
+  active.clear();
+  activity.clear();
+  host.widget.active = true;
+  host.SelectProfile(&home);
+  host.SelectProfile(&work);
+  assert(active["companion"] && !active["primary"]);
+  host.widget.active = false;
+  host.SelectProfile(&home);
+  assert(!active["companion"]);
+  assert(!active["primary"]);
+  host.widget.active = true;
+  host.SelectProfile(&work);
+  assert(active["companion"] && activity.back() == "+companion");
+  host.widget.active = false;
+  host.SelectProfile(&side);
+  assert(!active["companion"] && !active["other"]);
   return 0;
 }
 '''

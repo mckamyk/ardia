@@ -134,8 +134,8 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
     visible window shows them in its own viewports exactly like its own tabs.
   - A companion is a stock `BrowserView` whose widget is never shown. `chromium-linux-companion-browsers.patch` hands
     its `Show`, `ShowInactive` and `Activate` to the host, which focuses the visible window instead, drops its
-    `Restore`, `Maximize`, `Minimize`, `SetBounds`, `Deactivate`, `FlashFrame` and fullscreen (Aura's `Restore`, and
-    `Maximize` from minimized, show the window themselves), and hosts its tab-modal dialogs and permission prompts in
+    `Restore`, `Maximize`, `Minimize`, `SetBounds`, `Deactivate`, `FlashFrame` and fullscreen, synchronous or
+    asynchronous (`RequestFullscreen`; Aura's `Restore`, and `Maximize` from minimized, show the window themselves), and hosts its tab-modal dialogs and permission prompts in
     the visible window's `BrowserView`. W70X checks on Xvfb and openbox, and W70D in sway, that no extension call
     (`chrome.windows.update` with any state, focus or bounds, `chrome.tabs.create`) ever maps a second toplevel. A
     widgetless `BrowserWindow` (as
@@ -158,6 +158,7 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   extension shortcuts follow it. While the window is active, the member Browser of the active profile is the one
   Chromium sees as active and every other member is told it isn't, the window's own Browser included, as macOS's
   `ActivateExclusively` does; switching back to the window's own profile makes its Browser the last active one again.
+  A switch while the window is inactive still tells the member it leaves that it isn't active.
   The sequence belongs to one shell renderer: a reloaded shell starts again from 1, and a profile that resolves after
   the renderer changed is dropped. A switch between profiles that share data leaves all of this unchanged.
 - **Extensions per engine profile.** Chromium scopes the extension APIs by profile, so an isolated profile's extensions
@@ -170,11 +171,14 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
 - **Closing.** The window's close covers its whole family. After the document seal, each companion's beforeunload
   handlers run (`UnloadController::RunBeforeUnloadForShutdown`, in turn); Stay on any of them cancels the window's
   close and resets every companion, including ones that already said Leave. When the visible Browser closes, each
-  companion is closed through Chromium's own unload path, so its tabs' `pagehide` and `unload` handlers run, without a
-  second prompt and without its own download warning. On quit Chromium's `BrowserCloseManager` drains every Browser,
+  companion is closed through Chromium's normal close: a companion that said Leave goes straight to its tabs'
+  `unload` handlers, others get a prompt-free beforeunload pass first, and Chromium waits for each tab's unload (or its
+  timeout) before the companion goes away. A companion raises no download or multi-tab warning of its own; it is not
+  closed with `force_skip_warning_user_on_close`, which would also skip the unload handlers. On quit Chromium's `BrowserCloseManager` drains every Browser,
   companions included. Companions are looked up by id at every use, so a closed one leaves no pointer behind.
-  - Chromium's last-window and multi-tab counts skip companions, so closing the only visible window during a download
-    asks once, in that window, for the whole family.
+  - Chromium's last-window count skips companions, and its `--close-confirmation` multi-tab warning counts the tabs of
+    every member, so closing the only visible window asks once, in that window, for the whole family. W70X shows both
+    warnings on X11 and cancels them.
   - A companion never reaches `TabRestoreService`: neither its window nor the tabs it closes while closing, on a
     window close or on quit, so the profile's recently closed list never holds a hidden window that would reopen as a
     separate one. Ardia's own closed windows keep every profile's tabs.

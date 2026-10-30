@@ -48,18 +48,24 @@ class CompanionPatchTests(unittest.TestCase):
         for signature in ['void BrowserView::Restore() {', 'void BrowserView::Maximize() {', 'void BrowserView::Minimize() {',
                           'void BrowserView::SetBounds(const gfx::Rect& bounds) {', 'void BrowserView::Deactivate() {',
                           'void BrowserView::FlashFrame(bool flash) {',
-                          'void BrowserView::ProcessFullscreen(bool fullscreen, const int64_t display_id) {']:
+                          'void BrowserView::ProcessFullscreen(bool fullscreen, const int64_t display_id) {',
+                          'void BrowserView::RequestFullscreen(bool fullscreen, int64_t display_id) {']:
             body = method(view, signature)
             hook = 'g_ardia_linux_present_companion(browser_.get(), false)'
             self.assertIn(hook, body, signature)
             first = min(index for index in (body.find('browser_widget_->'), body.find('in_process_fullscreen_'),
-                                            body.find('BrowserWindowFullscreenController')) if index >= 0)
+                                            body.find('BrowserWindowFullscreenController'), body.find('#if')) if index >= 0)
             self.assertLess(body.index(hook), first, signature)
         last = method(unload, 'std::pair<bool, bool> IsLastWindow(const BrowserWindowInterface* browser) {')
         self.assertIn('g_ardia_linux_is_companion(other_browser)', last)
         closing = method(unload, 'void UnloadController::OnWindowClosing() {')
         self.assertLess(closing.index('g_ardia_linux_is_companion(browser_.get())'), closing.index('tab_restore_service->BrowserClosing('))
-        self.assertIn('g_ardia_linux_is_companion(browser)', method(unload, 'bool UnloadController::CanCloseWithMultipleTabs() {'))
+        multitab = method(unload, 'bool UnloadController::CanCloseWithMultipleTabs() {')
+        self.assertIn('g_ardia_linux_is_companion(browser)', multitab)
+        self.assertIn('g_ardia_linux_window_tab_count(browser_.get())', multitab)
+        self.assertIn('total_window_count >= 1 || tab_count <= 1', multitab)
+        warn = method(unload, 'UnloadController::MaybeWarnBeforeClosing(')
+        self.assertIn('force_skip_warning_user_on_close() || (g_ardia_linux_is_companion && g_ardia_linux_is_companion(browser_.get()))', warn)
         historical = method(delegate, 'std::optional<SessionID> BrowserTabStripModelDelegate::CreateHistoricalTab(')
         self.assertLess(historical.index('UnloadController::From(browser_)->is_attempting_to_close_browser()'),
                         historical.index('service->CreateHistoricalTab('))
@@ -135,7 +141,7 @@ class CompanionHostTests(unittest.TestCase):
         self.assertIn('CloseCompanions();', detach)
         close = method(self.host, 'void ShellHostView::CloseCompanions() {')
         self.assertNotIn('DetachAndDeleteWebContentsAt', close)
-        self.assertIn('set_force_skip_warning_user_on_close(true)', close)
+        self.assertNotIn('set_force_skip_warning_user_on_close', close)
         self.assertIn('RunBeforeUnloadForShutdown(true, base::DoNothing())', close)
         self.assertIn('companion->GetWindow()->Close()', close)
         self.assertIn('g_ardia_linux_is_companion = [](const BrowserWindowInterface* browser) { return IsCompanion(browser); };', self.host)
