@@ -26,6 +26,7 @@ export function startPermissionPrompts() {
 }
 
 function enqueue(tabId: string, request: PermissionRequest) {
+  if (pageOf(tabId).permission?.id === request.id || queues.get(tabId)?.some((r) => r.id === request.id)) return;
   if (!pageOf(tabId).permission) patchPage(tabId, { permission: request });
   else queues.set(tabId, [...(queues.get(tabId) ?? []), request]);
 }
