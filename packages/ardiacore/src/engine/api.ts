@@ -124,7 +124,7 @@ export type EngineCalls = {
   "extensions.syncApply": [Profile & ExtensionsSyncApply, ExtensionsSyncApplied];
 
   "search.engines": [Profile, { list: { engines: ChromeSearchEngine[] } }];
-  "search.setEngineName": [{ name: string }, null];
+  "search.setEngineName": [{ name: string; keyword?: string; url?: string }, null];
 
   "media.displayMediaSources": [{}, DisplayMediaSource[]];
   "media.screenRecordingAllowed": [{}, boolean];
