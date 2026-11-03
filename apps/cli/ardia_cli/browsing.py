@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from ardia_cli.endpoint import EndpointError, require_control
+from ardia_cli.endpoint import EndpointError, chromium_dir, require_control
 
 DEFAULT_PROFILE_ID = "default"
 WEBKIT_EPOCH_OFFSET = 11644473600
@@ -235,7 +235,7 @@ def pinned(root: Path | None, deadline: float | None = None) -> list[dict]:
 
 
 def profile_dirs(root: Path, session: dict) -> list[tuple[str, Path]]:
-    chromium = root / "Chromium"
+    chromium = chromium_dir(root)
     names = profile_names(session)
     profiles = session.get("profiles") or {}
     by_dir: dict[str, str] = {}

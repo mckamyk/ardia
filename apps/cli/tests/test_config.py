@@ -31,7 +31,7 @@ class Sandbox(unittest.TestCase):
             mock.patch.dict(os.environ, {"HOME": str(self.home), "ARDIA_DATA_DIR": str(self.data)}),
             mock.patch.object(endpoint, "INSTALLED_DATA_DIR", self.installed),
         ]
-        for name in ("VISUAL", "EDITOR"):
+        for name in ("VISUAL", "EDITOR", "XDG_CONFIG_HOME", "ARDIA_CONFIG_HOME"):
             patches.append(mock.patch.dict(os.environ, {name: ""}))
         for patch in patches:
             patch.start()
@@ -87,8 +87,8 @@ class Paths(Sandbox):
             out, _ = self.ok("config", "path")
         self.assertEqual(out.strip(), str(self.home / ".config" / "ardia"))
 
-    def test_xdg_config_home_is_ignored(self):
-        with mock.patch.dict(os.environ, {"ARDIA_DATA_DIR": "", "XDG_CONFIG_HOME": str(self.temp / "xdg")}):
+    def test_xdg_config_home_is_ignored_on_macos(self):
+        with mock.patch.dict(os.environ, {"ARDIA_DATA_DIR": "", "XDG_CONFIG_HOME": str(self.temp / "xdg")}), mock.patch.object(endpoint, "LINUX", False):
             out, _ = self.ok("config", "path")
         self.assertEqual(out.strip(), str(self.home / ".config" / "ardia"))
 
@@ -530,7 +530,7 @@ class Themes(Sandbox):
 
 class Edit(Sandbox):
     def test_fallback_waits_with_open(self):
-        with mock.patch("subprocess.call", return_value=0) as call:
+        with mock.patch("subprocess.call", return_value=0) as call, mock.patch.object(endpoint, "LINUX", False):
             out, _ = self.ok("config", "edit")
         call.assert_called_once_with(["vi", str(self.folder / "config.json")])
         self.assertIn("config.json: ok", out)
