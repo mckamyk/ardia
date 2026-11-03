@@ -41,6 +41,8 @@
 #include "ardia/linux/ac_linux_extensions.h"
 #include "ardia/linux/ac_linux_native_messaging.h"
 #include "ardia/linux/ac_linux_files.h"
+#include "ardia/linux/ac_linux_automation.h"
+#include "ardia/linux/ac_linux_cli.h"
 #include "ardia/linux/ac_linux_fullscreen_restore.h"
 #include "ardia/linux/ac_linux_import_formats.h"
 #include "ardia/linux/ac_linux_import_service.h"
@@ -257,6 +259,8 @@ namespace {
 constexpr size_t kDocumentLimit = linux_policy::kDocumentLimit;
 constexpr size_t kAssetLimit = 32 * 1024 * 1024;
 constexpr char kSessionName[] = "linux-session.json";
+constexpr const char* kCliControlCalls[] = {"engine.cliControlStatus", "engine.setCliControl",
+                                            "engine.setCliActiveTab"};
 
 base::FilePath NativeMessagingManifest(const std::string& host_name) {
   std::unique_ptr<base::Environment> environment = base::Environment::Create();
@@ -445,6 +449,11 @@ Profile* ProfileOf(content::BrowserContext* context) {
 uint64_t& ActivationClock() {
   static uint64_t clock = 0;
   return clock;
+}
+
+int& CliActiveOwner() {
+  static int owner = 0;
+  return owner;
 }
 
 int& Revision() {
@@ -1109,6 +1118,7 @@ class ShellHostView : public views::View,
   }
   void RetireRenderer() {
     LinuxLiveCallerGone(LiveCaller());
+    ardiacore::LinuxAutomationCallerGone(LiveCaller());
     auto alive = GetWeakPtr();
     if (dialogs_ && renderer_generation_)
       dialogs_->controller().RetireRenderer(base::NumberToString(renderer_generation_));
@@ -1710,6 +1720,39 @@ class HostMessageHandler : public content::WebUIMessageHandler,
   void Fail(const std::string& id, std::string_view code, std::string_view message) {
     Reply(id, false, base::Value(base::DictValue().Set("code", code).Set("message", message)));
   }
+  void CliControlCall(const std::string& id, const std::string& name, const base::Value* value) {
+    std::optional<base::Value> parsed;
+    if (value && value->is_string()) {
+      parsed = base::JSONReader::Read(value->GetString(), base::JSON_PARSE_RFC);
+    } else if (!value || value->is_none()) {
+      parsed = base::Value(base::DictValue());
+    }
+    if (!parsed || !parsed->is_dict()) return Fail(id, "ERR_ENGINE", "Engine arguments require a JSON object");
+    const base::DictValue& input = parsed->GetDict();
+    base::DictValue request;
+    if (name == "engine.setCliControl") {
+      const std::optional<bool> on = input.FindBool("on");
+      if (!on) return Fail(id, "ERR_ENGINE", "engine.setCliControl requires {on}");
+      request.Set("on", *on);
+    } else if (name == "engine.setCliActiveTab") {
+      const base::Value* tab = input.Find("tabId");
+      if (!tab || !(tab->is_string() || tab->is_none())) {
+        return Fail(id, "ERR_ENGINE", "engine.setCliActiveTab requires {tabId}");
+      }
+      TabBinding* binding = tab->is_string() ? host_->BindingForKey(tab->GetString()) : nullptr;
+      content::WebContents* contents = binding ? binding->contents() : nullptr;
+      if (contents && !contents->GetBrowserContext()->IsOffTheRecord()) {
+        CliActiveOwner() = host_->id();
+        request.Set("active", TabId(contents));
+      } else if (CliActiveOwner() == 0 || CliActiveOwner() == host_->id()) {
+        CliActiveOwner() = 0;
+        request.Set("active", -1);
+      }
+    }
+    const auto json = base::WriteJson(request);
+    if (!json) return Fail(id, "ERR_BAD_REPLY", "CLI control arguments are not JSON");
+    ac_engine_call("ac_cli_control", "", json->c_str(), Replied, new EngineReply{name, weak_factory_.GetWeakPtr(), id});
+  }
   void ProfileFail(const std::string& id, ardiacore::linux_profiles::ProfileError error) {
     Fail(id, ardiacore::linux_profiles::ProfileErrorCode(error), ardiacore::linux_profiles::ProfileErrorMessage(error));
   }
@@ -1735,6 +1778,9 @@ class HostMessageHandler : public content::WebUIMessageHandler,
           host_->private_window() || (window_profile && window_profile->IsOffTheRecord()), profile_name->kind);
       if (host_->private_window() && !window_profile) {
         return ProfileFail(id, ardiacore::linux_profiles::ProfileError::kPrivateEnding);
+      }
+      if (std::find(std::begin(kCliControlCalls), std::end(kCliControlCalls), name) != std::end(kCliControlCalls)) {
+        return CliControlCall(id, name, args.Find("args"));
       }
       if (name == "profiles.release") {
         ardiacore::ReleaseLinuxProfile(profile);
@@ -2148,6 +2194,8 @@ ShellHostView::~ShellHostView() {
   DropPlayer();
   weak_factory_.InvalidateWeakPtrs();
   LinuxLiveCallerGone(LiveCaller());
+  ardiacore::LinuxAutomationCallerGone(LiveCaller());
+  if (CliActiveOwner() == id_) CliActiveOwner() = 0;
   handler_ = nullptr;
   renderer_document_ = content::WeakDocumentPtr();
   dialogs_.reset();
@@ -2553,7 +2601,7 @@ bool ShellHostView::Trusted(content::WebUI* ui) const {
 
 base::DictValue ShellHostView::Bootstrap() const {
   base::DictValue info = base::DictValue().Set("appName", "Ardia")
-      .Set("appVersion", version_info::GetVersionNumber())
+      .Set("appVersion", ardiacore::LinuxAppVersion())
       .Set("appBuild", "linux-host")
       .Set("bundleId", "dev.ardia.linux")
       .Set("configuration", "Release")
@@ -2605,13 +2653,19 @@ base::DictValue ShellHostView::Bootstrap() const {
   AppendLinuxSiteControlsCapabilities(capabilities);
   for (const char* capability : linux_import::kImportCapabilities) capabilities.Append(capability);
   capabilities.Append("favicons.fetch");
+  for (const char* capability : kCliControlCalls) capabilities.Append(capability);
+  for (const char* capability : ardiacore::kLinuxAutomationCapabilities) capabilities.Append(capability);
+  for (const char* capability : ardiacore::kLinuxCliCapabilities) capabilities.Append(capability);
+  base::DictValue native_modules;
+  native_modules.Set("ArdiaApp", base::DictValue().Set("systemInfo", std::move(info)));
+  if (auto installed = ardiacore::LinuxCliBootstrapVersion()) {
+    native_modules.Set("ArdiaCli", base::DictValue().Set("installedVersion", std::move(*installed)));
+  }
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
       .Set("startup", startup_)
       .Set("profileId", "default")
-      .Set("nativeModules", base::DictValue().Set(
-                                "ArdiaApp", base::DictValue().Set(
-                                                "systemInfo", std::move(info))))
+      .Set("nativeModules", std::move(native_modules))
       .Set("launchConfig", ardiacore::LinuxLaunchConfig(DocumentDirectory(profile()), user_data_directory))
       .Set("capabilities", std::move(capabilities))
       .Set("glassPanels", glass_ && glass_->available());
@@ -5525,6 +5579,20 @@ void ShellHostView::Invoke(
     return LinuxLiveInvoke({LiveCaller(), !private_window_.empty()},
                            profile(), method, values, std::move(done));
   }
+  if (ardiacore::LinuxAutomationInvokes(method)) {
+    if (!profile() || profile()->ShutdownStarted()) {
+      return std::move(done).Run(false, ProfileFailure(ardiacore::linux_profiles::ProfileError::kUnavailable));
+    }
+    base::FilePath user_data_directory;
+    base::PathService::Get(chrome::DIR_USER_DATA, &user_data_directory);
+    return ardiacore::LinuxAutomationInvoke(
+        {LiveCaller(), window_id_, user_data_directory,
+         !is_utility() && !private_window() && private_window_.empty() && !window_id_.empty()},
+        method, values, std::move(done));
+  }
+  if (ardiacore::LinuxCliInvokes(method)) {
+    return ardiacore::LinuxCliInvoke(LiveCaller(), method, values, std::move(done));
+  }
   if (LinuxExtensionSurfaces::Handles(method)) {
     return ExtensionSurfaces()->Invoke(method, args, ActiveProfile(), renderer_generation_,
         blink::ZoomLevelToZoomFactor(zoom::ZoomController::GetZoomLevelForWebContents(shell())), std::move(done));
@@ -6731,6 +6799,13 @@ void EngineEvent(void*, const char* topic, const char* json) {
   if (!topic || !json) return;
   const auto payload = base::JSONReader::Read(json, base::JSON_PARSE_RFC);
   if (!payload || !payload->is_dict()) return;
+  if (std::string_view(topic) == "cliControl") {
+    for (const auto& [id, host] : Hosts()) {
+      host->Event("ArdiaEngine", "engine", base::Value(base::DictValue()
+          .Set("name", "engine.cliControl").Set("data", payload->GetDict().Clone())));
+    }
+    return;
+  }
   for (const auto& [id, host] : Hosts()) host->EngineEvent(topic, payload->GetDict());
 }
 
@@ -6972,6 +7047,29 @@ void StartLinuxHost() {
   });
   ardiacore::StartLinuxPagePrompts(std::move(prompts));
   ac_engine_set_event_sink(EngineEvent, nullptr);
+  ardiacore::InitLinuxAutomation(
+      base::BindRepeating(
+          [](const std::string& caller, std::string_view event, base::Value payload) {
+            for (const auto& [id, host] : Hosts()) {
+              if (host->LiveCaller() == caller) return host->Event("ArdiaAutomation", event, std::move(payload));
+            }
+          }),
+      base::BindRepeating([](const std::string& caller) -> uint64_t {
+        for (const auto& [id, host] : Hosts()) {
+          if (host->LiveCaller() == caller) return host->activation();
+        }
+        return 0;
+      }));
+  ardiacore::InitLinuxCli(
+      base::BindRepeating(
+          [](const std::string& caller, std::string_view event, base::Value payload) {
+            for (const auto& [id, host] : Hosts()) {
+              if (host->LiveCaller() == caller) return host->Event("ArdiaCli", event, std::move(payload));
+            }
+          }),
+      base::BindRepeating([](std::string_view event, base::Value payload) {
+        for (const auto& [id, host] : Hosts()) host->Event("ArdiaCli", event, payload.Clone());
+      }));
   StartLinuxSiteControls(base::BindRepeating([](Profile* profile, base::Value stats) {
     for (const auto& [id, host] : Hosts()) {
       if (!host->profile() || host->profile()->GetOriginalProfile() != profile) continue;

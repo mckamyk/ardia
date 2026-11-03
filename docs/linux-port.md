@@ -17,7 +17,7 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
 | --- | --- |
 | `apps/linux` | The Linux UI entry point. Vite builds it from the shared `apps/browser` components into `apps/linux/dist`. It holds the Linux adapters (native modules, WebView, menus, window controls, wording transforms) and the acceptance suite. |
 | `engine/ardiacore-linux` | The Aura host and every Linux-only native service (`src/ardia/linux/ac_linux_*`), the content blocker's bridge page, and their tests. It is the Linux patch-series layer. |
-| `engine/chromium/src/chrome/browser/ardia` | The shared engine services (`ac_*`). Linux-only parts are `ac_reauth_linux.*`, `pip/ac_pip_linux.cc` and `pip/ac_pip_hyprland.*`, behind `is_linux` in `BUILD.gn`. |
+| `engine/chromium/src/chrome/browser/ardia` | The shared engine services (`ac_*`), the `ardia` command's token server (`ac_cli_control.cc`, `ac_cli_token_policy*`) included. Linux-only parts are `ac_reauth_linux.*`, `pip/ac_pip_linux.cc` and `pip/ac_pip_hyprland.*`, behind `is_linux` in `BUILD.gn`. |
 | `engine/patches/chromium-linux-*.patch` | Chromium hooks the Linux host needs. They are selected with `linux` in `engine/patches/series`. |
 | `scripts/linux` | Build, package, install, engine publish and fetch, smoke gate, CI checks, the polkit policy and the Arch `PKGBUILD`. |
 | `.github/workflows/linux.yml` | The Linux workflow ([linux-ci.md](linux-ci.md)). |
@@ -253,6 +253,13 @@ Command-line switches win over it.
 | `ARDIA_SWITCHES` | Feature switches. |
 | `ARDIA_INSTANCE` | Read for the downloads folder only. |
 | `HYPRLAND_INSTANCE_SIGNATURE`, `XDG_RUNTIME_DIR` | Become `--ardia-hyprland-instance` and `--ardia-hyprland-runtime-dir`, the only way the Hyprland socket reaches the PiP code. |
+| `ARDIA_CLI_HOME`, `ARDIA_CLI_BIN_DIR`, `ARDIA_CLI_URL` | Passed to the `ardia` command's installer (absolute paths only for the first two). |
+| `XDG_DATA_HOME`, `HOME` | Give the default CLI home, `${XDG_DATA_HOME:-$HOME/.local/share}/ardia/cli`. |
+| `ARDIA_PACKAGE_DIR` | Only with an explicit `--user-data-dir`: the folder read for `VERSION` and `cli/` instead of the one holding `chrome`. For tests of a raw build tree. |
+
+It also reads `VERSION` beside `chrome` and appends `DevToolsAcceptDebuggingConnections` to `--disable-features`, as
+the Mac app does: chrome://inspect's approval mode would replace the process's one DevTools handler, the `ardia`
+command's token server.
 
 `ARDIA_DATA_DIR` isn't read: pass `--user-data-dir`. Test hooks and authentication bypasses don't exist in this
 build (`SignedForDistribution()` is true and `TestInstance()` false).
@@ -351,6 +358,15 @@ python3 scripts/linux/package.py \
   --destination "$CB/artifacts/ardia-linux-$AC_TARGET_CPU.tar.xz"
 ```
 
+That makes a dev package. A release adds `--version <version>` and `--cli <dist>/ardia-cli-<version>-linux-x64.tar.gz`.
+`scripts/linux/release.sh <version>` runs the whole release build, the smoke gate included, and prints the upload
+command ([linux-ci.md](linux-ci.md) › Linux releases).
+
+- **Version and CLI.** `--version` must match `<major>.<minor>.<patch>` or `<major>.<minor>.<patch>-<channel>.<n>`, and
+  `--cli` needs it. package.py checks the CLI tarball before copying it:
+  - its name must carry the same version and `linux-x64`;
+  - its `.sha256` file, when one sits next to it, must match;
+  - every entry must sit under `ardia-cli-<version>/`, including `bin/ardia`.
 - **Content blocker.** `fetch-ubo.sh` prepares the same pinned, patched uBlock Origin build macOS embeds, by running
   `packages/ardiacore/scripts/ubo.sh` with `flock` and `sha256sum` standing in for `lockf` and `shasum`. Without
   `--content-blocker` the package has no blocker, and Settings says so.
@@ -359,20 +375,32 @@ python3 scripts/linux/package.py \
   - `lib/ardia/chrome` and the Chromium runtime files from the allowlist in `scripts/linux/runtime_files.py`;
   - `lib/ardia/ardia-ui`;
   - `lib/ardia/extensions/ublock`;
+  - `lib/ardia/VERSION` (with `--version`): the version on one line;
+  - `lib/ardia/cli/` (with `--cli`): `ardia-cli-install.sh` (a copy of `apps/cli/install.sh`, mode 0755), the CLI tarball,
+    and `ardia-cli.sha256` with its digest. When the CLI is turned on, the browser installs from these files with
+    `ardia-cli-install.sh --version <VERSION> --sha256 <digest>` and `ARDIA_CLI_URL=file://…`;
   - the desktop entry and icon;
   - `share/polkit-1/actions/dev.ardia.linux.policy`;
-  - `install.sh`.
+  - `install.sh`;
+  - `lib/ardia/VERSION`, one line with the Ardia version (`0.2.44`, `0.2.44-nightly.3`);
+  - `lib/ardia/cli/ardia-cli-install.sh`, `lib/ardia/cli/ardia-cli-<version>-linux-x64.tar.gz` and
+    `lib/ardia/cli/ardia-cli.sha256` (the digest is its first token), the `ardia` command's installer, tarball and pinned
+    digest.
 - **Running it.** Run the extracted `bin/ardia`. A raw build-tree `chrome` needs `--ardia-ui-dir apps/linux/dist`.
   Test with a throwaway `--user-data-dir` and keep the sandbox on.
 - **Installing.** `sudo ./ardia/install.sh` installs under `/usr`. It also accepts `--prefix /opt/ardia` and
   `--destdir <staging root>`.
   - Without `--destdir` it must run as root and refuses otherwise, so it never leaves a partial install. Installed
     files are owned by root.
+  - It copies `lib/ardia` whole, so `VERSION` and `cli/` come along.
   - It always installs the polkit policy at `<destdir>/usr/share/polkit-1/actions` (mode 0644), whatever the prefix,
     because polkit reads actions only from there. Without the policy Ardia can't ask for the system password, so saved
     passwords and card numbers stay hidden.
-- **Arch.** Put the archive next to `scripts/linux/arch/PKGBUILD` as `ardia-linux-x64.tar.xz` and run `makepkg -si`.
-  The package (`ardia-bin`) depends on `polkit` and installs through the same script.
+- **Arch.** Copy `scripts/linux/arch/PKGBUILD` and the archive, renamed `ardia-linux-x64.tar.xz`, into an empty folder
+  and run `makepkg -si` there. The package (`ardia-bin`) depends on `polkit` and installs through the same script.
+  Its `pkgver()` reads the package's `VERSION`, with `-` turned into `_` (`0.2.44_nightly.3`), and falls back to
+  `0.0.0` for a dev package. makepkg writes that version back into the PKGBUILD, which is why the copy goes in a
+  folder of its own.
   `pkaction --action-id dev.ardia.linux.reauthenticate` then lists the action.
 
 CI builds packages from a prebuilt engine instead of compiling Chromium; see [linux-ci.md](linux-ci.md).
@@ -807,6 +835,70 @@ Linux reads calendars from Evolution Data Server, which GNOME Online Accounts, G
 - **Files.** A file import uses only a path the native chooser returned to the same window, once.
 - **Refreshing open windows.** Imported bookmarks and history reach open windows without a relaunch.
 
+### The `ardia` command
+
+It works as on the Mac ([cli.md](cli.md), [automation.md](automation.md)); what differs:
+
+- **Version.** `systemInfo.appVersion` is the content of `lib/ardia/VERSION` when it is one well-formed line (a digit
+  first, then digits, letters, `.`, `-` or `+`, at most 64 characters), else Chromium's version as before. `hello`, the
+  release-notes bookkeeping and the CLI upgrade check all read it. The first launch with a `VERSION` file counts as an
+  update, but Linux sets no release-notes page or `isolatedInstance: false`, so no tab opens; only a postcard shows,
+  and only when the shared notes have that exact version. A dev build without the file keeps reporting Chromium's
+  version.
+- **Token server.** `ac_cli_control.cc` and the token policy are shared code now, unchanged. `ArdiaControl.json` is
+  `<user data dir>/ArdiaControl.json` (0600). `engine.cliControlStatus`, `engine.setCliControl` and
+  `engine.setCliActiveTab` are typed host calls (`CliControlCall` in `ac_linux_host.cc`), and the `cliControl` topic is
+  sent to every window as `engine.cliControl`. Each window's renderer reports its own shown page. The tab
+  `/ardia/active` names is kept by the last window that resolved a tab of its own (never an incognito one), and a null
+  from another window doesn't clear it. `--remote-debugging-port` makes the status `external` and the server never
+  starts. Tests reach the token path with `--remote-debugging-pipe`, which leaves it alone.
+- **Control socket** (`ac_linux_automation.cc`, `ac_linux_control_core.cc`). It is a port of `ControlSocket.swift`,
+  `ControlConnection.swift` and `ControlOutput.swift` with the same limits, framing, dropped-event marking, generation
+  and ticket semantics. It listens on `<user data dir>/ArdiaControl.sock`, beside `ArdiaControl.json`, with
+  `ArdiaControl.sock.lock` next to it; the CLI's data root on Linux is that folder (`--data-dir`, `$ARDIA_DATA_DIR`,
+  else `${XDG_CONFIG_HOME:-~/.config}/ardia`). The peer is checked with `SO_PEERCRED`, and a path over 107 bytes is
+  refused with a logged line and an error status. The umask is never touched: the socket is bound in a fresh 0700
+  staging folder in the data folder, made 0600 and checked there, then renamed into place while the lock is held.
+  I/O runs on a thread-pool sequence; routing and events run on the UI thread.
+  Every regular browser window starts automation (not Settings or private windows); the socket is one per process and
+  the windows that started it are its participants:
+  - a connection's requests go to the window that was focused most recently when its first line arrived;
+  - `run` goes to the window it names, or else to the most recently focused one, so the command runs in that window's
+    renderer as a shortcut would;
+  - replies are taken only from a window that was given that request, and written tickets go back to the window that
+    issued them;
+  - a window whose renderer goes away (closing or reloading) closes the connections it was serving, and lines already
+    queued from them are dropped rather than handed to another window; the last one leaving stops the socket, and
+    turning `cliControl` off stops it at once;
+  - a start that a stop overtook joins the socket if another window has started it again since, and otherwise
+    settles `off` ("The control socket was stopped while it started."), never with a stale generation.
+- **Installer** (`ac_linux_cli.cc`, a port of `CliInstaller.swift`). `ArdiaCli.installedVersion` is the basename of the
+  `current` link in `${ARDIA_CLI_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/ardia/cli}`. The bootstrap carries it
+  (`nativeModules.ArdiaCli`) so the shared code can read it synchronously, and `apps/linux/src/hostCli.ts` keeps it
+  current from installs and the `onInstalledVersion` event.
+  - `ArdiaCli.install` runs `/bin/sh lib/ardia/cli/ardia-cli-install.sh --version <VERSION> [--sha256 <digest>]` from
+    the temp folder with stdin on `/dev/null`. It gets the browser's environment minus every `ARDIA_*` variable, plus
+    `ARDIA_CLI_HOME` and `ARDIA_CLI_BIN_DIR` when set and `ARDIA_CLI_URL`: the browser's own value if it has one,
+    else `file://` of the bundled tarball when it exists.
+  - stdout lines stream as `onInstallLine` to every window waiting on the run. Calls made while a run is going join it.
+    The installer runs in its own process group. After 300 s the group gets SIGTERM, then SIGKILL 5 s later, and the
+    result is the failure "The installer didn't finish in 300 s, so it was stopped." Output is drained for at most
+    10 s after the shell exits (or after the kill), so a leftover child holding the pipes can't stall it. The bridge
+    gives `ArdiaCli.install` 330 s (`bootstrap.js`). The result is parsed as on the Mac (`ok`,
+    `appVersion`, `binPath`, `version`, `rcFile`, `error`, `lines`, `status`, `installedVersion`), and a version that
+    doesn't match `^[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+\.[0-9]+)?$` is refused.
+  - The launcher is `bin/ardia` and the CLI links `~/.local/bin/ardia`; they don't collide.
+  - An instance started with its own `--user-data-dir` is a test instance: it installs only with both
+    `ARDIA_CLI_HOME` and `ARDIA_CLI_BIN_DIR` set, and reports no installed version without `ARDIA_CLI_HOME`.
+- **UI.** `apps/linux` turns the Settings rows on from the host's capabilities (`cliControl` needs the three engine
+  calls and the four `ArdiaAutomation` methods; `cliInstall` needs both `ArdiaCli` methods), so an older engine still
+  hides them. `startCliControl` runs in every window, Settings included, so the pill and the Settings note follow the
+  server. The shared UI has no onboarding step for the command; it is offered in Settings › Advanced.
+- **Not on Linux yet.** `ardia scripts install` and the userscripts extension: `ArdiaUserScripts` still answers empty
+  on Linux, so an install waits and reports that Ardia didn't answer. The engine's scripts policy
+  (`ac_scripts_policy.cc`) already looks in `<user data dir>/Scripts` on Linux, where the CLI writes (the Mac's
+  `Chromium/..` parent would be `~/.config` here). `ardia hooks install` is a LaunchAgent.
+
 ### Downloads and files
 
 - **Choosers.** File and folder choosers go through `ui::SelectFileDialog`: the XDG portal, GTK or KDE, as Chromium
@@ -864,7 +956,7 @@ These were open at the time of the PR.
   - Handoff;
   - AppleScript;
   - alternate app icons;
-  - the `ardia` command;
+  - the `ardia` command's userscripts (`ardia scripts install`);
   - default-browser registration, launch at login and the scroll bar style setting.
 - **Packaging.**
   - There is no published Linux release or AUR package yet; the `PKGBUILD` builds from a local tarball.

@@ -9,6 +9,7 @@ import { linuxSystemMethod } from "./hostFiles.ts";
 import { linuxModuleMethod } from "./hostSystem.ts";
 import { linuxShellMethod, watchSidebarEdgeBesideNativeLeftEdge } from "./shellMethods.ts";
 import { appModuleFallback } from "./appModuleFallbacks.ts";
+import { cliModuleMethod } from "./hostCli.ts";
 
 const synchronousDefaults: Record<string, Record<string, unknown>> = {
   ArdiaApp: { apiVersion: 0 },
@@ -48,6 +49,8 @@ export function resolveHostModule(host: ArdiaHost, name: string, method: string)
   if (syncMethod !== undefined) return syncMethod;
   const calendar = calendarModuleMethod(host, name, method);
   if (calendar !== undefined) return calendar;
+  const cli = cliModuleMethod(host, name, method);
+  if (cli !== undefined) return cli;
   const fallback = appModuleFallback(host, name, method);
   if (fallback) return fallback;
   if (name === "ArdiaDocuments" && method === "call") {

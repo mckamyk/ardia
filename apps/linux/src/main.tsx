@@ -20,7 +20,9 @@ import { usePages } from "../../browser/src/state/tabs/pageState";
 import { useOnboarding } from "../../browser/src/state/onboarding/onboarding";
 import { adoptParkedPins } from "../../browser/src/state/pins/parkedPins";
 import { decideLastTabClose, decideWindowClose } from "../../browser/src/state/windows/windowClose";
-import { firstWindowCommitted } from "../../browser/src/lib/afterFirstWindow";
+import { afterFirstWindow, firstWindowCommitted } from "../../browser/src/lib/afterFirstWindow";
+import { startCliControl } from "../../browser/src/state/app/cliControl";
+import { startAutomation } from "../../browser/src/state/automation/controlSocket";
 import { recordFreshProfile, startAppCommands, startLinuxAppServices, UTILITY_APP_COMMANDS } from "./appServices";
 import { linuxCapabilities } from "./hostCapabilities";
 import { useExtensions } from "../../browser/src/state/extensions/store";
@@ -82,12 +84,14 @@ async function start() {
   const saved = stored ? linuxSessionShape(stored) : stored;
   setStoreBatching(unstable_batchedUpdates);
   useBrowser.getState().hydrate(initialLinuxSession(ardiaHost, saved));
+  const capabilities = linuxCapabilities(ardiaHost);
+  if (capabilities.cliControl) startCliControl();
   await startLinuxShortcuts(ardiaHost);
   if (utility) {
     const persistence = startHostPersistence(ardiaHost, useBrowser, saved ?? {}, createUtilitySessionSnapshot(useBrowser.getState(), saved ?? {}));
     setSessionFlush(persistence.flush);
     startHostData();
-    startAppCommands(windowId, linuxCapabilities(ardiaHost), undefined, UTILITY_APP_COMMANDS);
+    startAppCommands(windowId, capabilities, undefined, UTILITY_APP_COMMANDS);
     startLinuxSync({ host: ardiaHost, candidate: false });
     followExtensionChanges(ardiaHost, settingsShowsExtensions, refreshExtensionsAfterChange);
     await startUtility(ardiaHost);
@@ -116,11 +120,12 @@ async function start() {
     });
     watchInstallPromptCancellations(ardiaHost, useExtensions);
     startLinuxSync({ host: ardiaHost, candidate: true, locks: navigator.locks });
+    if (capabilities.cliControl && !ardiaHost.bootstrap.privateWindow) afterFirstWindow(startAutomation);
     startLinuxAppServices({
       host: ardiaHost,
       windowId,
       savedSession: !!saved,
-      capabilities: linuxCapabilities(ardiaHost),
+      capabilities,
       locks: navigator.locks,
       marks: sessionStorage,
     });

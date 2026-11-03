@@ -159,10 +159,17 @@ test("translation's synchronous methods answer synchronously on Linux, as the sh
   assert.equal(resolveHostModule(host, "ArdiaTranslate", "languageName")("fr"), "fr");
 });
 
-test("the ardia command and the user-scripts folder answer on Linux as the modules were absent before they became required", async () => {
-  const host = linuxHost();
+test("the ardia command routes to the engine that advertises it, and the user-scripts folder answers as the module was absent", async () => {
+  for (const name of ["ArdiaCli.installedVersion", "ArdiaCli.install", "ArdiaAutomation.start", "ArdiaAutomation.stop", "ArdiaAutomation.reply", "ArdiaAutomation.broadcast"]) {
+    assert.ok(routedNatively.has(name), name);
+  }
+  const cli = ["ArdiaCli.installedVersion", "ArdiaCli.install"];
+  const host = olderEngine(...cli);
   assert.equal(resolveHostModule(host, "ArdiaCli", "installedVersion")(), null);
   assert.equal((await resolveHostModule(host, "ArdiaCli", "install")().catch((error) => error)).code, "ERR_UNAVAILABLE");
+  const current = linuxHost();
+  current.bootstrap.capabilities.push(...cli);
+  await assert.rejects(resolveHostModule(current, "ArdiaCli", "install")(), /Unsupported Linux host method: ArdiaCli.install/);
   assert.equal(resolveHostModule(host, "ArdiaUserScripts", "watch")(true), undefined);
   assert.deepEqual(await resolveHostModule(host, "ArdiaUserScripts", "read")(), { state: "empty" });
   assert.equal(await resolveHostModule(host, "ArdiaUserScripts", "readStatus")(), null);
