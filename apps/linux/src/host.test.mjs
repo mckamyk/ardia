@@ -13,6 +13,8 @@ import { adoptParkedPins } from "../../browser/src/state/pins/parkedPins.ts";
 import { splitTabIds } from "../../browser/src/state/splits/splits.ts";
 import { reloadBookmarks } from "../../browser/src/state/bookmarks/engineSync.ts";
 import { reloadHistory } from "../../browser/src/state/history/engineSync.ts";
+import { engineProfile } from "../../browser/src/state/browser/model.ts";
+import { useProfileLoading } from "../../browser/src/state/profiles/profileLoading.ts";
 import * as native from "../../browser/src/test-native/index.ts";
 
 function fixture(invoke = async () => null) {
@@ -513,6 +515,29 @@ test("production data bridges persist bookmark edits in Chrome and load history 
     assert.ok(Object.values(useBrowser.getState().bookmarks.nodes).some((node) => node.url === "https://bookmark.example"));
   } finally {
     again();
+  }
+});
+
+test("a launch reads only the profiles its windows show, and another once a window shows it", async () => {
+  native.loadedEngineProfiles.clear();
+  native.loadedEngineProfiles.add("");
+  const { host } = fixture();
+  useBrowser.getState().hydrate(initialHostSession(host, null));
+  const work = useBrowser.getState().createProfile({ name: "Work" });
+  const engine = engineProfile(useBrowser.getState(), work);
+  const since = native.engineCalls.length;
+  const stop = startHostData();
+  const callsToWork = () => native.engineCalls.slice(since).filter((call) => call.profile === engine);
+  try {
+    await Promise.all([reloadBookmarks(), reloadHistory()]);
+    assert.deepEqual(callsToWork(), []);
+    useBrowser.getState().switchProfile("w_linux", work);
+    await Promise.all([reloadBookmarks(), reloadHistory()]);
+    assert.ok(callsToWork().some((call) => call.domain === "history"));
+    assert.ok(callsToWork().some((call) => call.domain === "bookmarks"));
+  } finally {
+    stop();
+    useProfileLoading.setState({ deferred: false, opened: {} });
   }
 });
 

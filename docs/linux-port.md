@@ -202,6 +202,12 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   - A tab moved to another engine profile is recreated in the destination profile (`CreateTabIn` drops the old binding
     and its contents); a tab moved to another window keeps its contents only when the profile matches, and lands in
     the destination window's member for that profile.
+- **Profiles load when opened.** As on macOS, a launch loads only the profiles its windows show. The others, with their
+  extensions and uBlock Origin, load the first time a window shows one or a call needs their engine data.
+  `startHostData` starts the shared `state/profiles/profileLoading.ts`, which also honours Settings › Advanced ›
+  Performance › Load profiles when opened and the `lazyProfiles` kill switch. Native reports what `ProfileRegistry` has
+  loaded through the `profiles.loaded` call, and a later load through the event of the same name, to every window. An
+  engine without the call answers `ERR_UNKNOWN_CALL`, and every profile loads at launch.
 - **The window's active engine profile.** The Linux shell tells the host which engine profile the window shows
   (`ArdiaShell.setActiveProfile`, sent by `watchActiveProfile` in `hostWindowProfiles.ts` whenever the window's engine
   profile changes, with a sequence number so a late reply can't win). The extension toolbar, popups, side panels and

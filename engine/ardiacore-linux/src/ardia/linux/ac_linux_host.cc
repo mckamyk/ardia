@@ -1790,6 +1790,11 @@ class HostMessageHandler : public content::WebUIMessageHandler,
         ardiacore::ReleaseLinuxProfile(profile);
         return Resolve(id, base::Value());
       }
+      if (name == "profiles.loaded") {
+        base::ListValue loaded;
+        for (const std::string& engine_profile : ardiacore::LoadedLinuxProfiles()) loaded.Append(engine_profile);
+        return Resolve(id, base::Value(base::DictValue().Set("profiles", std::move(loaded))));
+      }
       if (LinuxExtensionsHandles(name)) {
         return LinuxExtensionsCall(host_->ExtensionWindow(profile), profile, name, args.Find("args"),
             base::BindOnce([](base::WeakPtr<HostMessageHandler> handler, std::string id, bool ok, base::Value result) {
@@ -3663,6 +3668,11 @@ void BroadcastWindowEvent(const base::DictValue& event) {
   for (const auto& [id, host] : Hosts()) {
     if (!host->is_utility()) host->Event("ArdiaShell", "onWindowEvent", base::Value(event.Clone()));
   }
+}
+
+void BroadcastProfileLoaded(const std::string& profile) {
+  const auto event = base::DictValue().Set("name", "profiles.loaded").Set("data", base::DictValue().Set("profile", profile));
+  for (const auto& [id, host] : Hosts()) host->Event("ArdiaProfiles", "profiles", base::Value(event.Clone()));
 }
 
 ShellHostView* DevToolsLinkWindow(content::BrowserContext* profile, content::WebContents* holding) {
@@ -6724,6 +6734,7 @@ class HostRegistry : public BrowserCollectionObserver,
       if (profile_path_.empty()) {
         profile_path_ = browser->GetProfile()->GetPath();
         ardiacore::SetLinuxAppProfile(browser->GetProfile());
+        ardiacore::SetLinuxProfileLoadedListener(base::BindRepeating(&BroadcastProfileLoaded));
       }
       if (browser->GetProfile()->GetPath() != profile_path_) return;
     }
