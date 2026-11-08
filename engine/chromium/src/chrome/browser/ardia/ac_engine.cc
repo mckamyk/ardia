@@ -104,6 +104,11 @@ void Reply::SendSecret(std::string_view key, std::u16string* secret) {
   }
   SendSecret(std::move(result));
 }
+#else
+void Reply::SendSecret(std::string_view key, std::u16string* secret) {
+  Send(base::DictValue().Set(
+      key, secret ? base::Value(*secret) : base::Value()));
+}
 #endif
 
 void Reply::Ok() {
