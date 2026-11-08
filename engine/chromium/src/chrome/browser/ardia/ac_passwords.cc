@@ -384,19 +384,9 @@ AC_PROFILE_CALL(ac_passwords_reveal) {
                       if (authenticated) {
                         credential = session.delegate->GetCredentialFromId(id);
                       }
-#if BUILDFLAG(IS_LINUX)
                       reply.SendSecret(
                           "password",
                           credential ? &credential->password : nullptr);
-#else
-                      base::DictValue result;
-                      if (credential) {
-                        result.Set("password", credential->password);
-                      } else {
-                        result.Set("password", base::Value());
-                      }
-                      reply.Send(std::move(result));
-#endif
                     },
                     entry->id));
           },
