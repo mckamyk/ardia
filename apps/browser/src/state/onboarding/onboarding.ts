@@ -13,6 +13,7 @@ import { stepsForThisSurface } from "./demoSteps";
 import { parseSaved, unchanged, versionedJson, type Migrations } from "../../lib/savedDocument";
 import { hasSavedSession } from "../session/sessionDocument";
 import { isLiquidGlass } from "../../platform/app";
+import { sharingRequired } from "../telemetry/required";
 
 export { playIntroMusic, setIntroMusicMuted, stopIntroMusic, type IntroMusicCues } from "../../platform/introMusic";
 export { PRESET_NAMES, PRESETS, presetFor, setsUpLikeBrowser, type BrowserSourceId, type Preset } from "./presets";
@@ -91,7 +92,7 @@ export function questionsFor(step: OnboardingStep): Question[] {
   if (step === "intro") return [];
   const { windowId, draft, preset, source } = useOnboarding.getState();
   const asked = setsUpLikeBrowser(source) ? QUESTIONS[step].filter((q) => !answeredByPreset(q, preset)) : QUESTIONS[step];
-  const list = liquidGlass ? asked : asked.filter((q) => q.id !== "style");
+  const list = asked.filter((q) => (liquidGlass || q.id !== "style") && !(q.id === "crash" && sharingRequired()));
   if (!list.some((q) => SIDEBAR_ONLY.includes(q.id))) return list;
   const b = useBrowser.getState();
   const { tabLayout } = resolveDraft(["tabLayout"], draft, preset, { ...b.settings, tabLayout: tabLayoutOf(b, windowId) }, b.settingsMeta.chosen);
