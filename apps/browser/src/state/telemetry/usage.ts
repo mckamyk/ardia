@@ -369,6 +369,12 @@ export function startUsage(continuing = false) {
   });
 }
 
+export function emitWindowUsage() {
+  emitCounts();
+  emitOmniboxLatency();
+  emitTabPresses();
+}
+
 export function sessionEnding() {
   emitCounts();
   emitOmniboxLatency();
