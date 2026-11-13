@@ -14,6 +14,7 @@ if [[ -e "$CB/chromium_git/chromium/src/out" ]]; then
   exit 64
 fi
 if [[ "$AC_TARGET_OS" == linux ]]; then "$CB/depot_tools/ensure_bootstrap"; fi
+"$AC_REPO/engine/patches/build/retire-series-base.sh" "$CB/chromium_git/chromium/src" "$AC_SERIES_BASE" "$CHROMIUM_VERSION"
 mkdir -p "$CB/chromium_git/chromium"
 cd "$CB/chromium_git/chromium"
 cat > .gclient <<GCLIENT

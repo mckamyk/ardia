@@ -344,8 +344,9 @@ for it. A new patch goes where it belongs in the file; names no longer carry the
 - `apply`: applies the series to the tree, skipping what is applied (step 4 runs it, through
   `apply-chromium-patches.sh`).
 - `capture-base`: records every file the series touches as it is before the series (the base). Step 4 runs it
-  just before it applies the series, so a fresh or rebased checkout records its own; `01-sync.sh` clears the old
-  one. It lives in `~/chromium-build/series-base` (`AC_SERIES_BASE`).
+  just before it applies the series, so a fresh or rebased checkout records its own. When the checkout moves to
+  another Chromium version, `01-sync.sh` sets the old one aside as `<base>.<old version>`
+  (`retire-series-base.sh`). It lives in `~/chromium-build/series-base` (`AC_SERIES_BASE`).
 - `check`: copies the base to a scratch directory, applies the whole series there strictly (`git apply`: exact
   context, no fuzz; each layer's `apply.sh` with `CHROMIUM_SRC` pointed at the scratch copy) and compares every
   touched file with the tree, byte for byte. Exit 0 means the series reproduces the engine we build; otherwise it
@@ -405,7 +406,7 @@ The live tree in `~/chromium-build` has been Helium's since 2026-10-23 (0.2.40-n
 
 | Step | Script | Time (M5 Pro, shared machine) |
 |---|---|---|
-| 1. Fetch Chromium's tag (`CHROMIUM_VERSION` in `env.sh`) at depth 1 and check it out, then `gclient sync --no-history` of its deps for the Mac with the PGO profiles (`checkout_pgo_profiles`), then its hooks; clears the series base | `01-sync.sh` | ~40 min, 30 GB (deps alone, re-cloned: 7 min; 3.5 min for 156 on 2026-10-25, every git dep deleted first) |
+| 1. Fetch Chromium's tag (`CHROMIUM_VERSION` in `env.sh`) at depth 1 and check it out, then `gclient sync --no-history` of its deps for the Mac with the PGO profiles (`checkout_pgo_profiles`), then its hooks; on a version move, sets the old series base aside first | `01-sync.sh` | ~40 min, 30 GB (deps alone, re-cloned: 7 min; 3.5 min for 156 on 2026-10-25, every git dep deleted first) |
 | 2. Write `out/Release_GN_arm64/args.gn` from `gn_defines.sh`, then `gn gen` | `02-gn-args.sh` | 5 s |
 | 3. Helium, as Ardia takes it ([Helium](#helium)), in stages: `pins` (the checkouts are at the pinned commits, unmodified and made for this Chromium, and `deps.ini` downloads nothing we don't leave out), `guard`, `patches` (Helium's series, then helium-macos's, minus the skip list, with no fuzz), `fixups`, `domsub`, `namesub`, `brand-namesub`, `version`, `resources`. It runs once per tree: `.helium-stages-src`, beside the tree, records the stages that ran and refuses a second run or one that died mid-stage. Each patch's result goes to `~/chromium-build/logs/helium-patches.tsv` | `03-helium.py` | 2.5 min (2026-10-25: the patches 15 s, the substitutions and resources 2 min) |
 | 4. Our series: `apply-chromium-patches.sh` (`series.py capture-base` and `apply`: the patches, then the layers `engine/chromium/apply.sh` and `engine/ardiacore/apply.sh`) | `04-series.sh` | seconds once every patch applies |

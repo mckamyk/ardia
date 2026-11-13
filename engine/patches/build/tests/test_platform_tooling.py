@@ -29,6 +29,62 @@ helium = module('helium', BUILD / '03-helium.py')
 packaging = module('packaging', REPO / 'scripts/linux/package.py')
 
 
+
+class RetireSeriesBaseTests(unittest.TestCase):
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.root = pathlib.Path(scratch.name)
+        self.src = self.root / 'src'
+        self.base = self.root / 'series-base-linux-x64'
+
+    def checkout(self, version):
+        major, minor, build, patch = version.split('.')
+        (self.src / 'chrome').mkdir(parents=True, exist_ok=True)
+        (self.src / 'chrome/VERSION').write_text(f'MAJOR={major}\nMINOR={minor}\nBUILD={build}\nPATCH={patch}\n')
+
+    def captured(self, path=None):
+        path = path or self.base
+        path.mkdir(parents=True)
+        (path / 'value').write_text('base\n')
+
+    def retire(self, version='157.0.8103.50'):
+        result = subprocess.run([str(BUILD / 'retire-series-base.sh'), str(self.src), str(self.base), version], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def test_a_base_for_the_synced_version_stays(self):
+        self.checkout('157.0.8103.50')
+        self.captured()
+        self.assertEqual(self.retire(), '')
+        self.assertEqual((self.base / 'value').read_text(), 'base\n')
+
+    def test_a_version_move_sets_the_base_aside_under_the_old_version(self):
+        self.checkout('156.0.8078.79')
+        self.captured()
+        self.assertIn('156.0.8078.79', self.retire())
+        self.assertFalse(self.base.exists())
+        self.assertEqual((self.root / 'series-base-linux-x64.156.0.8078.79/value').read_text(), 'base\n')
+
+    def test_a_taken_name_gets_a_number_and_no_checkout_reads_as_unknown(self):
+        self.captured(self.root / 'series-base-linux-x64.unknown')
+        self.captured()
+        self.retire()
+        self.assertFalse(self.base.exists())
+        self.assertTrue((self.root / 'series-base-linux-x64.unknown.1/value').is_file())
+
+    def test_no_base_is_a_no_op(self):
+        self.checkout('156.0.8078.79')
+        self.assertEqual(self.retire(), '')
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ['src'])
+
+    def test_usage_and_sync_wiring(self):
+        self.assertIn('retire-series-base.sh SRC BASE VERSION', subprocess.run([str(BUILD / 'retire-series-base.sh'), '--help'], text=True, capture_output=True, check=True).stdout)
+        self.assertEqual(subprocess.run([str(BUILD / 'retire-series-base.sh')], capture_output=True).returncode, 64)
+        sync = (BUILD / '01-sync.sh').read_text()
+        self.assertLess(sync.index('retire-series-base.sh'), sync.index('gclient sync'))
+        self.assertLess(sync.index('retire-series-base.sh'), sync.index('git -C src fetch'))
+
 class TargetTests(unittest.TestCase):
     def test_mac_defaults(self):
         config = target.configuration('mac', env={})
