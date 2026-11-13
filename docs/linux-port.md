@@ -395,6 +395,8 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
 - **Content blocker.** `fetch-ubo.sh` prepares the same pinned, patched uBlock Origin build macOS embeds, by running
   `packages/ardiacore/scripts/ubo.sh` with `flock` and `sha256sum` standing in for `lockf` and `shasum`. Without
   `--content-blocker` the package has no blocker, and Settings says so.
+- **Modes.** package.py sets every directory and executable to 0755 and every other file to 0644 before archiving,
+  so a package built under a umask of 002, Ubuntu's default, matches one built under 022.
 - **Archive contents.**
   - `bin/ardia`;
   - `lib/ardia/chrome` and the Chromium runtime files from the allowlist in `scripts/linux/runtime_files.py`;

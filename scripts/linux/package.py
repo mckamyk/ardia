@@ -94,6 +94,13 @@ def add_cli(runtime, tarball, digest, installer=CLI_INSTALLER):
     return digest
 
 
+def normalize_modes(root):
+    for path in [root, *root.rglob('*')]:
+        if path.is_symlink():
+            continue
+        path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
+
+
 def package(output, ui, destination, content_blocker=None, version=None, cli=None):
     if version is not None:
         check_version(version)
@@ -147,6 +154,7 @@ def package(output, ui, destination, content_blocker=None, version=None, cli=Non
             target = root / 'share/icons/hicolor/256x256/apps/ardia.png'
             target.parent.mkdir(parents=True)
             shutil.copyfile(icon, target)
+        normalize_modes(root)
         with tarfile.open(destination, 'x:xz') as archive:
             archive.add(root, arcname='ardia')
     return destination

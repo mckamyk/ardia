@@ -345,6 +345,21 @@ class PackagingTests(unittest.TestCase):
                 self.assertNotEqual(refused.returncode, 0, bad)
                 self.assertFalse((root / 'refused').exists(), bad)
 
+    def test_package_modes_do_not_follow_the_builders_umask(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            previous = os.umask(0o002)
+            try:
+                archive, _ = self.fake_package(pathlib.Path(scratch))
+            finally:
+                os.umask(previous)
+            with tarfile.open(archive) as packed:
+                modes = {member.name: member.mode & 0o7777 for member in packed.getmembers() if not member.issym()}
+            self.assertEqual({name: oct(mode) for name, mode in modes.items() if mode not in (0o644, 0o755)}, {})
+            self.assertEqual(modes['ardia/lib/ardia/ardia-ui/index.html'], 0o644)
+            self.assertEqual(modes['ardia/lib/ardia/ardia-ui'], 0o755)
+            self.assertEqual(modes['ardia/lib/ardia/chrome'], 0o755)
+            self.assertEqual(modes['ardia/install.sh'], 0o755)
+
     @unittest.skipUnless(shutil.which('fakeroot'), 'fakeroot is required')
     def test_root_install_owns_every_file_as_root_whoever_unpacked_the_package(self):
         with tempfile.TemporaryDirectory() as scratch:
