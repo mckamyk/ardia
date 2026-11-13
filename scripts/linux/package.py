@@ -139,6 +139,9 @@ def package(output, ui, destination, content_blocker=None, version=None, cli=Non
         policy = root / 'share/polkit-1/actions/dev.ardia.linux.policy'
         policy.parent.mkdir(parents=True)
         shutil.copyfile(pathlib.Path(__file__).resolve().parent / 'dev.ardia.linux.policy', policy)
+        profile = root / 'share/apparmor.d/ardia'
+        profile.parent.mkdir(parents=True)
+        shutil.copyfile(pathlib.Path(__file__).resolve().parent / 'ardia.apparmor', profile)
         installer = root / 'install.sh'
         shutil.copyfile(pathlib.Path(__file__).resolve().parent / 'install.sh', installer)
         installer.chmod(0o755)

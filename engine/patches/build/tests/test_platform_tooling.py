@@ -339,6 +339,7 @@ class PackagingTests(unittest.TestCase):
                 self.assertIn(f'Exec={prefix}/bin/ardia %U', desktop)
                 self.assertFalse((installed / 'install.sh').exists())
                 self.assertFalse((installed / 'share/polkit-1').exists() and prefix != '/usr')
+                self.assertFalse((destdir / 'etc').exists())
             for bad in ['relative', '/opt/a|b', '/opt/a&b', '/opt/a b']:
                 refused = subprocess.run([str(installer), '--prefix', bad, '--destdir', str(root / 'refused')],
                                          capture_output=True, text=True, timeout=30)
@@ -358,6 +359,21 @@ class PackagingTests(unittest.TestCase):
             owners = [line for line in result.stdout.splitlines() if line.strip()]
             self.assertTrue(any(line.endswith('/usr/lib/ardia/chrome') for line in owners), owners)
             self.assertEqual([line for line in owners if not line.startswith('0:0 ')], [])
+
+    def test_package_ships_an_apparmor_profile_that_lets_the_sandbox_create_user_namespaces(self):
+        profile = REPO / 'scripts/linux/ardia.apparmor'
+        with tempfile.TemporaryDirectory() as scratch:
+            _, package_root = self.fake_package(pathlib.Path(scratch))
+            self.assertEqual((package_root / 'share/apparmor.d/ardia').read_text(), profile.read_text())
+        text = profile.read_text()
+        self.assertIn('profile ardia /usr/lib/ardia/chrome flags=(unconfined) {\n', text)
+        self.assertIn('  userns,\n', text)
+        self.assertNotIn('#', text)
+        parser = shutil.which('apparmor_parser')
+        if parser and pathlib.Path('/etc/apparmor.d/abi/4.0').exists():
+            parsed = subprocess.run([parser, '--skip-kernel-load', '--skip-cache', '--names', str(profile)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual((parsed.returncode, parsed.stdout.strip()), (0, 'ardia'), parsed.stderr)
 
     def test_installer_refuses_parent_segments_and_a_non_root_system_install_up_front(self):
         with tempfile.TemporaryDirectory() as scratch:

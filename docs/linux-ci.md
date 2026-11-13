@@ -174,8 +174,9 @@ The key's paths must still be clean for a fetched engine, so pass an engine dir 
   to start rather than run unsandboxed.
 - **In CI.** The workflow lifts the restriction on its throwaway runner before the smoke step and never passes
   `--no-sandbox`.
-- **For users.** Users on Ubuntu 24.04 hit the same restriction. The package needs an AppArmor profile, as Chrome's
-  `.deb` ships, before it is usable there.
+- **For users.** Users on Ubuntu 24.04 hit the same restriction. `sudo ./ardia/install.sh` installs and loads an
+  AppArmor profile for the installed `chrome`, as Chrome's `.deb` does ([linux-port.md](linux-port.md) › Packaging
+  and installing). An extracted package run in place has no profile and doesn't start there.
 
 ## Turning on automatic runs
 

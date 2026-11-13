@@ -14,6 +14,9 @@ Ardia goes under PREFIX/lib/ardia with PREFIX/bin/ardia, its desktop entry
 and icon. The polkit policy always goes to DESTDIR/usr/share/polkit-1/actions,
 the only directory polkit reads actions from, whatever the prefix.
 Without --destdir it must run as root, and installed files are owned by root.
+On a host whose AppArmor reads the 4.0 ABI (Ubuntu 24.04 and later), an install
+without --destdir also writes /etc/apparmor.d/ardia and loads it, so the
+sandbox may create the user namespaces Ubuntu otherwise denies.
 USAGE
 }
 
@@ -45,7 +48,7 @@ if [[ -z "$destdir" && "$(id -u)" != 0 ]]; then
 fi
 
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-for required in lib/ardia/chrome share/polkit-1/actions/dev.ardia.linux.policy share/applications/ardia.desktop; do
+for required in lib/ardia/chrome share/polkit-1/actions/dev.ardia.linux.policy share/applications/ardia.desktop share/apparmor.d/ardia; do
   if [[ ! -e "$source_root/$required" ]]; then
     echo "install.sh: $source_root is not an extracted Ardia package (missing $required)" >&2
     exit 1
@@ -75,3 +78,11 @@ fi
 
 install -D -m 0644 "$source_root/share/polkit-1/actions/dev.ardia.linux.policy" \
   "$destdir/usr/share/polkit-1/actions/dev.ardia.linux.policy"
+
+if [[ -z "$destdir" && -e /etc/apparmor.d/abi/4.0 ]]; then
+  sed "s|/usr/lib/ardia/chrome|$prefix/lib/ardia/chrome|" "$source_root/share/apparmor.d/ardia" > "$launcher"
+  install -m 0644 "$launcher" /etc/apparmor.d/ardia
+  if command -v apparmor_parser >/dev/null && [[ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" == Y ]]; then
+    apparmor_parser -r /etc/apparmor.d/ardia
+  fi
+fi

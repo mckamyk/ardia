@@ -407,6 +407,7 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
     with `ardia-cli-install.sh --version <VERSION> --sha256 <digest>` and `ARDIA_CLI_URL=file://…`;
   - the desktop entry and icon;
   - `share/polkit-1/actions/dev.ardia.linux.policy`;
+  - `share/apparmor.d/ardia`, the AppArmor profile `install.sh` installs on Ubuntu;
   - `install.sh`.
 - **Running it.** Run the extracted `bin/ardia`. A raw build-tree `chrome` needs `--ardia-ui-dir apps/linux/dist`.
   Test with a throwaway `--user-data-dir` and keep the sandbox on.
@@ -424,6 +425,11 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
   `0.0.0` for a dev package. makepkg writes that version back into the PKGBUILD, which is why the copy goes in a
   folder of its own.
   `pkaction --action-id dev.ardia.linux.reauthenticate` then lists the action.
+- **Ubuntu.** On a host whose AppArmor reads the 4.0 ABI (`/etc/apparmor.d/abi/4.0`, Ubuntu 24.04 and later), an
+  install without `--destdir` also writes `/etc/apparmor.d/ardia` and loads it with `apparmor_parser -r`. The profile
+  leaves `<prefix>/lib/ardia/chrome` unconfined and allows it user namespaces, which Ubuntu denies to unprivileged
+  programs and Chromium's sandbox needs. A staged install writes no profile, and an older AppArmor never gets the
+  file, which it couldn't parse.
 
 CI builds packages from a prebuilt engine instead of compiling Chromium; see [linux-ci.md](linux-ci.md).
 
@@ -1181,8 +1187,9 @@ These were open at the time of the PR.
     file, which stays where it landed (`appModuleFallbacks.ts`).
 - **Packaging.**
   - There is no published Linux release or AUR package yet; the `PKGBUILD` builds from a local tarball.
-  - The package ships no SUID sandbox helper and no AppArmor profile. On Ubuntu 24.04, which restricts unprivileged
-    user namespaces, Chromium refuses to start until a profile is installed or the restriction is lifted.
+  - The package ships no SUID sandbox helper. On Ubuntu 24.04, which restricts unprivileged user namespaces, only an
+    installed Ardia starts: the AppArmor profile names the installed `chrome`, so `bin/ardia` run from an extracted
+    package and the smoke gate still need the restriction lifted.
 - **Sync.** One read has no total size cap (each file is capped at 64 MiB). Linux and macOS sharing a real folder has
   not been run end to end with a Mac.
 - **Shared, not Linux-specific.** The Google Drive OAuth flow uses `Math.random` state, plain PKCE and a loopback
