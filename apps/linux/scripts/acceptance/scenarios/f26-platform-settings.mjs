@@ -1,12 +1,12 @@
 import { visibleUnsupported } from "../lib/assertions.mjs";
 import { startBrowser } from "../lib/flows.mjs";
-import { until } from "../lib/util.mjs";
+import { pause, until } from "../lib/util.mjs";
 
 const STARTUP_PROBLEM = /ArdiaSystem|ArdiaApp|ERR_UNAVAILABLE|startup failed|Unhandled|unhandledrejection/;
 
 async function paneText(settings, pane) {
   await settings.clickText(pane, { timeout: 6000 });
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await pause(500);
   return settings.text();
 }
 

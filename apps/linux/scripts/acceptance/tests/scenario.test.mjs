@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { buildReport, exitCode, formatLine, scenarioStatus } from "../lib/report.mjs";
 import { startBrowser } from "../lib/flows.mjs";
 import { runScenario, runScenarios } from "../lib/scenario.mjs";
-import { until } from "../lib/util.mjs";
+import { pause, until } from "../lib/util.mjs";
 import { SCENARIOS, selectScenarios } from "../scenarios/index.mjs";
 
 const exists = (path) => access(path).then(() => true, () => false);
@@ -101,6 +101,20 @@ describe("scenario runner", () => {
     assert.match(result.checks[0].detail, /100 ms deadline/);
     assert.ok(events.includes("slow poll"));
     assert.deepEqual(events.slice(events.indexOf("next started")), ["next started"]);
+  });
+
+  it("stops a timed-out check that sleeps with pause before the next check starts", async () => {
+    const events = [];
+    const started = Date.now();
+    const result = await run({ id: "T10", issue: 910, title: "sleeping check",
+      async run(t) {
+        await t.check("sleeps", async () => { await pause(4000); events.push("woke"); }, { timeout: 50 });
+        await t.check("next", () => { events.push("next"); return true; });
+      },
+    }, { drainTimeout: 100 }).promise;
+    assert.deepEqual(result.checks.map((c) => [c.name, c.status]), [["sleeps", "fail"], ["next", "pass"]]);
+    assert.deepEqual(events, ["next"]);
+    assert.ok(Date.now() - started < 1000, "the sleep stopped when the check was cancelled");
   });
 
   it("stops the scenario when a timed-out check ignores cancellation", async () => {
@@ -218,6 +232,12 @@ describe("scenario catalogue", () => {
       assert.equal(typeof s.run, "function", s.id);
       for (const m of s.manual ?? []) assert.ok(m.name && m.steps?.length, `${s.id} manual steps`);
     }
+  });
+
+  it("sleeps only through the cancellable pause", async () => {
+    const dir = new URL("../scenarios/", import.meta.url);
+    const sources = [...(await readdir(dir)).filter((name) => name.endsWith(".mjs")).map((name) => new URL(name, dir)), new URL("../lib/ui.mjs", import.meta.url)];
+    for (const source of sources) assert.ok(!/setTimeout\(resolve/.test(await readFile(source, "utf8")), `${source.pathname} sleeps with setTimeout, not pause`);
   });
 
   it("selects by finding or issue number", () => {

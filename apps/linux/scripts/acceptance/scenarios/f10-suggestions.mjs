@@ -1,7 +1,7 @@
 import { SUGGEST_HOST, suggestionsFor } from "../lib/fixtures.mjs";
 import { startBrowser } from "../lib/flows.mjs";
 import { sessionSeed } from "../lib/seed.mjs";
-import { js, nonce, until } from "../lib/util.mjs";
+import { js, nonce, pause, until } from "../lib/util.mjs";
 
 async function onPage(shell, url) {
   const tabId = await shell.newTab(url);
@@ -58,7 +58,7 @@ export default {
       await shell.waitState("return s.settings.searchSuggestions === false;", { timeout: 5000 });
       const before = t.fixtures.suggestRequests().length;
       await typeQuery(shell, disabled);
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await pause(3000);
       const after = t.fixtures.suggestRequests().length;
       const text = await shell.text();
       await closePanel(shell);

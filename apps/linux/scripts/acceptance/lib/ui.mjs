@@ -1,11 +1,11 @@
 import { classifySitePanel } from "./assertions.mjs";
-import { js, until } from "./util.mjs";
+import { js, pause, until } from "./util.mjs";
 
 export async function revealToolbar(shell) {
   const width = await shell.eval("innerWidth");
   for (const [x, y] of [[width / 2, 60], [width / 2, 8], [width / 2, 26]]) {
     await shell.session.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await pause(250);
   }
 }
 
@@ -37,7 +37,7 @@ export async function sitePanelText(shell) {
     return classifySitePanel(text).level ? text : false;
   }, { timeout: 8000, label: "site panel connection row" });
   await shell.key("Escape", { code: "Escape", keyCode: 27 });
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  await pause(300);
   return text;
 }
 

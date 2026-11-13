@@ -1,7 +1,7 @@
 import { securityVerdict } from "../lib/assertions.mjs";
 import { navigateTab, startBrowser } from "../lib/flows.mjs";
 import { sitePanelText } from "../lib/ui.mjs";
-import { nonce } from "../lib/util.mjs";
+import { nonce, pause } from "../lib/util.mjs";
 
 export default {
   id: "F03",
@@ -26,7 +26,7 @@ export default {
     for (const entry of cases) {
       await t.check(`site panel: ${entry.label ?? entry.kind}`, async () => {
         await navigateTab(shell, tabId, entry.url, entry.match ? { match: entry.match } : {});
-        await new Promise((resolve) => setTimeout(resolve, 600));
+        await pause(600);
         const text = await sitePanelText(shell);
         await t.evidence(`site-panel-${entry.label ?? entry.kind}`.replace(/[^A-Za-z0-9-]+/g, "-"), { url: entry.url, text });
         const verdict = securityVerdict(entry.kind, text);

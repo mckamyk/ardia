@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { launchStepsComplete } from "../lib/assertions.mjs";
 import { restartBrowser, startBrowser } from "../lib/flows.mjs";
 import { documentDirectory, sessionSeed } from "../lib/seed.mjs";
-import { until } from "../lib/util.mjs";
+import { pause, until } from "../lib/util.mjs";
 
 const INTRO_MARK = "Your new home on the internet";
 const ONBOARDING_MARKS = [INTRO_MARK, "Where are you coming from?", "Where's the address bar?", "Where do your tabs go?"];
@@ -64,7 +64,7 @@ export default {
       const doc = (await onboardingDocument(fresh.scratch)) ?? {};
       await writeFile(join(documentDirectory(fresh.scratch), "onboarding.json"), JSON.stringify({ ...doc, completedAt: Date.now(), version: doc.version ?? 1 }));
       fresh = await startBrowser(t, { scratch: fresh.scratch, label: "completed" });
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await pause(3000);
       if (await showsOnboarding(fresh.shell)) throw new Error("onboarding reappeared after it was completed");
       return true;
     });
@@ -75,7 +75,7 @@ export default {
       const session = sessionSeed({ windows: [{ id: "main", urls: [t.fixtures.url.page(1, "existing-main")] }, { id: "existing-b", urls: [t.fixtures.url.page(2, "existing-b")] }] });
       existing = await startBrowser(t, { name: "existing", session, onboardingComplete: false });
       const shells = await regularShells(existing.app, 2);
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await pause(3000);
       const shown = [];
       for (const shell of shells) if (await showsOnboarding(shell)) shown.push(shell.windowId);
       if (shown.length) throw new Error(`onboarding shown in ${shown.join(", ")}`);
@@ -84,7 +84,7 @@ export default {
       const doc = await until(() => onboardingDocument(existing.scratch).then((d) => d?.completedAt ? d : false), { timeout: 10000, label: "existing profile marked complete" });
       const reloaded = shells[claims.marks.findIndex(Boolean)];
       await reloaded.session.send("Page.reload");
-      await new Promise((resolve) => setTimeout(resolve, 4000));
+      await pause(4000);
       const again = await existing.app.shell(reloaded.windowId, { timeout: 20000 });
       if (await showsOnboarding(again)) throw new Error("a reloaded renderer started onboarding");
       return { claims, doc, windows: shells.map((s) => s.windowId) };

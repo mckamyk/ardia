@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { evaluate } from "../lib/cdp.mjs";
 import { startBrowser } from "../lib/flows.mjs";
-import { js, nonce, until } from "../lib/util.mjs";
+import { js, nonce, pause, until } from "../lib/util.mjs";
 
 export const FIXTURE_EXTENSION = new URL("../fixtures/extension/", import.meta.url);
 export const FIXTURE_NAME = "Ardia Acceptance Fixture";
@@ -193,7 +193,7 @@ export default {
       const tabsAt = (url) => shell.state(`return Object.values(s.tabs).filter((t) => t.windowId === windowId && t.url === ${js(url)}).map((t) => t.id);`);
       const shownOnce = async (url, label) => {
         const [id] = await until(async () => { const ids = await tabsAt(url); return ids.length ? ids : false; }, { timeout: 10000, label });
-        await new Promise((resolve) => setTimeout(resolve, 600));
+        await pause(600);
         const ids = await tabsAt(url);
         const pages = (await app.targets()).filter((x) => x.type === "page" && x.url === url);
         if (ids.length !== 1 || pages.length !== 1) throw new Error(`${label}: ${ids.length} sidebar tabs, ${pages.length} pages`);

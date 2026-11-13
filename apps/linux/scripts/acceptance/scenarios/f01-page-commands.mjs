@@ -4,7 +4,7 @@ import { evaluate } from "../lib/cdp.mjs";
 import { findVerdict, nextActive } from "../lib/assertions.mjs";
 import { startBrowser } from "../lib/flows.mjs";
 import { FIND_WORD } from "../lib/fixtures.mjs";
-import { js, nonce, until } from "../lib/util.mjs";
+import { js, nonce, pause, until } from "../lib/util.mjs";
 
 const DEVTOOLS = (t) => t.url.startsWith("devtools://") || t.url.startsWith("chrome-devtools://");
 
@@ -32,7 +32,7 @@ async function openSplit(shell, fixtures, run) {
 async function focusPane(shell, tabId) {
   return until(async () => {
     if ((await shell.activeTabId()) !== tabId) await shell.state(`s.activate(${js(tabId)}); return true;`);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await pause(300);
     return (await shell.activeTabId()) === tabId;
   }, { timeout: 8000, label: `pane ${tabId} to stay active` });
 }
@@ -66,7 +66,7 @@ async function dismissFind(shell, tabId) {
   const focusedInPane = `(() => { const field = document.activeElement; const pane = document.querySelector(${js(`[data-ardia-native-tab="${tabId}"]`)}); if (field?.getAttribute('placeholder') !== 'Find on Page' || !pane) return false; const f = field.getBoundingClientRect(), p = pane.getBoundingClientRect(); const x = f.left + f.width / 2; return x >= p.left && x <= p.right; })()`;
   await until(async () => {
     await shell.state(`s.activate(${js(tabId)}); s.setFind(${js(tabId)}, { open: true, focusRequest: Date.now() }); return true;`);
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await pause(200);
     return shell.eval(focusedInPane);
   }, { timeout: 8000, label: `pane ${tabId}'s find field focus` });
   await shell.key("Escape", { code: "Escape", keyCode: 27 });
@@ -175,7 +175,7 @@ export default {
     await t.check("Save Page command reaches the native host without failing the shell", async () => {
       await focusPane(shell, split.tabB);
       await shell.command("savePage");
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await pause(1500);
       if (app.exited) throw new Error("the browser exited after Save Page");
       await shell.eval("1");
       const crashed = shell.problems.filter((p) => /savePage|ERR_PAGE_(STALE|DISPATCH|ARGUMENT)/.test(p.text ?? ""));
@@ -198,7 +198,7 @@ export default {
         return f?.count === 4 ? f : false;
       }, { timeout: 15000, label: "find in the background instance" });
       await background.shell.command("devTools");
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await pause(3000);
       const frontends = await devtoolsTargets(background.app);
       await t.stop(background.app);
       if (frontends.length) throw new Error("a background instance opened DevTools");

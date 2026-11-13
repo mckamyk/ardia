@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { evaluate } from "../lib/cdp.mjs";
 import { privateLeaks } from "../lib/assertions.mjs";
 import { readSavedSession, restartBrowser, startBrowser, waitSavedSession } from "../lib/flows.mjs";
-import { js, nonce, until } from "../lib/util.mjs";
+import { js, nonce, pause, until } from "../lib/util.mjs";
 
 const COOKIE = "ardia_acceptance";
 
@@ -114,7 +114,7 @@ export default {
       return { windowId: opened.windowId, pageProfile: opened.shell.pageProfile, privateBootstrap: opened.shell.privateWindow, context: page.browserContextId };
     });
     await t.check("the saved session never holds private state", async () => {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await pause(2000);
       const saved = await readSavedSession(state.scratch);
       const leaks = privateLeaks(saved);
       if (leaks.length) throw new Error(`private state persisted: ${leaks.join(", ")}`);
@@ -170,7 +170,7 @@ export default {
     await t.check("a profile no window shows stays unloaded across a restart and loads once a window shows it", async () => {
       const { profileId, folder } = await unshownProfile(`Unshown ${run}`);
       state = await restartBrowser(t, state);
-      await new Promise((resolve) => setTimeout(resolve, 4000));
+      await pause(4000);
       const atLaunch = await loadedProfiles();
       if (atLaunch.includes(profileId) || await onDisk(folder)) throw new Error(`${profileId} loaded at launch: ${JSON.stringify(atLaunch)}`);
       if (!atLaunch.includes("")) throw new Error(`the default profile isn't reported loaded: ${JSON.stringify(atLaunch)}`);

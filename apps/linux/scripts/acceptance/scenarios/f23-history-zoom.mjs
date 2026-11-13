@@ -2,7 +2,7 @@ import { evaluate } from "../lib/cdp.mjs";
 import { percentText, zoomAgreement } from "../lib/assertions.mjs";
 import { navigateTab, restartBrowser, startBrowser, waitCommitted } from "../lib/flows.mjs";
 import { chooseHistoryEntry, clickLabel, revealToolbar, visibleByLabel } from "../lib/ui.mjs";
-import { js, nonce, until } from "../lib/util.mjs";
+import { js, nonce, pause, until } from "../lib/util.mjs";
 
 async function pageRatio(app, url) {
   const target = await app.pageTarget((t) => t.type === "page" && t.url === url, { label: `page ${url}` });
@@ -110,7 +110,7 @@ export default {
       await state.shell.waitTabUrl(other, (u) => u === pages[3]);
       const discarded = await state.shell.eval(`(async () => { const view = ardiaLinux.webviews.get(${js(id)}); return view ? await view.discard() : "no web view"; })()`);
       if (discarded !== "discarded") throw new Error(`the background tab wasn't discarded: ${discarded}`);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await pause(1500);
       await state.shell.state(`s.closeTab(${js(id)}); return true;`);
       await until(() => state.shell.state(`return !s.tabs[${js(id)}];`), { timeout: 8000, label: "the discarded tab to close" });
       const back = await reopenClosedTabOn(pages[1]);

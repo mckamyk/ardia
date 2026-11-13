@@ -2,7 +2,7 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { downloadById, duplicateIds } from "../lib/assertions.mjs";
 import { restartBrowser, startBrowser } from "../lib/flows.mjs";
-import { js, nonce, until } from "../lib/util.mjs";
+import { js, nonce, pause, until } from "../lib/util.mjs";
 
 const downloadsOf = (shell) => shell.state("return s.downloads ?? [];");
 
@@ -22,9 +22,9 @@ async function control(shell, verb, id) {
 }
 
 async function receivedStalls(shell, id) {
-  await new Promise((resolve) => setTimeout(resolve, 700));
+  await pause(700);
   const first = downloadById(await downloadsOf(shell), id)?.received;
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  await pause(1500);
   const second = downloadById(await downloadsOf(shell), id)?.received;
   return { first, second, stalled: first === second };
 }
@@ -138,7 +138,7 @@ export default {
       const kept = `kept-${run}.bin`;
       await startDownload(state.shell, tabId, t.fixtures.url.download(kept, 1024), kept);
       const keptDownload = await waitDownload(state.shell, (d) => d.filename?.endsWith(kept) && d.state === "finished", "kept download");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await pause(1000);
       state = await restartBrowser(t, state, { preferences: { downloads: folder }, extraArgs: [`--ardia-downloads-dir=${folder}`] });
       const list = await until(async () => {
         const l = await downloadsOf(state.shell);
