@@ -1,11 +1,11 @@
 #!/bin/sh
 # Builds the ardia CLI tarball: a relocatable CPython 3.13 with ardia_cli, its pinned dependencies, esbuild and axe-core.
 #
-#   apps/cli/scripts/build.sh <version> <out dir> [--platform macos-arm64|linux-x64]
+#   apps/cli/scripts/build.sh <version> <out dir> [--platform macos-arm64|linux-x64|linux-arm64]
 #   apps/cli/scripts/build.sh -h | --help
 #
 # Writes <out dir>/ardia-cli-<version>-<platform>.tar.gz and its .sha256 (sha256sum format). The platform defaults to
-# the host's (macos-arm64 on Apple silicon, linux-x64 on Linux x86_64) and must be the host's: the bundled Python
+# the host's (macos-arm64 on Apple silicon, linux-x64 on Linux x86_64, linux-arm64 on Linux aarch64) and must be the host's: the bundled Python
 # installs the wheels and runs the checks. Needs the network (python-build-standalone from GitHub, wheels from PyPI,
 # esbuild and axe-core from npm) and uv (~/.local/bin/uv or on PATH). The Python, esbuild and axe-core downloads are pinned by
 # sha256 (the npm ones also by npm's sha512 integrity) and cached in ~/Library/Caches/ardia-cli-build on macOS and
@@ -46,9 +46,15 @@ printf '%s\n' "$version" | grep -Eq '^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-[a-z]{
 case $(uname -s)-$(uname -m) in
   Darwin-arm64) host=macos-arm64 ;;
   Linux-x86_64) host=linux-x64 ;;
+  Linux-aarch64|Linux-arm64) host=linux-arm64 ;;
   *) host=unsupported ;;
 esac
 platform=${platform:-$host}
+case $platform in
+  macos-arm64|linux-x64|linux-arm64) ;;
+  *) echo "build.sh: the platform is macos-arm64, linux-x64 or linux-arm64, got $platform" >&2; exit 64 ;;
+esac
+[ "$platform" = "$host" ] || { echo "build.sh: build $platform on a $platform host (this one is $(uname -s) $(uname -m))" >&2; exit 64; }
 case $platform in
   macos-arm64)
     python_triple=aarch64-apple-darwin
@@ -64,15 +70,20 @@ case $platform in
     esbuild_sha256=9573bb2233aab0f9ea7647d5cca9726113cc1768de61d66b17267f4db84488f6
     esbuild_sha512=4xTZr1FUmSoQW4XIWmit3tzQrUTZM+N3P0XV8xROKYF50XfI7xeO90+1bZvNwxIufQ9hDQVRJH5YhgPVF8A/HQ==
     ;;
-  *) echo "build.sh: the platform is macos-arm64 or linux-x64, got $platform" >&2; exit 64 ;;
+  linux-arm64)
+    python_triple=aarch64-unknown-linux-gnu
+    python_sha256=69a30ed26198178732c37b8de0b6b5191479fbacfe526954da776befe38f18e7
+    esbuild_platform=linux-arm64
+    esbuild_sha256=a96dbfa41d3ef5dbd1ef22b1c10d5187be9267e86093a870f06402a7ec931596
+    esbuild_sha512=pW4AC0P3it8c7do9MVM4p51FzHzdM/TZrerurgRcHJ2WTa1VQ1CIq18xncfpBJw4ojkiZZrKW2yIBWBP92j6Ug==
+    ;;
 esac
-[ "$platform" = "$host" ] || { echo "build.sh: build $platform on a $platform host (this one is $(uname -s) $(uname -m))" >&2; exit 64; }
 python_asset=cpython-$python_version+$python_release-$python_triple-install_only_stripped.tar.gz
 python_url=https://github.com/astral-sh/python-build-standalone/releases/download/$python_release/$(printf %s "$python_asset" | sed 's/+/%2B/')
 esbuild_asset=esbuild-$esbuild_platform-$esbuild_version.tgz
 esbuild_url=https://registry.npmjs.org/@esbuild/$esbuild_platform/-/$esbuild_platform-$esbuild_version.tgz
 
-if [ "$platform" = linux-x64 ]; then
+if [ "${platform%%-*}" = linux ]; then
   case ${XDG_CACHE_HOME:-} in
     /*) cache=$XDG_CACHE_HOME/ardia-cli-build ;;
     *) cache=$HOME/.cache/ardia-cli-build ;;
@@ -178,7 +189,7 @@ mkdir "$root/.leases"
 find "$root" -name __pycache__ -type d -prune -exec rm -rf {} +
 
 tarball=ardia-cli-$version-$platform.tar.gz
-if [ "$platform" = linux-x64 ]; then
+if [ "${platform%%-*}" = linux ]; then
   tar --sort=name --owner=0 --group=0 --numeric-owner --no-xattrs --no-acls --no-selinux \
     -czf "$out/$tarball.part" -C "$work" "ardia-cli-$version"
 else

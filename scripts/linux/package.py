@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import pathlib
+import posixpath
 import re
 import shutil
 import sys
@@ -13,12 +14,12 @@ import tempfile
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import runtime_files
+import linux_platform
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 BRIDGE = REPO / 'engine/ardiacore-linux/content-blocker'
 BRIDGE_SCRIPTS = ('js/vapi.js', 'js/vapi-common.js', 'js/vapi-client.js')
 CLI_INSTALLER = REPO / 'apps/cli/install.sh'
-CLI_PLATFORM = 'linux-x64'
 VERSION_PATTERN = re.compile(r'^[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+\.[0-9]+)?$')
 REQUIRED = runtime_files.REQUIRED
 
@@ -41,8 +42,8 @@ def check_version(version):
     return version
 
 
-def cli_tarball_name(version):
-    return f'ardia-cli-{version}-{CLI_PLATFORM}.tar.gz'
+def cli_tarball_name(version, cpu="x64"):
+    return f'ardia-cli-{version}-linux-{linux_platform.normalize_cpu(cpu)}.tar.gz'
 
 
 def sha256_of(path):
@@ -53,10 +54,11 @@ def sha256_of(path):
     return digest.hexdigest()
 
 
-def check_cli(tarball, version, installer=CLI_INSTALLER):
-    expected = cli_tarball_name(version)
+def check_cli(tarball, version, installer=CLI_INSTALLER, cpu="x64"):
+    cpu = linux_platform.normalize_cpu(cpu)
+    expected = cli_tarball_name(version, cpu)
     if tarball.name != expected:
-        raise ValueError(f'the CLI tarball is {tarball.name}, not {expected} (the package version and {CLI_PLATFORM})')
+        raise ValueError(f'the CLI tarball is {tarball.name}, not {expected} (the package version and linux-{cpu})')
     if not tarball.is_file():
         raise ValueError(f'no CLI tarball at {tarball}')
     if not installer.is_file():
@@ -71,6 +73,50 @@ def check_cli(tarball, version, installer=CLI_INSTALLER):
     try:
         with tarfile.open(tarball, 'r:gz') as packed:
             names = packed.getnames()
+            members = {}
+            for member in packed.getmembers():
+                runtime_files.check_member(member, top)
+                name = posixpath.normpath(member.name)
+                if name in members:
+                    raise ValueError(f'duplicate CLI archive entry {name!r}')
+                members[name] = member
+            for name in members:
+                for parent in pathlib.PurePosixPath(name).parents:
+                    ancestor = members.get(str(parent))
+                    if ancestor is not None and not ancestor.isdir():
+                        raise ValueError(f'unsafe CLI archive parent {str(parent)!r}')
+
+            def executable_member(name):
+                seen = set()
+                while name not in seen:
+                    seen.add(name)
+                    member = members.get(name)
+                    if member is None:
+                        raise ValueError(f'CLI executable target is missing: {name}')
+                    if member.isfile():
+                        return member
+                    if member.issym() or member.islnk():
+                        anchor = posixpath.dirname(name) if member.issym() else ''
+                        name = posixpath.normpath(posixpath.join(anchor, member.linkname))
+                    else:
+                        raise ValueError(f'CLI executable is not a file: {name}')
+                raise ValueError(f'cyclic CLI executable link: {name}')
+
+            python = executable_member(f'{top}/python/bin/python3')
+            esbuild_pattern = re.compile(re.escape(top) + r'/python/lib/python[0-9]+\.[0-9]+/site-packages/ardia_cli/bin/esbuild')
+            esbuild = [executable_member(name) for name in members if esbuild_pattern.fullmatch(name)]
+            if not esbuild:
+                raise ValueError('the CLI archive lacks its esbuild executable in Python site-packages')
+            binaries = [python, *esbuild]
+            binaries.extend(member for name, member in members.items() if member.isfile() and (name.startswith(f'{top}/python/bin/python3') or '.so' in pathlib.PurePosixPath(name).suffixes))
+            with tempfile.TemporaryDirectory(prefix='ardia-cli-check-') as scratch:
+                for member in binaries:
+                    executable = pathlib.Path(scratch) / 'executable'
+                    with packed.extractfile(member) as source, executable.open('wb') as target:
+                        shutil.copyfileobj(source, target)
+                    actual = linux_platform.elf_cpu(executable)
+                    if actual != cpu:
+                        raise ValueError(f'CLI architecture {actual} does not match {cpu}: {member.name}')
     except (tarfile.TarError, OSError, EOFError) as error:
         raise ValueError(f'{tarball.name} is not a gzipped tarball: {error}') from None
     stray = [name for name in names if name.rstrip('/') != top and not name.startswith(top + '/')]
@@ -94,14 +140,15 @@ def add_cli(runtime, tarball, digest, installer=CLI_INSTALLER):
     return digest
 
 
-def package(output, ui, destination, content_blocker=None, version=None, cli=None):
+def package(output, ui, destination, content_blocker=None, version=None, cli=None, cpu=None):
     if version is not None:
         check_version(version)
+    cpu = linux_platform.validate_runtime(output, cpu)
     cli_digest = None
     if cli is not None:
         if version is None:
             raise ValueError('a package with the CLI needs --version')
-        cli_digest = check_cli(cli, version)
+        cli_digest = check_cli(cli, version, cpu=cpu)
     missing = runtime_files.missing(output)
     if missing:
         raise ValueError('missing Linux build outputs: ' + ', '.join(missing))
@@ -116,7 +163,7 @@ def package(output, ui, destination, content_blocker=None, version=None, cli=Non
         root = pathlib.Path(scratch) / 'ardia'
         runtime = root / 'lib/ardia'
         runtime.mkdir(parents=True)
-        runtime_files.copy(output, runtime)
+        runtime_files.copy(output, runtime, cpu)
         shutil.copytree(ui, runtime / 'ardia-ui')
         if version is not None:
             (runtime / 'VERSION').write_text(version + '\n')
@@ -159,14 +206,15 @@ def main():
     parser.add_argument('--destination', type=pathlib.Path, required=True)
     parser.add_argument('--content-blocker', type=pathlib.Path)
     parser.add_argument('--version', help='the Ardia version, written to lib/ardia/VERSION')
-    parser.add_argument('--cli', type=pathlib.Path, help=f'the ardia-cli-<version>-{CLI_PLATFORM}.tar.gz to bundle in lib/ardia/cli (needs --version)')
+    parser.add_argument('--arch', choices=('x64', 'arm64'))
+    parser.add_argument('--cli', type=pathlib.Path, help='the matching ardia-cli-<version>-linux-<arch>.tar.gz (needs --version)')
     args = parser.parse_args()
     if args.cli is not None and args.version is None:
         parser.error('--cli needs --version')
     try:
         blocker = args.content_blocker.resolve() if args.content_blocker else None
         cli = args.cli.resolve() if args.cli else None
-        print(package(args.out.resolve(), args.ui.resolve(), args.destination.resolve(), blocker, args.version, cli))
+        print(package(args.out.resolve(), args.ui.resolve(), args.destination.resolve(), blocker, args.version, cli, args.arch))
     except (ValueError, OSError, json.JSONDecodeError) as error:
         parser.error(str(error))
 

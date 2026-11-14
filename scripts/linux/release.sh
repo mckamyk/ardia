@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
-usage='usage: scripts/linux/release.sh <version> [--engine exact|nearest|<dir>] [--out <dir>] [--allow-dirty]
+usage='usage: scripts/linux/release.sh <version> [--engine exact|nearest|<dir>] [--out <dir>] [--arch x64|arm64] [--allow-dirty]
 
-Builds the Linux x64 release of Ardia <version> (a -nightly.<n> version is a
+Builds the native Linux x64 or ARM64 release of Ardia <version> (a -nightly.<n> version is a
 nightly), the Linux counterpart of scripts/release.sh: it fetches the engine,
 builds apps/linux/dist and the ardia CLI, prepares uBlock Origin, packages
-Ardia-<version>-linux-x64.tar.xz with lib/ardia/VERSION and the CLI, writes
+Ardia-<version>-linux-<arch>.tar.xz with lib/ardia/VERSION and the CLI, writes
 the .sha256 files and provenance.txt, and runs the smoke gate. It never
 publishes: it prints the gh release upload command for the assets.
 
@@ -15,7 +15,9 @@ publishes: it prints the gh release upload command for the assets.
   --engine DIR       an engine dir (chrome and manifest.json) or a Chromium out
                      dir, read only: a test build unless its manifest names
                      this commit'"'"'s engine key (engine/engine-key.sh)
-  --out DIR          where the assets go (default dist/<version>/linux); an
+  --arch CPU         x64 or arm64 (default: host architecture; smoke is native)
+  --out DIR          where the assets go (default dist/<version>/linux for x64,
+                     dist/<version>/linux/arm64 for ARM64); an
                      existing DIR must be empty or an earlier output of this script
   --allow-dirty      build with uncommitted changes under apps/browser,
                      apps/linux, apps/cli, packages, engine or scripts/linux
@@ -34,10 +36,12 @@ version=""
 engine_mode=exact
 out=""
 allow_dirty=0
+cpu=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) echo "$usage"; exit 0 ;;
     --engine) [ $# -ge 2 ] || die "--engine needs exact, nearest or a directory"; engine_mode=$2; shift 2 ;;
+    --arch) [ $# -ge 2 ] || die "--arch needs x64 or arm64"; cpu=$2; shift 2 ;;
     --out) [ $# -ge 2 ] || die "--out needs a directory"; out=$2; shift 2 ;;
     --allow-dirty) allow_dirty=1; shift ;;
     -*) echo "$usage" >&2; exit 64 ;;
@@ -48,6 +52,9 @@ done
 
 root=$(cd "$(dirname "$0")/../.." && pwd -P)
 . "$root/scripts/lib/releases.sh"
+cpu=$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import linux_platform; import platform; print(linux_platform.normalize_cpu(sys.argv[2] or platform.machine()))' "$root/scripts/linux" "$cpu") || die "unsupported architecture"
+host_cpu=$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import linux_platform; import platform; print(linux_platform.normalize_cpu(platform.machine()))' "$root/scripts/linux") || die "unsupported host architecture"
+[ "$cpu" = "$host_cpu" ] || die "release smoke requires a native $cpu host (this host is $host_cpu)"
 channel=$(channel_of "$version") || exit 1
 cd "$root"
 
@@ -78,13 +85,15 @@ node scripts/lib/release-note.mjs "docs/release-notes/$version.md" headline >/de
 release_output_entry() {
   case $1 in
     provenance.txt|ui-build.log|cli-build.log|ubo.log|smoke) return 0 ;;
-    Ardia-*-linux-x64.tar.xz|Ardia-*-linux-x64.tar.xz.sha256) return 0 ;;
-    ardia-cli-*-linux-x64.tar.gz|ardia-cli-*-linux-x64.tar.gz.sha256|ardia-cli-*-linux-x64.tar.gz.part) return 0 ;;
+    Ardia-*-linux-$cpu.tar.xz|Ardia-*-linux-$cpu.tar.xz.sha256) return 0 ;;
+    ardia-cli-*-linux-$cpu.tar.gz|ardia-cli-*-linux-$cpu.tar.gz.sha256|ardia-cli-*-linux-$cpu.tar.gz.part) return 0 ;;
   esac
   return 1
 }
 
-out=${out:-$root/dist/$version/linux}
+default_out=$root/dist/$version/linux
+[ "$cpu" = x64 ] || default_out=$default_out/$cpu
+out=${out:-$default_out}
 if [ -e "$out" ]; then
   [ -d "$out" ] || die "$out is not a directory"
   if [ -n "$(ls -A "$out")" ]; then
@@ -97,16 +106,17 @@ if [ -e "$out" ]; then
 fi
 mkdir -p "$out"
 out=$(cd "$out" && pwd -P)
-package_name="Ardia-$version-linux-x64.tar.xz"
-cli_name="ardia-cli-$version-linux-x64.tar.gz"
+package_name="Ardia-$version-linux-$cpu.tar.xz"
+cli_name="ardia-cli-$version-linux-$cpu.tar.gz"
 
 echo "==> Engine ($engine_mode)"
 case "$engine_mode" in
-  exact) engine=$(packages/ardiacore/scripts/fetch-engine.sh --arch linux-x86_64) || die "no published Linux engine for this commit's engine key: publish it with scripts/linux/publish-engine.sh --upload (docs/linux-ci.md)" ;;
-  nearest) engine=$(packages/ardiacore/scripts/fetch-engine.sh --arch linux-x86_64 --nearest) || die "no published Linux engine near this commit's engine key" ;;
+  exact) engine=$(packages/ardiacore/scripts/fetch-engine.sh --arch linux-$cpu) || die "no published Linux engine for this commit's engine key: publish it with scripts/linux/publish-engine.sh --upload (docs/linux-ci.md)" ;;
+  nearest) engine=$(packages/ardiacore/scripts/fetch-engine.sh --arch linux-$cpu --nearest) || die "no published Linux engine near this commit's engine key" ;;
   "") die "--engine needs exact, nearest or a directory" ;;
   *) [ -d "$engine_mode" ] || die "--engine $engine_mode is neither exact, nearest nor a directory"; engine=$(cd "$engine_mode" && pwd -P) ;;
 esac
+PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import linux_platform; linux_platform.validate_runtime(Path(sys.argv[2]), sys.argv[3])' "$root/scripts/linux" "$engine" "$cpu" || die "engine architecture validation failed"
 head_key=$(engine/engine-key.sh) || die "couldn't compute this commit's engine key (engine/engine-key.sh)"
 manifest_field() {
   python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1])).get(sys.argv[2]) or "")' "$engine/manifest.json" "$1" 2>/dev/null || true
@@ -137,7 +147,7 @@ pnpm --filter @ardia/linux build >"$out/ui-build.log" 2>&1 \
   || { tail -20 "$out/ui-build.log" >&2; die "building apps/linux/dist failed ($out/ui-build.log)"; }
 
 echo "==> ardia CLI"
-apps/cli/scripts/build.sh "$version" "$out" --platform linux-x64 >"$out/cli-build.log" 2>&1 \
+apps/cli/scripts/build.sh "$version" "$out" --platform linux-$cpu >"$out/cli-build.log" 2>&1 \
   || { tail -20 "$out/cli-build.log" >&2; die "building the ardia CLI failed ($out/cli-build.log)"; }
 [ -f "$out/$cli_name" ] && [ -f "$out/$cli_name.sha256" ] || die "the CLI build left no $cli_name and .sha256 in $out"
 
@@ -147,11 +157,11 @@ blocker=$(scripts/linux/fetch-ubo.sh 2>"$out/ubo.log") \
 
 echo "==> Package"
 python3 scripts/linux/package.py --out "$engine" --ui apps/linux/dist --content-blocker "$blocker" \
-  --version "$version" --cli "$out/$cli_name" --destination "$out/$package_name" >/dev/null
+  --arch "$cpu" --version "$version" --cli "$out/$cli_name" --destination "$out/$package_name" >/dev/null
 (cd "$out" && sha256sum "$package_name" > "$package_name.sha256")
 
 {
-  echo "version $version, $channel, linux-x64"
+  echo "version $version, $channel, linux-$cpu"
   echo "commit $(git rev-parse HEAD)${dirty:+ + uncommitted changes}"
   echo "engine key ${engine_key:-unknown} ($([ "$exact" = 1 ] && echo exact || echo "not this commit's $head_key")), from $engine"
   echo "engine source commit ${engine_commit:-unknown}"

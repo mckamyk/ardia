@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import lzma
 import os
@@ -9,6 +10,10 @@ import shutil
 import stat
 import sys
 import tarfile
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import linux_platform
 
 REQUIRED = ('chrome', 'chrome_crashpad_handler', 'icudtl.dat', 'resources.pak', 'chrome_100_percent.pak', 'chrome_200_percent.pak', 'locales', 'v8_context_snapshot.bin')
 OPTIONAL = ('snapshot_blob.bin', 'libEGL.so', 'libGLESv2.so', 'libvk_swiftshader.so', 'vk_swiftshader_icd.json', 'libvulkan.so.1', 'libqt5_shim.so', 'libqt6_shim.so', 'chrome_sandbox', 'manifest.json')
@@ -20,8 +25,12 @@ TARGET_OS = 'linux'
 TARGET_CPU = 'x64'
 
 
-def archive_name(key):
-    return f'ArdiaCore-{key[:12]}-linux-{TARGET_CPU}.tar.xz'
+def archive_root(cpu='x64'):
+    return f'ardiacore-linux-{linux_platform.normalize_cpu(cpu)}'
+
+
+def archive_name(key, cpu='x64'):
+    return f'ArdiaCore-{key[:12]}-linux-{linux_platform.normalize_cpu(cpu)}.tar.xz'
 
 
 def release_tag(key):
@@ -32,7 +41,7 @@ def missing(directory):
     return [name for name in REQUIRED if not (directory / name).exists()]
 
 
-def select(directory):
+def select(directory, cpu=None):
     absent = missing(directory)
     if absent:
         raise ValueError(f'missing Linux build outputs in {directory}: ' + ', '.join(absent))
@@ -40,11 +49,12 @@ def select(directory):
         raise ValueError(f'{directory}/locales is not a directory')
     if not os.access(directory / 'chrome', os.X_OK):
         raise ValueError('chrome is not executable')
+    linux_platform.validate_runtime(directory, cpu)
     return list(REQUIRED) + [name for name in OPTIONAL if (directory / name).exists()]
 
 
-def copy(source, destination):
-    names = select(source)
+def copy(source, destination, cpu=None):
+    names = select(source, cpu)
     destination.mkdir(parents=True, exist_ok=True)
     for name in names:
         path = source / name
@@ -66,15 +76,24 @@ def strippable(directory):
     return [directory / name for name in REQUIRED + OPTIONAL if name not in NEVER_STRIPPED and is_elf(directory / name)]
 
 
-def check_manifest(directory, key):
+def check_manifest(directory, key, cpu='x64'):
     path = directory / 'manifest.json'
     if not path.is_file():
         raise ValueError('the engine archive holds no manifest.json')
     manifest = json.loads(path.read_text())
-    expected = {'format': MANIFEST_FORMAT, 'engine_key': key, 'target_os': TARGET_OS, 'target_cpu': TARGET_CPU}
+    if not isinstance(manifest, dict):
+        raise ValueError('the engine manifest must be an object')
+    expected = {'format': MANIFEST_FORMAT, 'engine_key': key, 'target_os': TARGET_OS, 'target_cpu': linux_platform.normalize_cpu(cpu)}
     wrong = [f'{key} is {manifest.get(key)!r}, not {value!r}' for key, value in expected.items() if manifest.get(key) != value]
     if wrong:
         raise ValueError('the engine manifest does not match: ' + '; '.join(wrong))
+    select(directory, cpu)
+    digest = hashlib.sha256()
+    with (directory / 'chrome').open('rb') as handle:
+        for block in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(block)
+    if manifest.get('chrome_sha256') != digest.hexdigest():
+        raise ValueError('the engine manifest chrome SHA-256 does not match')
     return manifest
 
 
@@ -97,21 +116,22 @@ def check_member(member, root):
     raise ValueError(f'archive entry {name!r} is not a file, directory or link')
 
 
-def unpack(archive, into, key):
+def unpack(archive, into, key, cpu='x64'):
+    root = archive_root(cpu)
     into.mkdir(parents=True, exist_ok=False)
     extract_filter = getattr(tarfile, 'data_filter', None)
     with tarfile.open(archive, 'r|xz') as packed:
         for member in packed:
-            check_member(member, ARCHIVE_ROOT)
+            check_member(member, root)
             if extract_filter is not None:
                 packed.extract(member, into, filter='data')
             else:
                 member.mode &= ~(stat.S_ISUID | stat.S_ISGID)
                 packed.extract(member, into)
-    engine = into / ARCHIVE_ROOT
+    engine = into / root
     if not engine.is_dir():
-        raise ValueError(f'the engine archive holds no {ARCHIVE_ROOT}/ directory')
-    check_manifest(engine, key)
+        raise ValueError(f'the engine archive holds no {root}/ directory')
+    check_manifest(engine, key, cpu)
     select(engine)
     return engine
 
@@ -128,6 +148,7 @@ def main():
     unpacking.add_argument('--archive', type=pathlib.Path, required=True)
     unpacking.add_argument('--into', type=pathlib.Path, required=True)
     unpacking.add_argument('--key', required=True)
+    unpacking.add_argument('--arch', default='x64')
     args = parser.parse_args()
     try:
         if args.command == 'list':
@@ -135,7 +156,7 @@ def main():
         elif args.command == 'copy':
             copy(args.source, args.destination)
         else:
-            print(unpack(args.archive, args.into, args.key))
+            print(unpack(args.archive, args.into, args.key, args.arch))
     except (ValueError, OSError, tarfile.TarError, lzma.LZMAError, EOFError, json.JSONDecodeError) as error:
         print(f'runtime_files.py: {error}', file=sys.stderr)
         sys.exit(1)

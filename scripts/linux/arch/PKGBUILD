@@ -2,7 +2,7 @@ pkgname=ardia-bin
 pkgver=0.0.0
 pkgrel=1
 pkgdesc="Ardia, a Chromium-based browser with Arc's sidebar and Dia's polish"
-arch=('x86_64')
+arch=('x86_64' 'aarch64')
 url="https://ardia.dev"
 license=('Apache-2.0')
 depends=('alsa-lib' 'dbus' 'gtk3' 'hicolor-icon-theme' 'libcups' 'libxss' 'libxtst' 'nss' 'polkit' 'ttf-liberation' 'xdg-utils')
@@ -14,8 +14,10 @@ optdepends=(
 provides=('ardia')
 conflicts=('ardia')
 options=('!strip' '!debug')
-source=("ardia-linux-x64.tar.xz")
-sha256sums=('SKIP')
+source_x86_64=("ardia-linux-x64.tar.xz")
+source_aarch64=("ardia-linux-arm64.tar.xz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
 
 pkgver() {
   local version

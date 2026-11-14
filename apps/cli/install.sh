@@ -8,7 +8,7 @@
 # --sha256 DIGEST    the tarball's digest; required for a download (the app passes the one pinned in its signed bundle).
 # --uninstall        remove the installed CLI and its ardia link.
 #
-# Runs on macOS (Apple silicon) and Linux (x86_64). Installs into $ARDIA_CLI_HOME/<version> (default
+# Runs on macOS (Apple silicon) and Linux (x86_64 and aarch64). Installs into $ARDIA_CLI_HOME/<version> (default
 # ~/Library/Application Support/Ardia/CLI on macOS, ${XDG_DATA_HOME:-~/.local/share}/ardia/cli on Linux), points its
 # `current` link there and links ${ARDIA_CLI_BIN_DIR:-~/.local/bin}/ardia to current/bin/ardia. When the default bin
 # dir isn't on the login shell's PATH, it adds one PATH line to its login file, once: on macOS ~/.zprofile
@@ -39,7 +39,11 @@ repo=mantrakp04/ardia
 version_pattern='^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-[a-z]{1,16}\.[0-9]{1,4})?$'
 if [ "$(uname -s)" = Linux ]; then
   os=linux
-  asset_platform=linux-x64
+  case $(uname -m) in
+    x86_64) asset_platform=linux-x64; elf_machine=62 ;;
+    aarch64|arm64) asset_platform=linux-arm64; elf_machine=183 ;;
+    *) asset_platform=unsupported; elf_machine=0 ;;
+  esac
   case ${XDG_DATA_HOME:-} in
     /*) data_home=$XDG_DATA_HOME ;;
     *) data_home=$HOME/.local/share ;;
@@ -228,6 +232,62 @@ check_tree() {
     done' sh {} + || fail "the tarball has a link that points outside it"
 }
 
+invalid_elf() {
+  fail "the bundled $elf_label is not a $asset_platform ELF executable"
+}
+
+check_elf_architecture() {
+  elf_binary=$1
+  elf_label=$2
+  [ -f "$elf_binary" ] && [ -x "$elf_binary" ] || invalid_elf
+  header=$(od -An -v -tu1 -N 64 "$elf_binary" | tr '\n' ' ')
+  set -- $header
+  [ "$#" -eq 64 ] || invalid_elf
+  [ "$1 $2 $3 $4 $5 $6 $7" = "127 69 76 70 2 1 1" ] || invalid_elf
+  shift 16
+  case "$1 $2 $3 $4" in
+    "2 0 $elf_machine 0"|"3 0 $elf_machine 0") ;;
+    *) invalid_elf ;;
+  esac
+  shift 4
+  [ "$1 $2 $3 $4" = "1 0 0 0" ] || invalid_elf
+  shift 32
+  [ "$1 $2 $3 $4" = "64 0 56 0" ] || invalid_elf
+  shift 4
+  program_count=$(($1 + 256 * $2))
+  program_offset=$(od -An -v -tu8 -j 32 -N 8 "$elf_binary" | tr -d '[:space:]')
+  binary_size=$(stat -c %s "$elf_binary")
+  [ "$program_count" -gt 0 ] && [ "$program_count" -le 1024 ] || invalid_elf
+  [ "$program_offset" -ge 64 ] && [ "$program_offset" -le "$binary_size" ] || invalid_elf
+  [ "$program_count" -le "$(((binary_size - program_offset) / 56))" ] || invalid_elf
+  load_count=0
+  program_index=0
+  while [ "$program_index" -lt "$program_count" ]; do
+    entry_offset=$((program_offset + program_index * 56))
+    entry_type=$(od -An -v -tu4 -j "$entry_offset" -N 4 "$elf_binary" | tr -d '[:space:]')
+    if [ "$entry_type" = 1 ]; then
+      load_count=$((load_count + 1))
+      entry=$(od -An -v -tu8 -j "$((entry_offset + 8))" -N 48 "$elf_binary" | tr '\n' ' ')
+      set -- $entry
+      [ "$#" -eq 6 ] || invalid_elf
+      [ "$1" -ge 0 ] && [ "$1" -le "$binary_size" ] || invalid_elf
+      [ "$4" -ge 0 ] && [ "$5" -ge 0 ] && [ "$4" -le "$5" ] || invalid_elf
+      [ "$4" -le "$((binary_size - $1))" ] || invalid_elf
+    fi
+    program_index=$((program_index + 1))
+  done
+  [ "$load_count" -gt 0 ] || invalid_elf
+}
+
+check_cli_architecture() {
+  [ "$os" = linux ] || return 0
+  cli_tree=$1
+  check_elf_architecture "$cli_tree/python/bin/python3" Python
+  set -- "$cli_tree"/python/lib/python*/site-packages/ardia_cli/bin/esbuild
+  [ "$#" -eq 1 ] || fail "the tarball must contain exactly one bundled esbuild"
+  check_elf_architecture "$1" esbuild
+}
+
 if [ "$uninstall" -eq 1 ]; then
   printf 'step uninstall\n'
   if points_into_cli_home "$bin_dir/ardia"; then
@@ -255,7 +315,7 @@ fi
 
 case $(uname -s) in
   Darwin) [ "$(uname -m)" = arm64 ] || fail "the ardia CLI runs on Apple silicon only, not $(uname -m)" ;;
-  Linux) [ "$(uname -m)" = x86_64 ] || fail "the ardia CLI runs on x86_64 Linux only, not $(uname -m)" ;;
+  Linux) [ "$asset_platform" != unsupported ] || fail "the ardia CLI runs on x86_64 or aarch64 Linux, not $(uname -m)" ;;
   *) fail "the ardia CLI runs on macOS and Linux only" ;;
 esac
 
@@ -295,6 +355,7 @@ chmod 700 "$work"
 
 previous=$(readlink "$cli_home/current" 2>/dev/null || true)
 if [ "$previous" = "$version" ] && [ -x "$cli_home/$version/bin/ardia" ]; then
+  check_cli_architecture "$cli_home/$version"
   link_bin
   reported=1
   printf 'installed %s\n' "$bin_dir/ardia"
@@ -324,6 +385,7 @@ mkdir "$staged" || fail "couldn't create $staged"
 tar -xzf "$work/cli.tar.gz" -C "$staged" --strip-components 1 --no-same-owner "ardia-cli-$version" \
   || fail "couldn't extract ardia-cli-$version from the tarball"
 check_tree "$staged"
+check_cli_architecture "$staged"
 [ -x "$staged/bin/ardia" ] || fail "the tarball has no ardia-cli-$version/bin/ardia"
 [ "$os" = linux ] || xattr -dr com.apple.quarantine "$staged" 2>/dev/null || true
 "$staged/bin/ardia" --version >"$work/check.out" 2>&1 9>&- || fail "the downloaded ardia doesn't run: $(tail -n 1 "$work/check.out")"

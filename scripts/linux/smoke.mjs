@@ -7,12 +7,12 @@ import { copyFile, mkdir, mkdtemp, readdir, readFile, readlink, rm, stat, writeF
 import { tmpdir } from "node:os";
 import { inflateSync } from "node:zlib";
 import { basename, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { SHELL_PREFIX, closeAllApps, killAllAppsNow, launchArdia, launchArguments, launchEnvironment } from "../../apps/linux/scripts/acceptance/lib/ardia.mjs";
 import { connectCdp, evaluate } from "../../apps/linux/scripts/acceptance/lib/cdp.mjs";
 import { errorText, js, nonce, until, withDeadline } from "../../apps/linux/scripts/acceptance/lib/util.mjs";
 
-export const USAGE = `Usage: node scripts/linux/smoke.mjs --package <Ardia-*linux-x64*.tar.xz> --results <dir> [--timeout-ms N] [--keep] [--allow-old-engine]
+export const USAGE = `Usage: node scripts/linux/smoke.mjs --package <Ardia-*linux-*.tar.xz> --results <dir> [--timeout-ms N] [--keep] [--allow-old-engine]
 
 Strict smoke gate for a packaged Ardia Linux build. It extracts the tarball into
 a temporary folder, launches ardia/bin/ardia headless (ozone headless, SwiftShader,
@@ -79,7 +79,10 @@ export function userScriptSource() {
 }
 export const CLI_INSTALLER = "ardia-cli-install.sh";
 export const CLI_DIGEST = "ardia-cli.sha256";
-export const cliTarball = (version) => `ardia-cli-${version}-linux-x64.tar.gz`;
+export const cliTarball = (version, cpu = process.arch) => {
+  if (!["x64", "arm64"].includes(cpu)) throw new Error(`unsupported Linux CPU ${cpu}`);
+  return `ardia-cli-${version}-linux-${cpu}.tar.gz`;
+};
 const BRIDGE_DIR = new URL("../../engine/ardiacore-linux/content-blocker/", import.meta.url);
 const DEFAULT_TIMEOUT_MS = 300000;
 
@@ -207,10 +210,10 @@ export function modeProblems(entries) {
   return problems;
 }
 
-export function packageStagedFiles({ version = null, cli = false } = {}) {
+export function packageStagedFiles({ version = null, cli = false, cpu = process.arch } = {}) {
   const files = [];
   if (version) files.push({ path: "usr/lib/ardia/VERSION", mode: 0o644 });
-  if (cli && version) files.push({ path: `usr/lib/ardia/cli/${CLI_INSTALLER}`, mode: 0o755 }, { path: `usr/lib/ardia/cli/${cliTarball(version)}`, mode: 0o644 }, { path: `usr/lib/ardia/cli/${CLI_DIGEST}`, mode: 0o644 });
+  if (cli && version) files.push({ path: `usr/lib/ardia/cli/${CLI_INSTALLER}`, mode: 0o755 }, { path: `usr/lib/ardia/cli/${cliTarball(version, cpu)}`, mode: 0o644 }, { path: `usr/lib/ardia/cli/${CLI_DIGEST}`, mode: 0o644 });
   return files;
 }
 
@@ -481,6 +484,8 @@ class Smoke {
     for (const path of [this.launcher, this.chrome, join(this.runtime, "ardia-ui", "index.html"), join(this.root, "install.sh")]) {
       if (!(await fileInfo(path))?.isFile) throw new Error(`the package has no ${path.slice(into.length + 1)}`);
     }
+    const validation = await run("python3", ["-B", "-c", "import pathlib,sys; sys.path.insert(0,sys.argv[1]); import linux_platform; linux_platform.validate_runtime(pathlib.Path(sys.argv[2]),sys.argv[3])", fileURLToPath(new URL(".", import.meta.url)), this.runtime, process.arch], { timeout: 30000 });
+    if (validation.code !== 0) throw new Error(`package architecture validation failed: ${validation.stderr}`);
     this.profile = join(this.work, "profile");
     await mkdir(this.profile);
     this.version = (await readFile(join(this.runtime, "VERSION"), "utf8").catch(() => null))?.trim() || null;

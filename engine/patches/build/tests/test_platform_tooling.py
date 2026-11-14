@@ -238,9 +238,9 @@ class PackagingTests(unittest.TestCase):
                     (output / name).mkdir()
                     (output / name / 'en-US.pak').write_bytes(b'locale')
                 else:
-                    (output / name).write_bytes(b'runtime')
+                    (output / name).write_bytes(pathlib.Path(shutil.which('true')).read_bytes() if name in ('chrome', 'chrome_crashpad_handler') else b'runtime')
             (output / 'chrome').chmod(0o755)
-            (output / 'libEGL.so').write_bytes(b'library')
+            shutil.copyfile(shutil.which('true'), output / 'libEGL.so')
             (ui / 'index.html').write_text('<html></html>')
             archive = packaging.package(output, ui, root / 'ardia.tar.xz')
             with tarfile.open(archive) as packed:
@@ -269,7 +269,7 @@ class PackagingTests(unittest.TestCase):
                 if name == 'locales':
                     (output / name).mkdir()
                 else:
-                    (output / name).write_bytes(b'runtime')
+                    (output / name).write_bytes(pathlib.Path(shutil.which('true')).read_bytes() if name in ('chrome', 'chrome_crashpad_handler') else b'runtime')
             (output / 'chrome').chmod(0o755)
             (ui / 'index.html').write_text('<html></html>')
             for name in packaging.BRIDGE_SCRIPTS:
@@ -300,7 +300,7 @@ class PackagingTests(unittest.TestCase):
                 (output / name).mkdir()
                 (output / name / 'en-US.pak').write_bytes(b'locale')
             else:
-                (output / name).write_bytes(b'runtime')
+                (output / name).write_bytes(pathlib.Path(shutil.which('true')).read_bytes() if name in ('chrome', 'chrome_crashpad_handler') else b'runtime')
         (output / 'chrome').chmod(0o755)
         (ui / 'index.html').write_text('<html></html>')
         archive = packaging.package(output, ui, root / 'ardia.tar.xz')

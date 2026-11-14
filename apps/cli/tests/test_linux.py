@@ -3,6 +3,7 @@ import io
 import json
 import os
 import platform
+import runpy
 import shutil
 import socket
 import subprocess
@@ -332,8 +333,13 @@ class LinuxKernel(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(root / "b")), ["x"])
 
 
-def fake_tarball(folder: Path, version: str) -> Path:
-    path = folder / f"ardia-cli-{version}-linux-x64.tar.gz"
+def native_cpu():
+    return {"x86_64": "x64", "aarch64": "arm64", "arm64": "arm64"}[platform.machine()]
+
+
+def fake_tarball(folder: Path, version: str, cpu=None, python_bytes=None, esbuild_bytes=None) -> Path:
+    cpu = cpu or native_cpu()
+    path = folder / f"ardia-cli-{version}-linux-{cpu}.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
         def add(name, data=None, mode=0o755):
             info = tarfile.TarInfo(f"ardia-cli-{version}{name}")
@@ -350,6 +356,12 @@ def fake_tarball(folder: Path, version: str) -> Path:
         add("")
         add("/bin")
         add("/.leases")
+        add("/python")
+        add("/python/bin")
+        add("/python/bin/python3", Path(sys.executable).read_bytes() if python_bytes is None else python_bytes)
+        for folder_name in ("/python/lib", "/python/lib/python3.13", "/python/lib/python3.13/site-packages", "/python/lib/python3.13/site-packages/ardia_cli", "/python/lib/python3.13/site-packages/ardia_cli/bin"):
+            add(folder_name)
+        add("/python/lib/python3.13/site-packages/ardia_cli/bin/esbuild", Path(sys.executable).read_bytes() if esbuild_bytes is None else esbuild_bytes)
         add("/bin/ardia", f"#!/bin/sh\necho 'ardia {version}'\n".encode())
         link = tarfile.TarInfo(f"ardia-cli-{version}/bin/python3")
         link.type = tarfile.SYMTYPE
@@ -360,7 +372,22 @@ def fake_tarball(folder: Path, version: str) -> Path:
     return path
 
 
-@unittest.skipUnless(ON_LINUX and platform.machine() == "x86_64" and shutil.which("flock") and shutil.which("sha256sum"), "Linux x86_64 with flock and sha256sum")
+class InstallerFixtureArchitecture(unittest.TestCase):
+    @unittest.skipUnless(ON_LINUX and shutil.which("flock") and shutil.which("sha256sum"), "Linux with flock and sha256sum")
+    def test_arm_host_enables_native_installer_suite(self):
+        with mock.patch.object(platform, "machine", return_value="aarch64"):
+            namespace = runpy.run_path(str(Path(__file__).resolve()))
+        self.assertFalse(getattr(namespace["InstallScript"], "__unittest_skip__", False))
+
+    def test_fixture_default_archive_name_follows_host(self):
+        with tempfile.TemporaryDirectory() as temp:
+            for machine, cpu in (("x86_64", "x64"), ("aarch64", "arm64")):
+                with self.subTest(machine=machine), mock.patch.object(platform, "machine", return_value=machine):
+                    path = fake_tarball(Path(temp), "0.0.8", python_bytes=b"parser fixture", esbuild_bytes=b"parser fixture")
+                    self.assertEqual(path.name, f"ardia-cli-0.0.8-linux-{cpu}.tar.gz")
+
+
+@unittest.skipUnless(ON_LINUX and platform.machine() in ("x86_64", "aarch64", "arm64") and shutil.which("flock") and shutil.which("sha256sum"), "Linux x64 or arm64 with flock and sha256sum")
 class InstallScript(unittest.TestCase):
     def setUp(self):
         self.temp = Path(tempfile.mkdtemp(prefix="ardia-install-test-")).resolve()
@@ -389,7 +416,7 @@ class InstallScript(unittest.TestCase):
 
     def install(self, version=None, *args, url_version=None, env=None):
         url_version = url_version or version
-        tarball = self.dist / f"ardia-cli-{url_version}-linux-x64.tar.gz"
+        tarball = self.dist / f"ardia-cli-{url_version}-linux-{native_cpu()}.tar.gz"
         if not tarball.exists():
             fake_tarball(self.dist, url_version)
         environment = {
@@ -411,6 +438,99 @@ class InstallScript(unittest.TestCase):
 
     def current(self):
         return os.readlink(self.cli_home / "current")
+
+    def pretend_machine(self, machine):
+        uname = self.tools / "uname"
+        uname.write_text(f'#!/bin/sh\ncase "$1" in -m) echo {machine} ;; *) echo Linux ;; esac\n')
+        uname.chmod(0o755)
+
+    def test_simulated_hosts_reject_opposite_cpu_python_parser_fixture(self):
+        for machine, cpu, wrong_machine in (("x86_64", "x64", 183), ("aarch64", "arm64", 62)):
+            with self.subTest(cpu=cpu):
+                self.pretend_machine(machine)
+                binary = bytearray(Path(sys.executable).read_bytes())
+                binary[18:20] = wrong_machine.to_bytes(2, "little")
+                path = fake_tarball(self.dist, "0.0.8", cpu, python_bytes=bytes(binary))
+                status, lines, _ = self.install(None, url_version="0.0.8", env={"ARDIA_CLI_URL": path.as_uri()})
+                self.assertEqual(status, 1)
+                self.assertIn("version 0.0.8", lines)
+                self.assertIn(f"error the bundled Python is not a linux-{cpu} ELF executable", lines)
+                self.assertFalse((self.cli_home / "current").exists())
+
+    def test_rejects_non_elf_python(self):
+        fake_tarball(self.dist, "0.0.8", python_bytes=b"#!/bin/sh\nexit 0\n")
+        status, lines, _ = self.install("0.0.8")
+        self.assertEqual(status, 1)
+        self.assertIn(f"error the bundled Python is not a linux-{native_cpu()} ELF executable", lines)
+        self.assertFalse((self.cli_home / "current").exists())
+
+    def test_rejects_truncated_elf_header(self):
+        fake_tarball(self.dist, "0.0.8", python_bytes=Path(sys.executable).read_bytes()[:20])
+        status, lines, _ = self.install("0.0.8")
+        self.assertEqual(status, 1)
+        self.assertIn(f"error the bundled Python is not a linux-{native_cpu()} ELF executable", lines)
+
+    def test_rejects_outside_program_headers(self):
+        binary = bytearray(Path(sys.executable).read_bytes())
+        binary[32:40] = (len(binary) + 64).to_bytes(8, "little")
+        fake_tarball(self.dist, "0.0.8", python_bytes=bytes(binary))
+        status, lines, _ = self.install("0.0.8")
+        self.assertEqual(status, 1)
+        self.assertIn(f"error the bundled Python is not a linux-{native_cpu()} ELF executable", lines)
+
+    def test_rejects_missing_or_invalid_load_segments(self):
+        for case in ("missing", "outside", "oversized"):
+            with self.subTest(case=case):
+                binary = bytearray(Path(sys.executable).read_bytes())
+                offset = int.from_bytes(binary[32:40], "little")
+                count = int.from_bytes(binary[56:58], "little")
+                for index in range(count):
+                    start = offset + index * 56
+                    if int.from_bytes(binary[start:start + 4], "little") == 1:
+                        if case == "missing":
+                            binary[start:start + 4] = bytes(4)
+                        elif case == "outside":
+                            binary[start + 8:start + 16] = len(binary).to_bytes(8, "little")
+                        else:
+                            binary[start + 40:start + 48] = bytes(8)
+                fake_tarball(self.dist, "0.0.8", python_bytes=bytes(binary))
+                status, lines, _ = self.install("0.0.8")
+                self.assertEqual(status, 1)
+                self.assertIn(f"error the bundled Python is not a linux-{native_cpu()} ELF executable", lines)
+
+    def test_rejects_incompatible_esbuild(self):
+        binary = bytearray(Path(sys.executable).read_bytes())
+        binary[18:20] = (183 if native_cpu() == "x64" else 62).to_bytes(2, "little")
+        fake_tarball(self.dist, "0.0.8", esbuild_bytes=bytes(binary))
+        status, lines, _ = self.install("0.0.8")
+        self.assertEqual(status, 1)
+        self.assertIn(f"error the bundled esbuild is not a linux-{native_cpu()} ELF executable", lines)
+
+    def test_rechecks_existing_python_architecture(self):
+        self.assertEqual(self.install("0.0.8")[0], 0)
+        (self.cli_home / "0.0.8/python/bin/python3").write_bytes(b"invalid")
+        status, lines, _ = self.install("0.0.8")
+        self.assertEqual(status, 1)
+        self.assertIn(f"error the bundled Python is not a linux-{native_cpu()} ELF executable", lines)
+
+    def test_cross_build_requires_matching_native_host(self):
+        target = "arm64" if native_cpu() == "x64" else "x64"
+        result = subprocess.run(["sh", str(INSTALL_SH.parent / "scripts/build.sh"), "0.0.8", str(self.temp / "out"), "--platform", f"linux-{target}"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 64)
+        self.assertIn(f"build linux-{target} on a linux-{target} host", result.stderr)
+
+    def test_simulated_arm_host_selects_verified_pins_before_build(self):
+        self.pretend_machine("aarch64")
+        for name in ("grep", "sed", "dirname"):
+            (self.tools / name).symlink_to(shutil.which(name))
+        result = subprocess.run(["/bin/sh", "-x", str(INSTALL_SH.parent / "scripts/build.sh"), "0.0.8", str(self.temp / "out")], env={**os.environ, "HOME": str(self.home), "PATH": str(self.tools)}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("python_triple=aarch64-unknown-linux-gnu", result.stderr)
+        self.assertIn("python_sha256=69a30ed26198178732c37b8de0b6b5191479fbacfe526954da776befe38f18e7", result.stderr)
+        self.assertIn("esbuild_sha256=a96dbfa41d3ef5dbd1ef22b1c10d5187be9267e86093a870f06402a7ec931596", result.stderr)
+        self.assertIn("esbuild_platform=linux-arm64", result.stderr)
+        self.assertIn("build.sh: uv not found", result.stderr)
+        self.assertFalse((self.temp / "out").exists())
 
     def test_install_noop_upgrade_and_retention(self):
         self.login_shell("zsh")
@@ -539,7 +659,7 @@ class InstallScript(unittest.TestCase):
 
     def test_refuses_links_out_of_the_tree(self):
         self.login_shell("zsh")
-        path = self.dist / "ardia-cli-0.0.9-linux-x64.tar.gz"
+        path = self.dist / f"ardia-cli-0.0.9-linux-{native_cpu()}.tar.gz"
         with tarfile.open(path, "w:gz") as archive:
             link = tarfile.TarInfo("ardia-cli-0.0.9/bin/ardia")
             link.type = tarfile.SYMTYPE

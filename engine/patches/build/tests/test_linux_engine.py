@@ -11,19 +11,12 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[4]
 LINUX = REPO / 'scripts/linux'
 MAC_FETCH = 'packages/ardiacore/scripts/fetch-engine.sh'
-DISPATCH = '''if [ "${1:-}" = --arch ]; then
-  case "${2:-}" in
-    linux-x86_64) shift 2; exec "$root/scripts/linux/fetch-engine.sh" "$@" ;;
-    *) die "usage: fetch-engine.sh [--nearest] | fetch-engine.sh --arch linux-x86_64 [--nearest]" ;;
-  esac
-fi
-
-'''
-FIXTURE_FILES = ('engine/engine-key.sh', 'scripts/linux/fetch-engine.sh', 'scripts/linux/runtime_files.py', 'scripts/linux/publish-engine.sh',
+FIXTURE_FILES = ('engine/engine-key.sh', 'scripts/linux/fetch-engine.sh', 'scripts/linux/runtime_files.py', 'scripts/linux/linux_platform.py', 'scripts/linux/publish-engine.sh',
                  'scripts/linux/publish_engine.py', 'scripts/linux/package.py', 'scripts/agent/locked', MAC_FETCH)
 GIT_ENV = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_AUTHOR_NAME': 'Test', 'GIT_AUTHOR_EMAIL': 'test@example.com',
            'GIT_COMMITTER_NAME': 'Test', 'GIT_COMMITTER_EMAIL': 'test@example.com'}
@@ -49,7 +42,19 @@ def has_build_id(path):
     return 'Build ID' in notes.stdout
 
 
-def fake_runtime(directory, junk=True, elf=False):
+def parser_elf(cpu):
+    data = bytearray(ELF.read_bytes())
+    data[18:20] = {'x64': 62, 'arm64': 183}[cpu].to_bytes(2, 'little')
+    return bytes(data)
+
+
+def without_arch_dispatch(source):
+    start = source.index('if [ "${1:-}" = --arch ]; then')
+    end = source.index('nearest=0\n', start)
+    return source[:start] + source[end:]
+
+
+def native_runtime(directory, junk=True):
     directory.mkdir(parents=True, exist_ok=True)
     for name in runtime.REQUIRED:
         if name == 'locales':
@@ -60,9 +65,8 @@ def fake_runtime(directory, junk=True, elf=False):
             (directory / name).write_bytes(b'runtime')
     for name in ('libEGL.so', 'libGLESv2.so', 'snapshot_blob.bin', 'vk_swiftshader_icd.json', 'libvulkan.so.1'):
         (directory / name).write_bytes(b'optional')
-    if elf:
-        shutil.copyfile(ELF, directory / 'chrome')
-        shutil.copyfile(ELF, directory / 'libEGL.so')
+    for name in ('chrome', 'chrome_crashpad_handler', 'libEGL.so', 'libGLESv2.so', 'libvulkan.so.1'):
+        shutil.copyfile(ELF, directory / name)
     (directory / 'chrome').chmod(0o755)
     if junk:
         for name in ('libEGL.so.TOC', 'libVkICD_mock_icd.so', 'libVkLayer_khronos_validation.so', 'chrome.debug', 'args.gn', 'build.ninja'):
@@ -140,22 +144,23 @@ class ArchiveMaker:
         self.table.write_text('')
 
     def manifest(self, key, **overrides):
-        manifest = {'format': 2, 'engine_key': key, 'source_commit': None, 'target_os': 'linux', 'target_cpu': 'x64'}
+        manifest = {'format': 2, 'engine_key': key, 'source_commit': None, 'target_os': 'linux', 'target_cpu': 'x64', 'chrome_sha256': hashlib.sha256(parser_elf('x64')).hexdigest()}
         manifest.update(overrides)
         return json.dumps(manifest).encode()
 
-    def publish(self, key, members=None, manifest=None, sha=None, skip=()):
+    def publish(self, key, members=None, manifest=None, sha=None, skip=(), cpu='x64'):
+        architecture_fixture = parser_elf(cpu)
         tag = runtime.release_tag(key)
         folder = self.assets / tag
         folder.mkdir(parents=True, exist_ok=True)
-        archive = folder / runtime.archive_name(key)
+        archive = folder / f'ArdiaCore-{key[:12]}-linux-{cpu}.tar.xz'
         with tarfile.open(archive, 'w:xz') as packed:
             def add(name, data=b'', kind=tarfile.REGTYPE, mode=0o644, link=''):
                 info = tarfile.TarInfo(name)
                 info.type, info.mode, info.linkname = kind, mode, link
                 info.size = len(data) if kind == tarfile.REGTYPE else 0
                 packed.addfile(info, io.BytesIO(data) if kind == tarfile.REGTYPE else None)
-            root = runtime.ARCHIVE_ROOT
+            root = f'ardiacore-linux-{cpu}'
             add(root, kind=tarfile.DIRTYPE, mode=0o755)
             for name in runtime.REQUIRED:
                 if name in skip:
@@ -164,8 +169,8 @@ class ArchiveMaker:
                     add(f'{root}/locales', kind=tarfile.DIRTYPE, mode=0o755)
                     add(f'{root}/locales/en-US.pak', b'locale')
                 else:
-                    add(f'{root}/{name}', b'runtime', mode=0o755 if name == 'chrome' else 0o644)
-            add(f'{root}/manifest.json', manifest if manifest is not None else self.manifest(key))
+                    add(f'{root}/{name}', architecture_fixture if name in ('chrome', 'chrome_crashpad_handler') else b'runtime', mode=0o755 if name == 'chrome' else 0o644)
+            add(f'{root}/manifest.json', manifest if manifest is not None else self.manifest(key, target_cpu=cpu, chrome_sha256=hashlib.sha256(architecture_fixture).hexdigest()))
             for member in members or ():
                 add(**member)
         digest = sha or hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -174,10 +179,29 @@ class ArchiveMaker:
         return archive
 
 
+class ArchiveFixtureTests(unittest.TestCase):
+    def test_parser_archives_label_both_cpus_independently_of_source_elf(self):
+        original = ELF.read_bytes()
+        for source_machine in (62, 183):
+            for cpu, machine in (('x64', 62), ('arm64', 183)):
+                with self.subTest(source_machine=source_machine, cpu=cpu), tempfile.TemporaryDirectory() as scratch:
+                    root = pathlib.Path(scratch)
+                    source = root / 'parser-source.elf'
+                    data = bytearray(original)
+                    data[18:20] = source_machine.to_bytes(2, 'little')
+                    source.write_bytes(data)
+                    with mock.patch.dict(globals(), ELF=source):
+                        archive = ArchiveMaker(root).publish('a' * 40, cpu=cpu)
+                    with tarfile.open(archive) as packed:
+                        for name in ('chrome', 'chrome_crashpad_handler'):
+                            binary = packed.extractfile(f'ardiacore-linux-{cpu}/{name}').read()
+                            self.assertEqual(int.from_bytes(binary[18:20], 'little'), machine)
+
+
 class RuntimeSelectionTests(unittest.TestCase):
     def test_allowlist_keeps_runtime_files_and_drops_build_files(self):
         with tempfile.TemporaryDirectory() as scratch:
-            out = fake_runtime(pathlib.Path(scratch) / 'out')
+            out = native_runtime(pathlib.Path(scratch) / 'out')
             names = runtime.select(out)
             self.assertEqual(names[:len(runtime.REQUIRED)], list(runtime.REQUIRED))
             for name in ('libEGL.so', 'libGLESv2.so', 'snapshot_blob.bin', 'vk_swiftshader_icd.json', 'libvulkan.so.1'):
@@ -188,7 +212,7 @@ class RuntimeSelectionTests(unittest.TestCase):
             runtime.copy(out, copied)
             self.assertEqual(sorted(path.name for path in copied.iterdir()), sorted(names))
             self.assertEqual([path.name for path in (copied / 'locales').iterdir()], ['en-US.pak'])
-            (out / 'chrome_sandbox').write_bytes(b'sandbox')
+            shutil.copyfile(ELF, out / 'chrome_sandbox')
             (out / 'manifest.json').write_text('{}')
             self.assertIn('chrome_sandbox', runtime.select(out))
             self.assertIn('manifest.json', runtime.select(out))
@@ -196,7 +220,7 @@ class RuntimeSelectionTests(unittest.TestCase):
 
     def test_missing_required_file_fails(self):
         with tempfile.TemporaryDirectory() as scratch:
-            out = fake_runtime(pathlib.Path(scratch) / 'out')
+            out = native_runtime(pathlib.Path(scratch) / 'out')
             (out / 'resources.pak').unlink()
             with self.assertRaisesRegex(ValueError, 'resources.pak'):
                 runtime.select(out)
@@ -212,7 +236,7 @@ class RuntimeSelectionTests(unittest.TestCase):
     def test_package_accepts_a_fetched_engine_dir(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = pathlib.Path(scratch)
-            engine = fake_runtime(root / 'engine', junk=False)
+            engine = native_runtime(root / 'engine', junk=False)
             (engine / 'manifest.json').write_text('{"format": 1}')
             (engine / '.complete').write_text('x\n')
             ui = root / 'ui'
@@ -235,7 +259,9 @@ class PublisherTests(unittest.TestCase):
         self.root = pathlib.Path(self.scratch.name)
         self.fixture = Fixture(self.root)
         src = self.root / 'chromium/src'
-        self.out = fake_runtime(src / 'out/Release_GN_linux_x64', elf=True)
+        self.cpu = runtime.linux_platform.elf_cpu(ELF)
+        self.archive_root = f'ardiacore-linux-{self.cpu}'
+        self.out = native_runtime(src / f'out/Release_GN_linux_{self.cpu}')
         (self.out / 'args.gn').write_text('target_os="linux"\n')
         (src / 'chrome').mkdir()
         (src / 'chrome/VERSION').write_text('MAJOR=156\nMINOR=0\nBUILD=8078\nPATCH=47\n')
@@ -256,7 +282,7 @@ class PublisherTests(unittest.TestCase):
         result = self.publish(self.fixture.repo, dest)
         self.assertEqual(result.returncode, 0, result.stderr)
         key, head = self.fixture.key(), self.fixture.git('rev-parse', 'HEAD')
-        archive = dest / f'ArdiaCore-{key[:12]}-linux-x64.tar.xz'
+        archive = dest / f'ArdiaCore-{key[:12]}-linux-{self.cpu}.tar.xz'
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         self.assertEqual(result.stdout.splitlines(), [str(archive), f'{key}\tengine-{key[:12]}\t{digest}'])
         self.assertEqual((dest / (archive.name + '.sha256')).read_text(), f'{digest}  {archive.name}\n')
@@ -266,18 +292,18 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual((self.fixture.repo / 'packages/ardiacore/prebuilt-engines-linux.tsv').read_text(), '')
         with tarfile.open(archive) as packed:
             names = packed.getnames()
-            self.assertTrue(all(name == 'ardiacore-linux-x64' or name.startswith('ardiacore-linux-x64/') for name in names), names)
+            self.assertTrue(all(name == self.archive_root or name.startswith(self.archive_root + '/') for name in names), names)
             top = sorted(name.split('/')[1] for name in names if name.count('/') == 1)
             self.assertEqual(top, sorted(runtime.select(self.out) + ['manifest.json']))
-            self.assertNotIn('ardiacore-linux-x64/locales/en-US.pak.info', names)
-            manifest = json.load(packed.extractfile('ardiacore-linux-x64/manifest.json'))
-            chrome = packed.extractfile('ardiacore-linux-x64/chrome').read()
-            self.assertTrue(packed.getmember('ardiacore-linux-x64/chrome').mode & 0o111)
+            self.assertNotIn(f'{self.archive_root}/locales/en-US.pak.info', names)
+            manifest = json.load(packed.extractfile(f'{self.archive_root}/manifest.json'))
+            chrome = packed.extractfile(f'{self.archive_root}/chrome').read()
+            self.assertTrue(packed.getmember(f'{self.archive_root}/chrome').mode & 0o111)
             self.assertEqual({member.uid for member in packed.getmembers()}, {0})
         self.assertEqual(manifest['format'], 2)
         self.assertEqual(manifest['engine_key'], key)
         self.assertEqual(manifest['source_commit'], head)
-        self.assertEqual((manifest['target_os'], manifest['target_cpu']), ('linux', 'x64'))
+        self.assertEqual((manifest['target_os'], manifest['target_cpu']), ('linux', self.cpu))
         self.assertEqual(manifest['chromium_version'], '156.0.8078.47')
         self.assertEqual(manifest['args_gn_sha256'], hashlib.sha256(b'target_os="linux"\n').hexdigest())
         self.assertEqual(manifest['chrome_sha256'], hashlib.sha256(chrome).hexdigest())
@@ -287,6 +313,11 @@ class PublisherTests(unittest.TestCase):
         again = self.publish(self.fixture.repo, dest)
         self.assertNotEqual(again.returncode, 0)
         self.assertIn('refusing to overwrite', again.stderr)
+
+    def test_explicit_arch_rejects_mislabeled_native_runtime(self):
+        result = self.publish(self.fixture.repo, self.root / 'dest', '--arch', 'arm64' if self.cpu == 'x64' else 'x64')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('architecture', result.stderr)
 
     def test_dirty_checkout_is_refused(self):
         for index, relative in enumerate(('engine/version.txt', 'apps/browser/assets/offline-game-pipeline/version.txt')):
@@ -318,7 +349,7 @@ class PublisherTests(unittest.TestCase):
             result = self.publish(copy, self.root / f'dest{index}')
             self.assertEqual(result.returncode, 0, result.stderr)
             with tarfile.open(result.stdout.splitlines()[0]) as packed:
-                manifest = json.load(packed.extractfile('ardiacore-linux-x64/manifest.json'))
+                manifest = json.load(packed.extractfile(f'{self.archive_root}/manifest.json'))
             self.assertEqual(manifest['engine_key'], key)
             self.assertEqual(manifest['source_commit'], expected)
             self.assertIn(warning, result.stderr)
@@ -327,7 +358,7 @@ class PublisherTests(unittest.TestCase):
         result = self.publish(copy, self.root / 'dest-changed')
         self.assertEqual(result.returncode, 0, result.stderr)
         with tarfile.open(result.stdout.splitlines()[0]) as packed:
-            manifest = json.load(packed.extractfile('ardiacore-linux-x64/manifest.json'))
+            manifest = json.load(packed.extractfile(f'{self.archive_root}/manifest.json'))
         self.assertNotEqual(manifest['engine_key'], key)
         self.assertIsNone(manifest['source_commit'])
         (copy / 'engine/version.txt').write_text('two\n')
@@ -335,7 +366,7 @@ class PublisherTests(unittest.TestCase):
         result = self.publish(copy, self.root / 'dest-game')
         self.assertEqual(result.returncode, 0, result.stderr)
         with tarfile.open(result.stdout.splitlines()[0]) as packed:
-            manifest = json.load(packed.extractfile('ardiacore-linux-x64/manifest.json'))
+            manifest = json.load(packed.extractfile(f'{self.archive_root}/manifest.json'))
         self.assertNotEqual(manifest['engine_key'], key)
         self.assertIsNone(manifest['source_commit'])
         self.assertEqual(manifest['engine_key'], self.fixture.commit_game('changed'))
@@ -364,7 +395,8 @@ class FetcherTests(unittest.TestCase):
         self.scratch.cleanup()
 
     def fetch(self, *args, script='scripts/linux/fetch-engine.sh'):
-        return run([self.fixture.repo / script, *args], env=self.env)
+        target = () if '--arch' in args else ('--arch', 'x64')
+        return run([self.fixture.repo / script, *target, *args], env=self.env)
 
     def assert_fetched(self, result, key):
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -381,6 +413,28 @@ class FetcherTests(unittest.TestCase):
         self.assertEqual(result.stdout, '')
         self.assertFalse((self.fixture.store / key[:12]).exists())
         self.assertEqual(list(self.fixture.store.glob('.tmp-*')), [])
+
+    def simulate_arm_host(self):
+        tools = self.root / 'host-tools'
+        tools.mkdir()
+        uname = tools / 'uname'
+        uname.write_text('#!/bin/sh\nif [ "$1" = -m ]; then echo aarch64; else exec /usr/bin/uname "$@"; fi\n')
+        uname.chmod(0o755)
+        self.env['PATH'] = str(tools) + os.pathsep + self.env['PATH']
+
+    def test_x64_fetch_fixture_on_simulated_arm_host(self):
+        self.simulate_arm_host()
+        self.test_exact_hit_and_cache_reuse_without_network()
+
+    def test_simulated_arm_host_defaults_to_arm64(self):
+        self.simulate_arm_host()
+        key = self.fixture.key()
+        self.assets.publish(key, cpu='arm64')
+        result = run([self.fixture.repo / 'scripts/linux/fetch-engine.sh'], env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        engine = self.fixture.store.with_name('prebuilt-linux-arm64') / key[:12]
+        self.assertEqual(result.stdout.strip(), str(engine))
+        self.assertEqual(json.loads((engine / 'manifest.json').read_text())['target_cpu'], 'arm64')
 
     def test_exact_hit_and_cache_reuse_without_network(self):
         key = self.fixture.key()
@@ -502,6 +556,47 @@ class FetcherTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('uncommitted', result.stderr)
 
+    def test_explicit_x64_arch_and_wrapper_alias(self):
+        key = self.fixture.key()
+        self.assets.publish(key)
+        self.assert_fetched(self.fetch('--arch', 'x64'), key)
+        self.assert_fetched(self.fetch('--arch', 'linux-x64', script=MAC_FETCH), key)
+
+    def test_corrupt_cache_is_not_reused_without_table(self):
+        key = self.fixture.key()
+        self.assets.publish(key)
+        engine = self.assert_fetched(self.fetch(), key)
+        (engine / 'chrome').write_bytes(b'corrupt')
+        self.assets.table.write_text('')
+        result = self.fetch()
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_arm64_archive_uses_separate_table_and_cache(self):
+        key = self.fixture.key()
+        self.assets.publish(key, cpu='arm64')
+        table = self.fixture.repo / 'packages/ardiacore/prebuilt-engines-linux-arm64.tsv'
+        table.write_text(self.assets.table.read_text())
+        self.env.pop('ARDIACORE_PREBUILT_LINUX_TABLE')
+        result = self.fetch('--arch', 'linux-aarch64', script=MAC_FETCH)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        engine = self.fixture.store.with_name('prebuilt-linux-arm64') / key[:12]
+        self.assertEqual(result.stdout.strip(), str(engine))
+        self.assertEqual(json.loads((engine / 'manifest.json').read_text())['target_cpu'], 'arm64')
+        self.assertNotEqual(self.fetch('--arch', 'x64').returncode, 0)
+        self.assertFalse(self.fixture.store.exists())
+        again = self.fetch('--arch', 'arm64')
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn('cached', again.stderr)
+
+    def test_mislabeled_arm64_archive_rejects_x64_elf(self):
+        key = self.fixture.key()
+        self.assets.publish(key, cpu='arm64', members=[{'name': 'ardiacore-linux-arm64/chrome', 'data': parser_elf('x64'), 'mode': 0o755}],
+                            manifest=self.assets.manifest(key, target_cpu='arm64'))
+        result = self.fetch('--arch', 'arm64')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('architecture', result.stderr)
+        self.assertEqual(result.stdout, '')
+
     def test_usage(self):
         self.assertEqual(self.fetch('--help').returncode, 0)
         self.assertNotEqual(self.fetch('--bogus').returncode, 0)
@@ -511,10 +606,17 @@ class FetcherTests(unittest.TestCase):
 class MacDispatchTests(unittest.TestCase):
     def test_only_the_arch_dispatch_was_added(self):
         current = (REPO / MAC_FETCH).read_text()
-        self.assertEqual(current.count(DISPATCH), 1)
+        dispatch = current[current.index('if [ "${1:-}" = --arch ]; then'):current.index('nearest=0\n')]
+        self.assertIn('linux-arm64', dispatch)
         committed = subprocess.run(['git', 'show', f'HEAD:{MAC_FETCH}'], cwd=REPO, capture_output=True, text=True, check=True).stdout
-        self.assertEqual(current.replace(DISPATCH, ''), committed.replace(DISPATCH, ''))
-        self.assertLess(current.index(DISPATCH), current.index('nearest=0\n'))
+        self.assertEqual(without_arch_dispatch(current), without_arch_dispatch(committed))
+        self.assertLess(current.index(dispatch), current.index('nearest=0\n'))
+
+    def test_dispatch_comparison_after_current_change_is_committed(self):
+        current = (REPO / MAC_FETCH).read_text()
+        committed = subprocess.CompletedProcess(['git', 'show'], 0, stdout=current)
+        with mock.patch.object(subprocess, 'run', return_value=committed):
+            self.test_only_the_arch_dispatch_was_added()
 
     def test_unknown_arch_fails_and_mac_usage_is_unchanged(self):
         script = REPO / MAC_FETCH

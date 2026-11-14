@@ -354,7 +354,8 @@ scripts/linux/build.sh --apply --generate
 - **Build settings.** The build keeps the official configuration: phase-2 PGO, ThinLTO, CFI and the sandbox. The
   output is `out/Release_GN_linux_<cpu>/chrome`.
 - **Build time.** A first build takes roughly five hours with six jobs on eight cores and 24 GB of RAM.
-- **arm64.** Use `AC_TARGET_CPU=arm64`.
+- **arm64.** Use `AC_TARGET_CPU=arm64`. Delivery tooling selects ARM64 artifacts, and the CLI was built and exercised
+  on a 16KiB-page ARM64 host. The browser still needs native acceptance; see [Linux architectures](linux-ci.md#linux-architectures).
 
 After that, rebuild incrementally (add `--generate` when GN arguments change):
 
@@ -383,15 +384,16 @@ python3 scripts/linux/package.py \
   --destination "$CB/artifacts/ardia-linux-$AC_TARGET_CPU.tar.xz"
 ```
 
-That makes a dev package. A release adds `--version <version>` and `--cli <dist>/ardia-cli-<version>-linux-x64.tar.gz`.
+That makes a dev package. A release adds `--version <version>` and `--cli <dist>/ardia-cli-<version>-linux-<cpu>.tar.gz`, matching the engine CPU.
 `scripts/linux/release.sh <version>` runs the whole release build, the smoke gate included, and prints the upload
 command ([linux-ci.md](linux-ci.md) › Linux releases).
 
 - **Version and CLI.** `--version` must match `<major>.<minor>.<patch>` or `<major>.<minor>.<patch>-<channel>.<n>`, and
   `--cli` needs it. package.py checks the CLI tarball before copying it:
-  - its name must carry the same version and `linux-x64`;
+  - its name must carry the same version and `linux-<cpu>` (`x64` or `arm64`);
   - its `.sha256` file, when one sits next to it, must match;
-  - every entry must sit under `ardia-cli-<version>/`, including `bin/ardia`.
+  - every entry must sit under `ardia-cli-<version>/`, including `bin/ardia`, with no escaping links or traversal;
+  - Python, esbuild and native libraries must match the engine ELF architecture.
 - **Content blocker.** `fetch-ubo.sh` prepares the same pinned, patched uBlock Origin build macOS embeds, by running
   `packages/ardiacore/scripts/ubo.sh` with `flock` and `sha256sum` standing in for `lockf` and `shasum`. Without
   `--content-blocker` the package has no blocker, and Settings says so.
@@ -402,7 +404,7 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
   - `lib/ardia/extensions/ublock`;
   - `lib/ardia/VERSION` (with `--version`), one line with the Ardia version (`0.2.44`, `0.2.44-nightly.3`);
   - `lib/ardia/cli/` (with `--cli`): `ardia-cli-install.sh` (a copy of `apps/cli/install.sh`, mode 0755),
-    `ardia-cli-<version>-linux-x64.tar.gz` and `ardia-cli.sha256` (the digest is its first token), the `ardia`
+    `ardia-cli-<version>-linux-<cpu>.tar.gz` and `ardia-cli.sha256` (the digest is its first token), the `ardia`
     command's installer, tarball and pinned digest. When the CLI is turned on, the browser installs from these files
     with `ardia-cli-install.sh --version <VERSION> --sha256 <digest>` and `ARDIA_CLI_URL=file://…`;
   - the desktop entry and icon;
@@ -418,7 +420,8 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
   - It always installs the polkit policy at `<destdir>/usr/share/polkit-1/actions` (mode 0644), whatever the prefix,
     because polkit reads actions only from there. Without the policy Ardia can't ask for the system password, so saved
     passwords and card numbers stay hidden.
-- **Arch.** Copy `scripts/linux/arch/PKGBUILD` and the archive, renamed `ardia-linux-x64.tar.xz`, into an empty folder
+- **Arch.** Copy `scripts/linux/arch/PKGBUILD` and the archive, renamed `ardia-linux-x64.tar.xz` for x86_64 or
+  `ardia-linux-arm64.tar.xz` for aarch64, into an empty folder
   and run `makepkg -si` there. The package (`ardia-bin`) depends on `polkit` and installs through the same script.
   Its `pkgver()` reads the package's `VERSION`, with `-` turned into `_` (`0.2.44_nightly.3`), and falls back to
   `0.0.0` for a dev package. makepkg writes that version back into the PKGBUILD, which is why the copy goes in a

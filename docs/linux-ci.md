@@ -18,6 +18,27 @@ Hosted CI never runs `gclient sync`, GN or a Chromium build.
 | [`scripts/linux/smoke.mjs`](../scripts/linux/smoke.mjs) | Strict smoke gate for a packaged tarball |
 | [`scripts/linux/release.sh`](../scripts/linux/release.sh) | Builds a versioned Linux release with the CLI, smoke-tests it and prints the upload command |
 
+## Linux architectures
+
+The delivery tools accept `x64` and `arm64` (`x86_64` and `aarch64` aliases). The Linux fetcher defaults to the host;
+`packages/ardiacore/scripts/fetch-engine.sh --arch linux-arm64` selects ARM64 explicitly. Publishing and packaging
+infer the CPU from the runtime ELF, or accept `--arch` as an expectation. All shipped native binaries must match.
+A manifest that names another CPU is rejected, and fetching checks the manifest's Chrome SHA-256 on cache reuse too.
+
+x64 keeps its existing table and cache. ARM64 uses `packages/ardiacore/prebuilt-engines-linux-arm64.tsv` and
+`apps/browser/build-ardiacore/prebuilt-linux-arm64/<key12>/`. Both tables use the same three columns. ARM64 archives
+are `ArdiaCore-<key12>-linux-arm64.tar.xz`, rooted at `ardiacore-linux-arm64/`; both CPUs can share an engine-key release
+without replacing each other's assets. The ARM64 table is created only when a real engine is published.
+Cross-publishing needs `aarch64-linux-gnu-strip` or `llvm-strip`; it never uses an x64-only host strip on ARM64.
+
+This is tooling support, not ARM64 browser acceptance. No ARM64 engine is supplied by this change. The CLI builder
+selects pinned ARM64 Python and esbuild assets. All 17 locked wheels were acquired with hash enforcement, and a
+native production CLI archive was built and relocated on a 16KiB-page Arch Linux ARM host. Its version/help commands,
+Python imports, all 11 packaged native extensions and esbuild ran successfully. This does not validate browser integration.
+The builder retains hash enforcement and refuses source builds for missing wheels. `release.sh --arch arm64` requires
+a native ARM64 host for CLI build and smoke. The existing hosted CI workflow remains x64. A real ARM64 engine with
+the CLI must still pass the native browser smoke gate and Wayland/Hyprland acceptance, including on 16KiB-page systems.
+
 ## Engine archives
 
 - **Key.** The engine is keyed by `engine/engine-key.sh`, as on the Mac: one hash of `engine/`,

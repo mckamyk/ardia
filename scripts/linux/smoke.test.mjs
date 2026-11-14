@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { spawnSync } from "node:child_process";
 import { launchArguments, launchEnvironment } from "../../apps/linux/scripts/acceptance/lib/ardia.mjs";
 import { ASSERTIONS, SCRIPT_NAME, SCRIPT_TITLE_PREFIX, USAGE, USER_SCRIPTS_CAPABILITIES, VERSION_PATTERN, appVersionVerdict, cliControlSupport, cliTarball, formatTable, installerRanAgain, launchRefusal, packageStagedFiles, parseArgs, pipeLaunchArguments, splitPipeMessages, summarize, userScriptSource } from "./smoke.mjs";
 
@@ -30,18 +31,32 @@ test("--allow-old-engine is opt-in and leaves the default options as they were",
 test("the version pattern is the package contract's", () => {
   for (const good of ["0.2.44", "0.2.44-nightly.3"]) assert.ok(VERSION_PATTERN.test(good), good);
   for (const bad of ["0.2", "0.2.44-nightly", "0.2.44\n", "v0.2.44", "156.0.8078.79"]) assert.ok(!VERSION_PATTERN.test(bad), bad);
-  assert.equal(cliTarball("0.2.44"), "ardia-cli-0.2.44-linux-x64.tar.gz");
+  assert.equal(cliTarball("0.2.44", "x64"), "ardia-cli-0.2.44-linux-x64.tar.gz");
 });
 
 test("staged-install also checks VERSION and the CLI only when the package has them", () => {
   assert.deepEqual(packageStagedFiles(), []);
   assert.deepEqual(packageStagedFiles({ version: "1.2.3" }), [{ path: "usr/lib/ardia/VERSION", mode: 0o644 }]);
-  assert.deepEqual(packageStagedFiles({ version: "1.2.3", cli: true }).map((f) => [f.path, f.mode.toString(8)]), [
+  assert.deepEqual(packageStagedFiles({ version: "1.2.3", cli: true, cpu: "x64" }).map((f) => [f.path, f.mode.toString(8)]), [
     ["usr/lib/ardia/VERSION", "644"],
     ["usr/lib/ardia/cli/ardia-cli-install.sh", "755"],
     ["usr/lib/ardia/cli/ardia-cli-1.2.3-linux-x64.tar.gz", "644"],
     ["usr/lib/ardia/cli/ardia-cli.sha256", "644"],
   ]);
+});
+
+test("CLI package names and staged files select each explicit CPU", () => {
+  for (const cpu of ["x64", "arm64"]) {
+    const name = `ardia-cli-1.2.3-linux-${cpu}.tar.gz`;
+    assert.equal(cliTarball("1.2.3", cpu), name);
+    assert.deepEqual(packageStagedFiles({ version: "1.2.3", cli: true, cpu })[2], { path: `usr/lib/ardia/cli/${name}`, mode: 0o644 });
+  }
+  assert.throws(() => cliTarball("1.2.3", "riscv64"), /unsupported Linux CPU/);
+});
+
+test("CLI package and staged-file defaults follow the host CPU", () => {
+  assert.equal(cliTarball("1.2.3"), `ardia-cli-1.2.3-linux-${process.arch}.tar.gz`);
+  assert.deepEqual(packageStagedFiles({ version: "1.2.3", cli: true }), packageStagedFiles({ version: "1.2.3", cli: true, cpu: process.arch }));
 });
 
 test("appVersion passes on the package version, is old on Chromium's and fails on anything else", () => {
@@ -87,3 +102,17 @@ test("skipped and old-engine checks pass the gate but show what they are; an old
   assert.equal(summarize(rows).ok, false);
   assert.match(formatTable(rows), /^FAIL {2}cli-control/m);
 });
+
+if (!process.env.ARDIA_SMOKE_TEST_ARCH_CHILD) {
+  test("the smoke helper suite passes with a simulated ARM64 host", () => {
+    const source = `Object.defineProperty(process, "arch", { value: "arm64" }); await import(${JSON.stringify(import.meta.url)});`;
+    const env = { ...process.env, ARDIA_SMOKE_TEST_ARCH_CHILD: "1" };
+    delete env.NODE_TEST_CONTEXT;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", source], {
+      encoding: "utf8",
+      timeout: 30000,
+      env,
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  });
+}

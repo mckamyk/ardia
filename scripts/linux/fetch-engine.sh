@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-usage='usage: scripts/linux/fetch-engine.sh [--nearest]
+usage='usage: scripts/linux/fetch-engine.sh [--arch x64|arm64] [--nearest]
        packages/ardiacore/scripts/fetch-engine.sh --arch linux-x86_64 [--nearest]
 
-Downloads, verifies and caches the prebuilt Linux x64 ArdiaCore engine whose
+Downloads, verifies and caches the prebuilt Linux ArdiaCore engine whose
 engine key (engine/engine-key.sh: engine/ and the offline game it packs)
 matches this checkout (scripts/linux/publish-engine.sh makes them), and prints
 the engine directory (the one holding chrome and manifest.json) for
@@ -22,24 +22,34 @@ Environment:
   ARDIACORE_PREBUILT_TABLE_URL     published table URL, or none (default the
                                    linux branch copy of the table on GitHub)
   ARDIACORE_PREBUILT_LINUX_TABLE   local table path (default the checked-in one)
-Engines are cached in apps/browser/build-ardiacore/prebuilt-linux-x86_64.'
+ARM64 uses prebuilt-engines-linux-arm64.tsv and a separate prebuilt-linux-arm64 cache.
+The default architecture is the host; --arch selects an explicit target.'
 nearest=0
-case "${1:-}" in
-  -h|--help) echo "$usage"; exit 0 ;;
-  "") ;;
-  --nearest) nearest=1 ;;
-  *) echo "$usage" >&2; exit 64 ;;
-esac
-[ $# -le 1 ] || { echo "$usage" >&2; exit 64; }
-
+arch=$(uname -m)
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) echo "$usage"; exit 0 ;;
+    --nearest) nearest=1; shift ;;
+    --arch) [ $# -ge 2 ] || { echo "$usage" >&2; exit 64; }; arch=$2; shift 2 ;;
+    *) echo "$usage" >&2; exit 64 ;;
+  esac
+done
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
+cpu=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from linux_platform import normalize_cpu; print(normalize_cpu(sys.argv[2]))' "$here" "$arch") || exit 64
+table_name=prebuilt-engines-linux.tsv
+cache_arch=x86_64
+if [ "$cpu" = arm64 ]; then
+  table_name=prebuilt-engines-linux-arm64.tsv
+  cache_arch=arm64
+fi
+
 repo=${ARDIACORE_PREBUILT_REPO:-mckamyk/ardia}
 assets=${ARDIACORE_PREBUILT_ASSETS:-https://github.com/$repo/releases/download}
-table=${ARDIACORE_PREBUILT_LINUX_TABLE:-$root/packages/ardiacore/prebuilt-engines-linux.tsv}
-table_url=${ARDIACORE_PREBUILT_TABLE_URL:-https://raw.githubusercontent.com/$repo/linux/packages/ardiacore/prebuilt-engines-linux.tsv}
-store=$root/apps/browser/build-ardiacore/prebuilt-linux-x86_64
-archive_root=ardiacore-linux-x64
+table=${ARDIACORE_PREBUILT_LINUX_TABLE:-$root/packages/ardiacore/$table_name}
+table_url=${ARDIACORE_PREBUILT_TABLE_URL:-https://raw.githubusercontent.com/$repo/linux/packages/ardiacore/$table_name}
+store=$root/apps/browser/build-ardiacore/prebuilt-linux-$cache_arch
+archive_root=ardiacore-linux-$cpu
 die() { echo "fetch-engine.sh: $*" >&2; exit 1; }
 
 for tool in git curl sha256sum python3; do
@@ -70,7 +80,7 @@ load_remote() {
 cached_key() {
   local dir=$store/${1:0:12}
   [ -f "$dir/.complete" ] && [ -f "$dir/manifest.json" ] || return 1
-  [ "$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1])).get("engine_key", ""))' "$dir/manifest.json" 2>/dev/null)" = "$1" ]
+  python3 -I -c 'import pathlib, sys; sys.path.insert(0, sys.argv[1]); import runtime_files; directory = pathlib.Path(sys.argv[2]); runtime_files.check_manifest(directory, sys.argv[3], sys.argv[4]); runtime_files.select(directory, sys.argv[4])' "$here" "$dir" "$1" "$cpu" >/dev/null 2>&1
 }
 row=""
 resolve() {
@@ -95,10 +105,10 @@ else
     index=$((index + 1))
   done < <(git -C "$root" rev-list --max-count=200 HEAD -- "${key_paths[@]}")
   if [ -z "$found" ]; then
-    die "no prebuilt Linux engine for engine key ${key:0:12} or any of the 200 commits before it that changed a path the key covers: build this commit's engine on the Linux builder (scripts/linux/build.sh --apply), publish it with scripts/linux/publish-engine.sh --upload and commit packages/ardiacore/prebuilt-engines-linux.tsv"
+    die "no prebuilt Linux engine for engine key ${key:0:12} or any of the 200 commits before it that changed a path the key covers: build this commit's engine on the Linux builder (scripts/linux/build.sh --apply), publish it with scripts/linux/publish-engine.sh --upload and commit packages/ardiacore/$table_name"
   fi
   if [ "$nearest" = 0 ]; then
-    die "no prebuilt Linux engine for engine key ${key:0:12}: build this commit's engine on the Linux builder (scripts/linux/build.sh --apply), publish it with scripts/linux/publish-engine.sh --upload and commit packages/ardiacore/prebuilt-engines-linux.tsv, or pass --nearest to use ${found:0:12}, $distance engine commits older"
+    die "no prebuilt Linux engine for engine key ${key:0:12}: build this commit's engine on the Linux builder (scripts/linux/build.sh --apply), publish it with scripts/linux/publish-engine.sh --upload and commit packages/ardiacore/$table_name, or pass --nearest to use ${found:0:12}, $distance engine commits older"
   fi
   echo "warning: no prebuilt Linux engine for engine key ${key:0:12}; using ${found:0:12}, $distance engine commits older, and the app may not match it" >&2
 fi
@@ -112,7 +122,7 @@ exec 9>"$store/.lock"
 if command -v flock >/dev/null; then
   flock -w 300 9 || die "another fetch-engine.sh still holds $store/.lock after 300s"
 fi
-if [ -z "${tag:-}" ] && [ -z "${sha:-}" ] && [ -f "$dest/.complete" ]; then
+if [ -z "${tag:-}" ] && [ -z "${sha:-}" ] && [ -f "$dest/.complete" ] && cached_key "$selected"; then
   echo "using the cached Linux engine $short" >&2
   touch "$dest/.complete"
   echo "$dest"
@@ -132,13 +142,13 @@ for stale in "$store"/.tmp-*; do
 done
 tmp=$(mktemp -d "$store/.tmp-XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
-file="ArdiaCore-$short-linux-x64.tar.xz"
+file="ArdiaCore-$short-linux-$cpu.tar.xz"
 url="$assets/$tag/$file"
 echo "downloading the Linux engine $short ($url)" >&2
 curl -fsSL --retry 3 -o "$tmp/$file" "$url" || die "couldn't download $url"
 actual=$(sha256sum "$tmp/$file" | awk '{ print $1 }')
 [ "$actual" = "$sha" ] || die "$file has SHA-256 $actual, not $sha from the engine table"
-python3 -I "$here/runtime_files.py" unpack --archive "$tmp/$file" --into "$tmp/unpacked" --key "$selected" >/dev/null \
+python3 -I "$here/runtime_files.py" unpack --archive "$tmp/$file" --into "$tmp/unpacked" --key "$selected" --arch "$cpu" >/dev/null \
   || die "$file isn't a valid Linux engine for $short"
 rm -f "$tmp/$file"
 rm -rf "$dest"

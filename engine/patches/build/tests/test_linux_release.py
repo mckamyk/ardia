@@ -10,6 +10,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[4]
 LINUX = REPO / 'scripts/linux'
@@ -27,7 +28,16 @@ sys.dont_write_bytecode = True
 packaging = module('packaging', LINUX / 'package.py')
 
 
-def fake_engine(root):
+def built_elf_with_fixture_machine(cpu="x64"):
+    with tempfile.TemporaryDirectory() as scratch:
+        target = pathlib.Path(scratch) / "fixture"
+        subprocess.run(["cc", "-x", "c", "-", "-o", str(target)], input="int main(void) { return 0; }", text=True, check=True, capture_output=True)
+        data = bytearray(target.read_bytes())
+        data[18:20] = {"x64": 62, "arm64": 183}[cpu].to_bytes(2, "little")
+        return bytes(data)
+
+
+def fake_engine(root, cpu="x64"):
     output, ui = root / 'out', root / 'ui'
     output.mkdir()
     ui.mkdir()
@@ -37,29 +47,97 @@ def fake_engine(root):
             (output / name / 'en-US.pak').write_bytes(b'locale')
         else:
             (output / name).write_bytes(b'runtime')
-    (output / 'chrome').chmod(0o755)
+    for name in ('chrome', 'chrome_crashpad_handler'):
+        (output / name).write_bytes(built_elf_with_fixture_machine(cpu))
+        (output / name).chmod(0o755)
     (ui / 'index.html').write_text('<html></html>')
     return output, ui
 
 
-def fake_cli(directory, version=VERSION, platform='linux-x64', top=None, sidecar=True):
+def fake_cli(directory, version=VERSION, platform='linux-x64', top=None, sidecar=True, cpu='x64', extra=None, python_link='python3.13', esbuild_path='python/lib/python3.13/site-packages/ardia_cli/bin/esbuild'):
     directory.mkdir(parents=True, exist_ok=True)
     name = f'ardia-cli-{version}-{platform}.tar.gz'
     top = top or f'ardia-cli-{version}'
     tarball = directory / name
     with tarfile.open(tarball, 'w:gz') as packed:
-        for member, body in ((f'{top}/bin/ardia', b'#!/bin/sh\necho ardia\n'), (f'{top}/python/README', b'python')):
+        for member, body in [(f'{top}/bin/ardia', b'#!/bin/sh\necho ardia\n'), (f'{top}/python/bin/python3.13', built_elf_with_fixture_machine(cpu)), (f'{top}/{esbuild_path}', built_elf_with_fixture_machine(cpu))] + ([extra] if extra else []):
             info = tarfile.TarInfo(member)
             info.size = len(body)
             info.mode = 0o755
             packed.addfile(info, io.BytesIO(body))
+        link = tarfile.TarInfo(f'{top}/python/bin/python3')
+        link.type = tarfile.SYMTYPE
+        link.linkname = python_link
+        packed.addfile(link)
     if sidecar:
         digest = hashlib.sha256(tarball.read_bytes()).hexdigest()
         (directory / (name + '.sha256')).write_text(f'{digest}  {name}\n')
     return tarball
 
 
+class FixtureArchitectureTests(unittest.TestCase):
+    def test_parser_fixture_cpu_is_explicit_on_either_compiler_host(self):
+        native = bytearray(built_elf_with_fixture_machine())
+        for compiler_machine in (62, 183):
+            native[18:20] = compiler_machine.to_bytes(2, 'little')
+            for cpu, expected in (('x64', 62), ('arm64', 183)):
+                with self.subTest(compiler_machine=compiler_machine, cpu=cpu), mock.patch.object(pathlib.Path, 'read_bytes', return_value=bytes(native)):
+                    fixture = built_elf_with_fixture_machine(cpu)
+                    self.assertEqual(int.from_bytes(fixture[18:20], 'little'), expected)
+
+
 class PackageVersionAndCliTests(unittest.TestCase):
+    def test_arm64_package_requires_matching_cli_elf(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            output, ui = fake_engine(root, 'arm64')
+            cli = fake_cli(root / 'cli', platform='linux-arm64', cpu='arm64')
+            self.assertTrue(packaging.package(output, ui, root / 'arm.tar.xz', version=VERSION, cli=cli, cpu='arm64').is_file())
+            wrong = fake_cli(root / 'wrong', platform='linux-arm64')
+            with self.assertRaisesRegex(ValueError, 'architecture|CPU|cpu'):
+                packaging.package(output, ui, root / 'wrong.tar.xz', version=VERSION, cli=wrong, cpu='arm64')
+            with self.assertRaises(ValueError):
+                packaging.package(output, ui, root / 'mislabeled.tar.xz', cpu='x64')
+
+    def test_cli_validates_actual_python_target(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            cli = fake_cli(root, platform='linux-arm64', cpu='arm64', python_link='python', extra=(f'ardia-cli-{VERSION}/python/bin/python', built_elf_with_fixture_machine('x64')))
+            with self.assertRaisesRegex(ValueError, 'architecture'):
+                packaging.check_cli(cli, VERSION, cpu='arm64')
+
+    def test_cli_rejects_duplicate_entries_and_fake_esbuild_location(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            duplicate = fake_cli(root / 'duplicate', extra=(f'ardia-cli-{VERSION}/bin/ardia', b'bad'))
+            with self.assertRaisesRegex(ValueError, 'duplicate'):
+                packaging.check_cli(duplicate, VERSION)
+            misplaced = fake_cli(root / 'misplaced', esbuild_path='decoy/ardia_cli/bin/esbuild')
+            with self.assertRaisesRegex(ValueError, 'esbuild'):
+                packaging.check_cli(misplaced, VERSION)
+
+    def test_cli_rejects_missing_and_cyclic_python_links(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            for target in ('missing', 'python3'):
+                cli = fake_cli(root / target, python_link=target)
+                with self.assertRaises(ValueError):
+                    packaging.check_cli(cli, VERSION)
+
+    def test_cli_rejects_incompatible_native_extension(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            cli = fake_cli(root, extra=(f'ardia-cli-{VERSION}/python/lib/python3.13/site-packages/native.so', built_elf_with_fixture_machine('arm64')))
+            with self.assertRaisesRegex(ValueError, 'architecture'):
+                packaging.check_cli(cli, VERSION)
+
+    def test_cli_rejects_traversal(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            cli = fake_cli(root, extra=(f'ardia-cli-{VERSION}/../escape', b'bad'))
+            with self.assertRaisesRegex(ValueError, 'unsafe'):
+                packaging.check_cli(cli, VERSION)
+
     def test_release_package_carries_version_cli_installer_and_digest(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = pathlib.Path(scratch)
@@ -108,7 +186,7 @@ class PackageVersionAndCliTests(unittest.TestCase):
             cases = {
                 'other version': (fake_cli(root / 'a', version='0.2.43'), 'not ardia-cli-0.2.44-nightly.3-linux-x64'),
                 'mac tarball': (fake_cli(root / 'b', platform='macos-arm64'), 'linux-x64'),
-                'stray top': (fake_cli(root / 'c', top='other'), 'outside ardia-cli-0.2.44-nightly.3/'),
+                'stray top': (fake_cli(root / 'c', top='other'), 'unsafe archive entry'),
             }
             for label, (tarball, message) in cases.items():
                 with self.subTest(label), self.assertRaisesRegex(ValueError, message):
@@ -164,6 +242,12 @@ class ArchPackageTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
+    def test_architecture_sources(self):
+        result = subprocess.run(['bash', '-c', f'source {LINUX / "arch/PKGBUILD"}; declare -p arch source_x86_64 source_aarch64'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('aarch64', result.stdout)
+        self.assertIn('ardia-linux-arm64.tar.xz', result.stdout)
+
     def test_pkgver_comes_from_the_package_version(self):
         with tempfile.TemporaryDirectory() as scratch:
             srcdir = pathlib.Path(scratch)
@@ -178,6 +262,18 @@ class ArchPackageTests(unittest.TestCase):
 class ReleaseScriptTests(unittest.TestCase):
     def run_release(self, *args):
         return subprocess.run(['bash', str(LINUX / 'release.sh'), *args], capture_output=True, text=True, timeout=60, cwd=REPO)
+
+    def test_target_argument(self):
+        result = self.run_release('99.0.0', '--arch', 'arm64')
+        self.assertTrue('MARKETING_VERSION' in result.stderr or 'requires a native arm64 host' in result.stderr, result.stderr)
+        self.assertIn('--arch', self.run_release('--help').stdout)
+
+    def test_smoke_cli_architecture(self):
+        source = f"import {{cliTarball,packageStagedFiles}} from '{(LINUX / 'smoke.mjs').as_uri()}'; console.log(cliTarball('1.2.3','arm64')); console.log(JSON.stringify(packageStagedFiles({{version:'1.2.3',cli:true,cpu:'arm64'}})));"
+        result = subprocess.run(['node', '--input-type=module', '-e', source], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('linux-x64', result.stdout)
+        self.assertIn('linux-arm64', result.stdout)
 
     def test_help_and_argument_errors(self):
         usage = self.run_release('--help')
